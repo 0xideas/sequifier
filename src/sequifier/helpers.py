@@ -1,5 +1,5 @@
 import os
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -10,8 +10,8 @@ PANDAS_TO_TORCH_TYPES = {"int64": torch.int64, "float64": torch.float32}
 
 
 def construct_index_maps(
-    id_maps: Dict[str, Dict],
-    target_columns_index_map: List[str],
+    id_maps: dict[str, dict[Union[str, int], int]],
+    target_columns_index_map: list[str],
     map_to_id: Optional[bool]
 ) -> Dict[str, Dict]:
     """Construct index maps for target columns."""
@@ -29,7 +29,7 @@ def construct_index_maps(
     return index_map
 
 
-def read_data(path: str, read_format: str, columns: Optional[List[str]] = None) -> pd.DataFrame:
+def read_data(path: str, read_format: str, columns: Optional[list[str]] = None) -> pd.DataFrame:
     """Read data from CSV or Parquet file."""
     if read_format == "csv":
         return pd.read_csv(path, sep=",", decimal=".", index_col=False)
@@ -48,7 +48,7 @@ def write_data(data: pd.DataFrame, path: str, write_format: str, **kwargs) -> No
         raise ValueError(f"Unsupported write format: {write_format}")
 
 
-def subset_to_selected_columns(data: pd.DataFrame, selected_columns: List[str]) -> pd.DataFrame:
+def subset_to_selected_columns(data: pd.DataFrame, selected_columns: list[str]) -> pd.DataFrame:
     """Subset data to selected columns."""
     column_filters = [
         (data["inputCol"].values == input_col) for input_col in selected_columns
@@ -59,13 +59,13 @@ def subset_to_selected_columns(data: pd.DataFrame, selected_columns: List[str]) 
 
 def numpy_to_pytorch(
     data: pd.DataFrame,
-    column_types: Dict[str, torch.dtype],
-    selected_columns: List[str],
-    target_columns: List[str],
+    column_types: dict[str, torch.dtype],
+    selected_columns: list[str],
+    target_columns: list[str],
     seq_length: int,
     device: torch.device,
     to_device: bool
-) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
+) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     """Convert numpy data to PyTorch tensors."""
     targets = {}
     for target_column in target_columns:
@@ -121,5 +121,6 @@ class LogFile:
 
 def normalize_path(path: str, project_path: str) -> str:
     """Normalize a path relative to the project path."""
-    project_path_normalized = os.path.normpath(project_path) + os.sep
-    return os.path.normpath(os.path.join(project_path, path.replace(project_path_normalized, "")))
+    project_path_normalized = (project_path + os.sep).replace(os.sep + os.sep, os.sep)
+    path2 = os.path.join(project_path, path.replace(project_path_normalized, ""))
+    return path2
