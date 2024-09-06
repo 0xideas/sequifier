@@ -3,7 +3,7 @@ import math
 import multiprocessing
 import os
 import shutil
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -13,7 +13,7 @@ from sequifier.config.preprocess_config import load_preprocessor_config
 from sequifier.helpers import read_data, write_data
 
 
-def preprocess(args: Any, args_config: Dict[str, Any]) -> None:
+def preprocess(args: Any, args_config: dict[str, Any]) -> None:
     """
     Main preprocessing function.
 
@@ -34,8 +34,8 @@ class Preprocessor:
         data_path: str,
         read_format: str,
         write_format: str,
-        selected_columns: Optional[List[str]],
-        group_proportions: List[float],
+        selected_columns: Optional[list[str]],
+        group_proportions: list[float],
         seq_length: int,
         seq_step_size: int,
         max_rows: Optional[int],
@@ -65,7 +65,7 @@ class Preprocessor:
             shutil.rmtree(temp_path)
         os.makedirs(temp_path)
 
-    def _load_and_preprocess_data(self, data_path: str, read_format: str, selected_columns: Optional[List[str]], max_rows: Optional[int]) -> pd.DataFrame:
+    def _load_and_preprocess_data(self, data_path: str, read_format: str, selected_columns: Optional[list[str]], max_rows: Optional[int]) -> pd.DataFrame:
         data = read_data(data_path, read_format, columns=selected_columns)
         self.data_name_root = os.path.splitext(os.path.basename(data_path))[0]
 
@@ -84,7 +84,7 @@ class Preprocessor:
             for i in range(n_splits)
         ]
 
-    def _process_columns(self, data: pd.DataFrame, data_columns: List[str]) -> Tuple[Dict[str, int], Dict[str, Dict[Any, int]], Dict[str, Dict[str, float]], Dict[str, str]]:
+    def _process_columns(self, data: pd.DataFrame, data_columns: list[str]) -> tuple[dict[str, int],  dict[str, dict[Union[str, int], int]], dict[str, dict[str, float]], dict[str, str]]:
         n_classes, id_maps = {}, {}
         min_max_values = {}
         float_data_columns = []
@@ -106,7 +106,7 @@ class Preprocessor:
         col_types = {col: str(data[col].dtype) for col in data_columns}
         return n_classes, id_maps, min_max_values, col_types
 
-    def _process_batches(self, data: pd.DataFrame, n_cores: Optional[int], seq_length: int, seq_step_size: int, data_columns: List[str], group_proportions: List[float], write_format: str) -> None:
+    def _process_batches(self, data: pd.DataFrame, n_cores: Optional[int], seq_length: int, seq_step_size: int, data_columns: list[str], group_proportions: list[float], write_format: str) -> None:
         n_cores = n_cores or multiprocessing.cpu_count()
         batch_limits = get_batch_limits(data, n_cores)
         batches = [
@@ -125,7 +125,7 @@ class Preprocessor:
         assert len(delete_path) > 9
         os.system(f"rm -rf {delete_path}*")
 
-    def _export_metadata(self, id_maps: Dict[str, Dict[Any, int]], n_classes: Dict[str, int], col_types: Dict[str, str], min_max_values: Dict[str, Dict[str, float]]) -> None:
+    def _export_metadata(self, id_maps:  dict[str, dict[Union[str, int], int]], n_classes: dict[str, int], col_types: dict[str, str], min_max_values: dict[str, dict[str, float]]) -> None:
         data_driven_config = {
             "n_classes": n_classes,
             "id_maps": id_maps,
@@ -139,14 +139,14 @@ class Preprocessor:
             json.dump(data_driven_config, f)
 
 
-def replace_ids(data: pd.DataFrame, column: str) -> Tuple[pd.DataFrame, Dict[Any, int]]:
-    ids = sorted([int(x) if not isinstance(x, str) else x for x in np.unique(data[column])])
+def replace_ids(data: pd.DataFrame, column: str) -> tuple[pd.DataFrame,  dict[Union[str, int], int]]:
+    ids = sorted([int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]) # type: ignore
     id_map = {id_: i + 1 for i, id_ in enumerate(ids)}
     data[column] = data[column].map(id_map)
-    return data, id_map
+    return data, id_map # type: ignore
 
 
-def get_batch_limits(data: pd.DataFrame, n_batches: int) -> List[Tuple[int, int]]:
+def get_batch_limits(data: pd.DataFrame, n_batches: int) -> list[tuple[int, int]]:
     sequence_ids = data["sequenceId"].values
     new_sequence_id_indices = np.concatenate([[0], np.where(np.concatenate([[False], sequence_ids[1:] != sequence_ids[:-1]], axis=0))[0]])
 
@@ -161,15 +161,15 @@ def get_batch_limits(data: pd.DataFrame, n_batches: int) -> List[Tuple[int, int]
 def preprocess_batch(
     process_id: int,
     batch: pd.DataFrame,
-    split_paths: List[str],
+    split_paths: list[str],
     seq_length: int,
     seq_step_size: int,
-    data_columns: List[str],
-    group_proportions: List[float],
+    data_columns: list[str],
+    group_proportions: list[float],
     write_format: str,
 ) -> None:
     sequence_ids = sorted(list(np.unique(batch["sequenceId"])))
-    written_files = {i: [] for i in range(len(split_paths))}
+    written_files: dict[int, list[str]] = {i: [] for i in range(len(split_paths))}
     for i, sequence_id in enumerate(sequence_ids):
         data_subset = batch.loc[batch["sequenceId"] == sequence_id, :]
         sequences = extract_sequences(data_subset, seq_length, seq_step_size, data_columns)
@@ -199,7 +199,7 @@ def preprocess_batch(
             combine_parquet_files(written_files[j], out_path)
 
 
-def extract_sequences(data: pd.DataFrame, seq_length: int, seq_step_size: int, columns: List[str]) -> pd.DataFrame:
+def extract_sequences(data: pd.DataFrame, seq_length: int, seq_step_size: int, columns: list[str]) -> pd.DataFrame:
     raw_sequences = data.groupby("sequenceId").agg({col: list for col in columns}).reset_index(drop=False)
 
     rows = []
@@ -227,7 +227,7 @@ def get_subsequence_starts(in_seq_length: int, seq_length: int, seq_step_size: i
     return np.cumsum(increments)
 
 
-def extract_subsequences(in_seq: Dict[str, List[Any]], seq_length: int, seq_step_size: int, columns: List[str]) -> Dict[str, List[List[Any]]]:
+def extract_subsequences(in_seq: dict[str, pd.Series], seq_length: int, seq_step_size: int, columns: list[str]) -> dict[str, list[list[Union[float, int]]]]:
     if len(in_seq[columns[0]]) == 1:
         in_seq = {col: ([0] * (seq_length - len(in_seq[col]))) + in_seq[col] for col in columns}
     in_seq_length = len(in_seq[columns[0]])
@@ -243,10 +243,10 @@ def insert_top_folder(path: str, folder_name: str) -> str:
     return os.path.join(*new_components)
 
 
-def extract_data_subsets(sequences: pd.DataFrame, group_proportions: List[float]) -> Dict[int, pd.DataFrame]:
+def extract_data_subsets(sequences: pd.DataFrame, group_proportions: list[float]) -> dict[int, pd.DataFrame]:
     assert abs(1.0 - np.sum(group_proportions)) < 0.0000000000001, np.sum(group_proportions)
 
-    datasets = {i: [] for i in range(len(group_proportions))}
+    datasets: dict[int, list[pd.DataFrame]] = {i: [] for i in range(len(group_proportions))}
     n_cols = len(np.unique(sequences["inputCol"]))
     for _, sequence_data in sequences.groupby("sequenceId"):
         subset_groups = get_subset_groups(sequence_data, group_proportions, n_cols)
@@ -258,12 +258,12 @@ def extract_data_subsets(sequences: pd.DataFrame, group_proportions: List[float]
     return {group: pd.concat(dataset, axis=0) for group, dataset in datasets.items() if dataset}
 
 
-def get_subset_groups(sequence_data: pd.DataFrame, groups: List[float], n_cols: int) -> List[int]:
+def get_subset_groups(sequence_data: pd.DataFrame, groups: list[float], n_cols: int) -> list[int]:
     n_cases = int(sequence_data.shape[0] / n_cols)
-    subset_groups = [([i] * math.floor(n_cases * size)) for i, size in enumerate(groups)]
-    subset_groups = [inner for outer in subset_groups for inner in outer]
-    diff = n_cases - len(subset_groups)
-    return ([0] * diff) + subset_groups
+    subset_groups: list[list[int]] = [([i] * math.floor(n_cases * size)) for i, size in enumerate(groups)]
+    subset_groups2: list[int] = [inner for outer in subset_groups for inner in outer]
+    diff = n_cases - len(subset_groups2)
+    return ([0] * diff) + subset_groups2
 
 
 def cast_columns_to_string(data: pd.DataFrame) -> pd.DataFrame:
@@ -288,7 +288,7 @@ def combine_multiprocessing_outputs(
             combine_parquet_files(files, out_path)
 
 
-def combine_parquet_files(files: List[str], out_path: str) -> None:
+def combine_parquet_files(files: list[str], out_path: str) -> None:
     schema = pq.ParquetFile(files[0]).schema_arrow
     with pq.ParquetWriter(out_path, schema=schema, compression="snappy") as writer:
         for file in files:
