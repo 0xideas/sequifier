@@ -67,6 +67,7 @@ class Preprocessor:
 
     def _load_and_preprocess_data(self, data_path: str, read_format: str, selected_columns: Optional[list[str]], max_rows: Optional[int]) -> pd.DataFrame:
         data = read_data(data_path, read_format, columns=selected_columns)
+        assert data.isnull().sum().sum() == 0, f"NaN or null values not accepted: {data.isnull().sum(0)}"
         self.data_name_root = os.path.splitext(os.path.basename(data_path))[0]
 
         if selected_columns:
@@ -208,7 +209,9 @@ def extract_sequences(data: pd.DataFrame, seq_length: int, seq_step_size: int, c
 
         for subsequence_id in range(len(subsequences[columns[0]])):
             for col, subseqs in subsequences.items():
-                rows.append([in_row["sequenceId"], subsequence_id, col] + subseqs[subsequence_id])
+                row = [in_row["sequenceId"], subsequence_id, col] + subseqs[subsequence_id]
+                assert len(row) == (seq_length + 3), f"{row = }"
+                rows.append(row)
 
     sequences = pd.DataFrame(
         rows,
@@ -219,7 +222,7 @@ def extract_sequences(data: pd.DataFrame, seq_length: int, seq_step_size: int, c
 
 def get_subsequence_starts(in_seq_length: int, seq_length: int, seq_step_size: int) -> np.ndarray:
     nseq_adjusted = math.ceil((in_seq_length - seq_length) / seq_step_size)
-    seq_step_size_adjusted = math.floor((in_seq_length - seq_length) / nseq_adjusted)
+    seq_step_size_adjusted = math.floor((in_seq_length - seq_length) / max(1, nseq_adjusted))
     increments = [0] + [max(1, seq_step_size_adjusted)] * nseq_adjusted
     while np.sum(increments) < (in_seq_length - seq_length):
         increments[np.argmin(increments[1:]) + 1] += 1
@@ -228,7 +231,7 @@ def get_subsequence_starts(in_seq_length: int, seq_length: int, seq_step_size: i
 
 
 def extract_subsequences(in_seq: dict[str, pd.Series], seq_length: int, seq_step_size: int, columns: list[str]) -> dict[str, list[list[Union[float, int]]]]:
-    if len(in_seq[columns[0]]) == 1:
+    if len(in_seq[columns[0]]) < seq_length:
         in_seq = {col: ([0] * (seq_length - len(in_seq[col]))) + in_seq[col] for col in columns}
     in_seq_length = len(in_seq[columns[0]])
 

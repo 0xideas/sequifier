@@ -99,7 +99,9 @@ def format_number(number: float) -> str:
     Returns:
         A formatted string representation of the number.
     """
-    if number == 0:
+    if pd.isnull(number):
+        return("NaN")
+    elif number == 0:
         order_of_magnitude = 0
     else:
         order_of_magnitude = math.floor(math.log(number, 10))
@@ -354,7 +356,6 @@ class TransformerModel(nn.Module):
             if (batch_count + 1) % self.log_interval == 0:
                 lr = self.scheduler.get_last_lr()[0]
                 s_per_batch = (time.time() - start_time) / self.log_interval
-
                 self.log_file.write(
                     f"| epoch {epoch:3d} | {(batch_count+1):5d}/{num_batches:5d} batches | "
                     f"lr {format_number(lr)} | s/batch {format_number(s_per_batch)} | "
