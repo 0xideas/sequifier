@@ -4,7 +4,6 @@ from typing import Optional, Union
 import numpy as np
 import pandas as pd
 import torch
-from torch import Tensor
 
 PANDAS_TO_TORCH_TYPES = {"int64": torch.int64, "float64": torch.float32}
 
@@ -13,7 +12,7 @@ def construct_index_maps(
     id_maps: dict[str, dict[Union[str, int], int]],
     target_columns_index_map: list[str],
     map_to_id: Optional[bool]
-) -> Dict[str, Dict]:
+) -> dict[str, dict]:
     """Construct index maps for target columns."""
     index_map = {}
     if map_to_id is not None:
@@ -65,7 +64,7 @@ def numpy_to_pytorch(
     seq_length: int,
     device: torch.device,
     to_device: bool
-) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+) -> tuple[dict[str, torch.tensor], dict[str, torch.tensor]]:
     """Convert numpy data to PyTorch tensors."""
     targets = {}
     for target_column in target_columns:
