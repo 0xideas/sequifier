@@ -1,7 +1,7 @@
 import json
 import os
 import warnings
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 from warnings import simplefilter
 
 import numpy as np
@@ -18,7 +18,7 @@ from sequifier.train import infer_with_model, load_inference_model
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
 
-def infer(args: Any, args_config: Dict[str, Any]) -> None:
+def infer(args: Any, args_config: dict[str, Any]) -> None:
     config_path = (
         args.config_path if args.config_path is not None else "configs/infer.yaml"
     )
@@ -181,7 +181,7 @@ def expand_data_by_autoregression(data: pd.DataFrame, autoregression_additional_
     return data.sort_values(["sequenceId", "subsequenceId"], ascending=True).reset_index(drop=True)
 
 
-def get_probs_preds(config: Any, inferer: 'Inferer', data: pd.DataFrame, column_types: Dict[str, torch.dtype]) -> Tuple[Optional[Dict[str, np.ndarray]], Dict[str, np.ndarray]]:
+def get_probs_preds(config: Any, inferer: 'Inferer', data: pd.DataFrame, column_types: dict[str, torch.dtype]) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     X, _ = numpy_to_pytorch(
         data,
         column_types,
@@ -206,11 +206,11 @@ def get_probs_preds(config: Any, inferer: 'Inferer', data: pd.DataFrame, column_
 
 def fill_in_predictions(
     data: pd.DataFrame,
-    sequence_id_to_subsequence_ids: Dict[Any, np.ndarray],
-    ids_to_row: Dict[str, int],
+    sequence_id_to_subsequence_ids: dict[int, np.ndarray],
+    ids_to_row: dict[str, int],
     sequence_ids: np.ndarray,
     subsequence_id: int,
-    preds: Dict[str, np.ndarray]
+    preds: dict[str, np.ndarray]
 ) -> pd.DataFrame:
     """
     Fill in predictions for the given data.
@@ -279,9 +279,9 @@ def get_probs_preds_autoregression(
     config: Any,
     inferer: 'Inferer',
     data: pd.DataFrame,
-    column_types: Dict[str, torch.dtype],
+    column_types: dict[str, torch.dtype],
     seq_length: int
-) -> Tuple[Optional[Dict[str, np.ndarray]], Dict[str, np.ndarray]]:
+) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """
     Get probabilities and predictions for autoregression.
 
@@ -372,19 +372,19 @@ class Inferer:
         self,
         model_path: str,
         project_path: str,
-        id_maps: Dict[str, Dict[Union[str, int], int]],
-        min_max_values: Dict[str, Dict[str, float]],
+        id_maps: dict[str, dict[Union[str, int], int]],
+        min_max_values: dict[str, dict[str, float]],
         map_to_id: bool,
-        categorical_columns: List[str],
-        real_columns: List[str],
-        selected_columns: List[str],
-        target_columns: List[str],
-        target_column_types: Dict[str, str],
+        categorical_columns: list[str],
+        real_columns: list[str],
+        selected_columns: list[str],
+        target_columns: list[str],
+        target_column_types: dict[str, str],
         sample_from_distribution: bool,
         infer_with_dropout: bool,
         inference_batch_size: int,
         device: str,
-        args_config: Dict[str, Any],
+        args_config: dict[str, Any],
         training_config_path: str,
     ):
         self.map_to_id = map_to_id
@@ -452,10 +452,10 @@ class Inferer:
 
     def infer(
         self,
-        x: Optional[Dict[str, np.ndarray]],
-        probs: Optional[Dict[str, np.ndarray]] = None,
+        x: Optional[dict[str, np.ndarray]],
+        probs: Optional[dict[str, np.ndarray]] = None,
         return_probs: bool = False
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """
         Perform inference on the input data.
 
@@ -513,7 +513,7 @@ class Inferer:
                 outs[target_column] = self.invert_normalization(output, target_column)
         return outs
 
-    def prepare_inference_batches(self, x: Dict[str, np.ndarray], pad_to_batch_size: bool) -> List[Dict[str, np.ndarray]]:
+    def prepare_inference_batches(self, x: dict[str, np.ndarray], pad_to_batch_size: bool) -> list[dict[str, np.ndarray]]:
         size = x[self.target_columns[0]].shape[0]
         if size == self.inference_batch_size:
             return [x]
@@ -538,7 +538,7 @@ class Inferer:
             ]
             return xs
 
-    def infer_pure(self, x: Dict[str, np.ndarray]) -> List[np.ndarray]:
+    def infer_pure(self, x: dict[str, np.ndarray]) -> list[np.ndarray]:
         """
         Perform pure inference using ONNX session.
 
@@ -573,7 +573,7 @@ class Inferer:
         return np.concatenate(([x] * repetitions) + [x[0:filler, :]], axis=0)
 
 
-def normalize(outs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """
     Normalize the output probabilities.
 
