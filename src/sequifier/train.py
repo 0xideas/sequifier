@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 import warnings
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -29,7 +29,7 @@ from sequifier.helpers import (
 )
 
 
-def train(args: Any, args_config: Dict[str, Any]) -> None:
+def train(args: Any, args_config: dict[str, Any]) -> None:
     """
     Train the model using the provided configuration.
 
@@ -214,7 +214,7 @@ class TransformerModel(nn.Module):
         self._initialize_log_file()
         self.log_file.write(load_string)
 
-    def _get_real_columns_repetitions(self, real_columns: List[str], nhead: int) -> Dict[str, int]:
+    def _get_real_columns_repetitions(self, real_columns: list[str], nhead: int) -> dict[str, int]:
         real_columns_repetitions = {col: 1 for col in real_columns}
         column_index = dict(enumerate(real_columns))
         for i in range(nhead * len(real_columns)):
@@ -231,7 +231,7 @@ class TransformerModel(nn.Module):
         return torch.triu(torch.ones(sz, sz) * float("-inf"), diagonal=1)
 
     @staticmethod
-    def _filter_key(dict_: Dict[str, Any], key: str) -> Dict[str, Any]:
+    def _filter_key(dict_: dict[str, Any], key: str) -> dict[str, Any]:
         return {k: v for k, v in dict_.items() if k != key}
 
     def _init_weights(self) -> None:
@@ -243,7 +243,7 @@ class TransformerModel(nn.Module):
             self.decoder[target_column].bias.data.zero_()
             self.decoder[target_column].weight.data.uniform_(-initrange, initrange)
 
-    def forward_train(self, src: Dict[str, Tensor]) -> Dict[str, Tensor]:
+    def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
         srcs = []
         for col in self.categorical_columns:
             src_t = self.encoder[col](src[col].T) * math.sqrt(
@@ -275,12 +275,12 @@ class TransformerModel(nn.Module):
 
         return output
 
-    def forward(self, src: Dict[str, Tensor]) -> Dict[str, Tensor]:
+    def forward(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
         output = self.forward_train(src)
         return {target_column: out[-1, :, :] for target_column, out in output.items()}
 
-    def train_model(self, X_train: Dict[str, Tensor], y_train: Dict[str, Tensor],
-                    X_valid: Dict[str, Tensor], y_valid: Dict[str, Tensor]) -> None:
+    def train_model(self, X_train: dict[str, Tensor], y_train: dict[str, Tensor],
+                    X_valid: dict[str, Tensor], y_valid: dict[str, Tensor]) -> None:
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
 
@@ -315,7 +315,7 @@ class TransformerModel(nn.Module):
         self.log_file.write("Training transformer complete")
         self.log_file.close()
 
-    def _train_epoch(self, X_train: Dict[str, Tensor], y_train: Dict[str, Tensor], epoch: int) -> None:
+    def _train_epoch(self, X_train: dict[str, Tensor], y_train: dict[str, Tensor], epoch: int) -> None:
         self.train()  # turn on train mode
         total_loss = 0.0
         start_time = time.time()
@@ -363,7 +363,7 @@ class TransformerModel(nn.Module):
                 total_loss = 0.0
                 start_time = time.time()
 
-    def _calculate_loss(self, output: Dict[str, Tensor], targets: Dict[str, Tensor]) -> Tuple[Tensor, Dict[str, Tensor]]:
+    def _calculate_loss(self, output: dict[str, Tensor], targets: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor]]:
         losses = {}
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
@@ -408,7 +408,7 @@ class TransformerModel(nn.Module):
             assert self.target_column_types[col] == "real"
             return val
 
-    def _evaluate(self, X_valid: Dict[str, Tensor], y_valid: Dict[str, Tensor]) -> Tuple[float, Dict[str, float], Dict[str, Tensor]]:
+    def _evaluate(self, X_valid: dict[str, Tensor], y_valid: dict[str, Tensor]) -> tuple[float, dict[str, float], dict[str, Tensor]]:
         self.eval()  # turn on evaluation mode
 
         with torch.no_grad():
@@ -456,7 +456,7 @@ class TransformerModel(nn.Module):
 
         return total_loss, total_losses, output
 
-    def _get_batch(self, X: Dict[str, Tensor], y: Dict[str, Tensor], batch_start: int, batch_size: int, to_device: bool) -> Tuple[Dict[str, Tensor], Dict[str, Tensor]]:
+    def _get_batch(self, X: dict[str, Tensor], y: dict[str, Tensor], batch_start: int, batch_size: int, to_device: bool) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         if to_device:
             return (
                 {
@@ -621,7 +621,7 @@ class TransformerModel(nn.Module):
             return None
 
     def _log_epoch_results(self, epoch: int, elapsed: float, total_loss: float,
-                           total_losses: Dict[str, float], output: Dict[str, Tensor]) -> None:
+                           total_losses: dict[str, float], output: dict[str, Tensor]) -> None:
         self.log_file.write("-" * 89)
         self.log_file.write(
             f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | "
@@ -668,7 +668,7 @@ class TransformerModel(nn.Module):
 def load_inference_model(
     model_path: str,
     training_config_path: str,
-    args_config: Dict[str, Any],
+    args_config: dict[str, Any],
     device: str,
     infer_with_dropout: bool
 ) -> TransformerModel:
@@ -698,8 +698,8 @@ def load_inference_model(
     return model
 
 
-def infer_with_model(model: TransformerModel, x: List[Dict[str, np.ndarray]], device: str,
-                     size: int, target_columns: List[str]) -> Dict[str, np.ndarray]:
+def infer_with_model(model: TransformerModel, x: list[dict[str, np.ndarray]], device: str,
+                     size: int, target_columns: list[str]) -> dict[str, np.ndarray]:
     outs0 = [
         model.forward(
             {col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()}
