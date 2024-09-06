@@ -116,6 +116,17 @@ class TrainingSpecModel(BaseModel):
     scheduler: DotDict = Field(default_factory=lambda: DotDict({"name": "StepLR", "step_size": 1, "gamma": 0.99}))
     continue_training: bool = True
 
+    def __init__(self, **kwargs):
+        super().__init__(
+            **{k: v for k, v in kwargs.items() if k not in ["optimizer", "scheduler"]}
+        )
+
+        self.validate_optimizer_config(kwargs["optimizer"])
+        self.optimizer = DotDict(kwargs["optimizer"])
+        self.validate_scheduler_config(kwargs["scheduler"])
+        self.scheduler = DotDict(kwargs["scheduler"])
+
+
     @validator("criterion")
     def validate_criterion(cls, v):
         for vv in v.values():
@@ -153,7 +164,7 @@ class TrainModel(BaseModel):
     """Pydantic model for training configuration."""
 
     project_path: str
-    model_name: Optional[str] = None
+    model_name: str
     training_data_path: str
     validation_data_path: str
     read_format: str = "parquet"
