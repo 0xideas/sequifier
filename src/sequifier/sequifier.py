@@ -1,5 +1,5 @@
 from argparse import ArgumentParser
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -8,7 +8,7 @@ from sequifier.preprocess import preprocess
 from sequifier.train import train
 
 
-def build_args_config(args: Any) -> Dict[str, Any]:
+def build_args_config(args: Any) -> dict[str, Any]:
     """
     Build configuration dictionary from command-line arguments.
 
