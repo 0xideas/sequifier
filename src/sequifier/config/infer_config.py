@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field, validator
 from sequifier.helpers import normalize_path
 
 
-def load_inferer_config(config_path: str, args_config: dict, on_unprocessed: bool) -> 'InfererModel':
+def load_inferer_config(
+    config_path: str, args_config: dict, on_unprocessed: bool
+) -> "InfererModel":
     """
     Load inferer configuration from a YAML file and update it with args_config.
 
@@ -27,20 +29,28 @@ def load_inferer_config(config_path: str, args_config: dict, on_unprocessed: boo
     if not on_unprocessed:
         dd_config_path = config_values.get("ddconfig_path")
 
-        with open(normalize_path(dd_config_path, config_values["project_path"]), "r") as f:
+        with open(
+            normalize_path(dd_config_path, config_values["project_path"]), "r"
+        ) as f:
             dd_config = json.load(f)
 
-        config_values["column_types"] = config_values.get("column_types", dd_config["column_types"])
+        config_values["column_types"] = config_values.get(
+            "column_types", dd_config["column_types"]
+        )
 
         if config_values["selected_columns"] is None:
-            config_values["selected_columns"] = list(config_values["column_types"].keys())
+            config_values["selected_columns"] = list(
+                config_values["column_types"].keys()
+            )
 
         config_values["categorical_columns"] = [
-            col for col, type_ in dd_config["column_types"].items()
+            col
+            for col, type_ in dd_config["column_types"].items()
             if type_ == "int64" and col in config_values["selected_columns"]
         ]
         config_values["real_columns"] = [
-            col for col, type_ in dd_config["column_types"].items()
+            col
+            for col, type_ in dd_config["column_types"].items()
             if type_ == "float64" and col in config_values["selected_columns"]
         ]
         config_values["data_path"] = normalize_path(
@@ -104,21 +114,33 @@ class InfererModel(BaseModel):
     @validator("target_column_types")
     def validate_target_column_types(cls, v: dict, values: dict) -> dict:
         if not all(vv in ["categorical", "real"] for vv in v.values()):
-            raise ValueError("Target column types must be either 'categorical' or 'real'")
+            raise ValueError(
+                "Target column types must be either 'categorical' or 'real'"
+            )
         if list(v.keys()) != values.get("target_columns", []):
-            raise ValueError("target_columns and target_column_types must contain the same keys in the same order")
+            raise ValueError(
+                "target_columns and target_column_types must contain the same keys in the same order"
+            )
         return v
 
     @validator("map_to_id")
     def validate_map_to_id(cls, v: bool, values: dict) -> bool:
-        if v and not any(vv == "categorical" for vv in values.get("target_column_types", {}).values()):
-            raise ValueError("map_to_id can only be True if at least one target variable is categorical")
+        if v and not any(
+            vv == "categorical" for vv in values.get("target_column_types", {}).values()
+        ):
+            raise ValueError(
+                "map_to_id can only be True if at least one target variable is categorical"
+            )
         return v
 
     @validator("sample_from_distribution")
     def validate_sample_from_distribution(cls, v: bool, values: dict) -> bool:
-        if v and any(vv == "real" for vv in values.get("target_column_types", {}).values()):
-            raise ValueError("sample_from_distribution can only be used when all target columns are categorical")
+        if v and any(
+            vv == "real" for vv in values.get("target_column_types", {}).values()
+        ):
+            raise ValueError(
+                "sample_from_distribution can only be used when all target columns are categorical"
+            )
         return v
 
     class Config:
@@ -127,5 +149,9 @@ class InfererModel(BaseModel):
     def __init__(self, **data):
         super().__init__(**data)
         column_ordered = list(self.column_types.keys())
-        columns_ordered_filtered = [c for c in column_ordered if c in self.target_columns]
-        assert columns_ordered_filtered == self.target_columns, f"{columns_ordered_filtered} != {self.target_columns}"
+        columns_ordered_filtered = [
+            c for c in column_ordered if c in self.target_columns
+        ]
+        assert (
+            columns_ordered_filtered == self.target_columns
+        ), f"{columns_ordered_filtered} != {self.target_columns}"

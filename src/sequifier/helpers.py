@@ -11,27 +11,27 @@ PANDAS_TO_TORCH_TYPES = {"int64": torch.int64, "float64": torch.float32}
 def construct_index_maps(
     id_maps: Optional[dict[str, dict[Union[str, int], int]]],
     target_columns_index_map: list[str],
-    map_to_id: Optional[bool]
+    map_to_id: Optional[bool],
 ) -> dict[str, dict[int, Union[str, int]]]:
     """Construct index maps for target columns."""
     index_map = {}
     if map_to_id is not None:
         assert id_maps is not None
         for target_column in target_columns_index_map:
-            map_ = (
-                {v: k for k, v in id_maps[target_column].items()}
-            )
+            map_ = {v: k for k, v in id_maps[target_column].items()}
             val = next(iter(map_.values()))
             if isinstance(val, str):
                 map_[0] = "unknown"
             else:
                 assert isinstance(val, int)
-                map_[0] = min(map_.values()) - 1 # type: ignore
+                map_[0] = min(map_.values()) - 1  # type: ignore
             index_map[target_column] = map_
     return index_map
 
 
-def read_data(path: str, read_format: str, columns: Optional[list[str]] = None) -> pd.DataFrame:
+def read_data(
+    path: str, read_format: str, columns: Optional[list[str]] = None
+) -> pd.DataFrame:
     """Read data from CSV or Parquet file."""
     if read_format == "csv":
         return pd.read_csv(path, sep=",", decimal=".", index_col=False)
@@ -50,7 +50,9 @@ def write_data(data: pd.DataFrame, path: str, write_format: str, **kwargs) -> No
         raise ValueError(f"Unsupported write format: {write_format}")
 
 
-def subset_to_selected_columns(data: pd.DataFrame, selected_columns: list[str]) -> pd.DataFrame:
+def subset_to_selected_columns(
+    data: pd.DataFrame, selected_columns: list[str]
+) -> pd.DataFrame:
     """Subset data to selected columns."""
     column_filters = [
         (data["inputCol"].values == input_col) for input_col in selected_columns
@@ -66,7 +68,7 @@ def numpy_to_pytorch(
     target_columns: list[str],
     seq_length: int,
     device: torch.device,
-    to_device: bool
+    to_device: bool,
 ) -> tuple[dict[str, torch.tensor], dict[str, torch.tensor]]:
     """Convert numpy data to PyTorch tensors."""
     targets = {}

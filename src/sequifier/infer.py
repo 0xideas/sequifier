@@ -139,7 +139,9 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     print("Inference complete")
 
 
-def expand_data_by_autoregression(data: pd.DataFrame, autoregression_additional_steps: int, seq_length: int) -> pd.DataFrame:
+def expand_data_by_autoregression(
+    data: pd.DataFrame, autoregression_additional_steps: int, seq_length: int
+) -> pd.DataFrame:
     """
     Expand data for autoregression by adding additional steps.
 
@@ -162,27 +164,44 @@ def expand_data_by_autoregression(data: pd.DataFrame, autoregression_additional_
 
         for offset in range(1, autoregression_additional_steps + 1):
             sequence_id_fields = np.repeat(sequence_id, last_observation.shape[0])
-            subsequence_id_fields = np.repeat(max_subsequence_id + offset, last_observation.shape[0])
+            subsequence_id_fields = np.repeat(
+                max_subsequence_id + offset, last_observation.shape[0]
+            )
             input_col_fields = last_observation["inputCol"].values
-            metadata = pd.DataFrame({
-                "sequenceId": sequence_id_fields,
-                "subsequenceId": subsequence_id_fields,
-                "inputCol": input_col_fields,
-            })
+            metadata = pd.DataFrame(
+                {
+                    "sequenceId": sequence_id_fields,
+                    "subsequenceId": subsequence_id_fields,
+                    "inputCol": input_col_fields,
+                }
+            )
 
-            empty_data_fields = np.ones((last_observation.shape[0], min(seq_length, offset))) * np.inf
-            offset_data_fields = last_observation[data_cols].values[:, min(offset, last_observation.shape[1]):]
-            data_fields = np.concatenate([offset_data_fields, empty_data_fields], axis=1)
+            empty_data_fields = (
+                np.ones((last_observation.shape[0], min(seq_length, offset))) * np.inf
+            )
+            offset_data_fields = last_observation[data_cols].values[
+                :, min(offset, last_observation.shape[1]) :
+            ]
+            data_fields = np.concatenate(
+                [offset_data_fields, empty_data_fields], axis=1
+            )
             data_df = pd.DataFrame(data_fields, columns=data_cols)
             observation = pd.concat([metadata, data_df], axis=1)
             autoregression_additional_observations.append(observation)
 
     data = pd.concat([data] + autoregression_additional_observations, axis=0)
 
-    return data.sort_values(["sequenceId", "subsequenceId"], ascending=True).reset_index(drop=True)
+    return data.sort_values(
+        ["sequenceId", "subsequenceId"], ascending=True
+    ).reset_index(drop=True)
 
 
-def get_probs_preds(config: Any, inferer: 'Inferer', data: pd.DataFrame, column_types: dict[str, torch.dtype]) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
+def get_probs_preds(
+    config: Any,
+    inferer: "Inferer",
+    data: pd.DataFrame,
+    column_types: dict[str, torch.dtype],
+) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     X, _ = numpy_to_pytorch(
         data,
         column_types,
@@ -211,7 +230,7 @@ def fill_in_predictions(
     ids_to_row: dict[str, int],
     sequence_ids: np.ndarray,
     subsequence_id: int,
-    preds: dict[str, np.ndarray]
+    preds: dict[str, np.ndarray],
 ) -> pd.DataFrame:
     """
     Fill in predictions for the given data.
@@ -233,7 +252,9 @@ def fill_in_predictions(
         assert len(preds_vals) == len(sequence_ids_distinct)
         for sequence_id, pred in zip(sequence_ids_distinct, preds_vals.flatten()):
             sequence_id_subsequence_ids = sequence_id_to_subsequence_ids[sequence_id]
-            sequence_id_subsequence_ids = sequence_id_subsequence_ids[sequence_id_subsequence_ids > subsequence_id]
+            sequence_id_subsequence_ids = sequence_id_subsequence_ids[
+                sequence_id_subsequence_ids > subsequence_id
+            ]
             for subsequence_id2 in sequence_id_subsequence_ids:
                 offset = subsequence_id2 - subsequence_id
                 assert offset > 0
@@ -275,10 +296,10 @@ def verify_variable_order(data: pd.DataFrame) -> None:
 
 def get_probs_preds_autoregression(
     config: Any,
-    inferer: 'Inferer',
+    inferer: "Inferer",
     data: pd.DataFrame,
     column_types: dict[str, torch.dtype],
-    seq_length: int
+    seq_length: int,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """
     Get probabilities and predictions for autoregression.
@@ -310,7 +331,9 @@ def get_probs_preds_autoregression(
 
     sequence_id_to_subsequence_ids = {
         sequence_id_: np.array(subsequence_ids_)
-        for sequence_id_, subsequence_ids_ in data[["sequenceId", "subsequenceIdAdjusted"]]
+        for sequence_id_, subsequence_ids_ in data[
+            ["sequenceId", "subsequenceIdAdjusted"]
+        ]
         .groupby("sequenceId")
         .agg({"subsequenceIdAdjusted": lambda x: sorted(list(set(x)))})
         .to_dict()["subsequenceIdAdjusted"]
@@ -331,10 +354,12 @@ def get_probs_preds_autoregression(
         data_subset = data.loc[subsequence_filter, :]
         sequence_ids_present = sequence_ids[subsequence_filter]
 
-        sort_keys.extend([
-            f"{fill_number(seq_id, max_length)}-{fill_number(subsequence_id, max_length)}"
-            for seq_id in np.unique(sequence_ids_present)
-        ])
+        sort_keys.extend(
+            [
+                f"{fill_number(seq_id, max_length)}-{fill_number(subsequence_id, max_length)}"
+                for seq_id in np.unique(sequence_ids_present)
+            ]
+        )
 
         probs, preds = get_probs_preds(config, inferer, data_subset, column_types)
         preds_list.append(preds)
@@ -352,12 +377,16 @@ def get_probs_preds_autoregression(
     sort_order = np.argsort(sort_keys)
 
     preds = {
-        target_column: np.concatenate([p[target_column] for p in preds_list], axis=0)[sort_order]
+        target_column: np.concatenate([p[target_column] for p in preds_list], axis=0)[
+            sort_order
+        ]
         for target_column in inferer.target_columns
     }
     if len(probs_list):
         probs = {
-            target_column: np.concatenate([p[target_column] for p in probs_list], axis=0)[sort_order, :]
+            target_column: np.concatenate(
+                [p[target_column] for p in probs_list], axis=0
+            )[sort_order, :]
             for target_column in inferer.target_columns
         }
     else:
@@ -433,7 +462,9 @@ class Inferer:
                 self.infer_with_dropout,
             )
 
-    def invert_normalization(self, values: np.ndarray, target_column: str) -> np.ndarray:
+    def invert_normalization(
+        self, values: np.ndarray, target_column: str
+    ) -> np.ndarray:
         """
         Invert the normalization of values for a target column.
 
@@ -446,13 +477,15 @@ class Inferer:
         """
         min_ = self.min_max_values[target_column]["min"]
         max_ = self.min_max_values[target_column]["max"]
-        return np.array([(((v + 0.8) / 1.6) * (max_ - min_)) + min_ for v in values.flatten()]).reshape(*values.shape)
+        return np.array(
+            [(((v + 0.8) / 1.6) * (max_ - min_)) + min_ for v in values.flatten()]
+        ).reshape(*values.shape)
 
     def infer(
         self,
         x: Optional[dict[str, np.ndarray]],
         probs: Optional[dict[str, np.ndarray]] = None,
-        return_probs: bool = False
+        return_probs: bool = False,
     ) -> dict[str, np.ndarray]:
         """
         Perform inference on the input data.
@@ -465,26 +498,39 @@ class Inferer:
         Returns:
             Dictionary of inference results.
         """
-        if probs is None or (x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0): # type: ignore
+        if probs is None or (x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0):  # type: ignore
             assert x is not None
             size = x[self.target_columns[0]].shape[0]
-            if probs is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0: # type: ignore
+            if probs is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0:  # type: ignore
                 assert x is not None
-                warnings.warn(f"Not all keys in x are in probs - {x.keys() = } != {probs.keys() = }. Full inference is executed.")
-            
+                warnings.warn(
+                    f"Not all keys in x are in probs - {x.keys() = } != {probs.keys() = }. Full inference is executed."
+                )
+
             if self.inference_model_type == "onnx":
                 assert x is not None
                 x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
-                out_subs = [dict(zip(self.target_columns, self.infer_pure(x_sub))) for x_sub in x_adjusted]
+                out_subs = [
+                    dict(zip(self.target_columns, self.infer_pure(x_sub)))
+                    for x_sub in x_adjusted
+                ]
                 outs = {
-                    target_column: np.concatenate([out_sub[target_column] for out_sub in out_subs], axis=0)[:size, :]
+                    target_column: np.concatenate(
+                        [out_sub[target_column] for out_sub in out_subs], axis=0
+                    )[:size, :]
                     for target_column in self.target_columns
                 }
             elif self.inference_model_type == "pt":
                 assert x is not None
                 x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
-                outs = infer_with_model(self.inference_model, x_adjusted, self.device, size, self.target_columns)
-            
+                outs = infer_with_model(
+                    self.inference_model,
+                    x_adjusted,
+                    self.device,
+                    size,
+                    self.target_columns,
+                )
+
             for target_column, target_outs in outs.items():
                 assert not np.any(target_outs == np.inf), target_outs
 
@@ -502,7 +548,7 @@ class Inferer:
                 return {**preds, **normalize(logits)}
         else:
             outs = dict(probs)
-        
+
         for target_column in self.target_columns:
             if self.target_column_types[target_column] == "categorical":
                 if not self.sample_from_distribution:
@@ -515,7 +561,9 @@ class Inferer:
                 outs[target_column] = self.invert_normalization(output, target_column)
         return outs
 
-    def prepare_inference_batches(self, x: dict[str, np.ndarray], pad_to_batch_size: bool) -> list[dict[str, np.ndarray]]:
+    def prepare_inference_batches(
+        self, x: dict[str, np.ndarray], pad_to_batch_size: bool
+    ) -> list[dict[str, np.ndarray]]:
         size = x[self.target_columns[0]].shape[0]
         if size == self.inference_batch_size:
             return [x]

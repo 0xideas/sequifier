@@ -47,15 +47,29 @@ class Preprocessor:
         np.random.seed(seed)
 
         self._setup_directories()
-        data = self._load_and_preprocess_data(data_path, read_format, selected_columns, max_rows)
+        data = self._load_and_preprocess_data(
+            data_path, read_format, selected_columns, max_rows
+        )
         self._setup_split_paths(write_format, len(group_proportions))
 
-        data_columns = [col for col in data.columns if col not in ["sequenceId", "itemPosition"]]
-        n_classes, id_maps, min_max_values, col_types = self._process_columns(data, data_columns)
+        data_columns = [
+            col for col in data.columns if col not in ["sequenceId", "itemPosition"]
+        ]
+        n_classes, id_maps, min_max_values, col_types = self._process_columns(
+            data, data_columns
+        )
         self._export_metadata(id_maps, n_classes, col_types, min_max_values)
 
         data = data.sort_values(["sequenceId", "itemPosition"])
-        self._process_batches(data, n_cores, seq_length, seq_step_size, data_columns, group_proportions, write_format)
+        self._process_batches(
+            data,
+            n_cores,
+            seq_length,
+            seq_step_size,
+            data_columns,
+            group_proportions,
+            write_format,
+        )
         self._cleanup()
 
     def _setup_directories(self) -> None:
@@ -65,13 +79,25 @@ class Preprocessor:
             shutil.rmtree(temp_path)
         os.makedirs(temp_path)
 
-    def _load_and_preprocess_data(self, data_path: str, read_format: str, selected_columns: Optional[list[str]], max_rows: Optional[int]) -> pd.DataFrame:
+    def _load_and_preprocess_data(
+        self,
+        data_path: str,
+        read_format: str,
+        selected_columns: Optional[list[str]],
+        max_rows: Optional[int],
+    ) -> pd.DataFrame:
         data = read_data(data_path, read_format, columns=selected_columns)
-        assert data.isnull().sum().sum() == 0, f"NaN or null values not accepted: {data.isnull().sum(0)}"
+        assert (
+            data.isnull().sum().sum() == 0
+        ), f"NaN or null values not accepted: {data.isnull().sum(0)}"
         self.data_name_root = os.path.splitext(os.path.basename(data_path))[0]
 
         if selected_columns:
-            selected_columns_filtered = [col for col in selected_columns if col not in ["sequenceId", "itemPosition"]]
+            selected_columns_filtered = [
+                col
+                for col in selected_columns
+                if col not in ["sequenceId", "itemPosition"]
+            ]
             data = data[["sequenceId", "itemPosition"] + selected_columns_filtered]
 
         if max_rows:
@@ -81,11 +107,20 @@ class Preprocessor:
 
     def _setup_split_paths(self, write_format: str, n_splits: int) -> None:
         self.split_paths = [
-            os.path.join(self.project_path, "data", f"{self.data_name_root}-split{i}.{write_format}")
+            os.path.join(
+                self.project_path,
+                "data",
+                f"{self.data_name_root}-split{i}.{write_format}",
+            )
             for i in range(n_splits)
         ]
 
-    def _process_columns(self, data: pd.DataFrame, data_columns: list[str]) -> tuple[dict[str, int],  dict[str, dict[Union[str, int], int]], dict[str, dict[str, float]], dict[str, str]]:
+    def _process_columns(self, data: pd.DataFrame, data_columns: list[str]) -> tuple[
+        dict[str, int],
+        dict[str, dict[Union[str, int], int]],
+        dict[str, dict[str, float]],
+        dict[str, str],
+    ]:
         n_classes, id_maps = {}, {}
         min_max_values = {}
         float_data_columns = []
@@ -97,8 +132,12 @@ class Preprocessor:
                 id_maps[data_col] = dict(sup_id_map)
                 n_classes[data_col] = len(np.unique(data[data_col])) + 1
             elif dtype == "float64":
-                min_val, max_val = np.min(data[data_col].values), np.max(data[data_col].values)
-                data[data_col] = (((data[data_col] - min_val) / (max_val - min_val)) * 1.6) - 0.8
+                min_val, max_val = np.min(data[data_col].values), np.max(
+                    data[data_col].values
+                )
+                data[data_col] = (
+                    ((data[data_col] - min_val) / (max_val - min_val)) * 1.6
+                ) - 0.8
                 min_max_values[data_col] = {"min": min_val, "max": max_val}
                 float_data_columns.append(data_col)
             else:
@@ -107,11 +146,29 @@ class Preprocessor:
         col_types = {col: str(data[col].dtype) for col in data_columns}
         return n_classes, id_maps, min_max_values, col_types
 
-    def _process_batches(self, data: pd.DataFrame, n_cores: Optional[int], seq_length: int, seq_step_size: int, data_columns: list[str], group_proportions: list[float], write_format: str) -> None:
+    def _process_batches(
+        self,
+        data: pd.DataFrame,
+        n_cores: Optional[int],
+        seq_length: int,
+        seq_step_size: int,
+        data_columns: list[str],
+        group_proportions: list[float],
+        write_format: str,
+    ) -> None:
         n_cores = n_cores or multiprocessing.cpu_count()
         batch_limits = get_batch_limits(data, n_cores)
         batches = [
-            (i, data.iloc[start:end, :], self.split_paths, seq_length, seq_step_size, data_columns, group_proportions, write_format)
+            (
+                i,
+                data.iloc[start:end, :],
+                self.split_paths,
+                seq_length,
+                seq_step_size,
+                data_columns,
+                group_proportions,
+                write_format,
+            )
             for i, (start, end) in enumerate(batch_limits)
             if (end - start) > 0
         ]
@@ -119,14 +176,26 @@ class Preprocessor:
         with multiprocessing.Pool(processes=len(batches)) as pool:
             pool.starmap(preprocess_batch, batches)
 
-        combine_multiprocessing_outputs(self.project_path, len(group_proportions), len(batches), self.data_name_root, write_format)
+        combine_multiprocessing_outputs(
+            self.project_path,
+            len(group_proportions),
+            len(batches),
+            self.data_name_root,
+            write_format,
+        )
 
     def _cleanup(self) -> None:
         delete_path = os.path.join(self.project_path, "data", "temp")
         assert len(delete_path) > 9
         os.system(f"rm -rf {delete_path}*")
 
-    def _export_metadata(self, id_maps:  dict[str, dict[Union[str, int], int]], n_classes: dict[str, int], col_types: dict[str, str], min_max_values: dict[str, dict[str, float]]) -> None:
+    def _export_metadata(
+        self,
+        id_maps: dict[str, dict[Union[str, int], int]],
+        n_classes: dict[str, int],
+        col_types: dict[str, str],
+        min_max_values: dict[str, dict[str, float]],
+    ) -> None:
         data_driven_config = {
             "n_classes": n_classes,
             "id_maps": id_maps,
@@ -134,28 +203,53 @@ class Preprocessor:
             "column_types": col_types,
             "min_max_values": min_max_values,
         }
-        os.makedirs(os.path.join(self.project_path, "configs", "ddconfigs"), exist_ok=True)
+        os.makedirs(
+            os.path.join(self.project_path, "configs", "ddconfigs"), exist_ok=True
+        )
 
-        with open(os.path.join(self.project_path, "configs", "ddconfigs", f"{self.data_name_root}.json"), "w") as f:
+        with open(
+            os.path.join(
+                self.project_path, "configs", "ddconfigs", f"{self.data_name_root}.json"
+            ),
+            "w",
+        ) as f:
             json.dump(data_driven_config, f)
 
 
-def replace_ids(data: pd.DataFrame, column: str) -> tuple[pd.DataFrame,  dict[Union[str, int], int]]:
-    ids = sorted([int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]) # type: ignore
+def replace_ids(
+    data: pd.DataFrame, column: str
+) -> tuple[pd.DataFrame, dict[Union[str, int], int]]:
+    ids = sorted([int(x) if not isinstance(x, str) else x for x in np.unique(data[column])])  # type: ignore
     id_map = {id_: i + 1 for i, id_ in enumerate(ids)}
     data[column] = data[column].map(id_map)
-    return data, id_map # type: ignore
+    return data, id_map  # type: ignore
 
 
 def get_batch_limits(data: pd.DataFrame, n_batches: int) -> list[tuple[int, int]]:
     sequence_ids = data["sequenceId"].values
-    new_sequence_id_indices = np.concatenate([[0], np.where(np.concatenate([[False], sequence_ids[1:] != sequence_ids[:-1]], axis=0))[0]])
+    new_sequence_id_indices = np.concatenate(
+        [
+            [0],
+            np.where(
+                np.concatenate([[False], sequence_ids[1:] != sequence_ids[:-1]], axis=0)
+            )[0],
+        ]
+    )
 
     ideal_step = math.ceil(data.shape[0] / n_batches)
-    ideal_limits = np.array([ideal_step * m for m in range(n_batches)] + [data.shape[0]])
-    distances = [np.abs(new_sequence_id_indices - ideal_limit) for ideal_limit in ideal_limits[:-1]]
-    actual_limit_indices = [np.where(distance == np.min(distance))[0] for distance in distances]
-    actual_limits = [new_sequence_id_indices[limit_index[0]] for limit_index in actual_limit_indices] + [data.shape[0]]
+    ideal_limits = np.array(
+        [ideal_step * m for m in range(n_batches)] + [data.shape[0]]
+    )
+    distances = [
+        np.abs(new_sequence_id_indices - ideal_limit)
+        for ideal_limit in ideal_limits[:-1]
+    ]
+    actual_limit_indices = [
+        np.where(distance == np.min(distance))[0] for distance in distances
+    ]
+    actual_limits = [
+        new_sequence_id_indices[limit_index[0]] for limit_index in actual_limit_indices
+    ] + [data.shape[0]]
     return list(zip(actual_limits[:-1], actual_limits[1:]))
 
 
@@ -173,13 +267,17 @@ def preprocess_batch(
     written_files: dict[int, list[str]] = {i: [] for i in range(len(split_paths))}
     for i, sequence_id in enumerate(sequence_ids):
         data_subset = batch.loc[batch["sequenceId"] == sequence_id, :]
-        sequences = extract_sequences(data_subset, seq_length, seq_step_size, data_columns)
+        sequences = extract_sequences(
+            data_subset, seq_length, seq_step_size, data_columns
+        )
 
         splits = extract_data_subsets(sequences, group_proportions)
         splits = {group: cast_columns_to_string(data) for group, data in splits.items()}
 
         for split_path, (group, split) in zip(split_paths, splits.items()):
-            split_path_batch_seq = split_path.replace(f".{write_format}", f"-{process_id}-{i}.{write_format}")
+            split_path_batch_seq = split_path.replace(
+                f".{write_format}", f"-{process_id}-{i}.{write_format}"
+            )
             split_path_batch_seq = insert_top_folder(split_path_batch_seq, "temp")
 
             if write_format == "csv":
@@ -190,7 +288,9 @@ def preprocess_batch(
             written_files[group].append(split_path_batch_seq)
 
     for j, split_path in enumerate(split_paths):
-        out_path = split_path.replace(f".{write_format}", f"-{process_id}.{write_format}")
+        out_path = split_path.replace(
+            f".{write_format}", f"-{process_id}.{write_format}"
+        )
         out_path = insert_top_folder(out_path, "temp")
 
         if write_format == "csv":
@@ -200,29 +300,44 @@ def preprocess_batch(
             combine_parquet_files(written_files[j], out_path)
 
 
-def extract_sequences(data: pd.DataFrame, seq_length: int, seq_step_size: int, columns: list[str]) -> pd.DataFrame:
-    raw_sequences = data.groupby("sequenceId").agg({col: list for col in columns}).reset_index(drop=False)
+def extract_sequences(
+    data: pd.DataFrame, seq_length: int, seq_step_size: int, columns: list[str]
+) -> pd.DataFrame:
+    raw_sequences = (
+        data.groupby("sequenceId")
+        .agg({col: list for col in columns})
+        .reset_index(drop=False)
+    )
 
     rows = []
     for _, in_row in raw_sequences.iterrows():
-        subsequences = extract_subsequences(in_row[columns], seq_length, seq_step_size, columns)
+        subsequences = extract_subsequences(
+            in_row[columns], seq_length, seq_step_size, columns
+        )
 
         for subsequence_id in range(len(subsequences[columns[0]])):
             for col, subseqs in subsequences.items():
-                row = [in_row["sequenceId"], subsequence_id, col] + subseqs[subsequence_id]
+                row = [in_row["sequenceId"], subsequence_id, col] + subseqs[
+                    subsequence_id
+                ]
                 assert len(row) == (seq_length + 3), f"{row = }"
                 rows.append(row)
 
     sequences = pd.DataFrame(
         rows,
-        columns=["sequenceId", "subsequenceId", "inputCol"] + list(range(seq_length - 1, -1, -1)),
+        columns=["sequenceId", "subsequenceId", "inputCol"]
+        + list(range(seq_length - 1, -1, -1)),
     )
     return sequences
 
 
-def get_subsequence_starts(in_seq_length: int, seq_length: int, seq_step_size: int) -> np.ndarray:
+def get_subsequence_starts(
+    in_seq_length: int, seq_length: int, seq_step_size: int
+) -> np.ndarray:
     nseq_adjusted = math.ceil((in_seq_length - seq_length) / seq_step_size)
-    seq_step_size_adjusted = math.floor((in_seq_length - seq_length) / max(1, nseq_adjusted))
+    seq_step_size_adjusted = math.floor(
+        (in_seq_length - seq_length) / max(1, nseq_adjusted)
+    )
     increments = [0] + [max(1, seq_step_size_adjusted)] * nseq_adjusted
     while np.sum(increments) < (in_seq_length - seq_length):
         increments[np.argmin(increments[1:]) + 1] += 1
@@ -230,14 +345,27 @@ def get_subsequence_starts(in_seq_length: int, seq_length: int, seq_step_size: i
     return np.cumsum(increments)
 
 
-def extract_subsequences(in_seq: dict[str, pd.Series], seq_length: int, seq_step_size: int, columns: list[str]) -> dict[str, list[list[Union[float, int]]]]:
+def extract_subsequences(
+    in_seq: dict[str, pd.Series],
+    seq_length: int,
+    seq_step_size: int,
+    columns: list[str],
+) -> dict[str, list[list[Union[float, int]]]]:
     if len(in_seq[columns[0]]) < seq_length:
-        in_seq = {col: ([0] * (seq_length - len(in_seq[col]))) + in_seq[col] for col in columns}
+        in_seq = {
+            col: ([0] * (seq_length - len(in_seq[col]))) + in_seq[col]
+            for col in columns
+        }
     in_seq_length = len(in_seq[columns[0]])
 
-    subsequence_starts = get_subsequence_starts(in_seq_length, seq_length, seq_step_size)
+    subsequence_starts = get_subsequence_starts(
+        in_seq_length, seq_length, seq_step_size
+    )
 
-    return {col: [in_seq[col][i : i + seq_length] for i in subsequence_starts] for col in columns}
+    return {
+        col: [in_seq[col][i : i + seq_length] for i in subsequence_starts]
+        for col in columns
+    }
 
 
 def insert_top_folder(path: str, folder_name: str) -> str:
@@ -246,24 +374,40 @@ def insert_top_folder(path: str, folder_name: str) -> str:
     return os.path.join(*new_components)
 
 
-def extract_data_subsets(sequences: pd.DataFrame, group_proportions: list[float]) -> dict[int, pd.DataFrame]:
-    assert abs(1.0 - np.sum(group_proportions)) < 0.0000000000001, np.sum(group_proportions)
+def extract_data_subsets(
+    sequences: pd.DataFrame, group_proportions: list[float]
+) -> dict[int, pd.DataFrame]:
+    assert abs(1.0 - np.sum(group_proportions)) < 0.0000000000001, np.sum(
+        group_proportions
+    )
 
-    datasets: dict[int, list[pd.DataFrame]] = {i: [] for i in range(len(group_proportions))}
+    datasets: dict[int, list[pd.DataFrame]] = {
+        i: [] for i in range(len(group_proportions))
+    }
     n_cols = len(np.unique(sequences["inputCol"]))
     for _, sequence_data in sequences.groupby("sequenceId"):
         subset_groups = get_subset_groups(sequence_data, group_proportions, n_cols)
         assert len(subset_groups) * n_cols == sequence_data.shape[0]
         for i, group in enumerate(subset_groups):
             case_start = i * n_cols
-            datasets[group].append(sequence_data.iloc[case_start : case_start + n_cols, :])
+            datasets[group].append(
+                sequence_data.iloc[case_start : case_start + n_cols, :]
+            )
 
-    return {group: pd.concat(dataset, axis=0) for group, dataset in datasets.items() if dataset}
+    return {
+        group: pd.concat(dataset, axis=0)
+        for group, dataset in datasets.items()
+        if dataset
+    }
 
 
-def get_subset_groups(sequence_data: pd.DataFrame, groups: list[float], n_cols: int) -> list[int]:
+def get_subset_groups(
+    sequence_data: pd.DataFrame, groups: list[float], n_cols: int
+) -> list[int]:
     n_cases = int(sequence_data.shape[0] / n_cols)
-    subset_groups: list[list[int]] = [([i] * math.floor(n_cases * size)) for i, size in enumerate(groups)]
+    subset_groups: list[list[int]] = [
+        ([i] * math.floor(n_cases * size)) for i, size in enumerate(groups)
+    ]
     subset_groups2: list[int] = [inner for outer in subset_groups for inner in outer]
     diff = n_cases - len(subset_groups2)
     return ([0] * diff) + subset_groups2
@@ -275,13 +419,24 @@ def cast_columns_to_string(data: pd.DataFrame) -> pd.DataFrame:
 
 
 def combine_multiprocessing_outputs(
-    project_path: str, n_splits: int, n_batches: int, dataset_name: str, write_format: str
+    project_path: str,
+    n_splits: int,
+    n_batches: int,
+    dataset_name: str,
+    write_format: str,
 ) -> None:
     for split in range(n_splits):
-        out_path = os.path.join(project_path, "data", f"{dataset_name}-split{split}.{write_format}")
+        out_path = os.path.join(
+            project_path, "data", f"{dataset_name}-split{split}.{write_format}"
+        )
 
         files = [
-            os.path.join(project_path, "data", "temp", f"{dataset_name}-split{split}-{batch}.{write_format}")
+            os.path.join(
+                project_path,
+                "data",
+                "temp",
+                f"{dataset_name}-split{split}-{batch}.{write_format}",
+            )
             for batch in range(n_batches)
         ]
         if write_format == "csv":

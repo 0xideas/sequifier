@@ -31,7 +31,9 @@ def build_args_config(args: Any) -> dict[str, Any]:
         if args_config["selected_columns"] == "None":
             args_config["selected_columns"] = None
         else:
-            args_config["selected_columns"] = args_config["selected_columns"].replace(" ", "").split(",")
+            args_config["selected_columns"] = (
+                args_config["selected_columns"].replace(" ", "").split(",")
+            )
 
     return args_config
 
@@ -46,7 +48,9 @@ def setup_parser() -> ArgumentParser:
     parser = ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    parser_preprocess = subparsers.add_parser("preprocess", help="Run the preprocessing step")
+    parser_preprocess = subparsers.add_parser(
+        "preprocess", help="Run the preprocessing step"
+    )
     parser_train = subparsers.add_parser("train", help="Run the training step")
     parser_infer = subparsers.add_parser("infer", help="Run the inference step")
 

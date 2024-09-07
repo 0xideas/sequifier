@@ -5,7 +5,9 @@ import yaml
 from pydantic import BaseModel, validator
 
 
-def load_preprocessor_config(config_path: str, args_config: dict) -> 'PreprocessorModel':
+def load_preprocessor_config(
+    config_path: str, args_config: dict
+) -> "PreprocessorModel":
     """
     Load preprocessor configuration from a YAML file and update it with args_config.
 
@@ -28,6 +30,7 @@ class PreprocessorModel(BaseModel):
     """
     Pydantic model for preprocessor configuration.
     """
+
     project_path: str
     data_path: str
     read_format: str = "csv"
@@ -51,7 +54,9 @@ class PreprocessorModel(BaseModel):
     def validate_format(cls, v: str) -> str:
         supported_formats = ["csv", "parquet"]
         if v not in supported_formats:
-            raise ValueError(f"Currently only {', '.join(supported_formats)} are supported")
+            raise ValueError(
+                f"Currently only {', '.join(supported_formats)} are supported"
+            )
         return v
 
     def __init__(self, **kwargs):

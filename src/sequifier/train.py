@@ -17,16 +17,11 @@ from torch.nn import ModuleDict, TransformerEncoder, TransformerEncoderLayer
 from torch.nn.functional import one_hot
 
 torch._dynamo.config.suppress_errors = True
-from sequifier.config.train_config import load_train_config # noqa: E402
-from sequifier.helpers import (  # noqa: E402
-    PANDAS_TO_TORCH_TYPES,
-    LogFile,
-    construct_index_maps,
-    normalize_path,
-    numpy_to_pytorch,
-    read_data,
-    subset_to_selected_columns,
-)
+from sequifier.config.train_config import load_train_config  # noqa: E402
+from sequifier.helpers import (PANDAS_TO_TORCH_TYPES, LogFile,  # noqa: E402
+                               construct_index_maps, normalize_path,
+                               numpy_to_pytorch, read_data,
+                               subset_to_selected_columns)
 
 
 def train(args: Any, args_config: dict[str, Any]) -> None:
@@ -100,7 +95,7 @@ def format_number(number: float) -> str:
         A formatted string representation of the number.
     """
     if pd.isnull(number):
-        return("NaN")
+        return "NaN"
     elif number == 0:
         order_of_magnitude = 0
     else:
@@ -216,7 +211,9 @@ class TransformerModel(nn.Module):
         self._initialize_log_file()
         self.log_file.write(load_string)
 
-    def _get_real_columns_repetitions(self, real_columns: list[str], nhead: int) -> dict[str, int]:
+    def _get_real_columns_repetitions(
+        self, real_columns: list[str], nhead: int
+    ) -> dict[str, int]:
         real_columns_repetitions = {col: 1 for col in real_columns}
         column_index = dict(enumerate(real_columns))
         for i in range(nhead * len(real_columns)):
@@ -281,8 +278,13 @@ class TransformerModel(nn.Module):
         output = self.forward_train(src)
         return {target_column: out[-1, :, :] for target_column, out in output.items()}
 
-    def train_model(self, X_train: dict[str, Tensor], y_train: dict[str, Tensor],
-                    X_valid: dict[str, Tensor], y_valid: dict[str, Tensor]) -> None:
+    def train_model(
+        self,
+        X_train: dict[str, Tensor],
+        y_train: dict[str, Tensor],
+        X_valid: dict[str, Tensor],
+        y_valid: dict[str, Tensor],
+    ) -> None:
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
 
@@ -297,7 +299,9 @@ class TransformerModel(nn.Module):
                 self._train_epoch(X_train, y_train, epoch)
                 total_loss, total_losses, output = self._evaluate(X_valid, y_valid)
                 elapsed = time.time() - epoch_start_time
-                self._log_epoch_results(epoch, elapsed, total_loss, total_losses, output)
+                self._log_epoch_results(
+                    epoch, elapsed, total_loss, total_losses, output
+                )
 
                 if total_loss < best_val_loss:
                     best_val_loss = total_loss
@@ -317,7 +321,9 @@ class TransformerModel(nn.Module):
         self.log_file.write("Training transformer complete")
         self.log_file.close()
 
-    def _train_epoch(self, X_train: dict[str, Tensor], y_train: dict[str, Tensor], epoch: int) -> None:
+    def _train_epoch(
+        self, X_train: dict[str, Tensor], y_train: dict[str, Tensor], epoch: int
+    ) -> None:
         self.train()  # turn on train mode
         total_loss = 0.0
         start_time = time.time()
@@ -364,7 +370,9 @@ class TransformerModel(nn.Module):
                 total_loss = 0.0
                 start_time = time.time()
 
-    def _calculate_loss(self, output: dict[str, Tensor], targets: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor]]:
+    def _calculate_loss(
+        self, output: dict[str, Tensor], targets: dict[str, Tensor]
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         losses = {}
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
@@ -409,7 +417,9 @@ class TransformerModel(nn.Module):
             assert self.target_column_types[col] == "real"
             return val
 
-    def _evaluate(self, X_valid: dict[str, Tensor], y_valid: dict[str, Tensor]) -> tuple[float, dict[str, float], dict[str, Tensor]]:
+    def _evaluate(
+        self, X_valid: dict[str, Tensor], y_valid: dict[str, Tensor]
+    ) -> tuple[float, dict[str, float], dict[str, Tensor]]:
         self.eval()  # turn on evaluation mode
 
         with torch.no_grad():
@@ -457,7 +467,14 @@ class TransformerModel(nn.Module):
 
         return total_loss, total_losses, output
 
-    def _get_batch(self, X: dict[str, Tensor], y: dict[str, Tensor], batch_start: int, batch_size: int, to_device: bool) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+    def _get_batch(
+        self,
+        X: dict[str, Tensor],
+        y: dict[str, Tensor],
+        batch_start: int,
+        batch_size: int,
+        to_device: bool,
+    ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         if to_device:
             return (
                 {
@@ -487,7 +504,7 @@ class TransformerModel(nn.Module):
                 },
             )
 
-    def _export(self, model: 'TransformerModel', suffix: str, epoch: int) -> None:
+    def _export(self, model: "TransformerModel", suffix: str, epoch: int) -> None:
         self.eval()
 
         os.makedirs(os.path.join(self.project_path, "models"), exist_ok=True)
@@ -622,8 +639,14 @@ class TransformerModel(nn.Module):
         else:
             return None
 
-    def _log_epoch_results(self, epoch: int, elapsed: float, total_loss: float,
-                           total_losses: dict[str, float], output: dict[str, Tensor]) -> None:
+    def _log_epoch_results(
+        self,
+        epoch: int,
+        elapsed: float,
+        total_loss: float,
+        total_losses: dict[str, float],
+        output: dict[str, Tensor],
+    ) -> None:
         self.log_file.write("-" * 89)
         self.log_file.write(
             f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | "
@@ -651,9 +674,7 @@ class TransformerModel(nn.Module):
             )
 
         for categorical_column in self.class_share_log_columns:
-            output_values = (
-                output[categorical_column].argmax(1).cpu().detach().numpy()
-            )
+            output_values = output[categorical_column].argmax(1).cpu().detach().numpy()
             output_counts = pd.Series(output_values).value_counts().sort_index()
             output_counts = output_counts / output_counts.sum()
             value_shares = " | ".join(
@@ -672,7 +693,7 @@ def load_inference_model(
     training_config_path: str,
     args_config: dict[str, Any],
     device: str,
-    infer_with_dropout: bool
+    infer_with_dropout: bool,
 ) -> TransformerModel:
     training_config = load_train_config(
         training_config_path, args_config, args_config["on_unprocessed"]
@@ -700,8 +721,13 @@ def load_inference_model(
     return model
 
 
-def infer_with_model(model: TransformerModel, x: list[dict[str, np.ndarray]], device: str,
-                     size: int, target_columns: list[str]) -> dict[str, np.ndarray]:
+def infer_with_model(
+    model: TransformerModel,
+    x: list[dict[str, np.ndarray]],
+    device: str,
+    size: int,
+    target_columns: list[str],
+) -> dict[str, np.ndarray]:
     outs0 = [
         model.forward(
             {col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()}
