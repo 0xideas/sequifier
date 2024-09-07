@@ -2,7 +2,6 @@ import json
 import os
 from typing import Optional
 
-import numpy as np
 import yaml
 from pydantic import BaseModel, Field, validator
 

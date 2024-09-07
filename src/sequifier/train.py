@@ -17,8 +17,8 @@ from torch.nn import ModuleDict, TransformerEncoder, TransformerEncoderLayer
 from torch.nn.functional import one_hot
 
 torch._dynamo.config.suppress_errors = True
-from sequifier.config.train_config import load_train_config
-from sequifier.helpers import (
+from sequifier.config.train_config import load_train_config # noqa: E402
+from sequifier.helpers import (  # noqa: E402
     PANDAS_TO_TORCH_TYPES,
     LogFile,
     construct_index_maps,

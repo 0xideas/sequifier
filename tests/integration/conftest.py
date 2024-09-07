@@ -5,8 +5,6 @@ import time
 import pytest
 import yaml
 
-from sequifier.helpers import read_data, write_data
-
 SELECTED_COLUMNS = {
     "categorical": {
         1: "itemId",

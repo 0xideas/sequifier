@@ -466,8 +466,8 @@ class Inferer:
             Dictionary of inference results.
         """
         if probs is None or (x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0): # type: ignore
-           assert x is not None
-           size = x[self.target_columns[0]].shape[0]
+            assert x is not None
+            size = x[self.target_columns[0]].shape[0]
             if probs is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0: # type: ignore
                 assert x is not None
                 warnings.warn(f"Not all keys in x are in probs - {x.keys() = } != {probs.keys() = }. Full inference is executed.")

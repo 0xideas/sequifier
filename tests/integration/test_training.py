@@ -1,9 +1,6 @@
-import json
 import os
 
 import numpy as np
-import pandas as pd
-import pytest
 
 
 def test_checkpoint_files_exists(run_training, project_path):
