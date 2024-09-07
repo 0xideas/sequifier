@@ -18,7 +18,7 @@ def construct_index_maps(
     if map_to_id is not None:
         for target_column in target_columns_index_map:
             map_ = (
-                {v: k for k, v in id_maps[target_column].items()} if map_to_id else None
+                {v: k for k, v in id_maps[target_column].items()}
             )
             if isinstance(next(iter(map_.values())), str):
                 map_[0] = "unknown"

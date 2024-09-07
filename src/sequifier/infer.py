@@ -96,6 +96,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     )
 
     if config.output_probabilities:
+        assert probs is not None
         os.makedirs(
             os.path.join(config.project_path, "outputs", "probabilities"), exist_ok=True
         )
@@ -260,9 +261,6 @@ def fill_number(number: Union[int, float], max_length: int) -> str:
 def verify_variable_order(data: pd.DataFrame) -> None:
     sequence_ids = data["sequenceId"].values
     assert np.all(
-        data.index == np.arange(data.shape[0])
-    ), "data index has to be equal to np.arange"
-    assert np.all(
         sequence_ids[1:] - sequence_ids[:-1] >= 0
     ), "sequenceId must be in ascending order for autoregression"
 
@@ -372,12 +370,12 @@ class Inferer:
         self,
         model_path: str,
         project_path: str,
-        id_maps: dict[str, dict[Union[str, int], int]],
+        id_maps: Optional[dict[str, dict[Union[str, int], int]]],
         min_max_values: dict[str, dict[str, float]],
         map_to_id: bool,
         categorical_columns: list[str],
         real_columns: list[str],
-        selected_columns: list[str],
+        selected_columns: Optional[list[str]],
         target_columns: list[str],
         target_column_types: dict[str, str],
         sample_from_distribution: bool,
@@ -467,9 +465,9 @@ class Inferer:
         Returns:
             Dictionary of inference results.
         """
-        if probs is None or (x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0):
+        if probs is None or (x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0): # type: ignore
             size = x[self.target_columns[0]].shape[0]
-            if probs is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0:
+            if probs is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0: # type: ignore
                 warnings.warn(f"Not all keys in x are in probs - {x.keys() = } != {probs.keys() = }. Full inference is executed.")
             
             if self.inference_model_type == "onnx":

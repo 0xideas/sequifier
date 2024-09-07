@@ -595,6 +595,7 @@ class TransformerModel(nn.Module):
 
     def _load_weights_conditional(self) -> str:
         latest_model_path = self._get_latest_model_name()
+        pytorch_total_params = sum(p.numel() for p in self.parameters())
 
         if latest_model_path is not None and self.continue_training:
             checkpoint = torch.load(
@@ -604,10 +605,10 @@ class TransformerModel(nn.Module):
             self.start_epoch = (
                 int(re.findall("epoch-([0-9]+)", latest_model_path)[0]) + 1
             )
-            return f"Loading model weights from {latest_model_path}"
+            return f"Loading model weights from {latest_model_path}. Total params: {format_number(pytorch_total_params)}"
         else:
             self.start_epoch = 1
-            return "Initializing new model"
+            return f"Initializing new model with {format_number(pytorch_total_params)} params"
 
     def _get_latest_model_name(self) -> Optional[str]:
         checkpoint_path = os.path.join(self.project_path, "checkpoints", "*")
