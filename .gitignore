@@ -10,7 +10,7 @@ project_folder/
 *.DS_Store
 
 .env.sh
-
+pyright-output.txt
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

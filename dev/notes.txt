@@ -34,4 +34,5 @@ x output single predictions file
 x enable autoregression continuation
 x automatic scaling of real variables to [-1.0, 1.0] and inversion on inference
 x log predicted class distributions in validation
-make losses invariant over batch sizes/training runs
+x make losses invariant over batch sizes/training runs
+optimize for memory efficiency

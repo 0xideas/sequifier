@@ -1,6 +1,7 @@
 import json
 import os
 import warnings
+from typing import Any, Optional, Union
 from warnings import simplefilter
 
 import numpy as np
@@ -17,7 +18,7 @@ from sequifier.train import infer_with_model, load_inference_model
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
 
-def infer(args, args_config):
+def infer(args: Any, args_config: dict[str, Any]) -> None:
     config_path = (
         args.config_path if args.config_path is not None else "configs/infer.yaml"
     )
@@ -95,6 +96,7 @@ def infer(args, args_config):
     )
 
     if config.output_probabilities:
+        assert probs is not None
         os.makedirs(
             os.path.join(config.project_path, "outputs", "probabilities"), exist_ok=True
         )
@@ -137,7 +139,20 @@ def infer(args, args_config):
     print("Inference complete")
 
 
-def expand_data_by_autoregression(data, autoregression_additional_steps, seq_length):
+def expand_data_by_autoregression(
+    data: pd.DataFrame, autoregression_additional_steps: int, seq_length: int
+) -> pd.DataFrame:
+    """
+    Expand data for autoregression by adding additional steps.
+
+    Args:
+        data: Input DataFrame.
+        autoregression_additional_steps: Number of additional steps for autoregression.
+        seq_length: Length of the sequence.
+
+    Returns:
+        Expanded DataFrame for autoregression.
+    """
     verify_variable_order(data)
 
     data_cols = [str(c) for c in range(seq_length, 0, -1)]
@@ -161,21 +176,16 @@ def expand_data_by_autoregression(data, autoregression_additional_steps, seq_len
                 }
             )
 
-            # initialize empty fields with infinite value, for n_input_cols rows
             empty_data_fields = (
                 np.ones((last_observation.shape[0], min(seq_length, offset))) * np.inf
             )
-
-            # use the last seq_length - offset data fields, if offset >= seq_lengths, no data
             offset_data_fields = last_observation[data_cols].values[
                 :, min(offset, last_observation.shape[1]) :
             ]
-            # create data fields from historic and empty fields
             data_fields = np.concatenate(
                 [offset_data_fields, empty_data_fields], axis=1
             )
             data_df = pd.DataFrame(data_fields, columns=data_cols)
-            # create observation from metadata and data fields
             observation = pd.concat([metadata, data_df], axis=1)
             autoregression_additional_observations.append(observation)
 
@@ -186,7 +196,12 @@ def expand_data_by_autoregression(data, autoregression_additional_steps, seq_len
     ).reset_index(drop=True)
 
 
-def get_probs_preds(config, inferer, data, column_types):
+def get_probs_preds(
+    config: Any,
+    inferer: "Inferer",
+    data: pd.DataFrame,
+    column_types: dict[str, torch.dtype],
+) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     X, _ = numpy_to_pytorch(
         data,
         column_types,
@@ -210,13 +225,27 @@ def get_probs_preds(config, inferer, data, column_types):
 
 
 def fill_in_predictions(
-    data,
-    sequence_id_to_subsequence_ids,
-    ids_to_row,
-    sequence_ids,
-    subsequence_id,
-    preds,
-):
+    data: pd.DataFrame,
+    sequence_id_to_subsequence_ids: dict[int, np.ndarray],
+    ids_to_row: dict[str, int],
+    sequence_ids: np.ndarray,
+    subsequence_id: int,
+    preds: dict[str, np.ndarray],
+) -> pd.DataFrame:
+    """
+    Fill in predictions for the given data.
+
+    Args:
+        data: Input DataFrame.
+        sequence_id_to_subsequence_ids: Mapping of sequence IDs to subsequence IDs.
+        ids_to_row: Mapping of IDs to row indices.
+        sequence_ids: Array of sequence IDs.
+        subsequence_id: Current subsequence ID.
+        preds: Dictionary of predictions.
+
+    Returns:
+        Updated DataFrame with filled-in predictions.
+    """
     sequence_ids_distinct = sorted(list(np.unique(sequence_ids)))
 
     for input_col, preds_vals in preds.items():
@@ -230,22 +259,28 @@ def fill_in_predictions(
                 offset = subsequence_id2 - subsequence_id
                 assert offset > 0
                 i = ids_to_row[f"{sequence_id}-{subsequence_id2}-{input_col}"]
-
                 data.loc[i, str(offset)] = pred
 
     return data
 
 
-def fill_number(number, max_length):
+def fill_number(number: Union[int, float], max_length: int) -> str:
+    """
+    Fill a number with leading zeros to reach the specified length.
+
+    Args:
+        number: Number to be filled.
+        max_length: Maximum length of the resulting string.
+
+    Returns:
+        String representation of the number with leading zeros.
+    """
     number_str = str(number)
-    return f"{'0'*(max_length-len(number_str))}{number_str}"
+    return f"{'0' * (max_length - len(number_str))}{number_str}"
 
 
-def verify_variable_order(data):
+def verify_variable_order(data: pd.DataFrame) -> None:
     sequence_ids = data["sequenceId"].values
-    assert np.all(
-        data.index == np.arange(data.shape[0])
-    ), "data index has to be equal to np.arange"
     assert np.all(
         sequence_ids[1:] - sequence_ids[:-1] >= 0
     ), "sequenceId must be in ascending order for autoregression"
@@ -259,7 +294,26 @@ def verify_variable_order(data):
         ), "subsequenceId must be in ascending order for autoregression"
 
 
-def get_probs_preds_autoregression(config, inferer, data, column_types, seq_length):
+def get_probs_preds_autoregression(
+    config: Any,
+    inferer: "Inferer",
+    data: pd.DataFrame,
+    column_types: dict[str, torch.dtype],
+    seq_length: int,
+) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
+    """
+    Get probabilities and predictions for autoregression.
+
+    Args:
+        config: Configuration object.
+        inferer: Inferer object.
+        data: Input DataFrame.
+        column_types: Dictionary of column types.
+        seq_length: Length of the sequence.
+
+    Returns:
+        Tuple of probabilities and predictions.
+    """
     sequence_ids = data["sequenceId"].values
     verify_variable_order(data)
 
@@ -337,28 +391,28 @@ def get_probs_preds_autoregression(config, inferer, data, column_types, seq_leng
         }
     else:
         probs = None
-    return (probs, preds)
+    return probs, preds
 
 
-class Inferer(object):
+class Inferer:
     def __init__(
         self,
-        model_path,
-        project_path,
-        id_maps,
-        min_max_values,
-        map_to_id,
-        categorical_columns,
-        real_columns,
-        selected_columns,
-        target_columns,
-        target_column_types,
-        sample_from_distribution,
-        infer_with_dropout,
-        inference_batch_size,
-        device,
-        args_config,
-        training_config_path,
+        model_path: str,
+        project_path: str,
+        id_maps: Optional[dict[str, dict[Union[str, int], int]]],
+        min_max_values: dict[str, dict[str, float]],
+        map_to_id: bool,
+        categorical_columns: list[str],
+        real_columns: list[str],
+        selected_columns: Optional[list[str]],
+        target_columns: list[str],
+        target_column_types: dict[str, str],
+        sample_from_distribution: bool,
+        infer_with_dropout: bool,
+        inference_batch_size: int,
+        device: str,
+        args_config: dict[str, Any],
+        training_config_path: str,
     ):
         self.map_to_id = map_to_id
         self.min_max_values = min_max_values
@@ -408,7 +462,19 @@ class Inferer(object):
                 self.infer_with_dropout,
             )
 
-    def invert_normalization(self, values, target_column):
+    def invert_normalization(
+        self, values: np.ndarray, target_column: str
+    ) -> np.ndarray:
+        """
+        Invert the normalization of values for a target column.
+
+        Args:
+            values: Normalized values.
+            target_column: Target column name.
+
+        Returns:
+            Denormalized values.
+        """
         min_ = self.min_max_values[target_column]["min"]
         max_ = self.min_max_values[target_column]["max"]
         return np.array(
@@ -416,35 +482,46 @@ class Inferer(object):
         ).reshape(*values.shape)
 
     def infer(
-        self, x, probs=None, return_probs=False
-    ):  # probs are of type Optional[dict[str, np.ndarray]]
-        if probs is None or (
-            x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0
-        ):
-            size = x[self.target_columns[0]].shape[0]
-            if (
-                probs is not None
-                and len(set(x.keys()).difference(set(probs.keys()))) > 0
-            ):
-                warnings.warn(
-                    f"not all keys in x are in probs - {x.keys() = } != {probs.keys() = }. This is why full inference is executed"
-                )
-            if self.inference_model_type == "onnx":
-                x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
+        self,
+        x: Optional[dict[str, np.ndarray]],
+        probs: Optional[dict[str, np.ndarray]] = None,
+        return_probs: bool = False,
+    ) -> dict[str, np.ndarray]:
+        """
+        Perform inference on the input data.
 
+        Args:
+            x: Input data.
+            probs: Pre-computed probabilities (optional).
+            return_probs: Whether to return probabilities.
+
+        Returns:
+            Dictionary of inference results.
+        """
+        if probs is None or (x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0):  # type: ignore
+            assert x is not None
+            size = x[self.target_columns[0]].shape[0]
+            if probs is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0:  # type: ignore
+                assert x is not None
+                warnings.warn(
+                    f"Not all keys in x are in probs - {x.keys() = } != {probs.keys() = }. Full inference is executed."
+                )
+
+            if self.inference_model_type == "onnx":
+                assert x is not None
+                x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
                 out_subs = [
                     dict(zip(self.target_columns, self.infer_pure(x_sub)))
                     for x_sub in x_adjusted
                 ]
-
                 outs = {
                     target_column: np.concatenate(
                         [out_sub[target_column] for out_sub in out_subs], axis=0
                     )[:size, :]
                     for target_column in self.target_columns
                 }
-
-            if self.inference_model_type == "pt":
+            elif self.inference_model_type == "pt":
+                assert x is not None
                 x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
                 outs = infer_with_model(
                     self.inference_model,
@@ -453,8 +530,9 @@ class Inferer(object):
                     size,
                     self.target_columns,
                 )
+
             for target_column, target_outs in outs.items():
-                assert np.any(target_outs == np.inf) == False, target_outs
+                assert not np.any(target_outs == np.inf), target_outs
 
             if return_probs:
                 preds = {
@@ -470,9 +548,10 @@ class Inferer(object):
                 return {**preds, **normalize(logits)}
         else:
             outs = dict(probs)
+
         for target_column in self.target_columns:
             if self.target_column_types[target_column] == "categorical":
-                if self.sample_from_distribution is False:
+                if not self.sample_from_distribution:
                     outs[target_column] = outs[target_column].argmax(1)
                 else:
                     outs[target_column] = sample_with_cumsum(outs[target_column])
@@ -482,7 +561,9 @@ class Inferer(object):
                 outs[target_column] = self.invert_normalization(output, target_column)
         return outs
 
-    def prepare_inference_batches(self, x, pad_to_batch_size):
+    def prepare_inference_batches(
+        self, x: dict[str, np.ndarray], pad_to_batch_size: bool
+    ) -> list[dict[str, np.ndarray]]:
         size = x[self.target_columns[0]].shape[0]
         if size == self.inference_batch_size:
             return [x]
@@ -507,7 +588,16 @@ class Inferer(object):
             ]
             return xs
 
-    def infer_pure(self, x):
+    def infer_pure(self, x: dict[str, np.ndarray]) -> list[np.ndarray]:
+        """
+        Perform pure inference using ONNX session.
+
+        Args:
+            x: Input data.
+
+        Returns:
+            List of output arrays.
+        """
         ort_inputs = {
             session_input.name: self.expand_to_batch_size(x[col])
             for session_input, col in zip(
@@ -516,17 +606,33 @@ class Inferer(object):
             )
         }
         ort_outs = self.ort_session.run(None, ort_inputs)
-
         return ort_outs
 
-    def expand_to_batch_size(self, x):
-        repetitions = self.inference_batch_size // x.shape[0]
+    def expand_to_batch_size(self, x: np.ndarray) -> np.ndarray:
+        """
+        Expand input to match the inference batch size.
 
+        Args:
+            x: Input array.
+
+        Returns:
+            Expanded array.
+        """
+        repetitions = self.inference_batch_size // x.shape[0]
         filler = self.inference_batch_size % x.shape[0]
         return np.concatenate(([x] * repetitions) + [x[0:filler, :]], axis=0)
 
 
-def normalize(outs):
+def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """
+    Normalize the output probabilities.
+
+    Args:
+        outs: Dictionary of output arrays.
+
+    Returns:
+        Dictionary of normalized probabilities.
+    """
     normalizer = {
         target_column: np.repeat(
             np.sum(np.exp(target_values), axis=1), target_values.shape[1]
@@ -540,7 +646,16 @@ def normalize(outs):
     return probs
 
 
-def sample_with_cumsum(probs):
+def sample_with_cumsum(probs: np.ndarray) -> np.ndarray:
+    """
+    Sample from cumulative sum of probabilities.
+
+    Args:
+        probs: Probability array.
+
+    Returns:
+        Sampled indices.
+    """
     cumulative_probs = np.cumsum(probs, axis=1)
     random_threshold = np.random.rand(cumulative_probs.shape[0], 1)
     random_threshold = np.repeat(random_threshold, probs.shape[1], axis=1)

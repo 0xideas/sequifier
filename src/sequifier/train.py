@@ -6,6 +6,7 @@ import re
 import time
 import uuid
 import warnings
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -16,18 +17,22 @@ from torch.nn import ModuleDict, TransformerEncoder, TransformerEncoderLayer
 from torch.nn.functional import one_hot
 
 torch._dynamo.config.suppress_errors = True
-from sequifier.config.train_config import load_train_config
-from sequifier.helpers import (PANDAS_TO_TORCH_TYPES, LogFile,
+from sequifier.config.train_config import load_train_config  # noqa: E402
+from sequifier.helpers import (PANDAS_TO_TORCH_TYPES, LogFile,  # noqa: E402
                                construct_index_maps, normalize_path,
                                numpy_to_pytorch, read_data,
                                subset_to_selected_columns)
 
 
-def train(args, args_config):
-    config_path = (
-        args.config_path if args.config_path is not None else "configs/train.yaml"
-    )
+def train(args: Any, args_config: dict[str, Any]) -> None:
+    """
+    Train the model using the provided configuration.
 
+    Args:
+        args: Command line arguments.
+        args_config: Configuration dictionary.
+    """
+    config_path = args.config_path or "configs/train.yaml"
     config = load_train_config(config_path, args_config, args.on_unprocessed)
 
     column_types = {
@@ -79,8 +84,19 @@ def train(args, args_config):
     model.train_model(X_train, y_train, X_valid, y_valid)
 
 
-def format_number(number):
-    if number == 0:
+def format_number(number: float) -> str:
+    """
+    Format a number for display.
+
+    Args:
+        number: The number to format.
+
+    Returns:
+        A formatted string representation of the number.
+    """
+    if pd.isnull(number):
+        return "NaN"
+    elif number == 0:
         order_of_magnitude = 0
     else:
         order_of_magnitude = math.floor(math.log(number, 10))
@@ -90,26 +106,22 @@ def format_number(number):
 
 
 class TransformerModel(nn.Module):
-    def __init__(self, hparams):
+    def __init__(self, hparams: Any):
         super().__init__()
         self.project_path = hparams.project_path
         self.model_type = "Transformer"
-        self.model_name = (
-            hparams.model_name
-            if hparams.model_name is not None
-            else uuid.uuid4().hex[:8]
-        )
+        self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
 
         self.selected_columns = hparams.selected_columns
         self.categorical_columns = [
             col
             for col in hparams.categorical_columns
-            if ((self.selected_columns is None) or (col in self.selected_columns))
+            if self.selected_columns is None or col in self.selected_columns
         ]
         self.real_columns = [
             col
             for col in hparams.real_columns
-            if ((self.selected_columns is None) or (col in self.selected_columns))
+            if self.selected_columns is None or col in self.selected_columns
         ]
 
         self.target_columns = hparams.target_columns
@@ -139,7 +151,7 @@ class TransformerModel(nn.Module):
                     self.seq_length, hparams.model_spec.d_model
                 )
 
-        self.real_columns_repetitions = self.get_real_columns_repetitions(
+        self.real_columns_repetitions = self._get_real_columns_repetitions(
             self.real_columns, hparams.model_spec.nhead
         )
 
@@ -167,8 +179,8 @@ class TransformerModel(nn.Module):
             elif target_column_type == "real":
                 self.decoder[target_column] = nn.Linear(embedding_size, 1)
             else:
-                raise Exception(
-                    f"{target_column_type = } not in ['categorical', 'real']"
+                raise ValueError(
+                    f"Target column type {target_column_type} not in ['categorical', 'real']"
                 )
 
         self.criterion = {
@@ -181,43 +193,47 @@ class TransformerModel(nn.Module):
         self.accumulation_steps = hparams.training_spec.accumulation_steps
         self.device = hparams.training_spec.device
 
-        self.src_mask = self.generate_square_subsequent_mask(self.seq_length).to(
+        self.src_mask = self._generate_square_subsequent_mask(self.seq_length).to(
             self.device
         )
 
-        self.init_weights()
-        self.optimizer = self.get_optimizer(
-            **self.filter_key(hparams.training_spec.optimizer, "name")
+        self._init_weights()
+        self.optimizer = self._get_optimizer(
+            **self._filter_key(hparams.training_spec.optimizer, "name")
         )
-        self.scheduler = self.get_scheduler(
-            **self.filter_key(hparams.training_spec.scheduler, "name")
+        self.scheduler = self._get_scheduler(
+            **self._filter_key(hparams.training_spec.scheduler, "name")
         )
 
         self.iter_save = hparams.training_spec.iter_save
         self.continue_training = hparams.training_spec.continue_training
-        load_string = self.load_weights_conditional()
-        self.initialize_log_file()
+        load_string = self._load_weights_conditional()
+        self._initialize_log_file()
         self.log_file.write(load_string)
 
-    def get_real_columns_repetitions(self, real_columns, nhead):
+    def _get_real_columns_repetitions(
+        self, real_columns: list[str], nhead: int
+    ) -> dict[str, int]:
         real_columns_repetitions = {col: 1 for col in real_columns}
         column_index = dict(enumerate(real_columns))
         for i in range(nhead * len(real_columns)):
-            if np.sum(list(real_columns_repetitions.values())) % nhead != 0:
+            if sum(real_columns_repetitions.values()) % nhead != 0:
                 j = i % len(real_columns)
                 real_columns_repetitions[column_index[j]] += 1
-        assert np.sum(list(real_columns_repetitions.values())) % nhead == 0
+        assert sum(real_columns_repetitions.values()) % nhead == 0
 
         return real_columns_repetitions
 
-    def generate_square_subsequent_mask(self, sz: int) -> Tensor:
+    @staticmethod
+    def _generate_square_subsequent_mask(sz: int) -> Tensor:
         """Generates an upper-triangular matrix of -inf, with zeros on diag."""
         return torch.triu(torch.ones(sz, sz) * float("-inf"), diagonal=1)
 
-    def filter_key(self, dict_, key):
+    @staticmethod
+    def _filter_key(dict_: dict[str, Any], key: str) -> dict[str, Any]:
         return {k: v for k, v in dict_.items() if k != key}
 
-    def init_weights(self) -> None:
+    def _init_weights(self) -> None:
         initrange = 0.01
         for col in self.categorical_columns:
             self.encoder[col].weight.data.uniform_(-initrange, initrange)
@@ -262,83 +278,52 @@ class TransformerModel(nn.Module):
         output = self.forward_train(src)
         return {target_column: out[-1, :, :] for target_column, out in output.items()}
 
-    def train_model(self, X_train, y_train, X_valid, y_valid):
+    def train_model(
+        self,
+        X_train: dict[str, Tensor],
+        y_train: dict[str, Tensor],
+        X_valid: dict[str, Tensor],
+        y_valid: dict[str, Tensor],
+    ) -> None:
         best_val_loss = float("inf")
-        n_epochs_no_improvemet = 0
+        n_epochs_no_improvement = 0
 
         for epoch in range(
             self.start_epoch, self.hparams.training_spec.epochs + self.start_epoch
         ):
             if (
                 self.early_stopping_epochs is None
-                or n_epochs_no_improvemet < self.early_stopping_epochs
+                or n_epochs_no_improvement < self.early_stopping_epochs
             ):
                 epoch_start_time = time.time()
-                self.train_epoch(X_train, y_train, epoch)
-                total_loss, total_losses, output = self.evaluate(X_valid, y_valid)
+                self._train_epoch(X_train, y_train, epoch)
+                total_loss, total_losses, output = self._evaluate(X_valid, y_valid)
                 elapsed = time.time() - epoch_start_time
-                self.log_file.write("-" * 89)
-                self.log_file.write(
-                    f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | "
-                    f"valid loss {format_number(total_loss)} | baseline loss {format_number(self.baseline_loss)}"
+                self._log_epoch_results(
+                    epoch, elapsed, total_loss, total_losses, output
                 )
-
-                if len(total_losses) > 1:
-                    self.log_file.write(
-                        ", ".join(
-                            [
-                                f"'{target_column} loss': {format_number(tloss)}"
-                                for target_column, tloss in total_losses.items()
-                            ]
-                        ),
-                        level=2,
-                    )
-                    self.log_file.write(
-                        ", ".join(
-                            [
-                                f"'{target_column} baseline loss': {format_number(bloss)}"
-                                for target_column, bloss in self.baseline_losses.items()
-                            ]
-                        ),
-                        level=2,
-                    )
-
-                for categorical_column in self.class_share_log_columns:
-                    output_values = (
-                        output[categorical_column].argmax(1).cpu().detach().numpy()
-                    )
-                    output_counts = pd.Series(output_values).value_counts().sort_index()
-                    output_counts = output_counts / output_counts.sum()
-                    value_shares = " | ".join(
-                        [
-                            f"{self.index_maps[categorical_column][value]}: {share:5.5f}"
-                            for value, share in output_counts.to_dict().items()
-                        ]
-                    )
-                    self.log_file.write(f"{categorical_column}: {value_shares}")
-
-                self.log_file.write("-" * 89)
 
                 if total_loss < best_val_loss:
                     best_val_loss = total_loss
-                    best_model = self.copy_model()
-
-                    n_epochs_no_improvemet = 0
+                    best_model = self._copy_model()
+                    n_epochs_no_improvement = 0
                 else:
-                    n_epochs_no_improvemet += 1
+                    n_epochs_no_improvement += 1
 
                 self.scheduler.step()
-                if (epoch) % self.iter_save == 0:
-                    self.save((epoch), total_loss)
+                if epoch % self.iter_save == 0:
+                    self._save(epoch, total_loss)
 
-                last_epoch = int(epoch)
+                last_epoch = epoch
 
-        self.export(self, "last", last_epoch)
-        self.export(best_model, "best", last_epoch)
+        self._export(self, "last", last_epoch)
+        self._export(best_model, "best", last_epoch)
         self.log_file.write("Training transformer complete")
         self.log_file.close()
 
-    def train_epoch(self, X_train, y_train, epoch) -> None:
+    def _train_epoch(
+        self, X_train: dict[str, Tensor], y_train: dict[str, Tensor], epoch: int
+    ) -> None:
         self.train()  # turn on train mode
         total_loss = 0.0
         start_time = time.time()
@@ -354,12 +339,12 @@ class TransformerModel(nn.Module):
         for batch_count, batch in enumerate(batch_order):
             batch_start = batch * self.batch_size
 
-            data, targets = self.get_batch(
+            data, targets = self._get_batch(
                 X_train, y_train, batch_start, self.batch_size, to_device=True
             )
             output = self.forward_train(data)
 
-            loss, losses = self.calculate_loss(output, targets)
+            loss, losses = self._calculate_loss(output, targets)
 
             loss.backward()
 
@@ -377,7 +362,6 @@ class TransformerModel(nn.Module):
             if (batch_count + 1) % self.log_interval == 0:
                 lr = self.scheduler.get_last_lr()[0]
                 s_per_batch = (time.time() - start_time) / self.log_interval
-
                 self.log_file.write(
                     f"| epoch {epoch:3d} | {(batch_count+1):5d}/{num_batches:5d} batches | "
                     f"lr {format_number(lr)} | s/batch {format_number(s_per_batch)} | "
@@ -386,7 +370,9 @@ class TransformerModel(nn.Module):
                 total_loss = 0.0
                 start_time = time.time()
 
-    def calculate_loss(self, output, targets):
+    def _calculate_loss(
+        self, output: dict[str, Tensor], targets: dict[str, Tensor]
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         losses = {}
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
@@ -395,8 +381,6 @@ class TransformerModel(nn.Module):
                 )
             elif target_column_type == "real":
                 output[target_column] = output[target_column].reshape(-1)
-            else:
-                pass
 
             losses[target_column] = self.criterion[target_column](
                 output[target_column], targets[target_column].T.contiguous().reshape(-1)
@@ -413,16 +397,16 @@ class TransformerModel(nn.Module):
             else:
                 loss += losses[target_column]
 
-        return (loss, losses)
+        return loss, losses
 
-    def copy_model(self):
+    def _copy_model(self):
         log_file = self.log_file
         del self.log_file
         model_copy = copy.deepcopy(self)
         self.log_file = log_file
         return model_copy
 
-    def _transform_val(self, col, val):
+    def _transform_val(self, col: str, val: Tensor) -> Tensor:
         if self.target_column_types[col] == "categorical":
             return (
                 one_hot(val, self.n_classes[col])
@@ -433,7 +417,9 @@ class TransformerModel(nn.Module):
             assert self.target_column_types[col] == "real"
             return val
 
-    def evaluate(self, X_valid, y_valid) -> float:
+    def _evaluate(
+        self, X_valid: dict[str, Tensor], y_valid: dict[str, Tensor]
+    ) -> tuple[float, dict[str, float], dict[str, Tensor]]:
         self.eval()  # turn on evaluation mode
 
         with torch.no_grad():
@@ -442,7 +428,7 @@ class TransformerModel(nn.Module):
             )  # any column will do
             total_loss_collect, total_losses_collect = [], []
             for batch_start in range(0, num_batches * self.batch_size, self.batch_size):
-                data, targets = self.get_batch(
+                data, targets = self._get_batch(
                     X_valid,
                     y_valid,
                     batch_start,
@@ -450,7 +436,7 @@ class TransformerModel(nn.Module):
                     to_device=True,
                 )
                 output = self.forward_train(data)
-                total_loss_iter, total_losses_iter = self.calculate_loss(
+                total_loss_iter, total_losses_iter = self._calculate_loss(
                     output, targets
                 )
                 total_loss_collect.append(total_loss_iter.cpu())
@@ -469,10 +455,10 @@ class TransformerModel(nn.Module):
             for target_column in total_losses_iter.keys()
         }
         if not hasattr(self, "baseline_loss"):
-            data, targets = self.get_batch(
+            data, targets = self._get_batch(
                 X_valid, y_valid, 0, list(X_valid.values())[0].shape[0], to_device=False
             )
-            self.baseline_loss, self.baseline_losses = self.calculate_loss(
+            self.baseline_loss, self.baseline_losses = self._calculate_loss(
                 {
                     col: self._transform_val(col, data[col]) for col in targets.keys()
                 },  # this variant is chosen because the same batch might have several "sequenceId" sequences
@@ -481,7 +467,14 @@ class TransformerModel(nn.Module):
 
         return total_loss, total_losses, output
 
-    def get_batch(self, X, y, batch_start, batch_size, to_device):
+    def _get_batch(
+        self,
+        X: dict[str, Tensor],
+        y: dict[str, Tensor],
+        batch_start: int,
+        batch_size: int,
+        to_device: bool,
+    ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         if to_device:
             return (
                 {
@@ -511,7 +504,7 @@ class TransformerModel(nn.Module):
                 },
             )
 
-    def export(self, model, suffix, epoch):
+    def _export(self, model: "TransformerModel", suffix: str, epoch: int) -> None:
         self.eval()
 
         os.makedirs(os.path.join(self.project_path, "models"), exist_ok=True)
@@ -573,7 +566,7 @@ class TransformerModel(nn.Module):
                 export_path,
             )
 
-    def save(self, epoch, val_loss):
+    def _save(self, epoch: int, val_loss: float) -> None:
         os.makedirs(os.path.join(self.project_path, "checkpoints"), exist_ok=True)
 
         output_path = os.path.join(
@@ -593,7 +586,7 @@ class TransformerModel(nn.Module):
         )
         self.log_file.write(f"Saved model to {output_path}")
 
-    def get_optimizer(self, **kwargs):
+    def _get_optimizer(self, **kwargs):
         optimizer_class = eval(
             f"torch.optim.{self.hparams.training_spec.optimizer.name}"
         )
@@ -601,13 +594,13 @@ class TransformerModel(nn.Module):
             self.parameters(), lr=self.hparams.training_spec.lr, **kwargs
         )
 
-    def get_scheduler(self, **kwargs):
+    def _get_scheduler(self, **kwargs):
         scheduler_class = eval(
             f"torch.optim.lr_scheduler.{self.hparams.training_spec.scheduler.name}"
         )
         return scheduler_class(self.optimizer, **kwargs)
 
-    def initialize_log_file(self):
+    def _initialize_log_file(self):
         os.makedirs(os.path.join(self.project_path, "logs"), exist_ok=True)
         open_mode = "w" if self.start_epoch == 1 else "a"
         self.log_file = LogFile(
@@ -617,8 +610,9 @@ class TransformerModel(nn.Module):
             open_mode,
         )
 
-    def load_weights_conditional(self):
-        latest_model_path = self.get_latest_model_name()
+    def _load_weights_conditional(self) -> str:
+        latest_model_path = self._get_latest_model_name()
+        pytorch_total_params = sum(p.numel() for p in self.parameters())
 
         if latest_model_path is not None and self.continue_training:
             checkpoint = torch.load(
@@ -628,29 +622,79 @@ class TransformerModel(nn.Module):
             self.start_epoch = (
                 int(re.findall("epoch-([0-9]+)", latest_model_path)[0]) + 1
             )
-            return f"Loading model weights from {latest_model_path}"
+            return f"Loading model weights from {latest_model_path}. Total params: {format_number(pytorch_total_params)}"
         else:
             self.start_epoch = 1
-            return "Initializing new model"
+            return f"Initializing new model with {format_number(pytorch_total_params)} params"
 
-    def get_latest_model_name(self):
+    def _get_latest_model_name(self) -> Optional[str]:
         checkpoint_path = os.path.join(self.project_path, "checkpoints", "*")
 
-        files = glob.glob(
-            checkpoint_path
-        )  # * means all if need specific format then *.csv
+        files = glob.glob(checkpoint_path)
         files = [
             file for file in files if os.path.split(file)[1].startswith(self.model_name)
         ]
-        if len(files):
+        if files:
             return max(files, key=os.path.getctime)
         else:
             return None
 
+    def _log_epoch_results(
+        self,
+        epoch: int,
+        elapsed: float,
+        total_loss: float,
+        total_losses: dict[str, float],
+        output: dict[str, Tensor],
+    ) -> None:
+        self.log_file.write("-" * 89)
+        self.log_file.write(
+            f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | "
+            f"valid loss {format_number(total_loss)} | baseline loss {format_number(self.baseline_loss)}"
+        )
+
+        if len(total_losses) > 1:
+            self.log_file.write(
+                ", ".join(
+                    [
+                        f"'{target_column} loss': {format_number(tloss)}"
+                        for target_column, tloss in total_losses.items()
+                    ]
+                ),
+                level=2,
+            )
+            self.log_file.write(
+                ", ".join(
+                    [
+                        f"'{target_column} baseline loss': {format_number(bloss)}"
+                        for target_column, bloss in self.baseline_losses.items()
+                    ]
+                ),
+                level=2,
+            )
+
+        for categorical_column in self.class_share_log_columns:
+            output_values = output[categorical_column].argmax(1).cpu().detach().numpy()
+            output_counts = pd.Series(output_values).value_counts().sort_index()
+            output_counts = output_counts / output_counts.sum()
+            value_shares = " | ".join(
+                [
+                    f"{self.index_maps[categorical_column][value]}: {share:5.5f}"
+                    for value, share in output_counts.to_dict().items()
+                ]
+            )
+            self.log_file.write(f"{categorical_column}: {value_shares}")
+
+        self.log_file.write("-" * 89)
+
 
 def load_inference_model(
-    model_path, training_config_path, args_config, device, infer_with_dropout
-):
+    model_path: str,
+    training_config_path: str,
+    args_config: dict[str, Any],
+    device: str,
+    infer_with_dropout: bool,
+) -> TransformerModel:
     training_config = load_train_config(
         training_config_path, args_config, args_config["on_unprocessed"]
     )
@@ -677,7 +721,13 @@ def load_inference_model(
     return model
 
 
-def infer_with_model(model, x, device, size, target_columns):
+def infer_with_model(
+    model: TransformerModel,
+    x: list[dict[str, np.ndarray]],
+    device: str,
+    size: int,
+    target_columns: list[str],
+) -> dict[str, np.ndarray]:
     outs0 = [
         model.forward(
             {col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()}
