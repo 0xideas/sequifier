@@ -57,14 +57,14 @@ def load_inferer_config(config_path: str, args_config: dict, on_unprocessed: boo
 
 class InfererModel(BaseModel):
     project_path: str
-    ddconfig_path: Optional[str] = None
+    ddconfig_path: str
     model_path: str
     data_path: str
     training_config_path: str = Field(default="configs/train.yaml")
     read_format: str = Field(default="parquet")
     write_format: str = Field(default="csv")
 
-    selected_columns: Optional[list[str]] = None
+    selected_columns: list[str]
     categorical_columns: list[str]
     real_columns: list[str]
     target_columns: list[str]

@@ -9,21 +9,24 @@ PANDAS_TO_TORCH_TYPES = {"int64": torch.int64, "float64": torch.float32}
 
 
 def construct_index_maps(
-    id_maps: dict[str, dict[Union[str, int], int]],
+    id_maps: Optional[dict[str, dict[Union[str, int], int]]],
     target_columns_index_map: list[str],
     map_to_id: Optional[bool]
-) -> dict[str, dict]:
+) -> dict[str, dict[int, Union[str, int]]]:
     """Construct index maps for target columns."""
     index_map = {}
     if map_to_id is not None:
+        assert id_maps is not None
         for target_column in target_columns_index_map:
             map_ = (
                 {v: k for k, v in id_maps[target_column].items()}
             )
-            if isinstance(next(iter(map_.values())), str):
+            val = next(iter(map_.values()))
+            if isinstance(val, str):
                 map_[0] = "unknown"
             else:
-                map_[0] = min(map_.values()) - 1
+                assert isinstance(val, int)
+                map_[0] = min(map_.values()) - 1 # type: ignore
             index_map[target_column] = map_
     return index_map
 

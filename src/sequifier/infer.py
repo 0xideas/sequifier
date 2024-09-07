@@ -466,11 +466,14 @@ class Inferer:
             Dictionary of inference results.
         """
         if probs is None or (x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0): # type: ignore
-            size = x[self.target_columns[0]].shape[0]
+           assert x is not None
+           size = x[self.target_columns[0]].shape[0]
             if probs is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0: # type: ignore
+                assert x is not None
                 warnings.warn(f"Not all keys in x are in probs - {x.keys() = } != {probs.keys() = }. Full inference is executed.")
             
             if self.inference_model_type == "onnx":
+                assert x is not None
                 x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
                 out_subs = [dict(zip(self.target_columns, self.infer_pure(x_sub))) for x_sub in x_adjusted]
                 outs = {
@@ -478,6 +481,7 @@ class Inferer:
                     for target_column in self.target_columns
                 }
             elif self.inference_model_type == "pt":
+                assert x is not None
                 x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
                 outs = infer_with_model(self.inference_model, x_adjusted, self.device, size, self.target_columns)
             

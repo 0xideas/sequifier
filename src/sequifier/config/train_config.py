@@ -169,7 +169,7 @@ class TrainModel(BaseModel):
     validation_data_path: str
     read_format: str = "parquet"
 
-    selected_columns: Optional[list[str]] = None
+    selected_columns: list[str]
     column_types: dict[str, str]
     categorical_columns: list[str]
     real_columns: list[str]
