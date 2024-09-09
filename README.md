@@ -38,7 +38,9 @@ pip install sequifier
 git clone https://github.com/0xideas/sequifier-config YOUR_PROJECT_NAME
 ```
 to create a repository and ```cd YOUR_PROJECT_NAME```
-3. adapt the preprocess config to take the path to the data you want to preprocess and set `project_path` to`PROJECT PATH`
+
+3. adapt the preprocess config to take the path to the data you want to preprocess and set `project_path` to `PROJECT PATH`
+
 4. run
 ```console
 sequifier preprocess
