@@ -19,7 +19,7 @@ The sequifier package enables:
   - inference on data with a trained model
 
 
-## Other materials 
+## Other materials
 If you want to first get a more specific understanding of the transformer architecture, have a look at
 the [Wikipedia article.](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model))
 
@@ -29,6 +29,10 @@ an xgboost model and a logistic regression, check out [this notebook.](./documen
 
 ## Complete example how to build and apply a transformer sequence classifier with sequifier
 
+(the quickest way to initialize a sequifier project is to run
+``` git clone https://github.com/0xideas/sequifier-config YOUR_PROJECT_NAME```
+this sets up a repository with the config files already set up)
+
 1. create a conda environment with python >=3.9 activate and run
 ```console
 pip install sequifier
@@ -36,7 +40,7 @@ pip install sequifier
 2. create a new project folder (at a path referred to as `PROJECT PATH` later) and a `configs` subfolder
 3. copy default configs from repository for preprocessing, training and inference
 4. adapt preprocess config to take the path to the data you want to preprocess and set `project_path` to`PROJECT PATH`
-5. run 
+5. run
 ```console
 sequifier preprocess --config_path=[PROJECT PATH]/configs/preprocess.yaml
 ```
@@ -121,4 +125,3 @@ sequifier infer --config_path=[CONFIG PATH]
 and configured using a config file. The default version can be found here:
 
 [configs/infer.yaml](./configs/infer.yaml)
-
