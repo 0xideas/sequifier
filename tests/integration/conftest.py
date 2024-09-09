@@ -226,7 +226,7 @@ def run_training(
             f"sequifier train --config-path={training_config_path_real} --ddconfig-path={ddconfig_path_real} --model-name={model_name_real} --selected-columns=None"
         )
 
-    model_name_cat = f"model-categorical-{model_number}"
+    model_name_cat = f"model-categorical-{model_number}"  # type: ignore
     os.system(f"sequifier train --config-path={training_config_path_cat_multitarget}")
 
     source_path = os.path.join(
