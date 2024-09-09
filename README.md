@@ -37,21 +37,18 @@ pip install sequifier
 ```console
 git clone https://github.com/0xideas/sequifier-config YOUR_PROJECT_NAME
 ```
-to create a repository and ```cd YOUR_PROJECT_NAME```
-
-3. adapt the preprocess config to take the path to the data you want to preprocess and set `project_path` to `PROJECT PATH`
-
+3. cd into the `YOUR_PROJECT_NAME` folder, create a `data` folder and add your data and adapt the config file `preprocess.yaml` in the configs folder to take the path to the data you want to use for training
 4. run
 ```console
 sequifier preprocess
 ```
-5. the preprocessing step outputs a "data driven config" at `[PROJECT PATH]/configs/ddconfigs/[FILE NAME]`. It contains the number of classes found in the data, a map of classes to indices and the oaths to train, validation and test splits of data. Adapt the `dd_config` parameter in `train-on-preprocessed.yaml` and `infer.yaml` in to the path `[PROJECT PATH]/configs/ddconfigs/[FILE NAME]`and set `project_path` to `PROJECT PATH` in both configs
-6. run
+5. the preprocessing step outputs a "data driven config" at `configs/ddconfigs/[FILE NAME]`. It contains the number of classes found in the data, a map of classes to indices and the oaths to train, validation and test splits of data. Adapt the `dd_config` parameter in `train.yaml` and `infer.yaml` in to the path `configs/ddconfigs/[FILE NAME]`
+8. Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 ```console
 sequifier train
 ```
-7. adapt `data_path` in `infer.yaml`
-8. run
+9. adapt `data_path` in `infer.yaml` to one of the files output in the preprocessing step
+10. run
 ```console
 sequifier infer
 ```
