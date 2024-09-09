@@ -37,7 +37,7 @@ pip install sequifier
 ```console
 git clone https://github.com/0xideas/sequifier-config YOUR_PROJECT_NAME
 ```
-3. cd into the `YOUR_PROJECT_NAME` folder, create a `data` folder and add your data and adapt the config file `preprocess.yaml` in the configs folder to take the path to the data you want to use for training
+3. cd into the `YOUR_PROJECT_NAME` folder, create a `data` folder and add your data and adapt the config file `preprocess.yaml` in the configs folder to take the path to the data
 4. run
 ```console
 sequifier preprocess
