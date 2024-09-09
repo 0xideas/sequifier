@@ -43,12 +43,12 @@ git clone https://github.com/0xideas/sequifier-config YOUR_PROJECT_NAME
 sequifier preprocess
 ```
 5. the preprocessing step outputs a "data driven config" at `configs/ddconfigs/[FILE NAME]`. It contains the number of classes found in the data, a map of classes to indices and the oaths to train, validation and test splits of data. Adapt the `dd_config` parameter in `train.yaml` and `infer.yaml` in to the path `configs/ddconfigs/[FILE NAME]`
-8. Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
+6. Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 ```console
 sequifier train
 ```
-9. adapt `data_path` in `infer.yaml` to one of the files output in the preprocessing step
-10. run
+7. adapt `data_path` in `infer.yaml` to one of the files output in the preprocessing step
+8. run
 ```console
 sequifier infer
 ```
