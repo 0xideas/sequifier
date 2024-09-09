@@ -19,7 +19,7 @@ The sequifier package enables:
   - inference on data with a trained model
 
 
-## Other materials 
+## Other materials
 If you want to first get a more specific understanding of the transformer architecture, have a look at
 the [Wikipedia article.](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model))
 
@@ -33,24 +33,26 @@ an xgboost model and a logistic regression, check out [this notebook.](./documen
 ```console
 pip install sequifier
 ```
-2. create a new project folder (at a path referred to as `PROJECT PATH` later) and a `configs` subfolder
-3. copy default configs from repository for preprocessing, training and inference
-4. adapt preprocess config to take the path to the data you want to preprocess and set `project_path` to`PROJECT PATH`
-5. run 
+2. run
 ```console
-sequifier preprocess --config_path=[PROJECT PATH]/configs/preprocess.yaml
+git clone https://github.com/0xideas/sequifier-config YOUR_PROJECT_NAME
 ```
-6. the preprocessing step outputs a "data driven config" at `[PROJECT PATH]/configs/ddconfigs/[FILE NAME]`. It contains the number of classes found in the data, a map of classes to indices and the oaths to train, validation and test splits of data. Adapt the `dd_config` parameter in `train-on-preprocessed.yaml` and `infer.yaml` in to the path `[PROJECT PATH]/configs/ddconfigs/[FILE NAME]`and set `project_path` to `PROJECT PATH` in both configs
-7. run
+3. cd into the `YOUR_PROJECT_NAME` folder, create a `data` folder and add your data and adapt the config file `preprocess.yaml` in the configs folder to take the path to the data
+4. run
 ```console
-sequifier train --config_path=[PROJECT PATH]/configs/train-on-preprocessed.yaml
+sequifier preprocess
 ```
-8. adapt `data_path` in `infer.yaml`
-9. run
+5. the preprocessing step outputs a "data driven config" at `configs/ddconfigs/[FILE NAME]`. It contains the number of classes found in the data, a map of classes to indices and the oaths to train, validation and test splits of data. Adapt the `dd_config` parameter in `train.yaml` and `infer.yaml` in to the path `configs/ddconfigs/[FILE NAME]`
+6. Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 ```console
-sequifier infer --config_path=[PROJECT PATH]/configs/infer.yaml
+sequifier train
 ```
-10. find your predictions at `[PROJECT PATH]/outputs/predictions/sequifier-default-best-predictions.csv`
+7. adapt `data_path` in `infer.yaml` to one of the files output in the preprocessing step
+8. run
+```console
+sequifier infer
+```
+9. find your predictions at `[PROJECT PATH]/outputs/predictions/sequifier-default-best-predictions.csv`
 
 
 ## More detailed explanations of the three steps
@@ -121,4 +123,3 @@ sequifier infer --config_path=[CONFIG PATH]
 and configured using a config file. The default version can be found here:
 
 [configs/infer.yaml](./configs/infer.yaml)
-
