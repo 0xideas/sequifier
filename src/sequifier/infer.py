@@ -10,9 +10,15 @@ import pandas as pd
 import torch
 
 from sequifier.config.infer_config import load_inferer_config
-from sequifier.helpers import (PANDAS_TO_TORCH_TYPES, construct_index_maps,
-                               normalize_path, numpy_to_pytorch, read_data,
-                               subset_to_selected_columns, write_data)
+from sequifier.helpers import (
+    PANDAS_TO_TORCH_TYPES,
+    construct_index_maps,
+    normalize_path,
+    numpy_to_pytorch,
+    read_data,
+    subset_to_selected_columns,
+    write_data,
+)
 from sequifier.train import infer_with_model, load_inference_model
 
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
@@ -498,10 +504,15 @@ class Inferer:
         Returns:
             Dictionary of inference results.
         """
-        if probs is None or (x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0):  # type: ignore
+        if probs is None or (
+            x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0
+        ):  # type: ignore
             assert x is not None
             size = x[self.target_columns[0]].shape[0]
-            if probs is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0:  # type: ignore
+            if (
+                probs is not None
+                and len(set(x.keys()).difference(set(probs.keys()))) > 0
+            ):  # type: ignore
                 assert x is not None
                 warnings.warn(
                     f"Not all keys in x are in probs - {x.keys() = } != {probs.keys() = }. Full inference is executed."
@@ -530,6 +541,9 @@ class Inferer:
                     size,
                     self.target_columns,
                 )
+            else:
+                assert False
+                outs = {}  # for type checking
 
             for target_column, target_outs in outs.items():
                 assert not np.any(target_outs == np.inf), target_outs

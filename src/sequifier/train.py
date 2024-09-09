@@ -18,10 +18,15 @@ from torch.nn.functional import one_hot
 
 torch._dynamo.config.suppress_errors = True
 from sequifier.config.train_config import load_train_config  # noqa: E402
-from sequifier.helpers import (PANDAS_TO_TORCH_TYPES, LogFile,  # noqa: E402
-                               construct_index_maps, normalize_path,
-                               numpy_to_pytorch, read_data,
-                               subset_to_selected_columns)
+from sequifier.helpers import LogFile  # noqa: E402
+from sequifier.helpers import (  # noqa: E402
+    PANDAS_TO_TORCH_TYPES,
+    construct_index_maps,
+    normalize_path,
+    numpy_to_pytorch,
+    read_data,
+    subset_to_selected_columns,
+)
 
 
 def train(args: Any, args_config: dict[str, Any]) -> None:
@@ -316,8 +321,8 @@ class TransformerModel(nn.Module):
 
                 last_epoch = epoch
 
-        self._export(self, "last", last_epoch)
-        self._export(best_model, "best", last_epoch)
+        self._export(self, "last", last_epoch)  # type: ignore
+        self._export(best_model, "best", last_epoch)  # type: ignore
         self.log_file.write("Training transformer complete")
         self.log_file.close()
 
@@ -452,7 +457,7 @@ class TransformerModel(nn.Module):
                     for total_losses_i in total_losses_collect
                 ]
             )
-            for target_column in total_losses_iter.keys()
+            for target_column in total_losses_iter.keys()  # type: ignore
         }
         if not hasattr(self, "baseline_loss"):
             data, targets = self._get_batch(
@@ -465,7 +470,7 @@ class TransformerModel(nn.Module):
                 {col: val for col, val in targets.items()},
             )
 
-        return total_loss, total_losses, output
+        return total_loss, total_losses, output  # type: ignore
 
     def _get_batch(
         self,
@@ -616,7 +621,9 @@ class TransformerModel(nn.Module):
 
         if latest_model_path is not None and self.continue_training:
             checkpoint = torch.load(
-                latest_model_path, map_location=torch.device(self.device)
+                latest_model_path,
+                map_location=torch.device(self.device),
+                weights_only=False,
             )
             self.load_state_dict(checkpoint["model_state_dict"])
             self.start_epoch = (
@@ -702,7 +709,9 @@ def load_inference_model(
     with torch.no_grad():
         model = TransformerModel(training_config)
         model.log_file.write(f"Loading model weights from {model_path}")
-        model_state = torch.load(model_path, map_location=torch.device(device))
+        model_state = torch.load(
+            model_path, map_location=torch.device(device), weights_only=False
+        )
         model.load_state_dict(model_state["model_state_dict"])
 
         model.eval()
