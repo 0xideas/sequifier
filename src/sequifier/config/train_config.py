@@ -47,6 +47,7 @@ VALID_OPTIMIZERS = [
     "RMSprop",
     "Rprop",
     "SGD",
+    "AdEMAMix",
 ]
 
 VALID_SCHEDULERS = [
@@ -138,8 +139,8 @@ class DotDict(dict):
     """Dot notation access to dictionary attributes."""
 
     __getattr__ = dict.get
-    __setattr__ = dict.__setitem__
-    __delattr__ = dict.__delitem__
+    __setattr__ = dict.__setitem__  # type: ignore
+    __delattr__ = dict.__delitem__  # type: ignore
 
     def __deepcopy__(self, memo=None):
         return DotDict(copy.deepcopy(dict(self), memo=memo))

@@ -31,10 +31,9 @@ training_spec:
   loss_weights:
     itemId: 1.0
   optimizer:
-    name: Adam
+    name: AdamW
   scheduler:
     name: StepLR
     step_size: 1.0
     gamma: 0.99
   continue_training: false
-

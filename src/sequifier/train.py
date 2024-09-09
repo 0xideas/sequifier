@@ -27,6 +27,7 @@ from sequifier.helpers import (  # noqa: E402
     read_data,
     subset_to_selected_columns,
 )
+from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 
 
 def train(args: Any, args_config: dict[str, Any]) -> None:
@@ -592,9 +593,7 @@ class TransformerModel(nn.Module):
         self.log_file.write(f"Saved model to {output_path}")
 
     def _get_optimizer(self, **kwargs):
-        optimizer_class = eval(
-            f"torch.optim.{self.hparams.training_spec.optimizer.name}"
-        )
+        optimizer_class = get_optimizer_class(self.hparams.training_spec.optimizer.name)
         return optimizer_class(
             self.parameters(), lr=self.hparams.training_spec.lr, **kwargs
         )

@@ -32,11 +32,9 @@ training_spec:
   criterion:
     itemValue: MSELoss
   optimizer:
-    name: Adam
+    name: AdEMAMix
   scheduler:
     name: StepLR
     step_size: 1.0
     gamma: 0.99
   continue_training: false
-
-
