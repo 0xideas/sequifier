@@ -31,7 +31,7 @@ training_spec:
   loss_weights:
     itemId: 1.0
   optimizer:
-    name: AdamW
+    name: QHAdam
   scheduler:
     name: StepLR
     step_size: 1.0
