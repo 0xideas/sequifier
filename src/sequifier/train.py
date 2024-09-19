@@ -6,23 +6,24 @@ import re
 import time
 import uuid
 import warnings
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import numpy as np
 import pandas as pd
 import torch
 import torch._dynamo
+from beartype import beartype
 from torch import Tensor, nn
 from torch.nn import ModuleDict, TransformerEncoder, TransformerEncoderLayer
 from torch.nn.functional import one_hot
 
 torch._dynamo.config.suppress_errors = True
 from sequifier.config.train_config import load_train_config  # noqa: E402
+from sequifier.helpers import PANDAS_TO_TORCH_TYPES  # noqa: E402
 from sequifier.helpers import LogFile  # noqa: E402
+from sequifier.helpers import normalize_path  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
-    PANDAS_TO_TORCH_TYPES,
     construct_index_maps,
-    normalize_path,
     numpy_to_pytorch,
     read_data,
     subset_to_selected_columns,
@@ -30,6 +31,7 @@ from sequifier.helpers import (  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 
 
+@beartype
 def train(args: Any, args_config: dict[str, Any]) -> None:
     """
     Train the model using the provided configuration.
@@ -90,7 +92,8 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
     model.train_model(X_train, y_train, X_valid, y_valid)
 
 
-def format_number(number: float) -> str:
+@beartype
+def format_number(number: Union[int, float, np.float32]) -> str:
     """
     Format a number for display.
 
@@ -112,6 +115,7 @@ def format_number(number: float) -> str:
 
 
 class TransformerModel(nn.Module):
+    @beartype
     def __init__(self, hparams: Any):
         super().__init__()
         self.project_path = hparams.project_path
@@ -217,6 +221,7 @@ class TransformerModel(nn.Module):
         self._initialize_log_file()
         self.log_file.write(load_string)
 
+    @beartype
     def _get_real_columns_repetitions(
         self, real_columns: list[str], nhead: int
     ) -> dict[str, int]:
@@ -239,6 +244,7 @@ class TransformerModel(nn.Module):
     def _filter_key(dict_: dict[str, Any], key: str) -> dict[str, Any]:
         return {k: v for k, v in dict_.items() if k != key}
 
+    @beartype
     def _init_weights(self) -> None:
         initrange = 0.01
         for col in self.categorical_columns:
@@ -248,6 +254,7 @@ class TransformerModel(nn.Module):
             self.decoder[target_column].bias.data.zero_()
             self.decoder[target_column].weight.data.uniform_(-initrange, initrange)
 
+    @beartype
     def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
         srcs = []
         for col in self.categorical_columns:
@@ -270,9 +277,9 @@ class TransformerModel(nn.Module):
                 src[col].T.unsqueeze(2).repeat(1, 1, self.real_columns_repetitions[col])
             )
 
-        src = torch.cat(srcs, 2)
+        src2 = torch.cat(srcs, 2)
 
-        output = self.transformer_encoder(src, self.src_mask)
+        output = self.transformer_encoder(src2, self.src_mask)
         output = {
             target_column: self.decoder[target_column](output)
             for target_column in self.target_columns
@@ -280,10 +287,12 @@ class TransformerModel(nn.Module):
 
         return output
 
+    @beartype
     def forward(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
         output = self.forward_train(src)
         return {target_column: out[-1, :, :] for target_column, out in output.items()}
 
+    @beartype
     def train_model(
         self,
         X_train: dict[str, Tensor],
@@ -327,6 +336,7 @@ class TransformerModel(nn.Module):
         self.log_file.write("Training transformer complete")
         self.log_file.close()
 
+    @beartype
     def _train_epoch(
         self, X_train: dict[str, Tensor], y_train: dict[str, Tensor], epoch: int
     ) -> None:
@@ -343,7 +353,7 @@ class TransformerModel(nn.Module):
             ).flatten()
         )
         for batch_count, batch in enumerate(batch_order):
-            batch_start = batch * self.batch_size
+            batch_start = int(batch * self.batch_size)
 
             data, targets = self._get_batch(
                 X_train, y_train, batch_start, self.batch_size, to_device=True
@@ -376,6 +386,7 @@ class TransformerModel(nn.Module):
                 total_loss = 0.0
                 start_time = time.time()
 
+    @beartype
     def _calculate_loss(
         self, output: dict[str, Tensor], targets: dict[str, Tensor]
     ) -> tuple[Tensor, dict[str, Tensor]]:
@@ -403,8 +414,11 @@ class TransformerModel(nn.Module):
             else:
                 loss += losses[target_column]
 
+        assert loss is not None
+
         return loss, losses
 
+    @beartype
     def _copy_model(self):
         log_file = self.log_file
         del self.log_file
@@ -412,6 +426,7 @@ class TransformerModel(nn.Module):
         self.log_file = log_file
         return model_copy
 
+    @beartype
     def _transform_val(self, col: str, val: Tensor) -> Tensor:
         if self.target_column_types[col] == "categorical":
             return (
@@ -423,9 +438,10 @@ class TransformerModel(nn.Module):
             assert self.target_column_types[col] == "real"
             return val
 
+    @beartype
     def _evaluate(
         self, X_valid: dict[str, Tensor], y_valid: dict[str, Tensor]
-    ) -> tuple[float, dict[str, float], dict[str, Tensor]]:
+    ) -> tuple[np.float32, dict[str, np.float32], dict[str, Tensor]]:
         self.eval()  # turn on evaluation mode
 
         with torch.no_grad():
@@ -470,9 +486,15 @@ class TransformerModel(nn.Module):
                 },  # this variant is chosen because the same batch might have several "sequenceId" sequences
                 {col: val for col, val in targets.items()},
             )
+            self.baseline_loss = self.baseline_loss.item()
+            self.baseline_losses = {
+                target_column: target_loss.item()
+                for target_column, target_loss in self.baseline_losses.items()
+            }
 
         return total_loss, total_losses, output  # type: ignore
 
+    @beartype
     def _get_batch(
         self,
         X: dict[str, Tensor],
@@ -510,6 +532,7 @@ class TransformerModel(nn.Module):
                 },
             )
 
+    @beartype
     def _export(self, model: "TransformerModel", suffix: str, epoch: int) -> None:
         self.eval()
 
@@ -572,7 +595,8 @@ class TransformerModel(nn.Module):
                 export_path,
             )
 
-    def _save(self, epoch: int, val_loss: float) -> None:
+    @beartype
+    def _save(self, epoch: int, val_loss: np.float32) -> None:
         os.makedirs(os.path.join(self.project_path, "checkpoints"), exist_ok=True)
 
         output_path = os.path.join(
@@ -592,18 +616,21 @@ class TransformerModel(nn.Module):
         )
         self.log_file.write(f"Saved model to {output_path}")
 
+    @beartype
     def _get_optimizer(self, **kwargs):
         optimizer_class = get_optimizer_class(self.hparams.training_spec.optimizer.name)
         return optimizer_class(
             self.parameters(), lr=self.hparams.training_spec.lr, **kwargs
         )
 
+    @beartype
     def _get_scheduler(self, **kwargs):
         scheduler_class = eval(
             f"torch.optim.lr_scheduler.{self.hparams.training_spec.scheduler.name}"
         )
         return scheduler_class(self.optimizer, **kwargs)
 
+    @beartype
     def _initialize_log_file(self):
         os.makedirs(os.path.join(self.project_path, "logs"), exist_ok=True)
         open_mode = "w" if self.start_epoch == 1 else "a"
@@ -614,6 +641,7 @@ class TransformerModel(nn.Module):
             open_mode,
         )
 
+    @beartype
     def _load_weights_conditional(self) -> str:
         latest_model_path = self._get_latest_model_name()
         pytorch_total_params = sum(p.numel() for p in self.parameters())
@@ -633,6 +661,7 @@ class TransformerModel(nn.Module):
             self.start_epoch = 1
             return f"Initializing new model with {format_number(pytorch_total_params)} params"
 
+    @beartype
     def _get_latest_model_name(self) -> Optional[str]:
         checkpoint_path = os.path.join(self.project_path, "checkpoints", "*")
 
@@ -645,12 +674,13 @@ class TransformerModel(nn.Module):
         else:
             return None
 
+    @beartype
     def _log_epoch_results(
         self,
         epoch: int,
         elapsed: float,
-        total_loss: float,
-        total_losses: dict[str, float],
+        total_loss: np.float32,
+        total_losses: dict[str, np.float32],
         output: dict[str, Tensor],
     ) -> None:
         self.log_file.write("-" * 89)
@@ -694,13 +724,14 @@ class TransformerModel(nn.Module):
         self.log_file.write("-" * 89)
 
 
+@beartype
 def load_inference_model(
     model_path: str,
     training_config_path: str,
     args_config: dict[str, Any],
     device: str,
     infer_with_dropout: bool,
-) -> TransformerModel:
+) -> torch._dynamo.eval_frame.OptimizedModule:
     training_config = load_train_config(
         training_config_path, args_config, args_config["on_unprocessed"]
     )
@@ -729,8 +760,9 @@ def load_inference_model(
     return model
 
 
+@beartype
 def infer_with_model(
-    model: TransformerModel,
+    model: torch._dynamo.eval_frame.OptimizedModule,
     x: list[dict[str, np.ndarray]],
     device: str,
     size: int,

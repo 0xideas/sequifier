@@ -4,10 +4,13 @@ from typing import Optional, Union
 import numpy as np
 import pandas as pd
 import torch
+from beartype import beartype
+from torch import Tensor
 
 PANDAS_TO_TORCH_TYPES = {"int64": torch.int64, "float64": torch.float32}
 
 
+@beartype
 def construct_index_maps(
     id_maps: Optional[dict[str, dict[Union[str, int], int]]],
     target_columns_index_map: list[str],
@@ -29,6 +32,7 @@ def construct_index_maps(
     return index_map
 
 
+@beartype
 def read_data(
     path: str, read_format: str, columns: Optional[list[str]] = None
 ) -> pd.DataFrame:
@@ -40,6 +44,7 @@ def read_data(
     raise ValueError(f"Unsupported read format: {read_format}")
 
 
+@beartype
 def write_data(data: pd.DataFrame, path: str, write_format: str, **kwargs) -> None:
     """Write data to CSV or Parquet file."""
     if write_format == "csv":
@@ -50,6 +55,7 @@ def write_data(data: pd.DataFrame, path: str, write_format: str, **kwargs) -> No
         raise ValueError(f"Unsupported write format: {write_format}")
 
 
+@beartype
 def subset_to_selected_columns(
     data: pd.DataFrame, selected_columns: list[str]
 ) -> pd.DataFrame:
@@ -61,15 +67,16 @@ def subset_to_selected_columns(
     return data.loc[filter_, :]
 
 
+@beartype
 def numpy_to_pytorch(
     data: pd.DataFrame,
     column_types: dict[str, torch.dtype],
     selected_columns: list[str],
     target_columns: list[str],
     seq_length: int,
-    device: torch.device,
+    device: str,
     to_device: bool,
-) -> tuple[dict[str, torch.tensor], dict[str, torch.tensor]]:
+) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     """Convert numpy data to PyTorch tensors."""
     targets = {}
     for target_column in target_columns:
@@ -100,6 +107,7 @@ def numpy_to_pytorch(
 class LogFile:
     """A class for logging to multiple files with different levels."""
 
+    @beartype
     def __init__(self, path: str, open_mode: str):
         self.levels = [2, 3]
         self._files = {
@@ -108,6 +116,7 @@ class LogFile:
         }
         self._path = path
 
+    @beartype
     def write(self, string: str, level: int = 3) -> None:
         """Write a string to log files of appropriate levels."""
         for level2 in self.levels:
@@ -117,12 +126,14 @@ class LogFile:
         if level >= 3:
             print(string)
 
+    @beartype
     def close(self) -> None:
         """Close all open log files."""
         for file in self._files.values():
             file.close()
 
 
+@beartype
 def normalize_path(path: str, project_path: str) -> str:
     """Normalize a path relative to the project path."""
     project_path_normalized = (project_path + os.sep).replace(os.sep + os.sep, os.sep)

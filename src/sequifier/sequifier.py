@@ -2,12 +2,14 @@ from argparse import ArgumentParser
 from typing import Any
 
 import numpy as np
+from beartype import beartype
 
 from sequifier.infer import infer
 from sequifier.preprocess import preprocess
 from sequifier.train import train
 
 
+@beartype
 def build_args_config(args: Any) -> dict[str, Any]:
     """
     Build configuration dictionary from command-line arguments.
@@ -38,6 +40,7 @@ def build_args_config(args: Any) -> dict[str, Any]:
     return args_config
 
 
+@beartype
 def setup_parser() -> ArgumentParser:
     """
     Set up the argument parser for the command-line interface.

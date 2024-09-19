@@ -11,7 +11,7 @@ from torch.optim import Optimizer
 class AdEMAMix(Optimizer):
     def __init__(
         self,
-        params,
+        params={},
         lr=1e-3,
         betas=(0.9, 0.999, 0.9999),
         eps=1e-8,
