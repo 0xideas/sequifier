@@ -8,11 +8,13 @@ from typing import Any, Optional, Union
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
+from beartype import beartype
 
 from sequifier.config.preprocess_config import load_preprocessor_config
 from sequifier.helpers import read_data, write_data
 
 
+@beartype
 def preprocess(args: Any, args_config: dict[str, Any]) -> None:
     """
     Main preprocessing function.
@@ -28,6 +30,7 @@ def preprocess(args: Any, args_config: dict[str, Any]) -> None:
 
 
 class Preprocessor:
+    @beartype
     def __init__(
         self,
         project_path: str,
@@ -72,6 +75,7 @@ class Preprocessor:
         )
         self._cleanup()
 
+    @beartype
     def _setup_directories(self) -> None:
         os.makedirs(os.path.join(self.project_path, "data"), exist_ok=True)
         temp_path = os.path.join(self.project_path, "data", "temp")
@@ -79,6 +83,7 @@ class Preprocessor:
             shutil.rmtree(temp_path)
         os.makedirs(temp_path)
 
+    @beartype
     def _load_and_preprocess_data(
         self,
         data_path: str,
@@ -105,6 +110,7 @@ class Preprocessor:
 
         return data
 
+    @beartype
     def _setup_split_paths(self, write_format: str, n_splits: int) -> None:
         self.split_paths = [
             os.path.join(
@@ -115,7 +121,10 @@ class Preprocessor:
             for i in range(n_splits)
         ]
 
-    def _process_columns(self, data: pd.DataFrame, data_columns: list[str]) -> tuple[
+    @beartype
+    def _process_columns(
+        self, data: pd.DataFrame, data_columns: list[str]
+    ) -> tuple[
         dict[str, int],
         dict[str, dict[Union[str, int], int]],
         dict[str, dict[str, float]],
@@ -132,8 +141,9 @@ class Preprocessor:
                 id_maps[data_col] = dict(sup_id_map)
                 n_classes[data_col] = len(np.unique(data[data_col])) + 1
             elif dtype == "float64":
-                min_val, max_val = np.min(data[data_col].values), np.max(
-                    data[data_col].values
+                min_val, max_val = (
+                    np.min(data[data_col].values),
+                    np.max(data[data_col].values),
                 )
                 data[data_col] = (
                     ((data[data_col] - min_val) / (max_val - min_val)) * 1.6
@@ -146,6 +156,7 @@ class Preprocessor:
         col_types = {col: str(data[col].dtype) for col in data_columns}
         return n_classes, id_maps, min_max_values, col_types
 
+    @beartype
     def _process_batches(
         self,
         data: pd.DataFrame,
@@ -184,11 +195,13 @@ class Preprocessor:
             write_format,
         )
 
+    @beartype
     def _cleanup(self) -> None:
         delete_path = os.path.join(self.project_path, "data", "temp")
         assert len(delete_path) > 9
         os.system(f"rm -rf {delete_path}*")
 
+    @beartype
     def _export_metadata(
         self,
         id_maps: dict[str, dict[Union[str, int], int]],
@@ -216,15 +229,19 @@ class Preprocessor:
             json.dump(data_driven_config, f)
 
 
+@beartype
 def replace_ids(
     data: pd.DataFrame, column: str
 ) -> tuple[pd.DataFrame, dict[Union[str, int], int]]:
-    ids = sorted([int(x) if not isinstance(x, str) else x for x in np.unique(data[column])])  # type: ignore
+    ids = sorted(
+        [int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]
+    )  # type: ignore
     id_map = {id_: i + 1 for i, id_ in enumerate(ids)}
     data[column] = data[column].map(id_map)
     return data, id_map  # type: ignore
 
 
+@beartype
 def get_batch_limits(data: pd.DataFrame, n_batches: int) -> list[tuple[int, int]]:
     sequence_ids = data["sequenceId"].values
     new_sequence_id_indices = np.concatenate(
@@ -248,11 +265,13 @@ def get_batch_limits(data: pd.DataFrame, n_batches: int) -> list[tuple[int, int]
         np.where(distance == np.min(distance))[0] for distance in distances
     ]
     actual_limits = [
-        new_sequence_id_indices[limit_index[0]] for limit_index in actual_limit_indices
+        int(new_sequence_id_indices[limit_index[0]])
+        for limit_index in actual_limit_indices
     ] + [data.shape[0]]
     return list(zip(actual_limits[:-1], actual_limits[1:]))
 
 
+@beartype
 def preprocess_batch(
     process_id: int,
     batch: pd.DataFrame,
@@ -300,6 +319,7 @@ def preprocess_batch(
             combine_parquet_files(written_files[j], out_path)
 
 
+@beartype
 def extract_sequences(
     data: pd.DataFrame, seq_length: int, seq_step_size: int, columns: list[str]
 ) -> pd.DataFrame:
@@ -331,6 +351,7 @@ def extract_sequences(
     return sequences
 
 
+@beartype
 def get_subsequence_starts(
     in_seq_length: int, seq_length: int, seq_step_size: int
 ) -> np.ndarray:
@@ -345,8 +366,9 @@ def get_subsequence_starts(
     return np.cumsum(increments)
 
 
+@beartype
 def extract_subsequences(
-    in_seq: dict[str, pd.Series],
+    in_seq: pd.Series,  # col values are lists
     seq_length: int,
     seq_step_size: int,
     columns: list[str],
@@ -363,17 +385,19 @@ def extract_subsequences(
     )
 
     return {
-        col: [in_seq[col][i : i + seq_length] for i in subsequence_starts]
+        col: [list(in_seq[col][i : i + seq_length]) for i in subsequence_starts]
         for col in columns
     }
 
 
+@beartype
 def insert_top_folder(path: str, folder_name: str) -> str:
     components = os.path.split(path)
     new_components = list(components[:-1]) + [folder_name] + [components[-1]]
     return os.path.join(*new_components)
 
 
+@beartype
 def extract_data_subsets(
     sequences: pd.DataFrame, group_proportions: list[float]
 ) -> dict[int, pd.DataFrame]:
@@ -401,6 +425,7 @@ def extract_data_subsets(
     }
 
 
+@beartype
 def get_subset_groups(
     sequence_data: pd.DataFrame, groups: list[float], n_cols: int
 ) -> list[int]:
@@ -413,11 +438,13 @@ def get_subset_groups(
     return ([0] * diff) + subset_groups2
 
 
+@beartype
 def cast_columns_to_string(data: pd.DataFrame) -> pd.DataFrame:
     data.columns = [str(col) for col in data.columns]
     return data
 
 
+@beartype
 def combine_multiprocessing_outputs(
     project_path: str,
     n_splits: int,
@@ -446,6 +473,7 @@ def combine_multiprocessing_outputs(
             combine_parquet_files(files, out_path)
 
 
+@beartype
 def combine_parquet_files(files: list[str], out_path: str) -> None:
     schema = pq.ParquetFile(files[0]).schema_arrow
     with pq.ParquetWriter(out_path, schema=schema, compression="snappy") as writer:

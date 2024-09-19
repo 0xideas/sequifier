@@ -8,6 +8,7 @@ import numpy as np
 import onnxruntime
 import pandas as pd
 import torch
+from beartype import beartype
 
 from sequifier.config.infer_config import load_inferer_config
 from sequifier.helpers import (
@@ -24,6 +25,7 @@ from sequifier.train import infer_with_model, load_inference_model
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
 
+@beartype
 def infer(args: Any, args_config: dict[str, Any]) -> None:
     config_path = (
         args.config_path if args.config_path is not None else "configs/infer.yaml"
@@ -145,6 +147,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     print("Inference complete")
 
 
+@beartype
 def expand_data_by_autoregression(
     data: pd.DataFrame, autoregression_additional_steps: int, seq_length: int
 ) -> pd.DataFrame:
@@ -202,6 +205,7 @@ def expand_data_by_autoregression(
     ).reset_index(drop=True)
 
 
+@beartype
 def get_probs_preds(
     config: Any,
     inferer: "Inferer",
@@ -230,6 +234,7 @@ def get_probs_preds(
     return (probs, preds)
 
 
+@beartype
 def fill_in_predictions(
     data: pd.DataFrame,
     sequence_id_to_subsequence_ids: dict[int, np.ndarray],
@@ -270,6 +275,7 @@ def fill_in_predictions(
     return data
 
 
+@beartype
 def fill_number(number: Union[int, float], max_length: int) -> str:
     """
     Fill a number with leading zeros to reach the specified length.
@@ -285,6 +291,7 @@ def fill_number(number: Union[int, float], max_length: int) -> str:
     return f"{'0' * (max_length - len(number_str))}{number_str}"
 
 
+@beartype
 def verify_variable_order(data: pd.DataFrame) -> None:
     sequence_ids = data["sequenceId"].values
     assert np.all(
@@ -300,6 +307,7 @@ def verify_variable_order(data: pd.DataFrame) -> None:
         ), "subsequenceId must be in ascending order for autoregression"
 
 
+@beartype
 def get_probs_preds_autoregression(
     config: Any,
     inferer: "Inferer",
@@ -362,7 +370,7 @@ def get_probs_preds_autoregression(
 
         sort_keys.extend(
             [
-                f"{fill_number(seq_id, max_length)}-{fill_number(subsequence_id, max_length)}"
+                f"{fill_number(int(seq_id), max_length)}-{fill_number(int(subsequence_id), max_length)}"
                 for seq_id in np.unique(sequence_ids_present)
             ]
         )
@@ -377,7 +385,7 @@ def get_probs_preds_autoregression(
             sequence_id_to_subsequence_ids,
             ids_to_row,
             sequence_ids_present,
-            subsequence_id,
+            int(subsequence_id),
             preds,
         )
     sort_order = np.argsort(sort_keys)
@@ -401,6 +409,7 @@ def get_probs_preds_autoregression(
 
 
 class Inferer:
+    @beartype
     def __init__(
         self,
         model_path: str,
@@ -468,6 +477,7 @@ class Inferer:
                 self.infer_with_dropout,
             )
 
+    @beartype
     def invert_normalization(
         self, values: np.ndarray, target_column: str
     ) -> np.ndarray:
@@ -487,6 +497,7 @@ class Inferer:
             [(((v + 0.8) / 1.6) * (max_ - min_)) + min_ for v in values.flatten()]
         ).reshape(*values.shape)
 
+    @beartype
     def infer(
         self,
         x: Optional[dict[str, np.ndarray]],
@@ -575,6 +586,7 @@ class Inferer:
                 outs[target_column] = self.invert_normalization(output, target_column)
         return outs
 
+    @beartype
     def prepare_inference_batches(
         self, x: dict[str, np.ndarray], pad_to_batch_size: bool
     ) -> list[dict[str, np.ndarray]]:
@@ -602,6 +614,7 @@ class Inferer:
             ]
             return xs
 
+    @beartype
     def infer_pure(self, x: dict[str, np.ndarray]) -> list[np.ndarray]:
         """
         Perform pure inference using ONNX session.
@@ -622,6 +635,7 @@ class Inferer:
         ort_outs = self.ort_session.run(None, ort_inputs)
         return ort_outs
 
+    @beartype
     def expand_to_batch_size(self, x: np.ndarray) -> np.ndarray:
         """
         Expand input to match the inference batch size.
@@ -637,6 +651,7 @@ class Inferer:
         return np.concatenate(([x] * repetitions) + [x[0:filler, :]], axis=0)
 
 
+@beartype
 def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """
     Normalize the output probabilities.
@@ -660,6 +675,7 @@ def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return probs
 
 
+@beartype
 def sample_with_cumsum(probs: np.ndarray) -> np.ndarray:
     """
     Sample from cumulative sum of probabilities.

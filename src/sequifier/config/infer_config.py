@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field, validator
 from sequifier.helpers import normalize_path
 
 
+from beartype import beartype
+
+@beartype
 def load_inferer_config(
     config_path: str, args_config: dict, on_unprocessed: bool
 ) -> "InfererModel":
