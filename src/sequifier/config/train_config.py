@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 import yaml
 from pydantic import BaseModel, Field, validator
+from beartype import beartype
 
 from sequifier.helpers import normalize_path
 
@@ -97,6 +98,7 @@ VALID_SCHEDULERS = [
 ]
 
 
+@beartype
 def load_train_config(
     config_path: str, args_config: dict[str, Any], on_unprocessed: bool
 ) -> "TrainModel":

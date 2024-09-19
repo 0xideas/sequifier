@@ -5,6 +5,9 @@ import yaml
 from pydantic import BaseModel, validator
 
 
+from beartype import beartype
+
+@beartype
 def load_preprocessor_config(
     config_path: str, args_config: dict
 ) -> "PreprocessorModel":
