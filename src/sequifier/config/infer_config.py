@@ -1,5 +1,6 @@
 import json
 import os
+import warnings
 from typing import Optional
 
 import yaml
@@ -132,6 +133,16 @@ class InfererModel(BaseModel):
         ):
             raise ValueError(
                 "map_to_id can only be True if at least one target variable is categorical"
+            )
+        return v
+
+    @validator("sample_from_distribution")
+    def validate_sample_from_distribution(cls, v: bool, values: dict) -> bool:
+        if v and any(
+            vv == "real" for vv in values.get("target_column_types", {}).values()
+        ):
+            warnings.warn(
+                "sample_from_distribution only enables sampling for categorical target variables, real targeet variables will remain unaffected"
             )
         return v
 
