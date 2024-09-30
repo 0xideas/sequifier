@@ -2,10 +2,9 @@ import os
 from typing import Optional
 
 import yaml
+from beartype import beartype
 from pydantic import BaseModel, validator
 
-
-from beartype import beartype
 
 @beartype
 def load_preprocessor_config(

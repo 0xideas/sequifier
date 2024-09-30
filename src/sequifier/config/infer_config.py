@@ -3,12 +3,11 @@ import os
 from typing import Optional
 
 import yaml
+from beartype import beartype
 from pydantic import BaseModel, Field, validator
 
 from sequifier.helpers import normalize_path
 
-
-from beartype import beartype
 
 @beartype
 def load_inferer_config(
@@ -133,16 +132,6 @@ class InfererModel(BaseModel):
         ):
             raise ValueError(
                 "map_to_id can only be True if at least one target variable is categorical"
-            )
-        return v
-
-    @validator("sample_from_distribution")
-    def validate_sample_from_distribution(cls, v: bool, values: dict) -> bool:
-        if v and any(
-            vv == "real" for vv in values.get("target_column_types", {}).values()
-        ):
-            raise ValueError(
-                "sample_from_distribution can only be used when all target columns are categorical"
             )
         return v
 

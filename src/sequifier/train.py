@@ -21,9 +21,9 @@ torch._dynamo.config.suppress_errors = True
 from sequifier.config.train_config import load_train_config  # noqa: E402
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES  # noqa: E402
 from sequifier.helpers import LogFile  # noqa: E402
+from sequifier.helpers import construct_index_maps  # noqa: E402
 from sequifier.helpers import normalize_path  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
-    construct_index_maps,
     numpy_to_pytorch,
     read_data,
     subset_to_selected_columns,
