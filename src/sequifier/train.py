@@ -23,11 +23,8 @@ from sequifier.helpers import PANDAS_TO_TORCH_TYPES  # noqa: E402
 from sequifier.helpers import LogFile  # noqa: E402
 from sequifier.helpers import construct_index_maps  # noqa: E402
 from sequifier.helpers import normalize_path  # noqa: E402
-from sequifier.helpers import (  # noqa: E402
-    numpy_to_pytorch,
-    read_data,
-    subset_to_selected_columns,
-)
+from sequifier.helpers import read_data  # noqa: E402
+from sequifier.helpers import numpy_to_pytorch, subset_to_selected_columns  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 
 
@@ -180,12 +177,14 @@ class TransformerModel(nn.Module):
         )
 
         self.decoder = ModuleDict()
+        self.softmax = ModuleDict()
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
                 self.decoder[target_column] = nn.Linear(
                     embedding_size,
                     self.n_classes[target_column],
                 )
+                self.softmax[target_column] = nn.LogSoftmax(dim=-1)
             elif target_column_type == "real":
                 self.decoder[target_column] = nn.Linear(embedding_size, 1)
             else:
@@ -281,11 +280,19 @@ class TransformerModel(nn.Module):
 
         output = self.transformer_encoder(src2, self.src_mask)
         output = {
-            target_column: self.decoder[target_column](output)
+            target_column: self.decode(target_column, output)
             for target_column in self.target_columns
         }
 
         return output
+
+    @beartype
+    def decode(self, target_column, output):
+        decoded = self.decoder[target_column](output)
+        if target_column in self.real_columns:
+            return decoded
+        else:
+            return self.softmax[target_column](decoded)
 
     @beartype
     def forward(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
