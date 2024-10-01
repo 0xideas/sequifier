@@ -234,6 +234,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _get_d_model_by_column(self, embedding_size, categorical_columns, real_columns):
+        print(f"{len(categorical_columns) = } {len(real_columns) = }")
         if len(categorical_columns) == 0 and len(real_columns) > 0:
             d_model_by_column = {col: 1 for col in real_columns}
             column_index = dict(enumerate(real_columns))
@@ -242,12 +243,12 @@ class TransformerModel(nn.Module):
                     j = i % len(real_columns)
                     d_model_by_column[column_index[j]] += 1
             assert sum(d_model_by_column.values()) % embedding_size == 0
-        elif len(real_columns) == 0 and len(categorical_columns) > 1:
+        elif len(real_columns) == 0 and len(categorical_columns) > 0:
             assert (
                 (embedding_size % len(categorical_columns)) == 0
             ), f"If only categorical variables are included, d_model must be a multiple of the number of categorical variables ({embedding_size = } % {len(categorical_columns) = }) != 0"
             d_model_comp = embedding_size // len(categorical_columns)
-            d_model_by_column = {col: d_model_comp for col in real_columns}
+            d_model_by_column = {col: d_model_comp for col in categorical_columns}
         else:
             raise UserWarning(
                 "If both real and categorical variables are present, d_model_by_column config value must be set"

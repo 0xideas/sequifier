@@ -19,6 +19,12 @@ SELECTED_COLUMNS = {
 }
 
 
+def write_and_log(command):
+    os.system(command)
+    with open(os.path.join("tests", "project_folder", "log.txt"), "a+") as f:
+        f.write(f"{command}\n")
+
+
 @pytest.fixture(scope="session")
 def split_groups():
     return {"categorical": 3, "real": 2}
@@ -175,18 +181,18 @@ def run_preprocessing(
         data_path_cat = os.path.join(
             "tests", "resources", f"test-data-categorical-{data_number}.csv"
         )
-        os.system(
+        write_and_log(
             f"sequifier preprocess --config-path={preprocessing_config_path_cat} --data-path={data_path_cat} --selected-columns=None"
         )
 
         data_path_real = os.path.join(
             "tests", "resources", f"test-data-real-{data_number}.csv"
         )
-        os.system(
+        write_and_log(
             f"sequifier preprocess --config-path={preprocessing_config_path_real} --data-path={data_path_real} --selected-columns={SELECTED_COLUMNS['real'][data_number]}"
         )
 
-    os.system(
+    write_and_log(
         f"sequifier preprocess --config-path={preprocessing_config_path_cat_multitarget}"
     )
 
@@ -214,7 +220,7 @@ def run_training(
             "configs", "ddconfigs", f"test-data-categorical-{model_number}.json"
         )
         model_name_cat = f"model-categorical-{model_number}"
-        os.system(
+        write_and_log(
             f"sequifier train --config-path={training_config_path_cat} --ddconfig-path={ddconfig_path_cat} --model-name={model_name_cat} --selected-columns={SELECTED_COLUMNS['categorical'][model_number]}"
         )
 
@@ -222,12 +228,14 @@ def run_training(
             "configs", "ddconfigs", f"test-data-real-{model_number}.json"
         )
         model_name_real = f"model-real-{model_number}"
-        os.system(
+        write_and_log(
             f"sequifier train --config-path={training_config_path_real} --ddconfig-path={ddconfig_path_real} --model-name={model_name_real} --selected-columns=None"
         )
 
     model_name_cat = f"model-categorical-{model_number}"  # type: ignore
-    os.system(f"sequifier train --config-path={training_config_path_cat_multitarget}")
+    write_and_log(
+        f"sequifier train --config-path={training_config_path_cat_multitarget}"
+    )
 
     source_path = os.path.join(
         project_path, "models", "sequifier-model-real-1-best-3.pt"
@@ -258,7 +266,7 @@ def run_inference(
         ddconfig_path_cat = os.path.join(
             "configs", "ddconfigs", f"test-data-categorical-{model_number}.json"
         )
-        os.system(
+        write_and_log(
             f"sequifier infer --config-path={inference_config_path_cat} --ddconfig-path={ddconfig_path_cat} --model-path={model_path_cat} --data-path={data_path_cat} --selected-columns={SELECTED_COLUMNS['categorical'][model_number]}"
         )
 
@@ -271,12 +279,14 @@ def run_inference(
         ddconfig_path_real = os.path.join(
             "configs", "ddconfigs", f"test-data-real-{model_number}.json"
         )
-        os.system(
+        write_and_log(
             f"sequifier infer --config-path={inference_config_path_real} --ddconfig-path={ddconfig_path_real} --model-path={model_path_real} --data-path={data_path_real} --selected-columns=None"
         )
 
-    os.system(f"sequifier infer --config-path={inference_config_path_cat_multitarget}")
+    write_and_log(
+        f"sequifier infer --config-path={inference_config_path_cat_multitarget}"
+    )
 
-    os.system(
+    write_and_log(
         f"sequifier infer --config-path={inference_config_path_real_autoregression} --selected-columns={SELECTED_COLUMNS['real'][1]}"
     )

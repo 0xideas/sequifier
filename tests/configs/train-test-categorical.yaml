@@ -12,8 +12,8 @@ seq_length: 8
 inference_batch_size: 10
 
 model_spec:
-  d_model: 6
-  nhead: 2
+  d_model: 60
+  nhead: 3
   d_hid: 12
   nlayers: 2
 training_spec:
