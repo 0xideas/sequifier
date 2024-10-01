@@ -151,23 +151,35 @@ class TransformerModel(nn.Module):
         self.drop = nn.Dropout(hparams.training_spec.dropout)
         self.encoder = ModuleDict()
         self.pos_encoder = ModuleDict()
+        self.embedding_size = max(
+            self.hparams.model_spec.d_model, self.hparams.model_spec.nhead
+        )
+        if hparams.model_spec.d_model_by_column is not None:
+            self.d_model_by_column = hparams.model_spec.d_model_by_column
+        else:
+            self.d_model_by_column = self._get_d_model_by_column(
+                self.embedding_size, self.categorical_columns, self.real_columns
+            )
+
+        self.real_columns_with_embedding = []
+        self.real_columns_direct = []
+        for col in self.real_columns:
+            if self.d_model_by_column[col] > 1:
+                self.encoder[col] = nn.Linear(1, self.d_model_by_column[col])
+                self.real_columns_with_embedding.append(col)
+            else:
+                assert self.d_model_by_column[col] == 1
+                self.real_columns_direct.append(col)
+
         for col, n_classes in self.n_classes.items():
             if col in self.categorical_columns:
-                self.encoder[col] = nn.Embedding(n_classes, hparams.model_spec.d_model)
+                self.encoder[col] = nn.Embedding(n_classes, self.d_model_by_column[col])
                 self.pos_encoder[col] = nn.Embedding(
-                    self.seq_length, hparams.model_spec.d_model
+                    self.seq_length, self.d_model_by_column[col]
                 )
 
-        self.real_columns_repetitions = self._get_real_columns_repetitions(
-            self.real_columns, hparams.model_spec.nhead
-        )
-
-        embedding_size = (
-            hparams.model_spec.d_model * len(self.categorical_columns)
-        ) + int(np.sum(list(self.real_columns_repetitions.values())))
-
         encoder_layers = TransformerEncoderLayer(
-            embedding_size,
+            self.embedding_size,
             hparams.model_spec.nhead,
             hparams.model_spec.d_hid,
             hparams.training_spec.dropout,
@@ -181,12 +193,12 @@ class TransformerModel(nn.Module):
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
                 self.decoder[target_column] = nn.Linear(
-                    embedding_size,
+                    self.embedding_size,
                     self.n_classes[target_column],
                 )
                 self.softmax[target_column] = nn.LogSoftmax(dim=-1)
             elif target_column_type == "real":
-                self.decoder[target_column] = nn.Linear(embedding_size, 1)
+                self.decoder[target_column] = nn.Linear(self.embedding_size, 1)
             else:
                 raise ValueError(
                     f"Target column type {target_column_type} not in ['categorical', 'real']"
@@ -221,18 +233,33 @@ class TransformerModel(nn.Module):
         self.log_file.write(load_string)
 
     @beartype
-    def _get_real_columns_repetitions(
-        self, real_columns: list[str], nhead: int
+    def _get_d_model_by_column(
+        self,
+        embedding_size: int,
+        categorical_columns: list[str],
+        real_columns: list[str],
     ) -> dict[str, int]:
-        real_columns_repetitions = {col: 1 for col in real_columns}
-        column_index = dict(enumerate(real_columns))
-        for i in range(nhead * len(real_columns)):
-            if sum(real_columns_repetitions.values()) % nhead != 0:
-                j = i % len(real_columns)
-                real_columns_repetitions[column_index[j]] += 1
-        assert sum(real_columns_repetitions.values()) % nhead == 0
+        print(f"{len(categorical_columns) = } {len(real_columns) = }")
+        if len(categorical_columns) == 0 and len(real_columns) > 0:
+            d_model_by_column = {col: 1 for col in real_columns}
+            column_index = dict(enumerate(real_columns))
+            for i in range(embedding_size):
+                if sum(d_model_by_column.values()) % embedding_size != 0:
+                    j = i % len(real_columns)
+                    d_model_by_column[column_index[j]] += 1
+            assert sum(d_model_by_column.values()) % embedding_size == 0
+        elif len(real_columns) == 0 and len(categorical_columns) > 0:
+            assert (
+                (embedding_size % len(categorical_columns)) == 0
+            ), f"If only categorical variables are included, d_model must be a multiple of the number of categorical variables ({embedding_size = } % {len(categorical_columns) = }) != 0"
+            d_model_comp = embedding_size // len(categorical_columns)
+            d_model_by_column = {col: d_model_comp for col in categorical_columns}
+        else:
+            raise UserWarning(
+                "If both real and categorical variables are present, d_model_by_column config value must be set"
+            )
 
-        return real_columns_repetitions
+        return d_model_by_column
 
     @staticmethod
     def _generate_square_subsequent_mask(sz: int) -> Tensor:
@@ -257,9 +284,7 @@ class TransformerModel(nn.Module):
     def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
         srcs = []
         for col in self.categorical_columns:
-            src_t = self.encoder[col](src[col].T) * math.sqrt(
-                self.hparams.model_spec.d_model
-            )
+            src_t = self.encoder[col](src[col].T) * math.sqrt(self.embedding_size)
             pos = (
                 torch.arange(0, self.seq_length, dtype=torch.long, device=self.device)
                 .repeat(src_t.shape[1], 1)
@@ -272,9 +297,15 @@ class TransformerModel(nn.Module):
             srcs.append(src_c)
 
         for col in self.real_columns:
-            srcs.append(
-                src[col].T.unsqueeze(2).repeat(1, 1, self.real_columns_repetitions[col])
-            )
+            if col in self.real_columns_direct:
+                srcs.append(src[col].T.unsqueeze(2).repeat(1, 1, 1))
+            elif col in self.real_columns_with_embedding:
+                srcs.append(
+                    self.encoder[col](src[col].T[:, :, None])
+                    * math.sqrt(self.embedding_size)
+                )
+            else:
+                assert False
 
         src2 = torch.cat(srcs, 2)
 
@@ -287,7 +318,7 @@ class TransformerModel(nn.Module):
         return output
 
     @beartype
-    def decode(self, target_column, output):
+    def decode(self, target_column: str, output: Tensor) -> Tensor:
         decoded = self.decoder[target_column](output)
         if target_column in self.real_columns:
             return decoded

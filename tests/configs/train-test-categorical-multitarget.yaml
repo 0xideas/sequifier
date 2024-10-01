@@ -15,7 +15,13 @@ seq_length: 8
 inference_batch_size: 10
 
 model_spec:
-  d_model: 10
+  d_model: 16
+  d_model_by_column:
+    itemId: 5
+    sup1: 4
+    sup2: 2
+    sup3: 1
+    sup4: 4
   nhead: 2
   d_hid: 10
   nlayers: 2

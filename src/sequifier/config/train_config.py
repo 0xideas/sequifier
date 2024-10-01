@@ -2,6 +2,7 @@ import copy
 import json
 from typing import Any, Optional
 
+import numpy as np
 import yaml
 from beartype import beartype
 from pydantic import BaseModel, Field, validator
@@ -239,9 +240,17 @@ class ModelSpecModel(BaseModel):
     """Pydantic model for model specifications."""
 
     d_model: int
+    d_model_by_column: Optional[dict[str, int]]
     nhead: int
     d_hid: int
     nlayers: int
+
+    @validator("d_model_by_column")
+    def validate_d_model_by_column(cls, v, values):
+        assert (
+            v is None or np.sum(list(v.values())) == values["d_model"]
+        ), f'{values["d_model"]} is not the sum of the d_model_by_column values'
+        return v
 
 
 class TrainModel(BaseModel):
