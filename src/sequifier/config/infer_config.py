@@ -3,12 +3,11 @@ import os
 from typing import Optional
 
 import yaml
+from beartype import beartype
 from pydantic import BaseModel, Field, validator
 
 from sequifier.helpers import normalize_path
 
-
-from beartype import beartype
 
 @beartype
 def load_inferer_config(
@@ -90,10 +89,10 @@ class InfererModel(BaseModel):
     seq_length: int
     inference_batch_size: int
 
-    sample_from_distribution: bool = Field(default=False)
+    sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
     autoregression: bool = Field(default=True)
-    autoregression_additional_steps: Optional[int] = None
+    autoregression_additional_steps: Optional[int] = Field(default=None)
 
     @validator("training_config_path")
     def validate_training_config_path(cls, v: str) -> str:
@@ -133,16 +132,6 @@ class InfererModel(BaseModel):
         ):
             raise ValueError(
                 "map_to_id can only be True if at least one target variable is categorical"
-            )
-        return v
-
-    @validator("sample_from_distribution")
-    def validate_sample_from_distribution(cls, v: bool, values: dict) -> bool:
-        if v and any(
-            vv == "real" for vv in values.get("target_column_types", {}).values()
-        ):
-            raise ValueError(
-                "sample_from_distribution can only be used when all target columns are categorical"
             )
         return v
 

@@ -57,7 +57,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         config.selected_columns,
         config.target_columns,
         config.target_column_types,
-        config.sample_from_distribution,
+        config.sample_from_distribution_columns,
         config.infer_with_dropout,
         config.inference_batch_size,
         config.device,
@@ -422,7 +422,7 @@ class Inferer:
         selected_columns: Optional[list[str]],
         target_columns: list[str],
         target_column_types: dict[str, str],
-        sample_from_distribution: bool,
+        sample_from_distribution_columns: Optional[list[str]],
         infer_with_dropout: bool,
         inference_batch_size: int,
         device: str,
@@ -444,7 +444,7 @@ class Inferer:
         self.selected_columns = selected_columns
         self.target_columns = target_columns
         self.target_column_types = target_column_types
-        self.sample_from_distribution = sample_from_distribution
+        self.sample_from_distribution_columns = sample_from_distribution_columns
         self.infer_with_dropout = infer_with_dropout
         self.inference_batch_size = inference_batch_size
         self.inference_model_type = model_path.split(".")[-1]
@@ -576,7 +576,10 @@ class Inferer:
 
         for target_column in self.target_columns:
             if self.target_column_types[target_column] == "categorical":
-                if not self.sample_from_distribution:
+                if (
+                    self.sample_from_distribution_columns is None
+                    or target_column not in self.sample_from_distribution_columns
+                ):
                     outs[target_column] = outs[target_column].argmax(1)
                 else:
                     outs[target_column] = sample_with_cumsum(outs[target_column])
@@ -686,7 +689,7 @@ def sample_with_cumsum(probs: np.ndarray) -> np.ndarray:
     Returns:
         Sampled indices.
     """
-    cumulative_probs = np.cumsum(probs, axis=1)
+    cumulative_probs = np.cumsum(np.exp(probs), axis=1)
     random_threshold = np.random.rand(cumulative_probs.shape[0], 1)
     random_threshold = np.repeat(random_threshold, probs.shape[1], axis=1)
     return (random_threshold < cumulative_probs).argmax(axis=1)

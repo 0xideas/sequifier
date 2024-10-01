@@ -3,8 +3,8 @@ import json
 from typing import Any, Optional
 
 import yaml
-from pydantic import BaseModel, Field, validator
 from beartype import beartype
+from pydantic import BaseModel, Field, validator
 
 from sequifier.helpers import normalize_path
 
