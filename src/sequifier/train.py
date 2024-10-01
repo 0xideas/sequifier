@@ -233,7 +233,12 @@ class TransformerModel(nn.Module):
         self.log_file.write(load_string)
 
     @beartype
-    def _get_d_model_by_column(self, embedding_size, categorical_columns, real_columns):
+    def _get_d_model_by_column(
+        self,
+        embedding_size: int,
+        categorical_columns: list[str],
+        real_columns: list[str],
+    ) -> dict[str, int]:
         print(f"{len(categorical_columns) = } {len(real_columns) = }")
         if len(categorical_columns) == 0 and len(real_columns) > 0:
             d_model_by_column = {col: 1 for col in real_columns}
@@ -313,7 +318,7 @@ class TransformerModel(nn.Module):
         return output
 
     @beartype
-    def decode(self, target_column, output):
+    def decode(self, target_column: str, output: Tensor) -> Tensor:
         decoded = self.decoder[target_column](output)
         if target_column in self.real_columns:
             return decoded

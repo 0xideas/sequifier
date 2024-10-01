@@ -19,7 +19,7 @@ SELECTED_COLUMNS = {
 }
 
 
-def write_and_log(command):
+def write_and_log(command: str) -> None:
     os.system(command)
     with open(os.path.join("tests", "project_folder", "log.txt"), "a+") as f:
         f.write(f"{command}\n")
