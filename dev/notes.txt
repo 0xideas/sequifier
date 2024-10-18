@@ -36,6 +36,7 @@ x automatic scaling of real variables to [-1.0, 1.0] and inversion on inference
 x log predicted class distributions in validation
 x make losses invariant over batch sizes/training runs
 x add beartype
+x validate embedding dimensions against input column list
 accept any variant of sequenceId, sequence_id, itemposition, etc
 add weight penalty terms
 script to export hyperparameters and sequifier version into a json/merge into a table
