@@ -5,6 +5,7 @@ import numpy as np
 from beartype import beartype
 
 from sequifier.infer import infer
+from sequifier.make import make
 from sequifier.preprocess import preprocess
 from sequifier.train import train
 
@@ -23,11 +24,12 @@ def build_args_config(args: Any) -> dict[str, Any]:
     args_config = {
         k: v for k, v in vars(args).items() if v is not None and k != "randomize"
     }
-    if args.randomize:
-        seed = np.random.choice(np.arange(int(1e9)))
-        args_config["seed"] = seed
-    else:
-        args_config["seed"] = 1010
+    if args.command != "make":
+        if args.randomize:
+            seed = np.random.choice(np.arange(int(1e9)))
+            args_config["seed"] = seed
+        else:
+            args_config["seed"] = 1010
 
     if "selected_columns" in args_config:
         if args_config["selected_columns"] == "None":
@@ -51,6 +53,8 @@ def setup_parser() -> ArgumentParser:
     parser = ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
+    parser_make = subparsers.add_parser("make", help="Set up sequifier project")
+    parser_make.add_argument("project_name", type=str)
     parser_preprocess = subparsers.add_parser(
         "preprocess", help="Run the preprocessing step"
     )
@@ -86,6 +90,8 @@ def main() -> None:
 
     args_config = build_args_config(args)
 
+    if args.command == "make":
+        make(args)
     if args.command == "preprocess":
         preprocess(args, args_config)
     elif args.command == "train":

@@ -18,7 +18,7 @@ def construct_index_maps(
 ) -> dict[str, dict[int, Union[str, int]]]:
     """Construct index maps for target columns."""
     index_map = {}
-    if map_to_id is not None:
+    if map_to_id is not None and map_to_id:
         assert id_maps is not None
         for target_column in target_columns_index_map:
             map_ = {v: k for k, v in id_maps[target_column].items()}

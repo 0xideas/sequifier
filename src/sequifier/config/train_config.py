@@ -250,6 +250,7 @@ class ModelSpecModel(BaseModel):
         assert (
             v is None or np.sum(list(v.values())) == values["d_model"]
         ), f'{values["d_model"]} is not the sum of the d_model_by_column values'
+
         return v
 
 
@@ -313,4 +314,16 @@ class TrainModel(BaseModel):
         assert (
             columns_ordered_filtered == target_columns
         ), f"{columns_ordered_filtered = } != {target_columns = }"
+        return v
+
+    @validator("model_spec")
+    def validate_model_spec(cls, v, values):
+        assert (
+            values["selected_columns"] is None
+            or (v.d_model_by_column is None)
+            or np.all(
+                np.array(list(v.d_model_by_column.keys()))
+                == np.array(list(values["selected_columns"]))
+            )
+        )
         return v

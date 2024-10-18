@@ -9,6 +9,7 @@ project_folder/
 *\~
 *.DS_Store
 
+tests/sequifier-make-test-project
 .env.sh
 pyright-output.txt
 # Byte-compiled / optimized / DLL files
