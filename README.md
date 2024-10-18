@@ -33,10 +33,10 @@ an xgboost model and a logistic regression, check out [this notebook.](./documen
 ```console
 pip install sequifier
 ```
-2. run
+2. To create the project folder with the config templates in the configs subfolder, run
 ```console
 sequifier make YOUR_PROJECT_NAME
-``` to create the project folder with the config templates in the configs subfolder
+```
 3. cd into the `YOUR_PROJECT_NAME` folder, create a `data` folder and add your data and adapt the config file `preprocess.yaml` in the configs folder to take the path to the data
 4. run
 ```console
