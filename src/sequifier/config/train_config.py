@@ -250,6 +250,10 @@ class ModelSpecModel(BaseModel):
         assert (
             v is None or np.sum(list(v.values())) == values["d_model"]
         ), f'{values["d_model"]} is not the sum of the d_model_by_column values'
+
+        assert values["selected_columns"] is None or np.all(
+            np.array(list(v.keys * ())) == np.array(list(values["selected_columns"]))
+        )
         return v
 
 
