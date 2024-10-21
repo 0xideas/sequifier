@@ -1,12 +1,17 @@
-project_path: "documentation/example_inputs"
-ddconfig_path: "configs/ddconfigs/preprocessing_input.json"
-model_path: "documentation/example_inputs/models/sequifier-a8c5865b-best-2.onnx"
+project_path: .
+ddconfig_path: PLEASE FILL
+model_path: PLEASE FILL
+data_path: PLEASE FILL
 
-target_columns: ["itemId"]
+selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
+target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
 target_column_types:
-  itemId: "categorical"
+  EXAMPLE_TARGET_COLUMN_NAME: real
 
-device: "mps"
-seq_length: 5
-inference_batch_size: 3
+output_probabilities: false
+map_to_id: false
+device: cpu
+seq_length: 48
+inference_batch_size: 10
 
+autoregression: true
