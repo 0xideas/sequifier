@@ -1,10 +1,7 @@
 <img src="./design/sequifier.png">
 
 
-### one-to-one and many-to-one autoregression made easy
-
-
-What is sequifier?
+### What is sequifier?
 
 Sequifier is a library for the easy configuration and execution of transformer models, their training and inference, and the data preprocessing that comes before.
 
@@ -23,6 +20,7 @@ Overall, it should be easy, *even for non-experts in machine learning*, to devel
 The basic data format that is used as input to the library takes the following form:
 
 |sequenceId|itemPosition|column1|column2|...|
+|----------|------------|-------|-------|---|
 |0|0|"high"|12.3|...|
 |0|1|"high"|10.2|...|
 |...|...|...|...|...|
@@ -34,6 +32,7 @@ The two columns "sequenceId" and "itemPositions" have to be present, and then th
 Data of this input format can be transformed into the format that is used for model training and inference, which takes this form:
 
 |sequenceId|subsequenceId|columnName|[Subsequence Length]|[Subsequence Length - 1]|...|0|
+|----------|-------------|----------|--------------------|------------------------|---|-|
 |0|0|column1|"high"|"high"|...|"low"|
 |0|0|column2|12.3|10.2|...|14.9|
 |...|...|...|...|...|...|...|
@@ -44,6 +43,7 @@ Data of this input format can be transformed into the format that is used for mo
 On inference, the output is returned in the library input format, introduced first.
 
 |sequenceId|itemPosition|column1|column2|...|
+|----------|------------|-------|-------|---|
 |0|963|"medium"|8.9|...|
 |0|964|"low"|6.3|...|
 |...|...|...|...|...|
