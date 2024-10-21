@@ -3,11 +3,9 @@
 
 ### What is sequifier?
 
-Sequifier is a library for the easy configuration of transformer models, their training and inference, and the data preprocessing that comes before.
+Sequifier is the library that make prototyping autoregressive transformer models for sequence modelling easy, reliable and comparable.
 
 ### Motivation
-
-*Make prototyping autoregressive transformer models for modelling sequences easy, reliable and comparable*
 
 The promise is that researchers, data scientists and ml scientists can take their sequential data sets, transform them into a standardized format, and from then use sequifier and configuration files to develop a model for these sequential data, apply it to a test set, and extrapolate these sequences through autoregression for an arbitrary number of steps. This should enable **much faster development and evaluation cycles**.
 
@@ -57,8 +55,6 @@ On inference, the output is returned in the library input format, introduced fir
 
 There are four standalone commands within sequifier: `make`, `preprocess`, `train` and `infer`. `make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, and `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format.
 
-A complete example can be found further down this page.
-
 
 
 
@@ -98,21 +94,8 @@ sequifier infer
 9. find your predictions at `[PROJECT PATH]/outputs/predictions/sequifier-default-best-predictions.csv`
 
 
-## More detailed explanations of the three steps
+### More detailed explanations of the three steps
 #### Preprocessing of data into sequences for training
-
-The preprocessing step is designed for scenarios where for timeseries or timeseries-like data,
-the prediction of the next data point of one or more variables from prior values of these
-variables and (optionally) other variables is of interest.
-
-This step presupposes input data with three columns: "sequenceId" and "itemPosition", and a column
-with the variable that is the prediction target.
-"sequenceId" separates different sequences and the itemPosition column
-provides values that enable sequential sorting. Often this will simply be a timestamp.
-You can find an example of the preprocessing input data at [documentation/example_inputs/preprocessing_input.csv](./documentation/example_inputs/preprocessing_input.csv)
-
-The data can then be processed and split into training, validation and testing datasets of all
-valid subsequences in the original data with the command:
 
 ```console
 sequifier preprocess --config_path=[CONFIG PATH]
@@ -125,7 +108,6 @@ steps are written to.
 The default config can be found on this path:
 
 [configs/preprocess.yaml](./configs/preprocess.yaml)
-
 
 
 #### Configuring and training the sequence classification model
@@ -145,7 +127,7 @@ If the data on which the model is trained DOES NOT come from the preprocessing s
 should be added.
 
 If the training data does not come from the preprocessing step, both train and validation
-data have to take the form of a csv file with the columns "sequenceId", "subsequenceId", "col_name", [SEQ LENGTH], [SEQ LENGTH - 1],...,"1", "0".
+data have to take the form of a csv file with the columns "sequenceId", "subsequenceId", "inputCol", [SEQ LENGTH], [SEQ LENGTH - 1],...,"1", "0".
 You can find an example of the preprocessing input data at [documentation/example_inputs/training_input.csv](./documentation/example_inputs/training_input.csv)
 
 The training step is configured using the config. The two default configs can be found here:

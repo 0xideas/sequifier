@@ -136,3 +136,28 @@ def test_make(setup_for_test_make):
 
     # clean up, only if tests didn't fail
     shutil.rmtree(test_project_name)
+
+
+def test_config_folder():
+    from sequifier.make import (
+        infer_config_string,
+        preprocess_config_string,
+        train_config_string,
+    )
+
+    def load_config_string(path):
+        with open(path, "r") as f:
+            config_string = f.read()
+
+        return config_string
+
+    config_strings = {
+        config_name: load_config_string(os.path.join("configs", f"{config_name}.yaml"))
+        for config_name in ["preprocess", "train", "infer"]
+    }
+
+    assert config_strings["preprocess"].strip() == preprocess_config_string.strip()
+
+    assert config_strings["train"].strip() == train_config_string.strip()
+
+    assert config_strings["infer"].strip() == infer_config_string.strip()
