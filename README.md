@@ -3,19 +3,23 @@
 
 ### What is sequifier?
 
-Sequifier is a library for the easy configuration and execution of transformer models, their training and inference, and the data preprocessing that comes before.
+Sequifier is a library for the easy configuration of transformer models, their training and inference, and the data preprocessing that comes before.
 
-The basic promise is that researchers, data scientists and ml scientists can take their sequential data sets, transform them into a standardized format, and from then use sequifier and configuration files to develop a model for these sequential data, apply it to a test set, and extrapolate these sequences through autoregression for an arbitrary number of steps.
+### Motivation
 
-Importantly, sequifier works for an arbitrary number of categorical and real valued input and output columns, and can therefore represent a large set of possible mappings from inputs to outputs. The input and output columns do not have to be identical.
+*Make prototyping autoregressive transformer models for modelling sequences easy, reliable and comparable*
 
-The standardized implementation of a decoder-only autorgressive transformer saves the work of implementing this model and the workflows around it repeatedly, across different domains and data sets, thereby reducing duplicate work and the probability of bugs and erroneous results.
+The promise is that researchers, data scientists and ml scientists can take their sequential data sets, transform them into a standardized format, and from then use sequifier and configuration files to develop a model for these sequential data, apply it to a test set, and extrapolate these sequences through autoregression for an arbitrary number of steps. This should enable **much faster development and evaluation cycles**.
 
-The standardized configuration enables easier experimentation and experiment tracking, and, if results are shared, an ever-improving basis for decision making on the initial configuration when applying the transformer architecture to a new problem.
+Importantly, sequifier works for an **arbitrary number of categorical and real valued input and output columns**, and can therefore represent a large set of possible mappings from inputs to outputs. The input and output columns do not have to be identical.
 
-Overall, it should be easy, *even for non-experts in machine learning*, to develop an initial prototype for a transformer model for a new domain. If the results are promising, it might become necessary to implement architecture variants that fall outside the scope of sequifier, but with a much cheaper (in terms of time and effort) initial exploration, many more potential application domains can be investigated.
+The standardized implementation of a decoder-only autorgressive transformer saves the work of implementing this model and the workflows around it repeatedly, across different domains and data sets, thereby **reducing duplicate work and the probability of bugs and compromised results**.
 
-# Data Formats
+The standardized configuration enables easier experimentation and experiment tracking, and, if results are shared, an **ever-improving basis for decision making on the initial configuration** when applying the transformer architecture to a new problem.
+
+Overall, it should be easy, **even for non-experts in machine learning**, to develop an initial prototype for a transformer model for a new domain. If the results are promising, it might become necessary to implement architecture variants that fall outside the scope of sequifier, but with a much cheaper (in terms of time and effort) initial exploration, many more potential application domains can be investigated.
+
+### Data Formats
 
 The basic data format that is used as input to the library takes the following form:
 
