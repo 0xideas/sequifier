@@ -55,7 +55,7 @@ On inference, the output is returned in the library input format, introduced fir
 |...|...|...|...|...|
 
 
-There are four standalone commands within sequifier: 'make', 'preprocess', 'train' and 'infer'. 'make' sets up a new sequifier project in a new folder,'preprocess' preprocesses the data from the input format into subsequences of a fixed length, 'train' trains a model on the preprocessed data, and 'infer' generates outputs from data in the preprocessed format and outputs it in the initial input format.
+There are four standalone commands within sequifier: `make`, `preprocess`, `train` and `infer`. `make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, and `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format.
 
 A complete example can be found further down this page.
 
