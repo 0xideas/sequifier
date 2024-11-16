@@ -64,6 +64,8 @@ There are four standalone commands within sequifier: `make`, `preprocess`, `trai
 
 
 ## Other materials
+To get more details on the specific configuration options, go to these [explanations of config parameters.](config-parameters.md)
+
 If you want to first get a more specific understanding of the transformer architecture, have a look at
 the [Wikipedia article.](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model))
 
