@@ -5,6 +5,11 @@
 
 Sequifier is the library that make prototyping autoregressive transformer models for sequence modelling easy, reliable and comparable.
 
+The process looks like this:
+
+<img src="./design/sequifier-illustration.png">
+
+
 ### Motivation
 
 The promise is that researchers, data scientists and ml scientists can take their sequential data sets, transform them into a standardized format, and from then use sequifier and configuration files to develop a model for these sequential data, apply it to a test set, and extrapolate these sequences through autoregression for an arbitrary number of steps. This should enable **much faster development and evaluation cycles**.
