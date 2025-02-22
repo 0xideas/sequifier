@@ -310,25 +310,32 @@ class TransformerModel(nn.Module):
         src2 = torch.cat(srcs, 2)
 
         output = self.transformer_encoder(src2, self.src_mask)
+        output = {
+            target_column: self.decode(target_column, output)
+            for target_column in self.target_columns
+        }
 
         return output
 
     @beartype
     def decode(self, target_column: str, output: Tensor) -> Tensor:
         decoded = self.decoder[target_column](output)
+        return decoded
+
+    @beartype
+    def apply_softmax(self, target_column: str, output: Tensor) -> Tensor:
         if target_column in self.real_columns:
-            return decoded
+            return output
         else:
-            return self.softmax[target_column](decoded)
+            return self.softmax[target_column](output)
 
     @beartype
     def forward(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
         output = self.forward_train(src)
-        output = {
-            target_column: self.decode(target_column, output)
-            for target_column in self.target_columns
+        return {
+            target_column: self.apply_softmax(target_column, out[-1, :, :])
+            for target_column, out in output.items()
         }
-        return {target_column: out[-1, :, :] for target_column, out in output.items()}
 
     @beartype
     def train_model(
