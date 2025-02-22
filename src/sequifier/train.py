@@ -310,10 +310,6 @@ class TransformerModel(nn.Module):
         src2 = torch.cat(srcs, 2)
 
         output = self.transformer_encoder(src2, self.src_mask)
-        output = {
-            target_column: self.decode(target_column, output)
-            for target_column in self.target_columns
-        }
 
         return output
 
@@ -328,6 +324,10 @@ class TransformerModel(nn.Module):
     @beartype
     def forward(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
         output = self.forward_train(src)
+        output = {
+            target_column: self.decode(target_column, output)
+            for target_column in self.target_columns
+        }
         return {target_column: out[-1, :, :] for target_column, out in output.items()}
 
     @beartype
