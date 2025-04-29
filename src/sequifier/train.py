@@ -204,10 +204,10 @@ class TransformerModel(nn.Module):
                     f"Target column type {target_column_type} not in ['categorical', 'real']"
                 )
 
+        self.device = hparams.training_spec.device
         self.criterion = self._init_criterion(hparams=hparams)
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
-        self.device = hparams.training_spec.device
 
         self.src_mask = self._generate_square_subsequent_mask(self.seq_length).to(
             self.device
@@ -231,23 +231,18 @@ class TransformerModel(nn.Module):
     def _init_criterion(self, hparams: Any) -> dict[str, Any]:
         criterion = {}
         for target_column in self.target_columns:
+            criterion_class = eval(
+                f"torch.nn.{hparams.training_spec.criterion[target_column]}"
+            )
+            criterion_kwargs = {}
             if (
-                hparams.training_spec.class_weights is None
-                or target_column not in hparams.training_spec.class_weights
+                hparams.training_spec.class_weights is not None
+                and target_column in hparams.training_spec.class_weights
             ):
-                criterion2 = eval(
-                    f"torch.nn.{hparams.training_spec.criterion[target_column]}()"
-                )
-            else:
-                class_weights_string = (
-                    f"Tensor({hparams.training_spec.class_weights[target_column]})"
-                    if target_column in hparams.training_spec.class_weights
-                    else "None"
-                )
-                criterion2 = eval(
-                    f"torch.nn.{hparams.training_spec.criterion[target_column]}(weight={class_weights_string})"
-                )
-            criterion[target_column] = criterion2
+                criterion_kwargs["weight"] = Tensor(
+                    hparams.training_spec.class_weights[target_column]
+                ).to(self.device)
+            criterion[target_column] = criterion_class(**criterion_kwargs)
         return criterion
 
     @beartype
