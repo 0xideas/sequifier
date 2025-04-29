@@ -189,6 +189,7 @@ class TrainingSpecModel(BaseModel):
     batch_size: int
     lr: float
     criterion: dict[str, str]
+    class_weights: Optional[dict[str, list[float]]] = None
     accumulation_steps: Optional[int] = None
     dropout: float = 0.0
     loss_weights: Optional[dict[str, float]] = None
