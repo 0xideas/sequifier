@@ -360,9 +360,7 @@ class TransformerModel(nn.Module):
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
 
-        for epoch in range(
-            self.start_epoch, self.hparams.training_spec.epochs + self.start_epoch
-        ):
+        for epoch in range(self.start_epoch, self.hparams.training_spec.epochs + 1):
             if (
                 self.early_stopping_epochs is None
                 or n_epochs_no_improvement < self.early_stopping_epochs
@@ -711,7 +709,7 @@ class TransformerModel(nn.Module):
                 weights_only=False,
             )
             self.load_state_dict(checkpoint["model_state_dict"])
-            self.start_epoch = checkpoint["epoch"]
+            self.start_epoch = checkpoint["epoch"] + 1
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             return f"Loading model weights from {latest_model_path}. Total params: {format_number(pytorch_total_params)}"
         else:
