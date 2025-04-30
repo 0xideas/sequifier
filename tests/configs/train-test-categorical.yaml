@@ -30,6 +30,8 @@ training_spec:
     itemId: CrossEntropyLoss
   loss_weights:
     itemId: 1.0
+  class_weights:
+    itemId: [1.0, 1.0, 1.5, 0.5, 0.6, 1.2, 0.66666667, 1.5, 1.2, 0.75, 0.85714286, 0.75, 0.85714286, 0.75, 0.6, 2.,1.5, 1.5, 1.0, 1.0, 0.66666667, 0.75, 0.5, 0.75, 2.0, 1.2, 3.0, 1.0, 0.75, 1.0, 0.85714286]
   optimizer:
     name: QHAdam
   scheduler:
