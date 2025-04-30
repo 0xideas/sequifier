@@ -40,7 +40,7 @@ class Preprocessor:
         selected_columns: Optional[list[str]],
         group_proportions: list[float],
         seq_length: int,
-        seq_step_size: int,
+        seq_step_sizes: list[int],
         max_rows: Optional[int],
         seed: int,
         n_cores: Optional[int],
@@ -68,7 +68,7 @@ class Preprocessor:
             data,
             n_cores,
             seq_length,
-            seq_step_size,
+            seq_step_sizes,
             data_columns,
             group_proportions,
             write_format,
@@ -162,7 +162,7 @@ class Preprocessor:
         data: pd.DataFrame,
         n_cores: Optional[int],
         seq_length: int,
-        seq_step_size: int,
+        seq_step_sizes: list[int],
         data_columns: list[str],
         group_proportions: list[float],
         write_format: str,
@@ -175,7 +175,7 @@ class Preprocessor:
                 data.iloc[start:end, :],
                 self.split_paths,
                 seq_length,
-                seq_step_size,
+                seq_step_sizes,
                 data_columns,
                 group_proportions,
                 write_format,
@@ -272,12 +272,21 @@ def get_batch_limits(data: pd.DataFrame, n_batches: int) -> list[tuple[int, int]
 
 
 @beartype
+def get_group_bounds(data_subset: pd.DataFrame, group_proportions: list[float]):
+    n = data_subset.shape[0]
+    upper_bounds = list((np.cumsum(group_proportions) * n).astype(int))
+    lower_bounds = [0] + list(upper_bounds[:-1])
+    group_bounds = list(zip(lower_bounds, upper_bounds))
+    return group_bounds
+
+
+@beartype
 def preprocess_batch(
     process_id: int,
     batch: pd.DataFrame,
     split_paths: list[str],
     seq_length: int,
-    seq_step_size: int,
+    seq_step_sizes: list[int],
     data_columns: list[str],
     group_proportions: list[float],
     write_format: str,
@@ -286,14 +295,20 @@ def preprocess_batch(
     written_files: dict[int, list[str]] = {i: [] for i in range(len(split_paths))}
     for i, sequence_id in enumerate(sequence_ids):
         data_subset = batch.loc[batch["sequenceId"] == sequence_id, :]
-        sequences = extract_sequences(
-            data_subset, seq_length, seq_step_size, data_columns
-        )
+        group_bounds = get_group_bounds(data_subset, group_proportions)
+        sequences = {
+            i: cast_columns_to_string(
+                extract_sequences(
+                    data_subset.iloc[lb:ub, :],
+                    seq_length,
+                    seq_step_sizes[i],
+                    data_columns,
+                )
+            )
+            for i, (lb, ub) in enumerate(group_bounds)
+        }
 
-        splits = extract_data_subsets(sequences, group_proportions)
-        splits = {group: cast_columns_to_string(data) for group, data in splits.items()}
-
-        for split_path, (group, split) in zip(split_paths, splits.items()):
+        for split_path, (group, split) in zip(split_paths, sequences.items()):
             split_path_batch_seq = split_path.replace(
                 f".{write_format}", f"-{process_id}-{i}.{write_format}"
             )
@@ -374,10 +389,12 @@ def extract_subsequences(
     columns: list[str],
 ) -> dict[str, list[list[Union[float, int]]]]:
     if len(in_seq[columns[0]]) < seq_length:
-        in_seq = {
-            col: ([0] * (seq_length - len(in_seq[col]))) + in_seq[col]
-            for col in columns
-        }
+        in_seq = pd.Series(
+            {
+                col: ([0] * (seq_length - len(in_seq[col]))) + in_seq[col]
+                for col in columns
+            }
+        )
     in_seq_length = len(in_seq[columns[0]])
 
     subsequence_starts = get_subsequence_starts(
@@ -395,47 +412,6 @@ def insert_top_folder(path: str, folder_name: str) -> str:
     components = os.path.split(path)
     new_components = list(components[:-1]) + [folder_name] + [components[-1]]
     return os.path.join(*new_components)
-
-
-@beartype
-def extract_data_subsets(
-    sequences: pd.DataFrame, group_proportions: list[float]
-) -> dict[int, pd.DataFrame]:
-    assert abs(1.0 - np.sum(group_proportions)) < 0.0000000000001, np.sum(
-        group_proportions
-    )
-
-    datasets: dict[int, list[pd.DataFrame]] = {
-        i: [] for i in range(len(group_proportions))
-    }
-    n_cols = len(np.unique(sequences["inputCol"]))
-    for _, sequence_data in sequences.groupby("sequenceId"):
-        subset_groups = get_subset_groups(sequence_data, group_proportions, n_cols)
-        assert len(subset_groups) * n_cols == sequence_data.shape[0]
-        for i, group in enumerate(subset_groups):
-            case_start = i * n_cols
-            datasets[group].append(
-                sequence_data.iloc[case_start : case_start + n_cols, :]
-            )
-
-    return {
-        group: pd.concat(dataset, axis=0)
-        for group, dataset in datasets.items()
-        if dataset
-    }
-
-
-@beartype
-def get_subset_groups(
-    sequence_data: pd.DataFrame, groups: list[float], n_cols: int
-) -> list[int]:
-    n_cases = int(sequence_data.shape[0] / n_cols)
-    subset_groups: list[list[int]] = [
-        ([i] * math.floor(n_cases * size)) for i, size in enumerate(groups)
-    ]
-    subset_groups2: list[int] = [inner for outer in subset_groups for inner in outer]
-    diff = n_cases - len(subset_groups2)
-    return ([0] * diff) + subset_groups2
 
 
 @beartype

@@ -41,7 +41,7 @@ class PreprocessorModel(BaseModel):
 
     group_proportions: list[float]
     seq_length: int
-    seq_step_size: Optional[int]
+    seq_step_sizes: Optional[list[int]]
     max_rows: Optional[int]
     seed: int
     n_cores: Optional[int]
@@ -62,6 +62,9 @@ class PreprocessorModel(BaseModel):
         return v
 
     def __init__(self, **kwargs):
-        kwargs["seq_step_size"] = kwargs.get("seq_step_size", kwargs["seq_length"])
+        default_seq_step_size = [kwargs["seq_length"]] * len(
+            kwargs["group_proportions"]
+        )
+        kwargs["seq_step_sizes"] = kwargs.get("seq_step_sizes", default_seq_step_size)
         kwargs["seq_length"] += 1
         super().__init__(**kwargs)
