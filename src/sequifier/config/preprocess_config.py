@@ -1,6 +1,7 @@
 import os
 from typing import Optional
 
+import numpy as np
 import yaml
 from beartype import beartype
 from pydantic import BaseModel, validator
@@ -41,7 +42,7 @@ class PreprocessorModel(BaseModel):
 
     group_proportions: list[float]
     seq_length: int
-    seq_step_size: Optional[int]
+    seq_step_sizes: Optional[list[int]]
     max_rows: Optional[int]
     seed: int
     n_cores: Optional[int]
@@ -61,7 +62,38 @@ class PreprocessorModel(BaseModel):
             )
         return v
 
+    @validator("group_proportions")
+    def validate_proportions_sum(cls, v: list[float]) -> list[float]:
+        if not np.isclose(np.sum(v), 1.0):
+            raise ValueError(
+                f"group_proportions must sum to 1.0, but sums to {np.sum(v)}"
+            )
+        if not all(p > 0 for p in v):
+            raise ValueError(f"All group_proportions must be positive: {v}")
+        return v
+
+    @validator("seq_step_sizes", always=True)
+    def validate_step_sizes(cls, v: Optional[list[int]], values: dict) -> list[int]:
+        group_proportions = values.get("group_proportions")
+        assert (
+            group_proportions is not None
+        ), "group_proportions must be set to validate seq_step_sizes"
+
+        assert isinstance(v, list), "seq_step_sizes should be a list after __init__"
+
+        if len(v) != len(group_proportions):
+            raise ValueError(
+                f"Length of seq_step_sizes ({len(v)}) must match length of "
+                f"group_proportions ({len(group_proportions)})"
+            )
+        if not all(step > 0 for step in v):
+            raise ValueError(f"All seq_step_sizes must be positive integers: {v}")
+        return v
+
     def __init__(self, **kwargs):
-        kwargs["seq_step_size"] = kwargs.get("seq_step_size", kwargs["seq_length"])
+        default_seq_step_size = [kwargs["seq_length"]] * len(
+            kwargs["group_proportions"]
+        )
+        kwargs["seq_step_sizes"] = kwargs.get("seq_step_sizes", default_seq_step_size)
         kwargs["seq_length"] += 1
         super().__init__(**kwargs)

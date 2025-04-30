@@ -8,6 +8,9 @@ group_proportions:
 - 0.5
 - 0.5
 seq_length: 8
-seq_step_size: 1
+seq_step_sizes:
+- 1
+- 1
+- 1
 max_rows: null
 n_cores: 1
