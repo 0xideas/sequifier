@@ -99,6 +99,12 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
                     [inferer.index_map[target_column][i] for i in predictions]
                 )
 
+    for target_column, predictions in preds.items():
+        if inferer.target_column_types[target_column] == "real":
+            preds[target_column] = inferer.invert_normalization(
+                predictions, target_column
+            )
+
     os.makedirs(
         os.path.join(config.project_path, "outputs", "predictions"), exist_ok=True
     )
