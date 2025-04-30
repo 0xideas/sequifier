@@ -204,15 +204,10 @@ class TransformerModel(nn.Module):
                     f"Target column type {target_column_type} not in ['categorical', 'real']"
                 )
 
-        self.criterion = {
-            target_column: eval(
-                f"torch.nn.{hparams.training_spec.criterion[target_column]}()"
-            )
-            for target_column in self.target_columns
-        }
+        self.device = hparams.training_spec.device
+        self.criterion = self._init_criterion(hparams=hparams)
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
-        self.device = hparams.training_spec.device
 
         self.src_mask = self._generate_square_subsequent_mask(self.seq_length).to(
             self.device
@@ -231,6 +226,24 @@ class TransformerModel(nn.Module):
         load_string = self._load_weights_conditional()
         self._initialize_log_file()
         self.log_file.write(load_string)
+
+    @beartype
+    def _init_criterion(self, hparams: Any) -> dict[str, Any]:
+        criterion = {}
+        for target_column in self.target_columns:
+            criterion_class = eval(
+                f"torch.nn.{hparams.training_spec.criterion[target_column]}"
+            )
+            criterion_kwargs = {}
+            if (
+                hparams.training_spec.class_weights is not None
+                and target_column in hparams.training_spec.class_weights
+            ):
+                criterion_kwargs["weight"] = Tensor(
+                    hparams.training_spec.class_weights[target_column]
+                ).to(self.device)
+            criterion[target_column] = criterion_class(**criterion_kwargs)
+        return criterion
 
     @beartype
     def _get_d_model_by_column(
