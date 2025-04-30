@@ -2,7 +2,6 @@ import copy
 import glob
 import math
 import os
-import re
 import time
 import uuid
 import warnings
@@ -361,9 +360,7 @@ class TransformerModel(nn.Module):
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
 
-        for epoch in range(
-            self.start_epoch, self.hparams.training_spec.epochs + self.start_epoch
-        ):
+        for epoch in range(self.start_epoch, self.hparams.training_spec.epochs + 1):
             if (
                 self.early_stopping_epochs is None
                 or n_epochs_no_improvement < self.early_stopping_epochs
@@ -712,9 +709,8 @@ class TransformerModel(nn.Module):
                 weights_only=False,
             )
             self.load_state_dict(checkpoint["model_state_dict"])
-            self.start_epoch = (
-                int(re.findall("epoch-([0-9]+)", latest_model_path)[0]) + 1
-            )
+            self.start_epoch = checkpoint["epoch"] + 1
+            self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             return f"Loading model weights from {latest_model_path}. Total params: {format_number(pytorch_total_params)}"
         else:
             self.start_epoch = 1
@@ -742,9 +738,10 @@ class TransformerModel(nn.Module):
         total_losses: dict[str, np.float32],
         output: dict[str, Tensor],
     ) -> None:
+        lr = self.optimizer.state_dict()["param_groups"][0]["lr"]
         self.log_file.write("-" * 89)
         self.log_file.write(
-            f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | "
+            f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | lr: {lr} | "
             f"valid loss {format_number(total_loss)} | baseline loss {format_number(self.baseline_loss)}"
         )
 
