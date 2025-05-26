@@ -26,6 +26,13 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
 
     if hyperparameter_search_config.search_strategy == "sample":
         n_samples = hyperparameter_search_config.n_samples
+        assert n_samples is not None
+        if n_samples > hyperparameter_search_config.n_combinations():
+            input(
+                f"{n_samples} is above the number of combinations of hyperparameters. Press any key to continue with grid search or abort to reconfigure"
+            )
+            n_samples = hyperparameter_search_config.n_combinations()
+            hyperparameter_search_config.search_strategy = "grid"
     elif hyperparameter_search_config.search_strategy == "grid":
         n_samples = hyperparameter_search_config.n_combinations()
         input(
