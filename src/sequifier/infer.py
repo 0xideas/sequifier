@@ -75,82 +75,89 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     )
 
     print(f"Inferring for {model_id}")
-    data = read_data(config.data_path, config.read_format)
-
-    if config.selected_columns is not None:
-        data = subset_to_selected_columns(data, config.selected_columns)
-
-    if not config.autoregression:
-        probs, preds = get_probs_preds(config, inferer, data, column_types)
+    if isinstance(config.data_path, str):
+        data_paths = [config.data_path]
     else:
-        if config.autoregression_additional_steps is not None:
-            data = expand_data_by_autoregression(
-                data, config.autoregression_additional_steps, config.seq_length
+        data_paths = config.data_path
+
+    for data_path in data_paths:
+        data = read_data(data_path, config.read_format)
+
+        if config.selected_columns is not None:
+            data = subset_to_selected_columns(data, config.selected_columns)
+
+        if not config.autoregression:
+            probs, preds = get_probs_preds(config, inferer, data, column_types)
+        else:
+            if config.autoregression_additional_steps is not None:
+                data = expand_data_by_autoregression(
+                    data, config.autoregression_additional_steps, config.seq_length
+                )
+
+            probs, preds = get_probs_preds_autoregression(
+                config, inferer, data, column_types, config.seq_length
             )
 
-        probs, preds = get_probs_preds_autoregression(
-            config, inferer, data, column_types, config.seq_length
-        )
+        if inferer.map_to_id:
+            for target_column, predictions in preds.items():
+                if target_column in inferer.index_map:
+                    preds[target_column] = np.array(
+                        [inferer.index_map[target_column][i] for i in predictions]
+                    )
 
-    if inferer.map_to_id:
         for target_column, predictions in preds.items():
-            if target_column in inferer.index_map:
-                preds[target_column] = np.array(
-                    [inferer.index_map[target_column][i] for i in predictions]
+            if inferer.target_column_types[target_column] == "real":
+                preds[target_column] = inferer.invert_normalization(
+                    predictions, target_column
                 )
 
-    for target_column, predictions in preds.items():
-        if inferer.target_column_types[target_column] == "real":
-            preds[target_column] = inferer.invert_normalization(
-                predictions, target_column
-            )
-
-    os.makedirs(
-        os.path.join(config.project_path, "outputs", "predictions"), exist_ok=True
-    )
-
-    if config.output_probabilities:
-        assert probs is not None
         os.makedirs(
-            os.path.join(config.project_path, "outputs", "probabilities"), exist_ok=True
+            os.path.join(config.project_path, "outputs", "predictions"), exist_ok=True
         )
-        for target_column in inferer.target_columns:
-            if inferer.target_column_types[target_column] == "categorical":
-                probabilities_path = os.path.join(
-                    config.project_path,
-                    "outputs",
-                    "probabilities",
-                    f"{model_id}-{target_column}-probabilities.{config.write_format}",
-                )
-                print(f"Writing probabilities to {probabilities_path}")
-                write_data(
-                    pd.DataFrame(probs[target_column]),
-                    probabilities_path,
-                    config.write_format,
-                )
-    n_input_cols = len(np.unique(data["inputCol"]))
-    predictions = pd.DataFrame(
-        {
-            **{"sequenceId": list(data["sequenceId"].values)[::n_input_cols]},
-            **{
-                target_column: preds[target_column].flatten()
-                for target_column in inferer.target_columns
-            },
-        }
-    )
-    predictions_path = os.path.join(
-        config.project_path,
-        "outputs",
-        "predictions",
-        f"{model_id}-predictions.{config.write_format}",
-    )
-    print(f"Writing predictions to {predictions_path}")
-    write_data(
-        predictions,
-        predictions_path,
-        config.write_format,
-    )
-    print("Inference complete")
+
+        if config.output_probabilities:
+            assert probs is not None
+            os.makedirs(
+                os.path.join(config.project_path, "outputs", "probabilities"),
+                exist_ok=True,
+            )
+            for target_column in inferer.target_columns:
+                if inferer.target_column_types[target_column] == "categorical":
+                    probabilities_path = os.path.join(
+                        config.project_path,
+                        "outputs",
+                        "probabilities",
+                        f"{model_id}-{target_column}-probabilities.{config.write_format}",
+                    )
+                    print(f"Writing probabilities to {probabilities_path}")
+                    write_data(
+                        pd.DataFrame(probs[target_column]),
+                        probabilities_path,
+                        config.write_format,
+                    )
+        n_input_cols = len(np.unique(data["inputCol"]))
+        predictions = pd.DataFrame(
+            {
+                **{"sequenceId": list(data["sequenceId"].values)[::n_input_cols]},
+                **{
+                    target_column: preds[target_column].flatten()
+                    for target_column in inferer.target_columns
+                },
+            }
+        )
+        predictions_path = os.path.join(
+            config.project_path,
+            "outputs",
+            "predictions",
+            f"{model_id}-predictions.{config.write_format}",
+        )
+        print(f"Writing predictions to {predictions_path}")
+        write_data(
+            predictions,
+            predictions_path,
+            config.write_format,
+        )
+        print("Inference complete")
 
 
 @beartype
