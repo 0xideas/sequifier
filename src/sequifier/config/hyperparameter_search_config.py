@@ -82,7 +82,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     """Pydantic model for training specifications."""
 
     device: str
-    epochs: int
+    epochs: list[int]
     log_interval: int = 10
     class_share_log_columns: list[str] = Field(default_factory=list)
     early_stopping_epochs: Optional[int] = None
@@ -128,7 +128,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         optimizer_index = np.random.randint(len(self.optimizer))
         return TrainingSpecModel(
             device=self.device,
-            epochs=self.epochs,
+            epochs=self.epochs[lr_and_scheduler_index],
             log_interval=self.log_interval,
             class_share_log_columns=self.class_share_log_columns,
             early_stopping_epochs=self.early_stopping_epochs,
@@ -160,7 +160,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
 
         return TrainingSpecModel(
             device=self.device,
-            epochs=self.epochs,
+            epochs=self.epochs[lr_and_scheduler_index],
             log_interval=self.log_interval,
             class_share_log_columns=self.class_share_log_columns,
             early_stopping_epochs=self.early_stopping_epochs,
