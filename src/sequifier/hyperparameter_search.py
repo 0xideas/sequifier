@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch._dynamo
 from beartype import beartype
-from config.hyperparameter_search import load_hyperparameter_search_config
+from config.hyperparameter_search_config import load_hyperparameter_search_config
 
 torch._dynamo.config.suppress_errors = True
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES  # noqa: E402
