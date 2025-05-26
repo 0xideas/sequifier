@@ -255,7 +255,7 @@ class TrainModelHyperparameterSampling(BaseModel):
         inner_combinations = model_hyperparamter_sample * training_hyperparamter_sample
 
         i_model = i % model_hyperparamter_sample
-        i_training = i // model_hyperparamter_sample
+        i_training = (i // model_hyperparamter_sample) % training_hyperparamter_sample
         i_outer = i // inner_combinations
 
         model_spec = self.model_hyperparamter_sampling.grid_sample(i_model)
