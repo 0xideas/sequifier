@@ -2,7 +2,7 @@ from itertools import product
 from typing import Optional
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from train_config import DotDict, ModelSpecModel, TrainingSpecModel
 
 
@@ -45,6 +45,13 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         self.scheduler = [
             DotDict(scheduler_config) for scheduler_config in kwargs["scheduler"]
         ]
+
+    @validator("scheduler")
+    def validate_model_spec(cls, v, values):
+        assert (
+            len(values["lr"]) == len(v)
+        ), "lr and scheduler must have the same number of candidate values, that are paired"
+        return v
 
     def random_sample(self):
         lr_and_scheduler_index = np.random.randint(len(self.lr))
@@ -110,6 +117,17 @@ class ModelSpecHyperparameterSampling(BaseModel):
     nlayers: list[int]
 
     hyperparamter_combinations = None
+
+    @validator("nhead")
+    def validate_model_spec(cls, v, values):
+        assert (
+            len(values["d_model"]) == len(values["d_model_by_column"])
+        ), "d_model and d_model_by_column must have the same number of candidate values, that are paired"
+
+        assert (
+            len(values["d_model"]) == len(v)
+        ), "d_model and nhead must have the same number of candidate values, that are paired"
+        return v
 
     def random_sample(self):
         d_model_index = np.random.randint(len(self.d_model))
