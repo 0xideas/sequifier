@@ -1,9 +1,68 @@
+import json
 from itertools import product
 from typing import Optional
 
 import numpy as np
+import yaml
+from beartype import beartype
 from pydantic import BaseModel, Field, validator
 from train_config import DotDict, ModelSpecModel, TrainingSpecModel, TrainModel
+
+from sequifier.helpers import normalize_path
+
+
+@beartype
+def load_hyperparameter_search_config(
+    config_path: str, on_unprocessed: bool
+) -> "HyperparameterSearch":
+    with open(config_path, "r") as f:
+        config_values = yaml.safe_load(f)
+
+    if not on_unprocessed:
+        dd_config_path = config_values.pop("ddconfig_path")
+
+        with open(
+            normalize_path(dd_config_path, config_values["project_path"]), "r"
+        ) as f:
+            dd_config = json.loads(f.read())
+
+        config_values["column_types"] = config_values.get(
+            "column_types", dd_config["column_types"]
+        )
+
+        if config_values["selected_columns"] is None:
+            config_values["selected_columns"] = list(
+                config_values["column_types"].keys()
+            )
+
+        config_values["categorical_columns"] = [
+            col
+            for col, type_ in dd_config["column_types"].items()
+            if type_ == "int64" and col in config_values["selected_columns"]
+        ]
+        config_values["real_columns"] = [
+            col
+            for col, type_ in dd_config["column_types"].items()
+            if type_ == "float64" and col in config_values["selected_columns"]
+        ]
+        config_values["n_classes"] = config_values.get(
+            "n_classes", dd_config["n_classes"]
+        )
+        config_values["training_data_path"] = normalize_path(
+            config_values.get("training_data_path", dd_config["split_paths"][0]),
+            config_values["project_path"],
+        )
+        config_values["validation_data_path"] = normalize_path(
+            config_values.get(
+                "validation_data_path",
+                dd_config["split_paths"][min(1, len(dd_config["split_paths"]) - 1)],
+            ),
+            config_values["project_path"],
+        )
+
+        config_values["id_maps"] = dd_config["id_maps"]
+
+    return HyperparameterSearch(**config_values)
 
 
 class TrainingSpecHyperparameterSampling(BaseModel):
@@ -178,7 +237,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         return len(self.d_model) * len(self.d_hid) * len(self.nlayers)
 
 
-class TrainModelHyperparameterSampling(BaseModel):
+class HyperparameterSearch(BaseModel):
     """Pydantic model for training configuration."""
 
     project_path: str
@@ -290,4 +349,20 @@ class TrainModelHyperparameterSampling(BaseModel):
             export_with_dropout=self.export_with_dropout,
             model_spec=model_spec,
             training_spec=training_spec,
+        )
+
+    def sample(self, i):
+        if self.search_strategy == "sample":
+            return self.random_sample(i)
+        elif self.search_strategy == "grid":
+            return self.grid_sample(i)
+        else:
+            raise Exception(f"{self.search_strategy} invalid")
+
+    def n_combinations(self):
+        return (
+            len(self.selected_columns)
+            * len(self.seq_length)
+            * self.model_hyperparamter_sampling.n_combinations()
+            * self.training_hyperparameter_sampling.n_combinations()
         )
