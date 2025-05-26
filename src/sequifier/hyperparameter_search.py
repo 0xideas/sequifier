@@ -48,17 +48,11 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
         config = hyperparameter_search_config.sample(i)
 
         normalized_config_path = normalize_path(
-            hyperparameter_search_config.project_path,
             hyperparameter_search_config.model_config_write_path,
+            hyperparameter_search_config.project_path,
         )
         print(normalized_config_path)
         print(f"{hyperparameter_search_config.model_name_root}-run-{i}.yaml")
-        print(
-            os.path.join(
-                normalized_config_path,
-                f"{hyperparameter_search_config.model_name_root}-run-{i}.yaml",
-            )
-        )
         with open(
             os.path.join(
                 normalized_config_path,
