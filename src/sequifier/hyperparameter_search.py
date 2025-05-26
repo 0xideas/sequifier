@@ -14,6 +14,7 @@ from sequifier.helpers import PANDAS_TO_TORCH_TYPES  # noqa: E402
 from sequifier.helpers import normalize_path  # noqa: E402
 from sequifier.helpers import read_data  # noqa: E402
 from sequifier.helpers import numpy_to_pytorch, subset_to_selected_columns  # noqa: E402
+from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 from sequifier.train import TransformerModel  # noqa: E402
 
 
@@ -50,7 +51,14 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
             ),
             "w",
         ) as f:
-            f.write(yaml.dump(config_path))
+            f.write(
+                yaml.dump(
+                    config,
+                    Dumper=TrainModelDumper,
+                    sort_keys=False,
+                    default_flow_style=False,
+                )
+            )
 
         column_types = {
             col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]

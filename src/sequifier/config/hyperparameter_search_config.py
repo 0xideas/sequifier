@@ -41,15 +41,23 @@ def load_hyperparameter_search_config(
             ]
 
         config_values["categorical_columns"] = [
-            col
-            for col, type_ in dd_config["column_types"].items()
-            if type_ == "int64" and col in config_values["selected_columns"]
+            [
+                col
+                for col, type_ in dd_config["column_types"].items()
+                if type_ == "int64" and col in selected_columns
+            ]
+            for selected_columns in config_values["selected_columns"]
         ]
+
         config_values["real_columns"] = [
-            col
-            for col, type_ in dd_config["column_types"].items()
-            if type_ == "float64" and col in config_values["selected_columns"]
+            [
+                col
+                for col, type_ in dd_config["column_types"].items()
+                if type_ == "float64" and col in selected_columns
+            ]
+            for selected_columns in config_values["selected_columns"]
         ]
+
         config_values["n_classes"] = config_values.get(
             "n_classes", dd_config["n_classes"]
         )
@@ -253,8 +261,8 @@ class HyperparameterSearch(BaseModel):
 
     selected_columns: list[list[str]]
     column_types: list[dict[str, str]]
-    categorical_columns: list[str]
-    real_columns: list[str]
+    categorical_columns: list[list[str]]
+    real_columns: list[list[str]]
     target_columns: list[str]
     target_column_types: dict[str, str]
     id_maps: dict[str, dict[str | int, int]]
@@ -291,8 +299,8 @@ class HyperparameterSearch(BaseModel):
             read_format=self.read_format,
             selected_columns=self.selected_columns[selected_columns_index],
             column_types=self.column_types[selected_columns_index],
-            categorical_columns=self.categorical_columns,
-            real_columns=self.real_columns,
+            categorical_columns=self.categorical_columns[selected_columns_index],
+            real_columns=self.real_columns[selected_columns_index],
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
@@ -336,8 +344,8 @@ class HyperparameterSearch(BaseModel):
             read_format=self.read_format,
             selected_columns=self.selected_columns[selected_columns_index],
             column_types=self.column_types[selected_columns_index],
-            categorical_columns=self.categorical_columns,
-            real_columns=self.real_columns,
+            categorical_columns=self.categorical_columns[selected_columns_index],
+            real_columns=self.real_columns[selected_columns_index],
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
