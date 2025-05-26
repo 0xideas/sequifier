@@ -3,7 +3,7 @@ from typing import Optional
 
 import numpy as np
 from pydantic import BaseModel, Field, validator
-from train_config import DotDict, ModelSpecModel, TrainingSpecModel
+from train_config import DotDict, ModelSpecModel, TrainingSpecModel, TrainModel
 
 
 class TrainingSpecHyperparameterSampling(BaseModel):
@@ -106,6 +106,14 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             scheduler=self.scheduler[lr_and_scheduler_index],
         )
 
+    def n_combinations(self):
+        return (
+            len(self.lr)
+            * len(self.batch_size)
+            * len(self.dropout)
+            * len(self.optimizer)
+        )
+
 
 class ModelSpecHyperparameterSampling(BaseModel):
     """Pydantic model for model specifications."""
@@ -166,6 +174,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
             nlayers=nlayers,
         )
 
+    def n_combinations(self):
+        return len(self.d_model) * len(self.d_hid) * len(self.nlayers)
+
 
 class TrainModelHyperparameterSampling(BaseModel):
     """Pydantic model for training configuration."""
@@ -195,5 +206,88 @@ class TrainModelHyperparameterSampling(BaseModel):
     export_pt: bool = False
     export_with_dropout: bool = False
 
-    model_spec: ModelSpecHyperparameterSampling
-    training_spec: TrainingSpecHyperparameterSampling
+    model_hyperparamter_sampling: ModelSpecHyperparameterSampling
+    training_hyperparameter_sampling: TrainingSpecHyperparameterSampling
+
+    hyperparamter_combinations = None
+
+    @validator("column_types")
+    def validate_model_spec(cls, v, values):
+        assert (
+            len(values["selected_columns"]) == len(v)
+        ), "selected_columns and column_types must have the same number of candidate values, that are paired"
+        return v
+
+    def random_sample(self, i):
+        model_spec = self.model_hyperparamter_sampling.random_sample()
+        training_spec = self.training_hyperparameter_sampling.random_sample()
+        selected_columns_index = np.random.randint(len(self.selected_columns))
+
+        return TrainModel(
+            project_path=self.project_path,
+            model_name=self.model_name_root + f"-run-{i}",
+            training_data_path=self.training_data_path,
+            validation_data_path=self.validation_data_path,
+            read_format=self.read_format,
+            selected_columns=self.selected_columns[selected_columns_index],
+            column_types=self.column_types[selected_columns_index],
+            categorical_columns=self.categorical_columns,
+            real_columns=self.real_columns,
+            target_columns=self.target_columns,
+            target_column_types=self.target_column_types,
+            id_maps=self.id_maps,
+            seq_length=np.random.choice(self.seq_length),
+            n_classes=self.n_classes,
+            inference_batch_size=self.inference_batch_size,
+            seed=self.seed,
+            export_onnx=self.export_onnx,
+            export_pt=self.export_pt,
+            export_with_dropout=self.export_with_dropout,
+            model_spec=model_spec,
+            training_spec=training_spec,
+        )
+
+    def grid_sample(self, i):
+        model_hyperparamter_sample = self.model_hyperparamter_sampling.n_combinations()
+        training_hyperparamter_sample = (
+            self.training_hyperparameter_sampling.n_combinations()
+        )
+        inner_combinations = model_hyperparamter_sample * training_hyperparamter_sample
+
+        i_model = i % model_hyperparamter_sample
+        i_training = i // model_hyperparamter_sample
+        i_outer = i // inner_combinations
+
+        model_spec = self.model_hyperparamter_sampling.grid_sample(i_model)
+        training_spec = self.training_hyperparameter_sampling.grid_sample(i_training)
+
+        if self.hyperparamter_combinations is None:
+            self.hyperparamter_combinations = list(
+                product(np.arange(len(self.selected_columns)), self.seq_length)
+            )
+
+        selected_columns_index, seq_length = self.hyperparamter_combinations[i_outer]
+
+        return TrainModel(
+            project_path=self.project_path,
+            model_name=self.model_name_root + f"-run-{i}",
+            training_data_path=self.training_data_path,
+            validation_data_path=self.validation_data_path,
+            read_format=self.read_format,
+            selected_columns=self.selected_columns[selected_columns_index],
+            column_types=self.column_types[selected_columns_index],
+            categorical_columns=self.categorical_columns,
+            real_columns=self.real_columns,
+            target_columns=self.target_columns,
+            target_column_types=self.target_column_types,
+            id_maps=self.id_maps,
+            seq_length=seq_length,
+            n_classes=self.n_classes,
+            inference_batch_size=self.inference_batch_size,
+            seed=self.seed,
+            export_onnx=self.export_onnx,
+            export_pt=self.export_pt,
+            export_with_dropout=self.export_with_dropout,
+            model_spec=model_spec,
+            training_spec=training_spec,
+        )
