@@ -47,9 +47,9 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
     for i in range(n_samples):
         config = hyperparameter_search_config.sample(i)
 
-        config_path = os.path.join(hyperparameter_search_config.model_config_write_path)
         normalized_config_path = normalize_path(
-            hyperparameter_search_config.project_path, config_path
+            hyperparameter_search_config.project_path,
+            hyperparameter_search_config.model_config_write_path,
         )
         with open(
             os.path.join(
