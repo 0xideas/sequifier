@@ -6,8 +6,13 @@ import numpy as np
 import yaml
 from beartype import beartype
 from pydantic import BaseModel, Field, validator
-from train_config import DotDict, ModelSpecModel, TrainingSpecModel, TrainModel
 
+from sequifier.config.train_config import (
+    DotDict,
+    ModelSpecModel,
+    TrainingSpecModel,
+    TrainModel,
+)
 from sequifier.helpers import normalize_path
 
 
@@ -27,13 +32,13 @@ def load_hyperparameter_search_config(
             dd_config = json.loads(f.read())
 
         config_values["column_types"] = config_values.get(
-            "column_types", dd_config["column_types"]
+            "column_types", [dd_config["column_types"]]
         )
 
         if config_values["selected_columns"] is None:
-            config_values["selected_columns"] = list(
-                config_values["column_types"].keys()
-            )
+            config_values["selected_columns"] = [
+                list(config_values["column_types"].keys())
+            ]
 
         config_values["categorical_columns"] = [
             col
@@ -91,8 +96,6 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     )
     continue_training: bool = True
 
-    hyperparamter_combinations = None
-
     def __init__(self, **kwargs):
         super().__init__(
             **{k: v for k, v in kwargs.items() if k not in ["optimizer", "scheduler"]}
@@ -134,7 +137,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         )
 
     def grid_sample(self, i):
-        if self.hyperparamter_combinations is None:
+        if not hasattr(self, "hyperparamter_combinations"):
             self.hyperparamter_combinations = list(
                 product(
                     np.arange(len(self.lr)),
@@ -183,13 +186,12 @@ class ModelSpecHyperparameterSampling(BaseModel):
     d_hid: list[int]
     nlayers: list[int]
 
-    hyperparamter_combinations = None
-
     @validator("nhead")
     def validate_model_spec(cls, v, values):
-        assert (
-            len(values["d_model"]) == len(values["d_model_by_column"])
-        ), "d_model and d_model_by_column must have the same number of candidate values, that are paired"
+        if values["d_model_by_column"] is not None:
+            assert (
+                len(values["d_model"]) == len(values["d_model_by_column"])
+            ), "d_model and d_model_by_column must have the same number of candidate values, that are paired"
 
         assert (
             len(values["d_model"]) == len(v)
@@ -212,7 +214,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         )
 
     def grid_sample(self, i):
-        if self.hyperparamter_combinations is None:
+        if not hasattr(self, "hyperparamter_combinations"):
             self.hyperparamter_combinations = list(
                 product(np.arange(len(self.d_model)), self.d_hid, self.nlayers)
             )
@@ -244,6 +246,7 @@ class HyperparameterSearch(BaseModel):
     model_name_root: str
     search_strategy: str = "sample"  # "sample" or "grid"
     n_samples: Optional[int]
+    model_config_write_path: str
     training_data_path: str
     validation_data_path: str
     read_format: str = "parquet"
@@ -259,26 +262,24 @@ class HyperparameterSearch(BaseModel):
     seq_length: list[int]
     n_classes: dict[str, int]
     inference_batch_size: int
-    seed: int
 
     export_onnx: bool = True
     export_pt: bool = False
     export_with_dropout: bool = False
 
-    model_hyperparamter_sampling: ModelSpecHyperparameterSampling
+    model_hyperparameter_sampling: ModelSpecHyperparameterSampling
     training_hyperparameter_sampling: TrainingSpecHyperparameterSampling
-
-    hyperparamter_combinations = None
 
     @validator("column_types")
     def validate_model_spec(cls, v, values):
-        assert (
-            len(values["selected_columns"]) == len(v)
-        ), "selected_columns and column_types must have the same number of candidate values, that are paired"
+        if v is not None:
+            assert (
+                len(values["selected_columns"]) == len(v)
+            ), "selected_columns and column_types must have the same number of candidate values, that are paired"
         return v
 
     def random_sample(self, i):
-        model_spec = self.model_hyperparamter_sampling.random_sample()
+        model_spec = self.model_hyperparameter_sampling.random_sample()
         training_spec = self.training_hyperparameter_sampling.random_sample()
         selected_columns_index = np.random.randint(len(self.selected_columns))
 
@@ -298,7 +299,7 @@ class HyperparameterSearch(BaseModel):
             seq_length=np.random.choice(self.seq_length),
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
-            seed=self.seed,
+            seed=101,
             export_onnx=self.export_onnx,
             export_pt=self.export_pt,
             export_with_dropout=self.export_with_dropout,
@@ -307,7 +308,7 @@ class HyperparameterSearch(BaseModel):
         )
 
     def grid_sample(self, i):
-        model_hyperparamter_sample = self.model_hyperparamter_sampling.n_combinations()
+        model_hyperparamter_sample = self.model_hyperparameter_sampling.n_combinations()
         training_hyperparamter_sample = (
             self.training_hyperparameter_sampling.n_combinations()
         )
@@ -317,10 +318,10 @@ class HyperparameterSearch(BaseModel):
         i_training = (i // model_hyperparamter_sample) % training_hyperparamter_sample
         i_outer = i // inner_combinations
 
-        model_spec = self.model_hyperparamter_sampling.grid_sample(i_model)
+        model_spec = self.model_hyperparameter_sampling.grid_sample(i_model)
         training_spec = self.training_hyperparameter_sampling.grid_sample(i_training)
 
-        if self.hyperparamter_combinations is None:
+        if not hasattr(self, "hyperparamter_combinations"):
             self.hyperparamter_combinations = list(
                 product(np.arange(len(self.selected_columns)), self.seq_length)
             )
@@ -343,7 +344,7 @@ class HyperparameterSearch(BaseModel):
             seq_length=seq_length,
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
-            seed=self.seed,
+            seed=101,
             export_onnx=self.export_onnx,
             export_pt=self.export_pt,
             export_with_dropout=self.export_with_dropout,
@@ -363,6 +364,6 @@ class HyperparameterSearch(BaseModel):
         return (
             len(self.selected_columns)
             * len(self.seq_length)
-            * self.model_hyperparamter_sampling.n_combinations()
+            * self.model_hyperparameter_sampling.n_combinations()
             * self.training_hyperparameter_sampling.n_combinations()
         )

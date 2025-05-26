@@ -1,10 +1,15 @@
+import os
+
 import numpy as np
 import torch
 import torch._dynamo
+import yaml
 from beartype import beartype
-from config.hyperparameter_search_config import load_hyperparameter_search_config
 
 torch._dynamo.config.suppress_errors = True
+from sequifier.config.hyperparameter_search_config import (  # noqa: E402
+    load_hyperparameter_search_config,
+)
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES  # noqa: E402
 from sequifier.helpers import normalize_path  # noqa: E402
 from sequifier.helpers import read_data  # noqa: E402
@@ -33,6 +38,19 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
     assert n_samples is not None
     for i in range(n_samples):
         config = hyperparameter_search_config.sample(i)
+
+        config_path = os.path.join(hyperparameter_search_config.model_config_write_path)
+        normalized_config_path = normalize_path(
+            hyperparameter_search_config.project_path, config_path
+        )
+        with open(
+            os.path.join(
+                normalized_config_path,
+                f"{hyperparameter_search_config.model_name_root}-run-{i}.yaml",
+            ),
+            "w",
+        ) as f:
+            f.write(yaml.dump(config_path))
 
         column_types = {
             col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
