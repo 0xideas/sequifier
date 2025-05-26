@@ -49,7 +49,7 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
 
     assert n_samples is not None
     for i in range(n_samples):
-        np.random.seed(int(datetime.now().timestamp() * 1e6))
+        np.random.seed(int(datetime.now().timestamp() * 1e6) % (2**32))
         config = hyperparameter_search_config.sample(i)
 
         normalized_config_path = normalize_path(
