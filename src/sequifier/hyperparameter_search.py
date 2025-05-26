@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -24,6 +25,9 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
         config_path, on_unprocessed
     )
 
+    n_combinations = hyperparameter_search_config.n_combinations()
+
+    print(f"Found {n_combinations} hyperparameter combinations")
     if hyperparameter_search_config.search_strategy == "sample":
         n_samples = hyperparameter_search_config.n_samples
         assert n_samples is not None
@@ -45,6 +49,7 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
 
     assert n_samples is not None
     for i in range(n_samples):
+        np.random.seed(int(datetime.now().timestamp() * 1e6))
         config = hyperparameter_search_config.sample(i)
 
         normalized_config_path = normalize_path(

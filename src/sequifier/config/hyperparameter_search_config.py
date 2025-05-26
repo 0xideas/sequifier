@@ -126,6 +126,13 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     def random_sample(self):
         lr_and_scheduler_index = np.random.randint(len(self.lr))
         optimizer_index = np.random.randint(len(self.optimizer))
+        batch_size = np.random.choice(self.batch_size)
+        dropout = np.random.choice(self.dropout)
+        optimizer = self.optimizer[optimizer_index]
+        lr = self.lr[lr_and_scheduler_index]
+
+        print(f"{lr = } - {batch_size = } - {dropout = } - {optimizer = }")
+
         return TrainingSpecModel(
             device=self.device,
             epochs=self.epochs[lr_and_scheduler_index],
@@ -133,14 +140,14 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             class_share_log_columns=self.class_share_log_columns,
             early_stopping_epochs=self.early_stopping_epochs,
             iter_save=self.iter_save,
-            batch_size=np.random.choice(self.batch_size),
-            lr=self.lr[lr_and_scheduler_index],
+            batch_size=batch_size,
+            lr=lr,
             criterion=self.criterion,
             class_weights=self.class_weights,
             accumulation_steps=self.accumulation_steps,
-            dropout=np.random.choice(self.dropout),
+            dropout=dropout,
             loss_weights=self.loss_weights,
-            optimizer=self.optimizer[optimizer_index],
+            optimizer=optimizer,
             scheduler=self.scheduler[lr_and_scheduler_index],
         )
 
@@ -158,6 +165,10 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             self.hyperparamter_combinations[i]
         )
 
+        lr = self.lr[lr_and_scheduler_index]
+
+        print(f"{lr = } - {batch_size = } - {dropout = } - {optimizer = }")
+
         return TrainingSpecModel(
             device=self.device,
             epochs=self.epochs[lr_and_scheduler_index],
@@ -166,7 +177,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             early_stopping_epochs=self.early_stopping_epochs,
             iter_save=self.iter_save,
             batch_size=batch_size,
-            lr=self.lr[lr_and_scheduler_index],
+            lr=lr,
             criterion=self.criterion,
             class_weights=self.class_weights,
             accumulation_steps=self.accumulation_steps,
@@ -213,12 +224,17 @@ class ModelSpecHyperparameterSampling(BaseModel):
             if self.d_model_by_column is None
             else self.d_model_by_column[d_model_index]
         )
+        d_model = self.d_model[d_model_index]
+        d_hid = np.random.choice(self.d_hid)
+        nlayers = np.random.choice(self.nlayers)
+        print(f"{d_model = } - {d_hid = } - {nlayers = }")
+
         return ModelSpecModel(
             d_model=self.d_model[d_model_index],
             d_model_by_column=d_model_by_column,
             nhead=self.nhead[d_model_index],
-            d_hid=np.random.choice(self.d_hid),
-            nlayers=np.random.choice(self.nlayers),
+            d_hid=d_hid,
+            nlayers=nlayers,
         )
 
     def grid_sample(self, i):
@@ -228,6 +244,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
             )
 
         d_model_index, d_hid, nlayers = self.hyperparamter_combinations[i]
+        d_model = self.d_model[d_model_index]
+        print(f"{d_model = } - {d_hid = } - {nlayers = }")
 
         d_model_by_column = (
             None
@@ -236,7 +254,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         )
 
         return ModelSpecModel(
-            d_model=self.d_model[d_model_index],
+            d_model=d_model,
             d_model_by_column=d_model_by_column,
             nhead=self.nhead[d_model_index],
             d_hid=d_hid,
@@ -290,7 +308,8 @@ class HyperparameterSearch(BaseModel):
         model_spec = self.model_hyperparameter_sampling.random_sample()
         training_spec = self.training_hyperparameter_sampling.random_sample()
         selected_columns_index = np.random.randint(len(self.selected_columns))
-
+        seq_length = np.random.choice(self.seq_length)
+        print(f"{selected_columns_index = } - {seq_length = }")
         return TrainModel(
             project_path=self.project_path,
             model_name=self.model_name_root + f"-run-{i}",
@@ -304,7 +323,7 @@ class HyperparameterSearch(BaseModel):
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
-            seq_length=np.random.choice(self.seq_length),
+            seq_length=seq_length,
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=101,
