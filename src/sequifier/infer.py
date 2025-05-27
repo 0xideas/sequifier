@@ -89,7 +89,9 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
             data = subset_to_selected_columns(data, config.selected_columns)
 
         if not config.autoregression:
-            probs, preds = get_probs_preds(config, inferer, data, column_types)
+            probs, preds = get_probs_preds(
+                config, inferer, data, column_types, apply_normalization_inversion=False
+            )
         else:
             if config.autoregression_additional_steps is not None:
                 data = expand_data_by_autoregression(
