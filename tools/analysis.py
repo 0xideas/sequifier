@@ -18,7 +18,7 @@ def invert_normalization(values, target_column, min_max_values):
     min_ = min_max_values[target_column]["min"]
     max_ = min_max_values[target_column]["max"]
     return np.array(
-        [(((v + 0.8) / 1.6) * (max_ - min_)) + min_ for v in values.flatten()]
+        [(((v + 1.0) / 2.0) * (max_ - min_)) + min_ for v in values.flatten()]
     ).reshape(*values.shape)
 
 
@@ -31,7 +31,7 @@ def load_column_attributes(dd_config_path="configs/ddconfigs/data.json"):
 
 
 def load_ground_truth(path, dd_config_path="configs/ddconfigs/data.json", load_col="0"):
-    y = pd.read_parquet("data/data-split2.parquet")
+    y = pd.read_parquet(path)
     n_cols = len(set(list(y["inputCol"].values)))
 
     y.index = np.repeat(np.arange(int(y.shape[0] / n_cols)), n_cols)

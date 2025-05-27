@@ -146,8 +146,8 @@ class Preprocessor:
                     np.max(data[data_col].values),
                 )
                 data[data_col] = (
-                    ((data[data_col] - min_val) / (max_val - min_val)) * 1.6
-                ) - 0.8
+                    ((data[data_col] - min_val) / (max_val - min_val)) * 2.0
+                ) - 1.0
                 min_max_values[data_col] = {"min": min_val, "max": max_val}
                 float_data_columns.append(data_col)
             else:

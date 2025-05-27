@@ -199,7 +199,9 @@ class TransformerModel(nn.Module):
                 )
                 self.softmax[target_column] = nn.LogSoftmax(dim=-1)
             elif target_column_type == "real":
-                self.decoder[target_column] = nn.Linear(self.embedding_size, 1)
+                self.decoder[target_column] = torch.nn.Tanh(
+                    nn.Linear(self.embedding_size, 1)
+                )
             else:
                 raise ValueError(
                     f"Target column type {target_column_type} not in ['categorical', 'real']"
