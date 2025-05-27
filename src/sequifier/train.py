@@ -286,13 +286,16 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _init_weights(self) -> None:
-        initrange = 0.01
+        init_std = 0.02
         for col in self.categorical_columns:
-            self.encoder[col].weight.data.uniform_(-initrange, initrange)
+            self.encoder[col].weight.data.normal_(mean=0.0, std=init_std)
 
         for target_column in self.target_columns:
             self.decoder[target_column].bias.data.zero_()
-            self.decoder[target_column].weight.data.uniform_(-initrange, initrange)
+            self.decoder[target_column].weight.data.normal_(mean=0.0, std=init_std)
+
+        for col_name in self.pos_encoder:
+            self.pos_encoder[col_name].weight.data.normal_(mean=0.0, std=init_std)
 
     @beartype
     def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -312,7 +315,9 @@ class TransformerModel(nn.Module):
 
         for col in self.real_columns:
             if col in self.real_columns_direct:
-                src_t = src[col].T.unsqueeze(2).repeat(1, 1, 1)
+                src_t = src[col].T.unsqueeze(2).repeat(1, 1, 1) * math.sqrt(
+                    self.embedding_size
+                )
             else:
                 assert col in self.real_columns_with_embedding
                 src_t = self.encoder[col](src[col].T[:, :, None]) * math.sqrt(
