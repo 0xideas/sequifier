@@ -27,6 +27,7 @@ simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
 @beartype
 def infer(args: Any, args_config: dict[str, Any]) -> None:
+    print("Inferring...")
     config_path = (
         args.config_path if args.config_path is not None else "configs/infer.yaml"
     )
@@ -46,42 +47,43 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         id_maps = None
         min_max_values = {}
 
-    inferer = Inferer(
-        config.model_path,
-        config.project_path,
-        id_maps,
-        min_max_values,
-        config.map_to_id,
-        config.categorical_columns,
-        config.real_columns,
-        config.selected_columns,
-        config.target_columns,
-        config.target_column_types,
-        config.sample_from_distribution_columns,
-        config.infer_with_dropout,
-        config.inference_batch_size,
-        config.device,
-        args_config=args_config,
-        training_config_path=config.training_config_path,
+    print("Reading data...")
+    data = read_data(config.data_path, config.read_format)
+    model_paths = (
+        config.model_path
+        if isinstance(config.model_path, list)
+        else [config.model_path]
     )
+    for model_path in model_paths:
+        inferer = Inferer(
+            model_path,
+            config.project_path,
+            id_maps,
+            min_max_values,
+            config.map_to_id,
+            config.categorical_columns,
+            config.real_columns,
+            config.selected_columns,
+            config.target_columns,
+            config.target_column_types,
+            config.sample_from_distribution_columns,
+            config.infer_with_dropout,
+            config.inference_batch_size,
+            config.device,
+            args_config=args_config,
+            training_config_path=config.training_config_path,
+        )
 
-    column_types = {
-        col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
-        for col in config.column_types
-    }
+        column_types = {
+            col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
+            for col in config.column_types
+        }
 
-    model_id = os.path.split(config.model_path)[1].replace(
-        f".{inferer.inference_model_type}", ""
-    )
+        model_id = os.path.split(model_path)[1].replace(
+            f".{inferer.inference_model_type}", ""
+        )
 
-    print(f"Inferring for {model_id}")
-    if isinstance(config.data_path, str):
-        data_paths = [config.data_path]
-    else:
-        data_paths = config.data_path
-
-    for data_path in data_paths:
-        data = read_data(data_path, config.read_format)
+        print(f"Inferring for {model_id}")
 
         if config.selected_columns is not None:
             data = subset_to_selected_columns(data, config.selected_columns)
@@ -471,6 +473,7 @@ class Inferer:
         self.sample_from_distribution_columns = sample_from_distribution_columns
         self.infer_with_dropout = infer_with_dropout
         self.inference_batch_size = inference_batch_size
+
         self.inference_model_type = model_path.split(".")[-1]
         self.args_config = args_config
         self.training_config_path = training_config_path

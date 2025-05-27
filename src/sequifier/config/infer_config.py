@@ -69,8 +69,8 @@ def load_inferer_config(
 class InfererModel(BaseModel):
     project_path: str
     ddconfig_path: str
-    model_path: str
-    data_path: Union[str, list[str]]
+    model_path: Union[str, list[str]]
+    data_path: str
     training_config_path: str = Field(default="configs/train.yaml")
     read_format: str = Field(default="parquet")
     write_format: str = Field(default="csv")
