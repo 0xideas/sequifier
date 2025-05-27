@@ -329,6 +329,8 @@ class TransformerModel(nn.Module):
 
             src_c = self.drop(src_t + src_p)
 
+            srcs.append(src_c)
+
         src2 = torch.cat(srcs, 2)
 
         output = self.transformer_encoder(src2, self.src_mask)
