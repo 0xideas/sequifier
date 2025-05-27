@@ -17,7 +17,7 @@ def invert_normalization(values, target_column, selected_columns_statistics):
     """
     std = selected_columns_statistics[target_column]["std"]
     mean = selected_columns_statistics[target_column]["mean"]
-    return (values * np.repeat(std, values.shape[0])) + np.repeat(mean, values.shape[0])
+    return (values * std) + mean
 
 
 def load_column_attributes(dd_config_path="configs/ddconfigs/data.json"):

@@ -522,9 +522,7 @@ class Inferer:
         """
         std = self.selected_columns_statistics[target_column]["std"]
         mean = self.selected_columns_statistics[target_column]["mean"]
-        return (
-            values * np.repeat(std, values.shape[0]).reshape(*values.shape)
-        ) + np.repeat(mean, values.shape[0]).reshape(*values.shape)
+        return (values * std) + mean
 
     @beartype
     def infer(
