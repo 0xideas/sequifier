@@ -169,7 +169,9 @@ class TransformerModel(nn.Module):
             else:
                 assert self.d_model_by_column[col] == 1
                 self.real_columns_direct.append(col)
-
+            self.pos_encoder[col] = nn.Embedding(
+                self.seq_length, self.d_model_by_column[col]
+            )
         for col, n_classes in self.n_classes.items():
             if col in self.categorical_columns:
                 self.encoder[col] = nn.Embedding(n_classes, self.d_model_by_column[col])
@@ -310,14 +312,22 @@ class TransformerModel(nn.Module):
 
         for col in self.real_columns:
             if col in self.real_columns_direct:
-                srcs.append(src[col].T.unsqueeze(2).repeat(1, 1, 1))
-            elif col in self.real_columns_with_embedding:
-                srcs.append(
-                    self.encoder[col](src[col].T[:, :, None])
-                    * math.sqrt(self.embedding_size)
-                )
+                src_t = src[col].T.unsqueeze(2).repeat(1, 1, 1)
             else:
-                assert False
+                assert col in self.real_columns_with_embedding
+                src_t = self.encoder[col](src[col].T[:, :, None]) * math.sqrt(
+                    self.embedding_size
+                )
+
+            pos = (
+                torch.arange(0, self.seq_length, dtype=torch.long, device=self.device)
+                .repeat(src_t.shape[1], 1)
+                .T
+            )
+
+            src_p = self.pos_encoder[col](pos)
+
+            src_c = self.drop(src_t + src_p)
 
         src2 = torch.cat(srcs, 2)
 
