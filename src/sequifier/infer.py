@@ -37,15 +37,15 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     if config.map_to_id or (len(config.real_columns) > 0):
         assert config.ddconfig_path is not None, (
             "If you want to map to id, you need to provide a file path to a json that contains: {{'id_maps':{...}}} to ddconfig_path"
-            "\nIf you have real columns in the data, you need to provide a json that contains: {{'min_max_values':{COL_NAME:{'min':..., 'max':...}}}}"
+            "\nIf you have real columns in the data, you need to provide a json that contains: {{'selected_columns_statistics':{COL_NAME:{'std':..., 'mean':...}}}}"
         )
         with open(normalize_path(config.ddconfig_path, config.project_path), "r") as f:
             dd_config = json.loads(f.read())
             id_maps = dd_config["id_maps"]
-            min_max_values = dd_config["min_max_values"]
+            selected_columns_statistics = dd_config["selected_columns_statistics"]
     else:
         id_maps = None
-        min_max_values = {}
+        selected_columns_statistics = {}
 
     print("Reading data...")
     data = read_data(config.data_path, config.read_format)
@@ -59,7 +59,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
             model_path,
             config.project_path,
             id_maps,
-            min_max_values,
+            selected_columns_statistics,
             config.map_to_id,
             config.categorical_columns,
             config.real_columns,
@@ -443,7 +443,7 @@ class Inferer:
         model_path: str,
         project_path: str,
         id_maps: Optional[dict[str, dict[Union[str, int], int]]],
-        min_max_values: dict[str, dict[str, float]],
+        selected_columns_statistics: dict[str, dict[str, float]],
         map_to_id: bool,
         categorical_columns: list[str],
         real_columns: list[str],
@@ -458,7 +458,7 @@ class Inferer:
         training_config_path: str,
     ):
         self.map_to_id = map_to_id
-        self.min_max_values = min_max_values
+        self.selected_columns_statistics = selected_columns_statistics
         target_columns_index_map = [
             c for c in target_columns if target_column_types[c] == "categorical"
         ]
@@ -520,11 +520,11 @@ class Inferer:
         Returns:
             Denormalized values.
         """
-        min_ = self.min_max_values[target_column]["min"]
-        max_ = self.min_max_values[target_column]["max"]
-        return np.array(
-            [(((v + 1.0) / 2.0) * (max_ - min_)) + min_ for v in values.flatten()]
-        ).reshape(*values.shape)
+        std = self.selected_columns_statistics[target_column]["std"]
+        mean = self.selected_columns_statistics[target_column]["mean"]
+        return (
+            values * np.repeat(std, values.shape[0]).reshape(*values.shape)
+        ) + np.repeat(mean, values.shape[0]).reshape(*values.shape)
 
     @beartype
     def infer(

@@ -31,7 +31,7 @@ def test_dd_config(dd_configs):
                     "id_maps",
                     "split_paths",
                     "column_types",
-                    "min_max_values",
+                    "selected_columns_statistics",
                 ]
             )
         ), list(dd_config.keys())
@@ -53,9 +53,9 @@ def test_dd_config(dd_configs):
                 id_map_values == np.arange(1, len(id_map_values) + 1)
             ), id_map_values
 
-        if "itemValue" in dd_config["min_max_values"]:
-            assert "max" in dd_config["min_max_values"]["itemValue"]
-            assert "min" in dd_config["min_max_values"]["itemValue"]
+        if "itemValue" in dd_config["selected_columns_statistics"]:
+            assert "std" in dd_config["selected_columns_statistics"]["itemValue"]
+            assert "mean" in dd_config["selected_columns_statistics"]["itemValue"]
 
 
 @pytest.fixture()

@@ -349,8 +349,6 @@ class TransformerModel(nn.Module):
     @beartype
     def decode(self, target_column: str, output: Tensor) -> Tensor:
         decoded = self.decoder[target_column](output)
-        if self.target_column_types[target_column] == "real":
-            decoded = torch.tanh(decoded)
         return decoded
 
     @beartype
