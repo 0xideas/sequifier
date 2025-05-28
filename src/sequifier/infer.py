@@ -1,6 +1,7 @@
 import json
 import os
 import warnings
+from datetime import datetime
 from typing import Any, Optional, Union
 from warnings import simplefilter
 
@@ -395,6 +396,12 @@ def verify_variable_order(data: pd.DataFrame) -> None:
         ), "subsequenceId must be in ascending order for autoregression"
 
 
+def format_delta(time_delta):
+    seconds = time_delta.seconds
+    microseconds = time_delta.microseconds
+    return f"{(seconds + (microseconds/1e6)):.3}"
+
+
 @beartype
 def get_probs_preds_autoregression(
     config: Any,
@@ -452,10 +459,12 @@ def get_probs_preds_autoregression(
     subsequence_ids = data["subsequenceIdAdjusted"].values
     max_length = len(str(np.max(subsequence_ids_distinct)))
     for subsequence_id in subsequence_ids_distinct:
-        print(f"inferring for {subsequence_id}")
+        t0 = datetime.now()
         subsequence_filter = subsequence_ids == subsequence_id
         data_subset = data.loc[subsequence_filter, :]
         sequence_ids_present = sequence_ids[subsequence_filter]
+
+        t1 = datetime.now()
 
         sort_keys.extend(
             [
@@ -464,6 +473,8 @@ def get_probs_preds_autoregression(
             ]
         )
 
+        t2 = datetime.now()
+
         probs, preds = get_probs_preds(
             config,
             inferer,
@@ -471,6 +482,9 @@ def get_probs_preds_autoregression(
             column_types,
             apply_normalization_inversion=False,
         )
+
+        t3 = datetime.now()
+
         preds_list.append(preds)
         if probs is not None:
             probs_list.append(probs)
@@ -482,6 +496,12 @@ def get_probs_preds_autoregression(
             sequence_ids_present,
             int(subsequence_id),
             preds,
+        )
+
+        t4 = datetime.now()
+
+        print(
+            f"subseq-id: {subsequence_id}: total: {format_delta(t4-t0)}s - {format_delta(t1 - t0)}s - {format_delta(t2 - t1)}s - {format_delta(t3 - t2)}s - {format_delta(t4 - t3)}s"
         )
     sort_order = np.argsort(sort_keys)
 
