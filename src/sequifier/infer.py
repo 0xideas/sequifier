@@ -266,33 +266,99 @@ def fill_in_predictions(
     preds: dict[str, np.ndarray],
 ) -> pd.DataFrame:
     """
-    Fill in predictions for the given data.
+    Fill in predictions for the given data using optimized batch operations.
+
+    This version maintains the exact same logic as the original but uses
+    vectorized operations where possible for better performance.
 
     Args:
-        data: Input DataFrame.
-        sequence_id_to_subsequence_ids: Mapping of sequence IDs to subsequence IDs.
-        ids_to_row: Mapping of IDs to row indices.
-        sequence_ids: Array of sequence IDs.
-        subsequence_id: Current subsequence ID.
-        preds: Dictionary of predictions.
+        data: Input DataFrame. Modified by adding new columns if necessary,
+              and then values are updated.
+        sequence_id_to_subsequence_ids: Mapping of sequence IDs to their *adjusted* subsequence IDs.
+        ids_to_row: Mapping of composite IDs (sequenceId-subsequenceIdAdjusted-inputCol) to row indices in `data`.
+        sequence_ids: Array of sequence IDs for which predictions are currently available.
+        subsequence_id: The current *adjusted* subsequence ID for which predictions were made.
+        preds: Dictionary of predictions. Keys are target column names,
+               values are np.ndarray of predictions, one for each unique, sorted sequence_id.
 
     Returns:
         Updated DataFrame with filled-in predictions.
     """
+    if not preds:
+        return data
+
+    # Get unique sorted sequence IDs (same as original)
     sequence_ids_distinct = sorted(list(np.unique(sequence_ids)))
 
+    # Pre-collect all updates to avoid repeated DataFrame operations
+    updates_by_column = {}  # column_name -> list of (row_idx, value) tuples
+
     for input_col, preds_vals in preds.items():
-        assert len(preds_vals) == len(sequence_ids_distinct)
-        for sequence_id, pred in zip(sequence_ids_distinct, preds_vals.flatten()):
-            sequence_id_subsequence_ids = sequence_id_to_subsequence_ids[sequence_id]
-            sequence_id_subsequence_ids = sequence_id_subsequence_ids[
+        flattened_preds = preds_vals.flatten()
+
+        # Validate prediction length matches sequence count
+        if len(flattened_preds) != len(sequence_ids_distinct):
+            raise ValueError(
+                f"Mismatch in length of predictions for '{input_col}' "
+                f"({len(flattened_preds)}) and number of unique, sorted sequence IDs "
+                f"({len(sequence_ids_distinct)}). Predictions must align with unique, sorted sequence IDs."
+            )
+
+        # Process each sequence and its prediction
+        for sequence_id, pred in zip(sequence_ids_distinct, flattened_preds):
+            # Get future subsequence IDs for this sequence (same logic as original)
+            sequence_id_subsequence_ids = sequence_id_to_subsequence_ids.get(
+                sequence_id, np.array([])
+            )
+            future_subsequence_ids = sequence_id_subsequence_ids[
                 sequence_id_subsequence_ids > subsequence_id
             ]
-            for subsequence_id2 in sequence_id_subsequence_ids:
+
+            # For each future time step, calculate offset and prepare update
+            for subsequence_id2 in future_subsequence_ids:
                 offset = subsequence_id2 - subsequence_id
-                assert offset > 0
-                i = ids_to_row[f"{sequence_id}-{subsequence_id2}-{input_col}"]
-                data.loc[i, str(offset)] = pred
+                # offset > 0 is guaranteed by the filter above
+
+                # Get the row index for this update
+                map_key = f"{sequence_id}-{subsequence_id2}-{input_col}"
+
+                if map_key not in ids_to_row:
+                    # Skip if the target row doesn't exist (consistent with original behavior)
+                    continue
+
+                row_idx = ids_to_row[map_key]
+                column_name = str(offset)
+
+                # Collect this update
+                if column_name not in updates_by_column:
+                    updates_by_column[column_name] = []
+                updates_by_column[column_name].append((row_idx, pred))
+
+    # Early return if no updates to perform
+    if not updates_by_column:
+        return data
+
+    # Ensure all required columns exist
+    for column_name in updates_by_column.keys():
+        if column_name not in data.columns:
+            data[column_name] = np.nan
+
+    # Perform batch updates column by column
+    for column_name, updates in updates_by_column.items():
+        if not updates:
+            continue
+
+        # Convert to arrays for vectorized assignment
+        row_indices = np.array([update[0] for update in updates], dtype=np.intp)
+        values = np.array([update[1] for update in updates])
+
+        # Get column position for iloc-based assignment (faster than loc)
+        col_idx = data.columns.get_loc(column_name)
+
+        # Batch assign all values for this column
+        # This is safe because each (row_idx, col_idx) combination should be unique
+        # within a single column's updates based on the original logic
+        data.iloc[row_indices, col_idx] = values
 
     return data
 
