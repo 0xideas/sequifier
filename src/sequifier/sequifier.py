@@ -4,6 +4,7 @@ from typing import Any
 import numpy as np
 from beartype import beartype
 
+from sequifier.hyperparameter_search import hyperparameter_search
 from sequifier.infer import infer
 from sequifier.make import make
 from sequifier.preprocess import preprocess
@@ -61,17 +62,28 @@ def setup_parser() -> ArgumentParser:
     parser_train = subparsers.add_parser("train", help="Run the training step")
     parser_infer = subparsers.add_parser("infer", help="Run the inference step")
 
-    for subparser in [parser_preprocess, parser_train, parser_infer]:
+    parser_hyperparameter_search = subparsers.add_parser(
+        "hyperparametersearch", help="Run hyperparamter search"
+    )
+
+    for subparser in [
+        parser_preprocess,
+        parser_train,
+        parser_infer,
+        parser_hyperparameter_search,
+    ]:
         subparser.add_argument(
             "--config-path",
             type=str,
             help="File path to config for current processing step",
         )
-        subparser.add_argument("-r", "--randomize", action="store_true")
-        subparser.add_argument("-sc", "--selected-columns", type=str)
-        subparser.add_argument("-dp", "--data-path", type=str)
 
-    for subparser in [parser_train, parser_infer]:
+        if subparser != parser_hyperparameter_search:
+            subparser.add_argument("-r", "--randomize", action="store_true")
+            subparser.add_argument("-sc", "--selected-columns", type=str)
+            subparser.add_argument("-dp", "--data-path", type=str)
+
+    for subparser in [parser_train, parser_infer, parser_hyperparameter_search]:
         subparser.add_argument("-ddcp", "--ddconfig-path", type=str)
         subparser.add_argument("-op", "--on-unprocessed", action="store_true")
 
@@ -88,16 +100,19 @@ def main() -> None:
     parser = setup_parser()
     args = parser.parse_args()
 
-    args_config = build_args_config(args)
+    if args.command != "hyperparametersearch":
+        args_config = build_args_config(args)
 
-    if args.command == "make":
-        make(args)
-    if args.command == "preprocess":
-        preprocess(args, args_config)
-    elif args.command == "train":
-        train(args, args_config)
-    elif args.command == "infer":
-        infer(args, args_config)
+        if args.command == "make":
+            make(args)
+        if args.command == "preprocess":
+            preprocess(args, args_config)
+        elif args.command == "train":
+            train(args, args_config)
+        elif args.command == "infer":
+            infer(args, args_config)
+    elif args.command == "hyperparametersearch":
+        hyperparameter_search(args.config_path, args.on_unprocessed)
 
 
 if __name__ == "__main__":

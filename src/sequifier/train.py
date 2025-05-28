@@ -169,7 +169,9 @@ class TransformerModel(nn.Module):
             else:
                 assert self.d_model_by_column[col] == 1
                 self.real_columns_direct.append(col)
-
+            self.pos_encoder[col] = nn.Embedding(
+                self.seq_length, self.d_model_by_column[col]
+            )
         for col, n_classes in self.n_classes.items():
             if col in self.categorical_columns:
                 self.encoder[col] = nn.Embedding(n_classes, self.d_model_by_column[col])
@@ -284,13 +286,16 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _init_weights(self) -> None:
-        initrange = 0.01
+        init_std = 0.02
         for col in self.categorical_columns:
-            self.encoder[col].weight.data.uniform_(-initrange, initrange)
+            self.encoder[col].weight.data.normal_(mean=0.0, std=init_std)
 
         for target_column in self.target_columns:
             self.decoder[target_column].bias.data.zero_()
-            self.decoder[target_column].weight.data.uniform_(-initrange, initrange)
+            self.decoder[target_column].weight.data.normal_(mean=0.0, std=init_std)
+
+        for col_name in self.pos_encoder:
+            self.pos_encoder[col_name].weight.data.normal_(mean=0.0, std=init_std)
 
     @beartype
     def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -310,14 +315,26 @@ class TransformerModel(nn.Module):
 
         for col in self.real_columns:
             if col in self.real_columns_direct:
-                srcs.append(src[col].T.unsqueeze(2).repeat(1, 1, 1))
-            elif col in self.real_columns_with_embedding:
-                srcs.append(
-                    self.encoder[col](src[col].T[:, :, None])
-                    * math.sqrt(self.embedding_size)
+                src_t = src[col].T.unsqueeze(2).repeat(1, 1, 1) * math.sqrt(
+                    self.embedding_size
                 )
             else:
-                assert False
+                assert col in self.real_columns_with_embedding
+                src_t = self.encoder[col](src[col].T[:, :, None]) * math.sqrt(
+                    self.embedding_size
+                )
+
+            pos = (
+                torch.arange(0, self.seq_length, dtype=torch.long, device=self.device)
+                .repeat(src_t.shape[1], 1)
+                .T
+            )
+
+            src_p = self.pos_encoder[col](pos)
+
+            src_c = self.drop(src_t + src_p)
+
+            srcs.append(src_c)
 
         src2 = torch.cat(srcs, 2)
 

@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Optional
+from typing import Optional, Union
 
 import yaml
 from beartype import beartype
@@ -69,7 +69,7 @@ def load_inferer_config(
 class InfererModel(BaseModel):
     project_path: str
     ddconfig_path: str
-    model_path: str
+    model_path: Union[str, list[str]]
     data_path: str
     training_config_path: str = Field(default="configs/train.yaml")
     read_format: str = Field(default="parquet")
@@ -102,9 +102,15 @@ class InfererModel(BaseModel):
 
     @validator("data_path")
     def validate_data_path(cls, v: str, values: dict) -> str:
-        v2 = normalize_path(v, values["project_path"])
-        if not os.path.exists(v2):
-            raise ValueError(f"{v2} does not exist")
+        if isinstance(v, str):
+            v2 = normalize_path(v, values["project_path"])
+            if not os.path.exists(v2):
+                raise ValueError(f"{v2} does not exist")
+        if isinstance(v, list):
+            for vv in v:
+                v2 = normalize_path(v, values["project_path"])
+                if not os.path.exists(v2):
+                    raise ValueError(f"{v2} does not exist")
         return v
 
     @validator("read_format", "write_format")

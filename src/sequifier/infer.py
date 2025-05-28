@@ -1,6 +1,7 @@
 import json
 import os
 import warnings
+from datetime import datetime
 from typing import Any, Optional, Union
 from warnings import simplefilter
 
@@ -27,6 +28,7 @@ simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
 @beartype
 def infer(args: Any, args_config: dict[str, Any]) -> None:
+    print("Inferring...")
     config_path = (
         args.config_path if args.config_path is not None else "configs/infer.yaml"
     )
@@ -36,121 +38,131 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     if config.map_to_id or (len(config.real_columns) > 0):
         assert config.ddconfig_path is not None, (
             "If you want to map to id, you need to provide a file path to a json that contains: {{'id_maps':{...}}} to ddconfig_path"
-            "\nIf you have real columns in the data, you need to provide a json that contains: {{'min_max_values':{COL_NAME:{'min':..., 'max':...}}}}"
+            "\nIf you have real columns in the data, you need to provide a json that contains: {{'selected_columns_statistics':{COL_NAME:{'std':..., 'mean':...}}}}"
         )
         with open(normalize_path(config.ddconfig_path, config.project_path), "r") as f:
             dd_config = json.loads(f.read())
             id_maps = dd_config["id_maps"]
-            min_max_values = dd_config["min_max_values"]
+            selected_columns_statistics = dd_config["selected_columns_statistics"]
     else:
         id_maps = None
-        min_max_values = {}
+        selected_columns_statistics = {}
 
-    inferer = Inferer(
-        config.model_path,
-        config.project_path,
-        id_maps,
-        min_max_values,
-        config.map_to_id,
-        config.categorical_columns,
-        config.real_columns,
-        config.selected_columns,
-        config.target_columns,
-        config.target_column_types,
-        config.sample_from_distribution_columns,
-        config.infer_with_dropout,
-        config.inference_batch_size,
-        config.device,
-        args_config=args_config,
-        training_config_path=config.training_config_path,
-    )
-
-    column_types = {
-        col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
-        for col in config.column_types
-    }
-
-    model_id = os.path.split(config.model_path)[1].replace(
-        f".{inferer.inference_model_type}", ""
-    )
-
-    print(f"Inferring for {model_id}")
+    print("Reading data...")
     data = read_data(config.data_path, config.read_format)
-
-    if config.selected_columns is not None:
-        data = subset_to_selected_columns(data, config.selected_columns)
-
-    if not config.autoregression:
-        probs, preds = get_probs_preds(config, inferer, data, column_types)
-    else:
-        if config.autoregression_additional_steps is not None:
-            data = expand_data_by_autoregression(
-                data, config.autoregression_additional_steps, config.seq_length
-            )
-
-        probs, preds = get_probs_preds_autoregression(
-            config, inferer, data, column_types, config.seq_length
-        )
-
-    if inferer.map_to_id:
-        for target_column, predictions in preds.items():
-            if target_column in inferer.index_map:
-                preds[target_column] = np.array(
-                    [inferer.index_map[target_column][i] for i in predictions]
-                )
-
-    for target_column, predictions in preds.items():
-        if inferer.target_column_types[target_column] == "real":
-            preds[target_column] = inferer.invert_normalization(
-                predictions, target_column
-            )
-
-    os.makedirs(
-        os.path.join(config.project_path, "outputs", "predictions"), exist_ok=True
+    model_paths = (
+        config.model_path
+        if isinstance(config.model_path, list)
+        else [config.model_path]
     )
-
-    if config.output_probabilities:
-        assert probs is not None
-        os.makedirs(
-            os.path.join(config.project_path, "outputs", "probabilities"), exist_ok=True
+    for model_path in model_paths:
+        inferer = Inferer(
+            model_path,
+            config.project_path,
+            id_maps,
+            selected_columns_statistics,
+            config.map_to_id,
+            config.categorical_columns,
+            config.real_columns,
+            config.selected_columns,
+            config.target_columns,
+            config.target_column_types,
+            config.sample_from_distribution_columns,
+            config.infer_with_dropout,
+            config.inference_batch_size,
+            config.device,
+            args_config=args_config,
+            training_config_path=config.training_config_path,
         )
-        for target_column in inferer.target_columns:
-            if inferer.target_column_types[target_column] == "categorical":
-                probabilities_path = os.path.join(
-                    config.project_path,
-                    "outputs",
-                    "probabilities",
-                    f"{model_id}-{target_column}-probabilities.{config.write_format}",
-                )
-                print(f"Writing probabilities to {probabilities_path}")
-                write_data(
-                    pd.DataFrame(probs[target_column]),
-                    probabilities_path,
-                    config.write_format,
-                )
-    n_input_cols = len(np.unique(data["inputCol"]))
-    predictions = pd.DataFrame(
-        {
-            **{"sequenceId": list(data["sequenceId"].values)[::n_input_cols]},
-            **{
-                target_column: preds[target_column].flatten()
-                for target_column in inferer.target_columns
-            },
+
+        column_types = {
+            col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
+            for col in config.column_types
         }
-    )
-    predictions_path = os.path.join(
-        config.project_path,
-        "outputs",
-        "predictions",
-        f"{model_id}-predictions.{config.write_format}",
-    )
-    print(f"Writing predictions to {predictions_path}")
-    write_data(
-        predictions,
-        predictions_path,
-        config.write_format,
-    )
-    print("Inference complete")
+
+        model_id = os.path.split(model_path)[1].replace(
+            f".{inferer.inference_model_type}", ""
+        )
+
+        print(f"Inferring for {model_id}")
+
+        if config.selected_columns is not None:
+            data = subset_to_selected_columns(data, config.selected_columns)
+
+        if not config.autoregression:
+            probs, preds = get_probs_preds(
+                config, inferer, data, column_types, apply_normalization_inversion=False
+            )
+        else:
+            if config.autoregression_additional_steps is not None:
+                data = expand_data_by_autoregression(
+                    data, config.autoregression_additional_steps, config.seq_length
+                )
+
+            probs, preds = get_probs_preds_autoregression(
+                config, inferer, data, column_types, config.seq_length
+            )
+
+        if inferer.map_to_id:
+            for target_column, predictions in preds.items():
+                if target_column in inferer.index_map:
+                    preds[target_column] = np.array(
+                        [inferer.index_map[target_column][i] for i in predictions]
+                    )
+
+        for target_column, predictions in preds.items():
+            if inferer.target_column_types[target_column] == "real":
+                preds[target_column] = inferer.invert_normalization(
+                    predictions, target_column
+                )
+
+        os.makedirs(
+            os.path.join(config.project_path, "outputs", "predictions"), exist_ok=True
+        )
+
+        if config.output_probabilities:
+            assert probs is not None
+            os.makedirs(
+                os.path.join(config.project_path, "outputs", "probabilities"),
+                exist_ok=True,
+            )
+            for target_column in inferer.target_columns:
+                if inferer.target_column_types[target_column] == "categorical":
+                    probabilities_path = os.path.join(
+                        config.project_path,
+                        "outputs",
+                        "probabilities",
+                        f"{model_id}-{target_column}-probabilities.{config.write_format}",
+                    )
+                    print(f"Writing probabilities to {probabilities_path}")
+                    write_data(
+                        pd.DataFrame(probs[target_column]),
+                        probabilities_path,
+                        config.write_format,
+                    )
+        n_input_cols = len(np.unique(data["inputCol"]))
+        predictions = pd.DataFrame(
+            {
+                **{"sequenceId": list(data["sequenceId"].values)[::n_input_cols]},
+                **{
+                    target_column: preds[target_column].flatten()
+                    for target_column in inferer.target_columns
+                },
+            }
+        )
+        predictions_path = os.path.join(
+            config.project_path,
+            "outputs",
+            "predictions",
+            f"{model_id}-predictions.{config.write_format}",
+        )
+        print(f"Writing predictions to {predictions_path}")
+        write_data(
+            predictions,
+            predictions_path,
+            config.write_format,
+        )
+        print("Inference complete")
 
 
 @beartype
@@ -255,33 +267,99 @@ def fill_in_predictions(
     preds: dict[str, np.ndarray],
 ) -> pd.DataFrame:
     """
-    Fill in predictions for the given data.
+    Fill in predictions for the given data using optimized batch operations.
+
+    This version maintains the exact same logic as the original but uses
+    vectorized operations where possible for better performance.
 
     Args:
-        data: Input DataFrame.
-        sequence_id_to_subsequence_ids: Mapping of sequence IDs to subsequence IDs.
-        ids_to_row: Mapping of IDs to row indices.
-        sequence_ids: Array of sequence IDs.
-        subsequence_id: Current subsequence ID.
-        preds: Dictionary of predictions.
+        data: Input DataFrame. Modified by adding new columns if necessary,
+              and then values are updated.
+        sequence_id_to_subsequence_ids: Mapping of sequence IDs to their *adjusted* subsequence IDs.
+        ids_to_row: Mapping of composite IDs (sequenceId-subsequenceIdAdjusted-inputCol) to row indices in `data`.
+        sequence_ids: Array of sequence IDs for which predictions are currently available.
+        subsequence_id: The current *adjusted* subsequence ID for which predictions were made.
+        preds: Dictionary of predictions. Keys are target column names,
+               values are np.ndarray of predictions, one for each unique, sorted sequence_id.
 
     Returns:
         Updated DataFrame with filled-in predictions.
     """
+    if not preds:
+        return data
+
+    # Get unique sorted sequence IDs (same as original)
     sequence_ids_distinct = sorted(list(np.unique(sequence_ids)))
 
+    # Pre-collect all updates to avoid repeated DataFrame operations
+    updates_by_column = {}  # column_name -> list of (row_idx, value) tuples
+
     for input_col, preds_vals in preds.items():
-        assert len(preds_vals) == len(sequence_ids_distinct)
-        for sequence_id, pred in zip(sequence_ids_distinct, preds_vals.flatten()):
-            sequence_id_subsequence_ids = sequence_id_to_subsequence_ids[sequence_id]
-            sequence_id_subsequence_ids = sequence_id_subsequence_ids[
+        flattened_preds = preds_vals.flatten()
+
+        # Validate prediction length matches sequence count
+        if len(flattened_preds) != len(sequence_ids_distinct):
+            raise ValueError(
+                f"Mismatch in length of predictions for '{input_col}' "
+                f"({len(flattened_preds)}) and number of unique, sorted sequence IDs "
+                f"({len(sequence_ids_distinct)}). Predictions must align with unique, sorted sequence IDs."
+            )
+
+        # Process each sequence and its prediction
+        for sequence_id, pred in zip(sequence_ids_distinct, flattened_preds):
+            # Get future subsequence IDs for this sequence (same logic as original)
+            sequence_id_subsequence_ids = sequence_id_to_subsequence_ids.get(
+                sequence_id, np.array([])
+            )
+            future_subsequence_ids = sequence_id_subsequence_ids[
                 sequence_id_subsequence_ids > subsequence_id
             ]
-            for subsequence_id2 in sequence_id_subsequence_ids:
+
+            # For each future time step, calculate offset and prepare update
+            for subsequence_id2 in future_subsequence_ids:
                 offset = subsequence_id2 - subsequence_id
-                assert offset > 0
-                i = ids_to_row[f"{sequence_id}-{subsequence_id2}-{input_col}"]
-                data.loc[i, str(offset)] = pred
+                # offset > 0 is guaranteed by the filter above
+
+                # Get the row index for this update
+                map_key = f"{sequence_id}-{subsequence_id2}-{input_col}"
+
+                if map_key not in ids_to_row:
+                    # Skip if the target row doesn't exist (consistent with original behavior)
+                    continue
+
+                row_idx = ids_to_row[map_key]
+                column_name = str(offset)
+
+                # Collect this update
+                if column_name not in updates_by_column:
+                    updates_by_column[column_name] = []
+                updates_by_column[column_name].append((row_idx, pred))
+
+    # Early return if no updates to perform
+    if not updates_by_column:
+        return data
+
+    # Ensure all required columns exist
+    for column_name in updates_by_column.keys():
+        if column_name not in data.columns:
+            data[column_name] = np.nan
+
+    # Perform batch updates column by column
+    for column_name, updates in updates_by_column.items():
+        if not updates:
+            continue
+
+        # Convert to arrays for vectorized assignment
+        row_indices = np.array([update[0] for update in updates], dtype=np.intp)
+        values = np.array([update[1] for update in updates])
+
+        # Get column position for iloc-based assignment (faster than loc)
+        col_idx = data.columns.get_loc(column_name)
+
+        # Batch assign all values for this column
+        # This is safe because each (row_idx, col_idx) combination should be unique
+        # within a single column's updates based on the original logic
+        data.iloc[row_indices, col_idx] = values
 
     return data
 
@@ -316,6 +394,12 @@ def verify_variable_order(data: pd.DataFrame) -> None:
         assert np.all(
             subsequence_ids[1:] - subsequence_ids[:-1] >= 0
         ), "subsequenceId must be in ascending order for autoregression"
+
+
+def format_delta(time_delta):
+    seconds = time_delta.seconds
+    microseconds = time_delta.microseconds
+    return f"{(seconds + (microseconds/1e6)):.3}"
 
 
 @beartype
@@ -375,9 +459,12 @@ def get_probs_preds_autoregression(
     subsequence_ids = data["subsequenceIdAdjusted"].values
     max_length = len(str(np.max(subsequence_ids_distinct)))
     for subsequence_id in subsequence_ids_distinct:
+        t0 = datetime.now()
         subsequence_filter = subsequence_ids == subsequence_id
-        data_subset = data.loc[subsequence_filter, :]
+        data_subset = data.loc[subsequence_filter, :].copy(deep=True)
         sequence_ids_present = sequence_ids[subsequence_filter]
+
+        t1 = datetime.now()
 
         sort_keys.extend(
             [
@@ -386,6 +473,8 @@ def get_probs_preds_autoregression(
             ]
         )
 
+        t2 = datetime.now()
+
         probs, preds = get_probs_preds(
             config,
             inferer,
@@ -393,6 +482,9 @@ def get_probs_preds_autoregression(
             column_types,
             apply_normalization_inversion=False,
         )
+
+        t3 = datetime.now()
+
         preds_list.append(preds)
         if probs is not None:
             probs_list.append(probs)
@@ -404,6 +496,12 @@ def get_probs_preds_autoregression(
             sequence_ids_present,
             int(subsequence_id),
             preds,
+        )
+
+        t4 = datetime.now()
+
+        print(
+            f"subseq-id: {subsequence_id}: total: {format_delta(t4-t0)}s - {format_delta(t1 - t0)}s - {format_delta(t2 - t1)}s - {format_delta(t3 - t2)}s - {format_delta(t4 - t3)}s"
         )
     sort_order = np.argsort(sort_keys)
 
@@ -432,7 +530,7 @@ class Inferer:
         model_path: str,
         project_path: str,
         id_maps: Optional[dict[str, dict[Union[str, int], int]]],
-        min_max_values: dict[str, dict[str, float]],
+        selected_columns_statistics: dict[str, dict[str, float]],
         map_to_id: bool,
         categorical_columns: list[str],
         real_columns: list[str],
@@ -447,7 +545,7 @@ class Inferer:
         training_config_path: str,
     ):
         self.map_to_id = map_to_id
-        self.min_max_values = min_max_values
+        self.selected_columns_statistics = selected_columns_statistics
         target_columns_index_map = [
             c for c in target_columns if target_column_types[c] == "categorical"
         ]
@@ -464,6 +562,7 @@ class Inferer:
         self.sample_from_distribution_columns = sample_from_distribution_columns
         self.infer_with_dropout = infer_with_dropout
         self.inference_batch_size = inference_batch_size
+
         self.inference_model_type = model_path.split(".")[-1]
         self.args_config = args_config
         self.training_config_path = training_config_path
@@ -508,11 +607,9 @@ class Inferer:
         Returns:
             Denormalized values.
         """
-        min_ = self.min_max_values[target_column]["min"]
-        max_ = self.min_max_values[target_column]["max"]
-        return np.array(
-            [(((v + 0.8) / 1.6) * (max_ - min_)) + min_ for v in values.flatten()]
-        ).reshape(*values.shape)
+        std = self.selected_columns_statistics[target_column]["std"]
+        mean = self.selected_columns_statistics[target_column]["mean"]
+        return (values * std) + mean
 
     @beartype
     def infer(

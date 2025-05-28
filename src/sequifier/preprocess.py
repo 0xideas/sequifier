@@ -58,10 +58,12 @@ class Preprocessor:
         data_columns = [
             col for col in data.columns if col not in ["sequenceId", "itemPosition"]
         ]
-        n_classes, id_maps, min_max_values, col_types = self._process_columns(
-            data, data_columns
+        n_classes, id_maps, selected_columns_statistics, col_types = (
+            self._process_columns(data, data_columns)
         )
-        self._export_metadata(id_maps, n_classes, col_types, min_max_values)
+        self._export_metadata(
+            id_maps, n_classes, col_types, selected_columns_statistics
+        )
 
         data = data.sort_values(["sequenceId", "itemPosition"])
         self._process_batches(
@@ -131,7 +133,7 @@ class Preprocessor:
         dict[str, str],
     ]:
         n_classes, id_maps = {}, {}
-        min_max_values = {}
+        selected_columns_statistics = {}
         float_data_columns = []
 
         for data_col in data_columns:
@@ -141,20 +143,16 @@ class Preprocessor:
                 id_maps[data_col] = dict(sup_id_map)
                 n_classes[data_col] = len(np.unique(data[data_col])) + 1
             elif dtype == "float64":
-                min_val, max_val = (
-                    np.min(data[data_col].values),
-                    np.max(data[data_col].values),
-                )
-                data[data_col] = (
-                    ((data[data_col] - min_val) / (max_val - min_val)) * 1.6
-                ) - 0.8
-                min_max_values[data_col] = {"min": min_val, "max": max_val}
+                std = data[data_col].std()
+                mean = data[data_col].mean()
+                data[data_col] = (data[data_col].values - mean) / std
+                selected_columns_statistics[data_col] = {"std": std, "mean": mean}
                 float_data_columns.append(data_col)
             else:
                 raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
 
         col_types = {col: str(data[col].dtype) for col in data_columns}
-        return n_classes, id_maps, min_max_values, col_types
+        return n_classes, id_maps, selected_columns_statistics, col_types
 
     @beartype
     def _process_batches(
@@ -207,14 +205,14 @@ class Preprocessor:
         id_maps: dict[str, dict[Union[str, int], int]],
         n_classes: dict[str, int],
         col_types: dict[str, str],
-        min_max_values: dict[str, dict[str, float]],
+        selected_columns_statistics: dict[str, dict[str, float]],
     ) -> None:
         data_driven_config = {
             "n_classes": n_classes,
             "id_maps": id_maps,
             "split_paths": self.split_paths,
             "column_types": col_types,
-            "min_max_values": min_max_values,
+            "selected_columns_statistics": selected_columns_statistics,
         }
         os.makedirs(
             os.path.join(self.project_path, "configs", "ddconfigs"), exist_ok=True
