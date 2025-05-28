@@ -461,7 +461,7 @@ def get_probs_preds_autoregression(
     for subsequence_id in subsequence_ids_distinct:
         t0 = datetime.now()
         subsequence_filter = subsequence_ids == subsequence_id
-        data_subset = data.loc[subsequence_filter, :]
+        data_subset = data.loc[subsequence_filter, :].copy(deep=True)
         sequence_ids_present = sequence_ids[subsequence_filter]
 
         t1 = datetime.now()
