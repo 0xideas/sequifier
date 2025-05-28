@@ -386,6 +386,7 @@ def get_probs_preds_autoregression(
     subsequence_ids = data["subsequenceIdAdjusted"].values
     max_length = len(str(np.max(subsequence_ids_distinct)))
     for subsequence_id in subsequence_ids_distinct:
+        print(f"inferring for {subsequence_id}")
         subsequence_filter = subsequence_ids == subsequence_id
         data_subset = data.loc[subsequence_filter, :]
         sequence_ids_present = sequence_ids[subsequence_filter]
