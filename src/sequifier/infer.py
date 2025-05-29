@@ -609,7 +609,7 @@ class Inferer:
         """
         std = self.selected_columns_statistics[target_column]["std"]
         mean = self.selected_columns_statistics[target_column]["mean"]
-        return (values * std) + mean
+        return (values * (std - 1e-9)) + mean
 
     @beartype
     def infer(
