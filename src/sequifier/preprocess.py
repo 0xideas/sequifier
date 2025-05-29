@@ -145,7 +145,7 @@ class Preprocessor:
             elif dtype == "float64":
                 std = data[data_col].std()
                 mean = data[data_col].mean()
-                data[data_col] = (data[data_col].values - mean) / std
+                data[data_col] = (data[data_col].values - mean) / (std + 1e-9)
                 selected_columns_statistics[data_col] = {"std": std, "mean": mean}
                 float_data_columns.append(data_col)
             else:
