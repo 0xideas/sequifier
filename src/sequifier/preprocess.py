@@ -50,6 +50,10 @@ class Preprocessor:
         np.random.seed(seed)
 
         self._setup_directories()
+
+        if selected_columns is not None:
+            selected_columns = ["sequenceId", "itemPosition"] + selected_columns
+
         data = self._load_and_preprocess_data(
             data_path, read_format, selected_columns, max_rows
         )
