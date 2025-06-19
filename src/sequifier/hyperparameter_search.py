@@ -119,3 +119,11 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
         model = torch.compile(TransformerModel(config).to(config.training_spec.device))
 
         model.train_model(X_train, y_train, X_valid, y_valid)
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            print("CUDA cache emptied.")
+
+        import gc
+
+        gc.collect()
