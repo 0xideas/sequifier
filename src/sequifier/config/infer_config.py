@@ -29,10 +29,10 @@ def load_inferer_config(
     config_values.update(args_config)
 
     if not on_unprocessed:
-        dd_config_path = config_values.get("ddconfig_path")
+        ddconfig_path = config_values.get("ddconfig_path")
 
         with open(
-            normalize_path(dd_config_path, config_values["project_path"]), "r"
+            normalize_path(ddconfig_path, config_values["project_path"]), "r"
         ) as f:
             dd_config = json.load(f)
 

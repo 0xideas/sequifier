@@ -1,4 +1,5 @@
 import os
+import subprocess
 from datetime import datetime
 
 import numpy as np
@@ -66,4 +67,19 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
                 )
             )
 
-        os.system(f"sequifier train --config-path={full_config_path}")
+        print(f"--- Starting Hyperparameter Search Run {i} ---")
+        try:
+            # This is the recommended way to run the command.
+            # It waits for the command to complete.
+            # `check=True` will raise an exception if the training fails.
+            subprocess.run(
+                ["sequifier", "train", f"--config-path={full_config_path}"], check=True
+            )
+        except subprocess.CalledProcessError as e:
+            print(
+                f"!!! ERROR: Run {i} failed with exit code {e.returncode}. Stopping hyperparameter search. !!!"
+            )
+        except Exception as e:
+            raise e
+
+        print(f"--- Finished Hyperparameter Search Run {i} ---")
