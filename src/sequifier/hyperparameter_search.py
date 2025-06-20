@@ -11,12 +11,8 @@ torch._dynamo.config.suppress_errors = True
 from sequifier.config.hyperparameter_search_config import (  # noqa: E402
     load_hyperparameter_search_config,
 )
-from sequifier.helpers import PANDAS_TO_TORCH_TYPES  # noqa: E402
 from sequifier.helpers import normalize_path  # noqa: E402
-from sequifier.helpers import read_data  # noqa: E402
-from sequifier.helpers import numpy_to_pytorch, subset_to_selected_columns  # noqa: E402
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
-from sequifier.train import TransformerModel  # noqa: E402
 
 
 @beartype
@@ -56,13 +52,11 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
             hyperparameter_search_config.model_config_write_path,
             hyperparameter_search_config.project_path,
         )
-        with open(
-            os.path.join(
-                normalized_config_path,
-                f"{hyperparameter_search_config.model_name_root}-run-{i}.yaml",
-            ),
-            "w",
-        ) as f:
+        full_config_path = os.path.join(
+            normalized_config_path,
+            f"{hyperparameter_search_config.model_name_root}-run-{i}.yaml",
+        )
+        with open(full_config_path, "w") as f:
             f.write(
                 yaml.dump(
                     config,
@@ -72,58 +66,4 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
                 )
             )
 
-        column_types = {
-            col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
-            for col in config.column_types
-        }
-
-        data_train = read_data(
-            normalize_path(config.training_data_path, config.project_path),
-            config.read_format,
-        )
-        if config.selected_columns is not None:
-            data_train = subset_to_selected_columns(data_train, config.selected_columns)
-
-        X_train, y_train = numpy_to_pytorch(
-            data_train,
-            column_types,
-            config.selected_columns,
-            config.target_columns,
-            config.seq_length,
-            config.training_spec.device,
-            to_device=False,
-        )
-        del data_train
-
-        data_valid = read_data(
-            normalize_path(config.validation_data_path, config.project_path),
-            config.read_format,
-        )
-        if config.selected_columns is not None:
-            data_valid = subset_to_selected_columns(data_valid, config.selected_columns)
-
-        X_valid, y_valid = numpy_to_pytorch(
-            data_valid,
-            column_types,
-            config.selected_columns,
-            config.target_columns,
-            config.seq_length,
-            config.training_spec.device,
-            to_device=False,
-        )
-        del data_valid
-
-        torch.manual_seed(config.seed)
-        np.random.seed(config.seed)
-
-        model = torch.compile(TransformerModel(config).to(config.training_spec.device))
-
-        model.train_model(X_train, y_train, X_valid, y_valid)
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            print("CUDA cache emptied.")
-
-        import gc
-
-        gc.collect()
+        os.system(f"sequifier train --config-path={full_config_path}")
