@@ -120,7 +120,7 @@ def load_train_config(
     config_values.update(args_config)
 
     if not on_unprocessed:
-        dd_config_path = config_values.pop("ddconfig_path")
+        dd_config_path = config_values.get("ddconfig_path")
 
         with open(
             normalize_path(dd_config_path, config_values["project_path"]), "r"
@@ -259,6 +259,7 @@ class TrainModel(BaseModel):
     """Pydantic model for training configuration."""
 
     project_path: str
+    dd_config_path: str
     model_name: str
     training_data_path: str
     validation_data_path: str
