@@ -24,10 +24,10 @@ def load_hyperparameter_search_config(
         config_values = yaml.safe_load(f)
 
     if not on_unprocessed:
-        dd_config_path = config_values.pop("ddconfig_path")
+        ddconfig_path = config_values.get("ddconfig_path")
 
         with open(
-            normalize_path(dd_config_path, config_values["project_path"]), "r"
+            normalize_path(ddconfig_path, config_values["project_path"]), "r"
         ) as f:
             dd_config = json.loads(f.read())
 
@@ -269,6 +269,7 @@ class HyperparameterSearch(BaseModel):
     """Pydantic model for training configuration."""
 
     project_path: str
+    ddconfig_path: str
     model_name_root: str
     search_strategy: str = "sample"  # "sample" or "grid"
     n_samples: Optional[int]
@@ -312,6 +313,7 @@ class HyperparameterSearch(BaseModel):
         print(f"{selected_columns_index = } - {seq_length = }")
         return TrainModel(
             project_path=self.project_path,
+            ddconfig_path=self.ddconfig_path,
             model_name=self.model_name_root + f"-run-{i}",
             training_data_path=self.training_data_path,
             validation_data_path=self.validation_data_path,
