@@ -381,11 +381,13 @@ class TransformerModel(nn.Module):
             if (
                 self.early_stopping_epochs is None
                 or n_epochs_no_improvement < self.early_stopping_epochs
+                or (epoch > self.start_epoch and not np.isnan(total_loss))  # type: ignore # noqa: F821
             ):
                 epoch_start_time = time.time()
                 self._train_epoch(X_train, y_train, epoch)
                 total_loss, total_losses, output = self._evaluate(X_valid, y_valid)
                 elapsed = time.time() - epoch_start_time
+
                 self._log_epoch_results(
                     epoch, elapsed, total_loss, total_losses, output
                 )
@@ -756,6 +758,7 @@ class TransformerModel(nn.Module):
         output: dict[str, Tensor],
     ) -> None:
         lr = self.optimizer.state_dict()["param_groups"][0]["lr"]
+
         self.log_file.write("-" * 89)
         self.log_file.write(
             f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | lr: {lr} | "
