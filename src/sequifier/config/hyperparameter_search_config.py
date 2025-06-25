@@ -91,7 +91,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     lr: list[float]
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
-    accumulation_steps: Optional[int] = None
+    accumulation_steps: list[int]
     dropout: list[float] = [0.0]
     loss_weights: Optional[dict[str, float]] = None
     optimizer: list[DotDict] = Field(
@@ -128,6 +128,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         optimizer_index = np.random.randint(len(self.optimizer))
         batch_size = np.random.choice(self.batch_size)
         dropout = np.random.choice(self.dropout)
+        accumulation_steps = np.random.choice(self.accumulation_steps)
         optimizer = self.optimizer[optimizer_index]
         lr = self.lr[lr_and_scheduler_index]
 
@@ -144,7 +145,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             lr=lr,
             criterion=self.criterion,
             class_weights=self.class_weights,
-            accumulation_steps=self.accumulation_steps,
+            accumulation_steps=accumulation_steps,
             dropout=dropout,
             loss_weights=self.loss_weights,
             optimizer=optimizer,
@@ -159,9 +160,10 @@ class TrainingSpecHyperparameterSampling(BaseModel):
                     self.batch_size,
                     self.dropout,
                     self.optimizer,
+                    self.accumulation_steps,
                 )
             )
-        lr_and_scheduler_index, batch_size, dropout, optimizer = (
+        lr_and_scheduler_index, batch_size, dropout, optimizer, accumulation_steps = (
             self.hyperparamter_combinations[i]
         )
 
@@ -180,7 +182,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             lr=lr,
             criterion=self.criterion,
             class_weights=self.class_weights,
-            accumulation_steps=self.accumulation_steps,
+            accumulation_steps=accumulation_steps,
             dropout=dropout,
             loss_weights=self.loss_weights,
             optimizer=optimizer,
@@ -193,6 +195,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             * len(self.batch_size)
             * len(self.dropout)
             * len(self.optimizer)
+            * len(self.accumulation_steps)
         )
 
 
