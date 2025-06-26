@@ -121,6 +121,10 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         assert (
             len(values["lr"]) == len(v)
         ), "lr and scheduler must have the same number of candidate values, that are paired"
+
+        assert (
+            len(values["epochs"]) == len(v)
+        ), "epochs and scheduler must have the same number of candidate values, that are paired"
         return v
 
     def random_sample(self):
