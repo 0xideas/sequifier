@@ -277,7 +277,7 @@ class HyperparameterSearch(BaseModel):
 
     project_path: str
     ddconfig_path: str
-    model_name_root: str
+    hp_search_name: str
     search_strategy: str = "sample"  # "sample" or "grid"
     n_samples: Optional[int]
     model_config_write_path: str
@@ -321,7 +321,7 @@ class HyperparameterSearch(BaseModel):
         return TrainModel(
             project_path=self.project_path,
             ddconfig_path=self.ddconfig_path,
-            model_name=self.model_name_root + f"-run-{i}",
+            model_name=self.hp_search_name + f"-run-{i}",
             training_data_path=self.training_data_path,
             validation_data_path=self.validation_data_path,
             read_format=self.read_format,
@@ -366,7 +366,7 @@ class HyperparameterSearch(BaseModel):
 
         return TrainModel(
             project_path=self.project_path,
-            model_name=self.model_name_root + f"-run-{i}",
+            model_name=self.hp_search_name + f"-run-{i}",
             training_data_path=self.training_data_path,
             validation_data_path=self.validation_data_path,
             read_format=self.read_format,
