@@ -125,7 +125,7 @@ class HyperparameterSearcher:
                     "sequifier",
                     "train",
                     f"--config-path={full_config_path}",
-                    f"--seed {seed}",
+                    f"--seed={seed}",
                 ],
                 check=True,
             )
