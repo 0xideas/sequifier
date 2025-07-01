@@ -29,7 +29,7 @@ def build_args_config(args: Any) -> dict[str, Any]:
         if args.randomize:
             seed = np.random.choice(np.arange(int(1e9)))
             args_config["seed"] = seed
-        elif args.seed:
+        elif args.command == "train" and args.seed:
             args_config["seed"] = args.seed
         else:
             args_config["seed"] = 1010
