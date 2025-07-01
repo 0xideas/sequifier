@@ -29,7 +29,7 @@ def build_args_config(args: Any) -> dict[str, Any]:
         if args.randomize:
             seed = np.random.choice(np.arange(int(1e9)))
             args_config["seed"] = seed
-        elif args.command == "train" and args.seed:
+        elif args.command in ["train", "infer"] and args.seed:
             args_config["seed"] = args.seed
         else:
             args_config["seed"] = 1010
@@ -92,6 +92,7 @@ def setup_parser() -> ArgumentParser:
     parser_train.add_argument("-mn", "--model-name", type=str)
     parser_train.add_argument("-s", "--seed", type=int)
     parser_infer.add_argument("-imp", "--model-path", type=str)
+    parser_infer.add_argument("-s", "--seed", type=int)
 
     return parser
 
