@@ -363,6 +363,7 @@ class HyperparameterSearch(BaseModel):
 
         return TrainModel(
             project_path=self.project_path,
+            ddconfig_path=self.ddconfig_path,
             model_name=self.hp_search_name + f"-run-{i}",
             training_data_path=self.training_data_path,
             validation_data_path=self.validation_data_path,
