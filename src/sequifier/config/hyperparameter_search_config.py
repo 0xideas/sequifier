@@ -157,18 +157,17 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         )
 
     def grid_sample(self, i):
-        if not hasattr(self, "hyperparamter_combinations"):
-            self.hyperparamter_combinations = list(
-                product(
-                    np.arange(len(self.lr)),
-                    self.batch_size,
-                    self.dropout,
-                    self.optimizer,
-                    self.accumulation_steps,
-                )
+        hyperparameter_combinations = list(
+            product(
+                np.arange(len(self.lr)),
+                self.batch_size,
+                self.dropout,
+                self.optimizer,
+                self.accumulation_steps,
             )
+        )
         lr_and_scheduler_index, batch_size, dropout, optimizer, accumulation_steps = (
-            self.hyperparamter_combinations[i]
+            hyperparameter_combinations[i]
         )
 
         lr = self.lr[lr_and_scheduler_index]
@@ -245,12 +244,11 @@ class ModelSpecHyperparameterSampling(BaseModel):
         )
 
     def grid_sample(self, i):
-        if not hasattr(self, "hyperparamter_combinations"):
-            self.hyperparamter_combinations = list(
-                product(np.arange(len(self.d_model)), self.d_hid, self.nlayers)
-            )
+        hyperparameter_combinations = list(
+            product(np.arange(len(self.d_model)), self.d_hid, self.nlayers)
+        )
 
-        d_model_index, d_hid, nlayers = self.hyperparamter_combinations[i]
+        d_model_index, d_hid, nlayers = hyperparameter_combinations[i]
         d_model = self.d_model[d_model_index]
         print(f"{d_model = } - {d_hid = } - {nlayers = }")
 
@@ -357,15 +355,15 @@ class HyperparameterSearch(BaseModel):
         model_spec = self.model_hyperparameter_sampling.grid_sample(i_model)
         training_spec = self.training_hyperparameter_sampling.grid_sample(i_training)
 
-        if not hasattr(self, "hyperparamter_combinations"):
-            self.hyperparamter_combinations = list(
-                product(np.arange(len(self.selected_columns)), self.seq_length)
-            )
+        hyperparameter_combinations = list(
+            product(np.arange(len(self.selected_columns)), self.seq_length)
+        )
 
-        selected_columns_index, seq_length = self.hyperparamter_combinations[i_outer]
+        selected_columns_index, seq_length = hyperparameter_combinations[i_outer]
 
         return TrainModel(
             project_path=self.project_path,
+            ddconfig_path=self.ddconfig_path,
             model_name=self.hp_search_name + f"-run-{i}",
             training_data_path=self.training_data_path,
             validation_data_path=self.validation_data_path,
