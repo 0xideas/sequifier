@@ -157,18 +157,17 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         )
 
     def grid_sample(self, i):
-        if not hasattr(self, "hyperparameter_combinations"):
-            self.hyperparameter_combinations = list(
-                product(
-                    np.arange(len(self.lr)),
-                    self.batch_size,
-                    self.dropout,
-                    self.optimizer,
-                    self.accumulation_steps,
-                )
+        hyperparameter_combinations = list(
+            product(
+                np.arange(len(self.lr)),
+                self.batch_size,
+                self.dropout,
+                self.optimizer,
+                self.accumulation_steps,
             )
+        )
         lr_and_scheduler_index, batch_size, dropout, optimizer, accumulation_steps = (
-            self.hyperparameter_combinations[i]
+            hyperparameter_combinations[i]
         )
 
         lr = self.lr[lr_and_scheduler_index]
@@ -356,12 +355,11 @@ class HyperparameterSearch(BaseModel):
         model_spec = self.model_hyperparameter_sampling.grid_sample(i_model)
         training_spec = self.training_hyperparameter_sampling.grid_sample(i_training)
 
-        if not hasattr(self, "hyperparameter_combinations"):
-            self.hyperparameter_combinations = list(
-                product(np.arange(len(self.selected_columns)), self.seq_length)
-            )
+        hyperparameter_combinations = list(
+            product(np.arange(len(self.selected_columns)), self.seq_length)
+        )
 
-        selected_columns_index, seq_length = self.hyperparameter_combinations[i_outer]
+        selected_columns_index, seq_length = hyperparameter_combinations[i_outer]
 
         return TrainModel(
             project_path=self.project_path,
