@@ -30,3 +30,17 @@ sequifier train --config-path=tests/configs/train-test-real.yaml --ddconfig-path
 sequifier infer --config-path=tests/configs/infer-test-real.yaml --ddconfig-path=configs/ddconfigs/test-data-real-3.json --model-path=models/sequifier-model-real-3-best-3.pt --data-path=data/test-data-real-3-split1.parquet --selected-columns=itemValue,sup1,sup2
 
 
+#50 dims
+sequifier preprocess --config-path=tests/configs/preprocess-test-categorical.yaml --data-path=tests/resources/test-data-categorical-50.csv --selected-columns=itemId,sup1,sup2,sup3,sup4,sup5,sup6,sup7,sup8,sup9,sup10,sup11,sup12,sup13,sup14,sup15,sup16,sup17,sup18,sup19,sup20,sup21,sup22,sup23,sup24,sup25,sup26,sup27,sup28,sup29,sup30,sup31,sup32,sup33,sup34,sup35,sup36,sup37,sup38,sup39,sup40,sup41,sup42,sup43,sup44,sup45,sup46,sup47,sup48,sup49
+
+sequifier train --config-path=tests/configs/train-test-categorical.yaml --ddconfig-path=configs/ddconfigs/test-data-categorical-50.json --model-name=model-categorical-50 --selected-columns=itemId,sup1,sup2,sup3,sup4,sup5,sup6,sup7,sup8,sup9,sup10,sup11,sup12,sup13,sup14,sup15,sup16,sup17,sup18,sup19,sup20,sup21,sup22,sup23,sup24,sup25,sup26,sup27,sup28,sup29,sup30,sup31,sup32,sup33,sup34,sup35,sup36,sup37,sup38,sup39,sup40,sup41,sup42,sup43,sup44,sup45,sup46,sup47,sup48,sup49
+
+sequifier infer --config-path=tests/configs/infer-test-categorical.yaml --ddconfig-path=configs/ddconfigs/test-data-categorical-50.json --model-path=models/sequifier-model-categorical-50-best-3.onnx --data-path=tests/project_folder/data/test-data-categorical-50-split2.parquet --selected-columns=itemId,sup1,sup2,sup3,sup4,sup5,sup6,sup7,sup8,sup9,sup10,sup11,sup12,sup13,sup14,sup15,sup16,sup17,sup18,sup19,sup20,sup21,sup22,sup23,sup24,sup25,sup26,sup27,sup28,sup29,sup30,sup31,sup32,sup33,sup34,sup35,sup36,sup37,sup38,sup39,sup40,sup41,sup42,sup43,sup44,sup45,sup46,sup47,sup48,sup49
+
+
+
+sequifier preprocess --config-path=tests/configs/preprocess-test-real.yaml --data-path=tests/resources/test-data-real-50.csv --selected-columns=itemValue,sup1,sup2,sup3,sup4,sup5,sup6,sup7,sup8,sup9,sup10,sup11,sup12,sup13,sup14,sup15,sup16,sup17,sup18,sup19,sup20,sup21,sup22,sup23,sup24,sup25,sup26,sup27,sup28,sup29,sup30,sup31,sup32,sup33,sup34,sup35,sup36,sup37,sup38,sup39,sup40,sup41,sup42,sup43,sup44,sup45,sup46,sup47,sup48,sup49
+
+sequifier train --config-path=tests/configs/train-test-real.yaml --ddconfig-path=configs/ddconfigs/test-data-real-50.json --model-name=model-real-50 --selected-columns=itemValue,sup1,sup2,sup3,sup4,sup5,sup6,sup7,sup8,sup9,sup10,sup11,sup12,sup13,sup14,sup15,sup16,sup17,sup18,sup19,sup20,sup21,sup22,sup23,sup24,sup25,sup26,sup27,sup28,sup29,sup30,sup31,sup32,sup33,sup34,sup35,sup36,sup37,sup38,sup39,sup40,sup41,sup42,sup43,sup44,sup45,sup46,sup47,sup48,sup49
+
+sequifier infer --config-path=tests/configs/infer-test-real.yaml --ddconfig-path=configs/ddconfigs/test-data-real-50.json --model-path=models/sequifier-model-real-50-best-3.onnx --data-path=tests/project_folder/data/test-data-real-50-split1.parquet --selected-columns=itemValue,sup1,sup2,sup3,sup4,sup5,sup6,sup7,sup8,sup9,sup10,sup11,sup12,sup13,sup14,sup15,sup16,sup17,sup18,sup19,sup20,sup21,sup22,sup23,sup24,sup25,sup26,sup27,sup28,sup29,sup30,sup31,sup32,sup33,sup34,sup35,sup36,sup37,sup38,sup39,sup40,sup41,sup42,sup43,sup44,sup45,sup46,sup47,sup48,sup49
