@@ -857,15 +857,21 @@ def infer_with_model(
     size: int,
     target_columns: list[str],
 ) -> dict[str, np.ndarray]:
-    outs0 = [
-        model.forward(
-            {col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()}
-        )
-        for x_sub in x
-    ]
+    outs0 = []
+    with torch.no_grad():
+        for x_sub in x:
+            data_gpu = {
+                col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()
+            }
+            output_gpu = model.forward(data_gpu)
+            output_cpu = {k: v.cpu().detach() for k, v in output_gpu.items()}
+            outs0.append(output_cpu)
+            if device == "cuda":
+                torch.cuda.empty_cache()
+
     outs = {
         target_column: np.concatenate(
-            [o[target_column].cpu().detach().numpy() for o in outs0],
+            [o[target_column].numpy() for o in outs0],
             axis=0,
         )[:size, :]
         for target_column in target_columns
