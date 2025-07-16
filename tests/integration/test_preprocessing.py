@@ -9,7 +9,7 @@ import pytest
 @pytest.fixture()
 def dd_configs(run_preprocessing, project_path):
     dd_configs = {}
-    for data_number in [1, 3, 5]:
+    for data_number in [1, 3, 5, 50]:
         for variant in ["categorical", "real"]:
             file_name = f"test-data-{variant}-{data_number}.json"
             with open(
@@ -70,14 +70,14 @@ def data_splits(project_path, split_groups):
             for i in range(split_groups[variant])
         ]
         for variant in ["categorical", "real"]
-        for j in [1, 3, 5]
+        for j in [1, 3, 5, 50]
     }
 
     return data_split_values
 
 
 def test_preprocessed_data_real(data_splits):
-    for j in [1, 3, 5]:
+    for j in [1, 3, 5, 50]:
         name = f"{j}-real"
         assert len(data_splits[name]) == 2
 
@@ -94,7 +94,7 @@ def test_preprocessed_data_real(data_splits):
 
 
 def test_preprocessed_data_categorical(data_splits):
-    for j in [1, 3, 5]:
+    for j in [1, 3, 5, 50]:
         name = f"{j}-categorical"
         assert len(data_splits[name]) == 3
 

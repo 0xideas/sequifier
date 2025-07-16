@@ -13,7 +13,7 @@ def predictions(run_inference, project_path):
     model_names = [
         f"model-{variant}-{model_number}-best-3"
         for variant in ["categorical", "real"]
-        for model_number in [1, 3, 5]
+        for model_number in [1, 3, 5, 50]
     ]
     model_names += [
         "model-categorical-multitarget-5-best-3",
@@ -43,7 +43,7 @@ def predictions(run_inference, project_path):
 @pytest.fixture()
 def probabilities(run_inference, project_path):
     probs = {}
-    for model_number in [1, 3, 5]:
+    for model_number in [1, 3, 5, 50]:
         model_name = f"model-categorical-{model_number}"
         prediction_path = os.path.join(
             project_path,

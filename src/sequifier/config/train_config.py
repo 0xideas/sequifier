@@ -181,6 +181,7 @@ class TrainingSpecModel(BaseModel):
     """Pydantic model for training specifications."""
 
     device: str
+    device_max_concat_length: int = 12
     epochs: int
     log_interval: int = 10
     class_share_log_columns: list[str] = Field(default_factory=list)

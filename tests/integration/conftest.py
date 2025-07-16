@@ -10,11 +10,13 @@ SELECTED_COLUMNS = {
         1: "itemId",
         3: "itemId,sup1",
         5: "itemId,sup1,sup2,sup4",
+        50: "itemId," + ",".join([f"sup{i}" for i in range(1, 50)]),
     },
     "real": {
         1: "itemValue",
         3: "itemValue,sup1,sup2",
         5: "itemValue,sup1,sup2,sup3,sup4",
+        50: "itemValue," + ",".join([f"sup{i}" for i in range(1, 50)]),
     },
 }
 
@@ -177,7 +179,7 @@ def run_preprocessing(
     format_configs_locally,
     remove_project_path_contents,
 ):
-    for data_number in [1, 3, 5]:
+    for data_number in [1, 3, 5, 50]:
         data_path_cat = os.path.join(
             "tests", "resources", f"test-data-categorical-{data_number}.csv"
         )
@@ -215,7 +217,7 @@ def run_training(
     training_config_path_real,
     training_config_path_cat_multitarget,
 ):
-    for model_number in [1, 3, 5]:
+    for model_number in [1, 3, 5, 50]:
         ddconfig_path_cat = os.path.join(
             "configs", "ddconfigs", f"test-data-categorical-{model_number}.json"
         )
@@ -256,7 +258,7 @@ def run_inference(
     inference_config_path_real,
     inference_config_path_real_autoregression,
 ):
-    for model_number in [1, 3, 5]:
+    for model_number in [1, 3, 5, 50]:
         model_path_cat = os.path.join(
             "models", f"sequifier-model-categorical-{model_number}-best-3.onnx"
         )

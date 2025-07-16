@@ -146,7 +146,6 @@ class TransformerModel(nn.Module):
         self.export_with_dropout = hparams.export_with_dropout
         self.early_stopping_epochs = hparams.training_spec.early_stopping_epochs
         self.hparams = hparams
-
         self.drop = nn.Dropout(hparams.training_spec.dropout)
         self.encoder = ModuleDict()
         self.pos_encoder = ModuleDict()
@@ -206,6 +205,7 @@ class TransformerModel(nn.Module):
                 )
 
         self.device = hparams.training_spec.device
+        self.device_max_concat_length = hparams.training_spec.device_max_concat_length
         self.criterion = self._init_criterion(hparams=hparams)
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
@@ -298,6 +298,19 @@ class TransformerModel(nn.Module):
             self.pos_encoder[col_name].weight.data.normal_(mean=0.0, std=init_std)
 
     @beartype
+    def _recursive_concat(self, srcs: list[Tensor]):
+        if len(srcs) <= self.device_max_concat_length:
+            return torch.cat(srcs, 2)
+        else:
+            srcs_inner = []
+            for start in range(0, len(srcs), self.device_max_concat_length):
+                src = self._recursive_concat(
+                    srcs[start : start + self.device_max_concat_length]
+                )
+                srcs_inner.append(src)
+            return self._recursive_concat(srcs_inner)
+
+    @beartype
     def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
         srcs = []
         for col in self.categorical_columns:
@@ -336,7 +349,7 @@ class TransformerModel(nn.Module):
 
             srcs.append(src_c)
 
-        src2 = torch.cat(srcs, 2)
+        src2 = self._recursive_concat(srcs)
 
         output = self.transformer_encoder(src2, self.src_mask)
         output = {
