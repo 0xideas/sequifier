@@ -434,11 +434,8 @@ class TransformerModel(nn.Module):
         num_batches = math.ceil(
             X_train[self.target_columns[0]].shape[0] / self.batch_size
         )  # any column will do
-        batch_order = list(
-            np.random.choice(
-                np.arange(num_batches), size=num_batches, replace=False
-            ).flatten()
-        )
+        batch_order = torch.randperm(num_batches).tolist()
+
         for batch_count, batch in enumerate(batch_order):
             batch_start = int(batch * self.batch_size)
 
