@@ -12,7 +12,7 @@ def test_checkpoint_files_exists(run_training, project_path):
             [
                 f"model-{model_type}-{j}-epoch-{i}.pt"
                 for model_type in ["categorical", "real"]
-                for j in [1, 3, 5]
+                for j in [1, 3, 5, 50]
                 for i in range(1, 4)
             ]
             + [f"model-categorical-multitarget-5-epoch-{i}.pt" for i in range(1, 4)]
@@ -38,7 +38,7 @@ def test_model_files_exists(run_training, project_path):
                 f"sequifier-model-{model_type}-{j}-{kind}-3.{model_type_format}"
                 for model_type in ["categorical", "real"]
                 for model_type_format in model_type_formats[model_type]
-                for j in [1, 3, 5]
+                for j in [1, 3, 5, 50]
                 for kind in ["best", "last"]
             ]
             + [

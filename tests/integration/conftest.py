@@ -10,13 +10,13 @@ SELECTED_COLUMNS = {
         1: "itemId",
         3: "itemId,sup1",
         5: "itemId,sup1,sup2,sup4",
-        50: "itemId" + ",".join([f"sup{i}" for i in range(1, 50)]),
+        50: "itemId," + ",".join([f"sup{i}" for i in range(1, 50)]),
     },
     "real": {
         1: "itemValue",
         3: "itemValue,sup1,sup2",
         5: "itemValue,sup1,sup2,sup3,sup4",
-        50: "itemId" + ",".join([f"sup{i}" for i in range(1, 50)]),
+        50: "itemValue," + ",".join([f"sup{i}" for i in range(1, 50)]),
     },
 }
 
