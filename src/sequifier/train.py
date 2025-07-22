@@ -394,7 +394,10 @@ class TransformerModel(nn.Module):
             if (
                 self.early_stopping_epochs is None
                 or n_epochs_no_improvement < self.early_stopping_epochs
-                or (epoch > self.start_epoch and not np.isnan(total_loss))  # type: ignore # noqa: F821
+            ) and (
+                epoch == self.start_epoch
+                or epoch > self.start_epoch
+                and not np.isnan(total_loss)  # type: ignore # noqa: F821
             ):
                 epoch_start_time = time.time()
                 self._train_epoch(X_train, y_train, epoch)
