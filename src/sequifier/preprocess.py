@@ -62,7 +62,7 @@ class Preprocessor:
         data_columns = [
             col for col in data.columns if col not in ["sequenceId", "itemPosition"]
         ]
-        n_classes, id_maps, selected_columns_statistics, col_types = (
+        data, n_classes, id_maps, selected_columns_statistics, col_types = (
             self._process_columns(data, data_columns)
         )
         self._export_metadata(
@@ -133,6 +133,7 @@ class Preprocessor:
     def _process_columns(
         self, data: pl.DataFrame, data_columns: list[str]
     ) -> tuple[
+        pl.DataFrame,
         dict[str, int],
         dict[str, dict[Union[str, int], int]],
         dict[str, dict[str, float]],
@@ -162,7 +163,7 @@ class Preprocessor:
                 raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
 
         col_types = {col: str(data.schema[col]) for col in data_columns}
-        return n_classes, id_maps, selected_columns_statistics, col_types
+        return data, n_classes, id_maps, selected_columns_statistics, col_types
 
     @beartype
     def _process_batches(
