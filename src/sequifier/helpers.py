@@ -86,7 +86,7 @@ def subset_to_selected_columns(
 
 @beartype
 def numpy_to_pytorch(
-    data: Union[pd.DataFrame, pl.DataFrame],
+    data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
     selected_columns: list[str],
     target_columns: list[str],
@@ -94,32 +94,44 @@ def numpy_to_pytorch(
     device: str,
     to_device: bool,
 ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
-    """Convert numpy data to PyTorch tensors."""
-    if isinstance(data, pl.DataFrame):
-        data = data.to_pandas()
+    """
+    Converts data from a Polars DataFrame to PyTorch Tensors based on specified columns.
 
+    This function processes a DataFrame that is structured in a "long" format,
+    where one column ('inputCol') identifies the feature or target type, and other
+    columns ('0', '1', '2', ...) contain the sequence data.
+    """
     targets = {}
+    # Define the column names for the target sequences, e.g., ['29', '28', ..., '0']
+    target_seq_cols = [str(c) for c in range(seq_length - 1, -1, -1)]
+
     for target_column in target_columns:
-        target = torch.tensor(
-            data.query(f"inputCol=='{target_column}'")[
-                [str(c) for c in range(seq_length - 1, -1, -1)]
-            ].values
-        ).to(column_types[target_column])
+        # Filter for the target, select sequence columns, and convert to a tensor
+        target_tensor = torch.tensor(
+            data.filter(pl.col("inputCol") == target_column)
+            .select(target_seq_cols)
+            .to_numpy(),
+            dtype=column_types[target_column],
+        )
+
         if to_device:
-            target = target.to(device)
-        targets[target_column] = target
+            target_tensor = target_tensor.to(device)
+        targets[target_column] = target_tensor
 
     sequence = {}
-    for col in selected_columns:
-        f = data["inputCol"].values == col
-        data_subset = data.loc[f, [str(c) for c in range(seq_length, 0, -1)]].values
+    # Define the column names for the input sequences, e.g., ['30', '29', ..., '1']
+    input_seq_cols = [str(c) for c in range(seq_length, 0, -1)]
 
-        tens = torch.tensor(data_subset).to(column_types[col])
+    for col in selected_columns:
+        # Filter for the feature, select sequence columns, and convert to a tensor
+        feature_tensor = torch.tensor(
+            data.filter(pl.col("inputCol") == col).select(input_seq_cols).to_numpy(),
+            dtype=column_types[col],
+        )
 
         if to_device:
-            tens = tens.to(device)
-
-        sequence[col] = tens
+            feature_tensor = feature_tensor.to(device)
+        sequence[col] = feature_tensor
 
     return sequence, targets
 

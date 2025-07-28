@@ -103,7 +103,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
             probs, preds = get_probs_preds(
                 config,
                 inferer,
-                data.to_pandas(),
+                data,
                 column_types,
                 apply_normalization_inversion=False,
             )
@@ -237,7 +237,7 @@ def expand_data_by_autoregression(
 def get_probs_preds(
     config: Any,
     inferer: "Inferer",
-    data: Union[pd.DataFrame, pl.DataFrame],
+    data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
     apply_normalization_inversion: bool = True,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
