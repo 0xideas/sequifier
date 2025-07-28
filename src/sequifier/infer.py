@@ -97,9 +97,9 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         if not config.autoregression:
             # For the non-autoregressive case, the old logic is still needed here
             n_input_cols = data.get_column("inputCol").n_unique()
-            sequence_ids_for_preds = data.get_column("sequenceId").take_every(
-                n_input_cols
-            )
+            mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
+            # Apply the mask to the sequenceId column
+            sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
             probs, preds = get_probs_preds(
                 config,
                 inferer,
