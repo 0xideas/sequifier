@@ -38,7 +38,7 @@ def read_data(
 ) -> pl.DataFrame:
     """Read data from CSV or Parquet file."""
     if read_format == "csv":
-        return pl.read_csv(path, sep=",", decimal=".", index_col=False)
+        return pl.read_csv(path, separator=",")
     if read_format == "parquet":
         return pl.read_parquet(path, columns=columns)
     raise ValueError(f"Unsupported read format: {read_format}")
@@ -59,7 +59,7 @@ def write_data(data: pl.DataFrame, path: str, write_format: str, **kwargs) -> No
         return
 
     if write_format == "csv":
-        data.to_csv(path, sep=",", decimal=".", index=False, **kwargs)
+        data.to_csv(path, separator=",", index=False, **kwargs)
     elif write_format == "parquet":
         data.to_parquet(path)
     else:

@@ -51,9 +51,7 @@ def probabilities(run_inference, project_path):
             "probabilities",
             f"sequifier-{model_name}-best-3-itemId-probabilities.csv",
         )
-        probs[model_name] = pl.read_csv(
-            prediction_path, sep=",", decimal=".", index_col=None
-        )
+        probs[model_name] = pl.read_csv(prediction_path, separator=",")
     return probs
 
 
