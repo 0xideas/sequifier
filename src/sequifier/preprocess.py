@@ -151,7 +151,7 @@ class Preprocessor:
                 data, sup_id_map = replace_ids(data, column=data_col)
                 id_maps[data_col] = dict(sup_id_map)
                 n_classes[data_col] = data.get_column(data_col).n_unique() + 1
-            elif pl.datatypes.is_float_dtype(dtype):
+            elif isinstance(dtype, (pl.Float32, pl.Float64)):
                 std = data.get_column(data_col).std()
                 mean = data.get_column(data_col).mean()
                 data = data.with_columns(

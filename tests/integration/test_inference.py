@@ -60,7 +60,7 @@ def test_predictions_real(predictions):
         assert np.all(
             [
                 v > -10.0 and v < 10.0
-                for v in model_predictions[TARGET_VARIABLE_DICT["real"]].values
+                for v in model_predictions[TARGET_VARIABLE_DICT["real"]].to_numpy()
             ]
         )
 
@@ -71,7 +71,9 @@ def test_predictions_cat(predictions):
         assert np.all(
             [
                 v in valid_values
-                for v in model_predictions[TARGET_VARIABLE_DICT["categorical"]].values
+                for v in model_predictions[
+                    TARGET_VARIABLE_DICT["categorical"]
+                ].to_numpy()
             ]
         ), model_predictions
 
@@ -92,5 +94,9 @@ def test_multi_pred(predictions):
 
     assert preds.shape[0] > 0
     assert preds.shape[1] == 4
-    assert np.all(preds["sup1"].values >= 0) and np.all(preds["sup1"].values < 10)
-    assert np.all(preds["sup3"].values > -4.0) and np.all(preds["sup3"].values < 4.0)
+    assert np.all(preds["sup1"].to_numpy() >= 0) and np.all(
+        preds["sup1"].to_numpy() < 10
+    )
+    assert np.all(preds["sup3"].to_numpy() > -4.0) and np.all(
+        preds["sup3"].to_numpy() < 4.0
+    )
