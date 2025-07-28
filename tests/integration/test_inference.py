@@ -83,7 +83,7 @@ def test_probabilities(probabilities):
         assert model_probabilities.shape[1] == 31
 
         np.testing.assert_almost_equal(
-            model_probabilities.sum(1),
+            model_probabilities.sum_horizontal(),
             np.ones(model_probabilities.shape[0]),
             decimal=5,
         )
