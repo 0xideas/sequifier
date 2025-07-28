@@ -241,7 +241,9 @@ class Preprocessor:
 def replace_ids(
     data: pl.DataFrame, column: str
 ) -> tuple[pl.DataFrame, dict[Union[str, int], int]]:
-    ids = data.get_column(column).unique(maintain_order=False).sort().to_list()
+    ids = sorted(
+        [int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]
+    )  # type: ignore
     id_map = {id_: i + 1 for i, id_ in enumerate(ids)}
     data = data.with_columns(pl.col(column).replace(id_map))
     return data, id_map
