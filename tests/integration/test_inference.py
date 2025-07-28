@@ -1,7 +1,7 @@
 import os
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import pytest
 
 TARGET_VARIABLE_DICT = {"categorical": "itemId", "real": "itemValue"}
@@ -33,8 +33,8 @@ def predictions(run_inference, project_path):
             if target_type == "categorical"
             else None
         )
-        preds[variant][model_name] = pd.read_csv(
-            prediction_path, sep=",", decimal=".", index_col=None, dtype=dtype
+        preds[variant][model_name] = pl.read_csv(
+            prediction_path, separator=",", dtypes=dtype
         )
 
     return preds
@@ -51,7 +51,7 @@ def probabilities(run_inference, project_path):
             "probabilities",
             f"sequifier-{model_name}-best-3-itemId-probabilities.csv",
         )
-        probs[model_name] = pd.read_csv(
+        probs[model_name] = pl.read_csv(
             prediction_path, sep=",", decimal=".", index_col=None
         )
     return probs

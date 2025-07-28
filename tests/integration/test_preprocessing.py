@@ -2,7 +2,7 @@ import json
 import os
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import pytest
 
 
@@ -62,7 +62,7 @@ def test_dd_config(dd_configs):
 def data_splits(project_path, split_groups):
     data_split_values = {
         f"{j}-{variant}": [
-            pd.read_parquet(
+            pl.read_parquet(
                 os.path.join(
                     project_path, "data", f"test-data-{variant}-{j}-split{i}.parquet"
                 )

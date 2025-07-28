@@ -1,7 +1,6 @@
 import json
 
-import numpy as np
-import pandas as pd
+import polars as pl
 
 
 def invert_normalization(values, target_column, selected_columns_statistics):
@@ -29,10 +28,9 @@ def load_column_attributes(ddconfig_path="configs/ddconfigs/data.json"):
 
 
 def load_ground_truth(path, ddconfig_path="configs/ddconfigs/data.json", load_col="0"):
-    y = pd.read_parquet(path)
-    n_cols = len(set(list(y["inputCol"].values)))
-
-    y.index = np.repeat(np.arange(int(y.shape[0] / n_cols)), n_cols)
+    y = pl.read_parquet(path)
+    n_cols = y["inputCol"].n_unique()
+    y = y.with_columns(group_id=pl.int_range(0, pl.count() // n_cols).repeat_by(n_cols))
 
     y2 = y.pivot_table(index=y.index, columns="inputCol", values=load_col)
 
