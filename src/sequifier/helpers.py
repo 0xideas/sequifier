@@ -7,7 +7,12 @@ import torch
 from beartype import beartype
 from torch import Tensor
 
-PANDAS_TO_TORCH_TYPES = {"int64": torch.int64, "float64": torch.float32}
+PANDAS_TO_TORCH_TYPES = {
+    "Int64": torch.int64,
+    "Float64": torch.float32,
+    "int64": torch.int64,
+    "float64": torch.float32,
+}
 
 
 @beartype

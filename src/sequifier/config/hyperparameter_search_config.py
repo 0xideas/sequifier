@@ -44,7 +44,7 @@ def load_hyperparameter_search_config(
             [
                 col
                 for col, type_ in dd_config["column_types"].items()
-                if type_ == "int64" and col in selected_columns
+                if type_ == "Int64" and col in selected_columns
             ]
             for selected_columns in config_values["selected_columns"]
         ]
@@ -53,7 +53,7 @@ def load_hyperparameter_search_config(
             [
                 col
                 for col, type_ in dd_config["column_types"].items()
-                if type_ == "float64" and col in selected_columns
+                if type_ == "Float64" and col in selected_columns
             ]
             for selected_columns in config_values["selected_columns"]
         ]

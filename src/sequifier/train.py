@@ -99,7 +99,7 @@ def format_number(number: Union[int, float, np.float32]) -> str:
     Returns:
         A formatted string representation of the number.
     """
-    if pl.isnull(number):
+    if np.isnan(number):
         return "NaN"
     elif number == 0:
         order_of_magnitude = 0
@@ -254,6 +254,7 @@ class TransformerModel(nn.Module):
         real_columns: list[str],
     ) -> dict[str, int]:
         print(f"{len(categorical_columns) = } {len(real_columns) = }")
+        assert (len(categorical_columns) + len(real_columns)) > 0, "No columns found"
         if len(categorical_columns) == 0 and len(real_columns) > 0:
             d_model_by_column = {col: 1 for col in real_columns}
             column_index = dict(enumerate(real_columns))
