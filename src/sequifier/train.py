@@ -804,13 +804,13 @@ class TransformerModel(nn.Module):
             output_counts_df = (
                 pl.Series("values", output_values).value_counts().sort("values")
             )
-            output_counts = output_counts_df.get_column("counts")
+            output_counts = output_counts_df.get_column("count")
 
             output_counts = output_counts / output_counts.sum()
             value_shares = " | ".join(
                 [
-                    f"{self.index_maps[categorical_column][value]}: {share:5.5f}"
-                    for value, share in output_counts.to_dict().items()
+                    f"{self.index_maps[categorical_column][row['values']]}: {row['count']:5.5f}"
+                    for row in output_counts_df.iter_rows(named=True)
                 ]
             )
             self.log_file.write(f"{categorical_column}: {value_shares}")
