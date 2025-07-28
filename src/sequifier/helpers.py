@@ -2,7 +2,6 @@ import os
 from typing import Optional, Union
 
 import numpy as np
-import pandas as pd
 import polars as pl
 import torch
 from beartype import beartype
@@ -36,19 +35,17 @@ def construct_index_maps(
 @beartype
 def read_data(
     path: str, read_format: str, columns: Optional[list[str]] = None
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """Read data from CSV or Parquet file."""
     if read_format == "csv":
-        return pd.read_csv(path, sep=",", decimal=".", index_col=False)
+        return pl.read_csv(path, sep=",", decimal=".", index_col=False)
     if read_format == "parquet":
-        return pd.read_parquet(path, columns=columns)
+        return pl.read_parquet(path, columns=columns)
     raise ValueError(f"Unsupported read format: {read_format}")
 
 
 @beartype
-def write_data(
-    data: Union[pd.DataFrame, pl.DataFrame], path: str, write_format: str, **kwargs
-) -> None:
+def write_data(data: pl.DataFrame, path: str, write_format: str, **kwargs) -> None:
     """Write data to CSV or Parquet file."""
     if isinstance(data, pl.DataFrame):
         if write_format == "csv":
@@ -71,8 +68,8 @@ def write_data(
 
 @beartype
 def subset_to_selected_columns(
-    data: Union[pd.DataFrame, pl.DataFrame, pl.LazyFrame], selected_columns: list[str]
-) -> Union[pd.DataFrame, pl.DataFrame, pl.LazyFrame]:
+    data: Union[pl.DataFrame, pl.LazyFrame], selected_columns: list[str]
+) -> Union[pl.DataFrame, pl.LazyFrame]:
     """Subset data to selected columns."""
     if isinstance(data, (pl.DataFrame, pl.LazyFrame)):
         return data.filter(pl.col("inputCol").is_in(selected_columns))

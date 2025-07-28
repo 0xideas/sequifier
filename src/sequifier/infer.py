@@ -3,11 +3,9 @@ import os
 import warnings
 from datetime import datetime
 from typing import Any, Optional, Union
-from warnings import simplefilter
 
 import numpy as np
 import onnxruntime
-import pandas as pd
 import polars as pl
 import torch
 from beartype import beartype
@@ -22,8 +20,6 @@ from sequifier.helpers import (
     write_data,
 )
 from sequifier.train import infer_with_model, load_inference_model
-
-simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
 
 @beartype
