@@ -3,6 +3,7 @@ from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import torch
 from beartype import beartype
 from torch import Tensor
@@ -45,8 +46,21 @@ def read_data(
 
 
 @beartype
-def write_data(data: pd.DataFrame, path: str, write_format: str, **kwargs) -> None:
+def write_data(
+    data: Union[pd.DataFrame, pl.DataFrame], path: str, write_format: str, **kwargs
+) -> None:
     """Write data to CSV or Parquet file."""
+    if isinstance(data, pl.DataFrame):
+        if write_format == "csv":
+            data.write_csv(path, **kwargs)
+        elif write_format == "parquet":
+            data.write_parquet(path)
+        else:
+            raise ValueError(
+                f"Unsupported write format for Polars DataFrame: {write_format}"
+            )
+        return
+
     if write_format == "csv":
         data.to_csv(path, sep=",", decimal=".", index=False, **kwargs)
     elif write_format == "parquet":
@@ -57,9 +71,12 @@ def write_data(data: pd.DataFrame, path: str, write_format: str, **kwargs) -> No
 
 @beartype
 def subset_to_selected_columns(
-    data: pd.DataFrame, selected_columns: list[str]
-) -> pd.DataFrame:
+    data: Union[pd.DataFrame, pl.DataFrame, pl.LazyFrame], selected_columns: list[str]
+) -> Union[pd.DataFrame, pl.DataFrame, pl.LazyFrame]:
     """Subset data to selected columns."""
+    if isinstance(data, (pl.DataFrame, pl.LazyFrame)):
+        return data.filter(pl.col("inputCol").is_in(selected_columns))
+
     column_filters = [
         (data["inputCol"].values == input_col) for input_col in selected_columns
     ]
@@ -69,7 +86,7 @@ def subset_to_selected_columns(
 
 @beartype
 def numpy_to_pytorch(
-    data: pd.DataFrame,
+    data: Union[pd.DataFrame, pl.DataFrame],
     column_types: dict[str, torch.dtype],
     selected_columns: list[str],
     target_columns: list[str],
@@ -78,6 +95,9 @@ def numpy_to_pytorch(
     to_device: bool,
 ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     """Convert numpy data to PyTorch tensors."""
+    if isinstance(data, pl.DataFrame):
+        data = data.to_pandas()
+
     targets = {}
     for target_column in target_columns:
         target = torch.tensor(
