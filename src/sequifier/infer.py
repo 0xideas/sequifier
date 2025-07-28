@@ -194,7 +194,9 @@ def expand_data_by_autoregression(
     data = data.sort("sequenceId", "subsequenceId")
 
     # Identify the last observation for each sequence
-    last_obs_lazy = data.lazy().group_by("sequenceId").agg(pl.all().last())
+    last_obs_lazy = data.lazy().filter(
+        pl.col("subsequenceId") == pl.col("subsequenceId").max().over("sequenceId")
+    )
 
     # Generate future rows lazily
     future_frames = []
@@ -260,6 +262,7 @@ def get_probs_preds(
         )
     else:
         probs = None
+
         preds = inferer.infer(
             X, apply_normalization_inversion=apply_normalization_inversion
         )
@@ -276,13 +279,29 @@ def fill_in_predictions_pl(
     seq_length: int,
 ) -> pl.DataFrame:
     """
-    Fill in predictions into the main Polars DataFrame using a declarative,
-    join-based approach.
+    Fills in predictions into the main Polars DataFrame using a robust,
+    join-based approach that preserves the original DataFrame's structure.
+
+    This function broadcasts predictions to all relevant future rows via a join,
+    then uses conditional expressions to update only the specific placeholder
+    cells (`np.inf`) that correspond to the correct future time step.
+
+    Args:
+        data: The main DataFrame containing all sequences.
+        preds: A dictionary of new predictions, mapping target column names to NumPy arrays.
+        current_subsequence_id: The adjusted subsequence ID at which predictions were made.
+        sequence_ids_present: A Polars Series of the sequence IDs in the current batch.
+        seq_length: The length of the sequence.
+
+    Returns:
+        An updated Polars DataFrame with the same dimensions as the input, with
+        future placeholder values filled in.
     """
     if not preds or sequence_ids_present.is_empty():
         return data
 
-    # 1. Create a prediction DataFrame
+    # 1. Create a "long" format DataFrame of the new predictions.
+    # This table has columns [sequenceId, inputCol, prediction].
     pred_dfs = []
     for input_col, pred_values in preds.items():
         if pred_values.size > 0:
@@ -296,41 +315,60 @@ def fill_in_predictions_pl(
                 )
             )
 
+    # If there are no valid predictions to process, return the original data.
     if not pred_dfs:
         return data
 
     preds_df = pl.concat(pred_dfs)
 
-    # 2. Join predictions to the main data frame to map predictions to all future rows
+    # 2. Left-join the predictions onto the main DataFrame.
+    # This adds a 'prediction' column. Rows that don't match the join keys
+    # (e.g., non-target columns) will have a null value for 'prediction'.
+    # A left join guarantees that no rows from the original `data` are dropped.
     data_with_preds = data.join(preds_df, on=["sequenceId", "inputCol"], how="left")
 
-    # 3. Create expressions to update future timesteps
+    # 3. Build a list of conditional update expressions for each future time step.
     update_expressions = []
-
-    # The prediction from `current_subsequence_id` updates column `offset` at row `current_subsequence_id + offset`
     for offset in range(1, seq_length + 1):
         col_to_update = str(offset)
+
+        # Skip if the column to update doesn't exist in the DataFrame.
         if col_to_update not in data.columns:
             continue
 
-        update_expressions.append(
+        # The core logic: A prediction made at `current_subsequence_id` for a given
+        # `offset` should fill the placeholder in column `str(offset)` at the row
+        # where `subsequenceIdAdjusted` is `current_subsequence_id + offset`.
+        update_expr = (
             pl.when(
+                # Condition 1: Is this the correct future row to update?
                 (pl.col("subsequenceIdAdjusted") == current_subsequence_id + offset)
+                # Condition 2: Does the cell contain a placeholder that needs updating?
                 & (pl.col(col_to_update).is_infinite())
+                # Condition 3: Is there a valid prediction available from the join?
                 & (pl.col("prediction").is_not_null())
             )
+            # If all conditions are met, use the new prediction value.
             .then(pl.col("prediction"))
+            # IMPORTANT: Otherwise, keep the column's existing value. This is crucial
+            # for preserving the integrity of the DataFrame.
             .otherwise(pl.col(col_to_update))
+            # Overwrite the original column with the updated values.
             .alias(col_to_update)
         )
+        update_expressions.append(update_expr)
 
-    # 4. Apply updates and clean up
+    # 4. Apply all expressions at once and remove the temporary 'prediction' column.
+    # The `with_columns` operation does not change the number of rows.
     if update_expressions:
-        data = data_with_preds.with_columns(update_expressions).drop("prediction")
+        updated_data = data_with_preds.with_columns(update_expressions).drop(
+            "prediction"
+        )
     else:
-        data = data_with_preds.drop("prediction")
+        # If no updates were needed, just drop the temporary join column.
+        updated_data = data_with_preds.drop("prediction")
 
-    return data
+    return updated_data
 
 
 @beartype
