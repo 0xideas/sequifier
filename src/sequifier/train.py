@@ -8,7 +8,7 @@ import warnings
 from typing import Any, Optional, Union
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import torch
 import torch._dynamo
 from beartype import beartype
@@ -99,7 +99,7 @@ def format_number(number: Union[int, float, np.float32]) -> str:
     Returns:
         A formatted string representation of the number.
     """
-    if pd.isnull(number):
+    if pl.isnull(number):
         return "NaN"
     elif number == 0:
         order_of_magnitude = 0
@@ -800,7 +800,11 @@ class TransformerModel(nn.Module):
 
         for categorical_column in self.class_share_log_columns:
             output_values = output[categorical_column].argmax(1).cpu().detach().numpy()
-            output_counts = pd.Series(output_values).value_counts().sort_index()
+            output_counts_df = (
+                pl.Series("values", output_values).value_counts().sort("values")
+            )
+            output_counts = output_counts_df.get_column("counts")
+
             output_counts = output_counts / output_counts.sum()
             value_shares = " | ".join(
                 [
