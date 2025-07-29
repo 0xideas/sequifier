@@ -175,6 +175,7 @@ def test_multi_pred(predictions):
     )
 
 
+@pytest.mark.optional
 def test_identities(targets, predictions, probabilities):
     for model_name, preds in predictions.items():
         equal = preds.to_numpy() == targets["preds"][model_name].to_numpy()

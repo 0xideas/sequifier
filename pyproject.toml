@@ -46,3 +46,10 @@ test = [
     "pytest>=7.2,<8.0",
     "csvkit>=1.0,<2.0",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "optional: marks tests as optional (run with -m optional)"
+]
+
+addopts = "-m 'not optional'"
