@@ -32,7 +32,7 @@ def load_ground_truth(path, ddconfig_path="configs/ddconfigs/data.json", load_co
     n_cols = y["inputCol"].n_unique()
     y = y.with_columns(group_id=pl.int_range(0, pl.count() // n_cols).repeat_by(n_cols))
 
-    y2 = y.pivot_table(index=y.index, columns="inputCol", values=load_col)
+    y2 = y.pivot(index="group_id", columns="inputCol", values=load_col)
 
     y2["sequenceId"] = y["sequenceId"].values[::n_cols]
 
