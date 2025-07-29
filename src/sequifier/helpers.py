@@ -2,12 +2,17 @@ import os
 from typing import Optional, Union
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import torch
 from beartype import beartype
 from torch import Tensor
 
-PANDAS_TO_TORCH_TYPES = {"int64": torch.int64, "float64": torch.float32}
+PANDAS_TO_TORCH_TYPES = {
+    "Int64": torch.int64,
+    "Float64": torch.float32,
+    "int64": torch.int64,
+    "float64": torch.float32,
+}
 
 
 @beartype
@@ -35,20 +40,31 @@ def construct_index_maps(
 @beartype
 def read_data(
     path: str, read_format: str, columns: Optional[list[str]] = None
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """Read data from CSV or Parquet file."""
     if read_format == "csv":
-        return pd.read_csv(path, sep=",", decimal=".", index_col=False)
+        return pl.read_csv(path, separator=",")
     if read_format == "parquet":
-        return pd.read_parquet(path, columns=columns)
+        return pl.read_parquet(path, columns=columns)
     raise ValueError(f"Unsupported read format: {read_format}")
 
 
 @beartype
-def write_data(data: pd.DataFrame, path: str, write_format: str, **kwargs) -> None:
+def write_data(data: pl.DataFrame, path: str, write_format: str, **kwargs) -> None:
     """Write data to CSV or Parquet file."""
+    if isinstance(data, pl.DataFrame):
+        if write_format == "csv":
+            data.write_csv(path, **kwargs)
+        elif write_format == "parquet":
+            data.write_parquet(path)
+        else:
+            raise ValueError(
+                f"Unsupported write format for Polars DataFrame: {write_format}"
+            )
+        return
+
     if write_format == "csv":
-        data.to_csv(path, sep=",", decimal=".", index=False, **kwargs)
+        data.to_csv(path, separator=",", index=False, **kwargs)
     elif write_format == "parquet":
         data.to_parquet(path)
     else:
@@ -57,9 +73,12 @@ def write_data(data: pd.DataFrame, path: str, write_format: str, **kwargs) -> No
 
 @beartype
 def subset_to_selected_columns(
-    data: pd.DataFrame, selected_columns: list[str]
-) -> pd.DataFrame:
+    data: Union[pl.DataFrame, pl.LazyFrame], selected_columns: list[str]
+) -> Union[pl.DataFrame, pl.LazyFrame]:
     """Subset data to selected columns."""
+    if isinstance(data, (pl.DataFrame, pl.LazyFrame)):
+        return data.filter(pl.col("inputCol").is_in(selected_columns))
+
     column_filters = [
         (data["inputCol"].values == input_col) for input_col in selected_columns
     ]
@@ -69,7 +88,7 @@ def subset_to_selected_columns(
 
 @beartype
 def numpy_to_pytorch(
-    data: pd.DataFrame,
+    data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
     selected_columns: list[str],
     target_columns: list[str],
@@ -77,29 +96,44 @@ def numpy_to_pytorch(
     device: str,
     to_device: bool,
 ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
-    """Convert numpy data to PyTorch tensors."""
+    """
+    Converts data from a Polars DataFrame to PyTorch Tensors based on specified columns.
+
+    This function processes a DataFrame that is structured in a "long" format,
+    where one column ('inputCol') identifies the feature or target type, and other
+    columns ('0', '1', '2', ...) contain the sequence data.
+    """
     targets = {}
+    # Define the column names for the target sequences, e.g., ['29', '28', ..., '0']
+    target_seq_cols = [str(c) for c in range(seq_length - 1, -1, -1)]
+
     for target_column in target_columns:
-        target = torch.tensor(
-            data.query(f"inputCol=='{target_column}'")[
-                [str(c) for c in range(seq_length - 1, -1, -1)]
-            ].values
-        ).to(column_types[target_column])
+        # Filter for the target, select sequence columns, and convert to a tensor
+        target_tensor = torch.tensor(
+            data.filter(pl.col("inputCol") == target_column)
+            .select(target_seq_cols)
+            .to_numpy(),
+            dtype=column_types[target_column],
+        )
+
         if to_device:
-            target = target.to(device)
-        targets[target_column] = target
+            target_tensor = target_tensor.to(device)
+        targets[target_column] = target_tensor
 
     sequence = {}
-    for col in selected_columns:
-        f = data["inputCol"].values == col
-        data_subset = data.loc[f, [str(c) for c in range(seq_length, 0, -1)]].values
+    # Define the column names for the input sequences, e.g., ['30', '29', ..., '1']
+    input_seq_cols = [str(c) for c in range(seq_length, 0, -1)]
 
-        tens = torch.tensor(data_subset).to(column_types[col])
+    for col in selected_columns:
+        # Filter for the feature, select sequence columns, and convert to a tensor
+        feature_tensor = torch.tensor(
+            data.filter(pl.col("inputCol") == col).select(input_seq_cols).to_numpy(),
+            dtype=column_types[col],
+        )
 
         if to_device:
-            tens = tens.to(device)
-
-        sequence[col] = tens
+            feature_tensor = feature_tensor.to(device)
+        sequence[col] = feature_tensor
 
     return sequence, targets
 

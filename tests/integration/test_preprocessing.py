@@ -2,7 +2,7 @@ import json
 import os
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import pytest
 
 
@@ -62,7 +62,7 @@ def test_dd_config(dd_configs):
 def data_splits(project_path, split_groups):
     data_split_values = {
         f"{j}-{variant}": [
-            pd.read_parquet(
+            pl.read_parquet(
                 os.path.join(
                     project_path, "data", f"test-data-{variant}-{j}-split{i}.parquet"
                 )
@@ -86,11 +86,11 @@ def test_preprocessed_data_real(data_splits):
             assert data.shape[1] == (
                 number_expected_columns
             ), f"{name = } - {i = }: {data.shape = } - {data.columns = }"
-            for sequenceId, group in data.groupby("sequenceId"):
+            for sequenceId, group in data.group_by("sequenceId"):
                 # offset by j in either direction as that is the number of columns in the input
                 # data, thus an offset by 1 'observation' requires an offset by j values
-                assert np.all((group["1"].values[:-j] == group["2"].values[j:]))
-                assert np.all((group["5"].values[:-j] == group["6"].values[j:]))
+                assert np.all((group["1"].to_numpy()[:-j] == group["2"].to_numpy()[j:]))
+                assert np.all((group["5"].to_numpy()[:-j] == group["6"].to_numpy()[j:]))
 
 
 def test_preprocessed_data_categorical(data_splits):
@@ -104,12 +104,14 @@ def test_preprocessed_data_categorical(data_splits):
                 number_expected_columns
             ), f"{name = } - {i = }: {data.shape = } - {data.columns = }"
 
-            for sequenceId, group in data.groupby("sequenceId"):
+            for sequenceId, group in data.group_by("sequenceId"):
                 # offset by j in either direction as that is the number of columns in the input
                 # data, thus an offset by 1 'observation' requires an offset by j values
                 assert np.all(
-                    np.abs(group["1"].values[:-j] - group["2"].values[j:]) < 0.0001
-                ), f'{list(group["1"].values[:-j]) = } != {list(group["2"].values[j:]) = }'
+                    np.abs(group["1"].to_numpy()[:-j] - group["2"].to_numpy()[j:])
+                    < 0.0001
+                ), f'{list(group["1"].to_numpy()[:-j]) = } != {list(group["2"].to_numpy()[j:]) = }'
                 assert np.all(
-                    np.abs(group["5"].values[:-j] - group["6"].values[j:]) < 0.0001
-                ), f'{list(group["5"].values[:-j]) = } != {list(group["6"].values[j:]) = }'
+                    np.abs(group["5"].to_numpy()[:-j] - group["6"].to_numpy()[j:])
+                    < 0.0001
+                ), f'{list(group["5"].to_numpy()[:-j]) = } != {list(group["6"].to_numpy()[j:]) = }'
