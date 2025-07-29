@@ -34,7 +34,7 @@ def predictions(run_inference, project_path):
             else None
         )
         preds[variant][model_name] = pl.read_csv(
-            prediction_path, separator=",", dtypes=dtype
+            prediction_path, separator=",", schema_overrides=dtype
         )
 
     return preds

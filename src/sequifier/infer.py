@@ -148,7 +148,12 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
                     print(f"Writing probabilities to {probabilities_path}")
                     # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
                     write_data(
-                        pl.DataFrame(probs[target_column]),
+                        pl.DataFrame(
+                            probs[target_column],
+                            schema=[
+                                str(i) for i in range(probs[target_column].shape[1])
+                            ],
+                        ),
                         probabilities_path,
                         config.write_format,
                     )
