@@ -1,1 +1,5 @@
 pytest -m "optional or not optional"
+
+python -m build
+
+python -m twine upload dist/*

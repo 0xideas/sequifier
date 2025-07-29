@@ -69,9 +69,31 @@ class Preprocessor:
             id_maps, n_classes, col_types, selected_columns_statistics
         )
 
+        schema = {
+            "sequenceId": pl.Int64,
+            "subsequenceId": pl.Int64,
+            "inputCol": pl.String,
+        }
+
+        if (np.unique(list(col_types.values())) == np.array(["Int64"]))[0]:
+            sequence_position_type = pl.Int64
+        else:
+            assert np.all(
+                [
+                    type_.startswith("Int") or type_.startswith("Float")
+                    for type_ in col_types.values()
+                ]
+            )
+            sequence_position_type = pl.Float64
+
+        schema.update(
+            {str(i): sequence_position_type for i in range(seq_length - 1, -1, -1)}
+        )
+
         data = data.sort(["sequenceId", "itemPosition"])
         self._process_batches(
             data,
+            schema,
             n_cores,
             seq_length,
             seq_step_sizes,
@@ -169,6 +191,7 @@ class Preprocessor:
     def _process_batches(
         self,
         data: pl.DataFrame,
+        schema: Any,
         n_cores: Optional[int],
         seq_length: int,
         seq_step_sizes: list[int],
@@ -182,6 +205,7 @@ class Preprocessor:
             (
                 i,
                 data.slice(start, end - start),
+                schema,
                 self.split_paths,
                 seq_length,
                 seq_step_sizes,
@@ -293,6 +317,7 @@ def get_group_bounds(data_subset: pl.DataFrame, group_proportions: list[float]):
 def preprocess_batch(
     process_id: int,
     batch: pl.DataFrame,
+    schema: Any,
     split_paths: list[str],
     seq_length: int,
     seq_step_sizes: list[int],
@@ -309,6 +334,7 @@ def preprocess_batch(
             i: cast_columns_to_string(
                 extract_sequences(
                     data_subset.slice(lb, ub - lb),
+                    schema,
                     seq_length,
                     seq_step_sizes[i],
                     data_columns,
@@ -324,7 +350,7 @@ def preprocess_batch(
             split_path_batch_seq = insert_top_folder(split_path_batch_seq, "temp")
 
             if write_format == "csv":
-                write_data(split, split_path_batch_seq, "csv", mode="w", header=True)
+                write_data(split, split_path_batch_seq, "csv")
             elif write_format == "parquet":
                 write_data(split, split_path_batch_seq, "parquet")
 
@@ -345,13 +371,14 @@ def preprocess_batch(
 
 @beartype
 def extract_sequences(
-    data: pl.DataFrame, seq_length: int, seq_step_size: int, columns: list[str]
+    data: pl.DataFrame,
+    schema: Any,
+    seq_length: int,
+    seq_step_size: int,
+    columns: list[str],
 ) -> pl.DataFrame:
     if data.is_empty():
-        return pl.DataFrame(
-            schema=["sequenceId", "subsequenceId", "inputCol"]
-            + [str(i) for i in range(seq_length - 1, -1, -1)]
-        )
+        return pl.DataFrame(schema=schema)
 
     raw_sequences = data.group_by("sequenceId", maintain_order=True).agg(
         [pl.col(c) for c in columns]
@@ -375,8 +402,7 @@ def extract_sequences(
 
     sequences = pl.DataFrame(
         rows,
-        schema=["sequenceId", "subsequenceId", "inputCol"]
-        + [str(i) for i in range(seq_length - 1, -1, -1)],
+        schema=schema,
         orient="row",
     )
     return sequences
