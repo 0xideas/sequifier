@@ -77,7 +77,10 @@ def train_worker(rank, world_size, config):
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
 
-    model = TransformerModel(config).to(rank)  # Move model to its assigned GPU
+    target = (
+        rank if config.training_spec.device == "cuda" else config.training_spec.device
+    )
+    model = TransformerModel(config).to(target)
 
     # Pass rank to model for logging/saving logic
     model.rank = rank
