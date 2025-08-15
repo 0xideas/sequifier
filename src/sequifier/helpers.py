@@ -142,7 +142,8 @@ class LogFile:
     """A class for logging to multiple files with different levels."""
 
     @beartype
-    def __init__(self, path: str, open_mode: str):
+    def __init__(self, path: str, open_mode: str, rank: Optional[int] = None):
+        self.rank = rank
         self.levels = [2, 3]
         self._files = {
             level: open(path.replace("[NUMBER]", str(level)), open_mode)
@@ -158,7 +159,8 @@ class LogFile:
                 self._files[level2].write(f"{string}\n")
                 self._files[level2].flush()
         if level >= 3:
-            print(string)
+            if self.rank is None or self.rank == 0:
+                print(string)
 
     @beartype
     def close(self) -> None:

@@ -91,10 +91,8 @@ def train_worker(rank, world_size, config):
     target = (
         rank if config.training_spec.device == "cuda" else config.training_spec.device
     )
-    model = TransformerModel(config).to(target)
+    model = TransformerModel(config, rank).to(target)
 
-    # Pass rank to model for logging/saving logic
-    model.rank = rank
     # Set the device on the model instance to the rank-specific target device.
     # This ensures that data tensors are moved to the correct GPU in the training loop.
     model.device = target
@@ -154,13 +152,13 @@ def format_number(number: Union[int, float, np.float32]) -> str:
 
 class TransformerModel(nn.Module):
     @beartype
-    def __init__(self, hparams: Any):
+    def __init__(self, hparams: Any, rank: Optional[int] = None):
         super().__init__()
         self.project_path = hparams.project_path
         self.model_type = "Transformer"
         self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
 
-        self.rank = 0
+        self.rank = rank
         self.selected_columns = hparams.selected_columns
         self.categorical_columns = [
             col
@@ -833,12 +831,12 @@ class TransformerModel(nn.Module):
     def _initialize_log_file(self):
         os.makedirs(os.path.join(self.project_path, "logs"), exist_ok=True)
         open_mode = "w" if self.start_epoch == 1 else "a"
-        self.log_file = LogFile(
-            os.path.join(
-                self.project_path, "logs", f"sequifier-{self.model_name}-[NUMBER].txt"
-            ),
-            open_mode,
+        path = os.path.join(
+            self.project_path, "logs", f"sequifier-{self.model_name}-[NUMBER].txt"
         )
+        if self.rank is not None:
+            path = path.replace("[NUMBER]", f"rank{self.rank}-[NUMBER]")
+        self.log_file = LogFile(path, open_mode, self.rank)
 
     @beartype
     def _load_weights_conditional(self) -> str:
