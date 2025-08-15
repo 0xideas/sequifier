@@ -72,7 +72,7 @@ def train_worker(rank, world_size, config):
         shuffle=(train_sampler is None),  # Shuffle only if not using sampler
         num_workers=0
         if config.training_spec.device in ["mps", "cpu"]
-        else 4,  # Use multiple workers for data loading
+        else config.training_spec.num_workers,  # Use multiple workers for data loading
         pin_memory=config.training_spec.device not in ["mps", "cpu"],
     )
 
@@ -633,14 +633,11 @@ class TransformerModel(nn.Module):
 
         # 3. Handle one-time baseline loss calculation (must also be synchronized)
         if not hasattr(self, "baseline_loss"):
-            # This logic is complex and assumes a full pass. We'll simplify and calculate
-            # it based on the first batch, which is a reasonable approximation.
-            baseline_loss_val = 0.0
-            baseline_losses_vals = {col: 0.0 for col in self.target_columns}
+            baseline_loss_local_collect = []
+            baseline_losses_local_collect = {col: [] for col in self.target_columns}
 
-            # Let only the main process calculate the baseline
-            if self.rank == 0:
-                data, targets = next(iter(valid_loader))  # Get first batch
+            # Iterate over the sharded validation loader
+            for data, targets in valid_loader:
                 data = {k: v.to(self.device) for k, v in data.items()}
                 targets = {k: v.to(self.device) for k, v in targets.items()}
 
@@ -649,39 +646,42 @@ class TransformerModel(nn.Module):
                     col: self._transform_val(col, data[col]) for col in targets.keys()
                 }
 
-                baseline_loss_tensor, baseline_losses_dict = self._calculate_loss(
-                    pseudo_output, targets
-                )
-                baseline_loss_val = baseline_loss_tensor.item()
-                baseline_losses_vals = {
-                    k: v.item() for k, v in baseline_losses_dict.items()
-                }
+                loss, losses = self._calculate_loss(pseudo_output, targets)
+
+                baseline_loss_local_collect.append(loss.item())
+                for col, loss_ in losses.items():
+                    baseline_losses_local_collect[col].append(loss_.item())
+
+            # Sum the losses for the local shard
+            baseline_loss_local = np.sum(baseline_loss_local_collect)
+            baseline_losses_local = {
+                col: np.sum(loss_list)
+                for col, loss_list in baseline_losses_local_collect.items()
+            }
 
             # Broadcast the baseline values from the main process to all others
             if self.hparams.training_spec.distributed:
-                baseline_loss_tensor_bcast = torch.tensor(
-                    baseline_loss_val, device=self.device
+                total_loss_tensor = torch.tensor(
+                    baseline_loss_local, device=self.device
                 )
-                dist.broadcast(baseline_loss_tensor_bcast, src=0)
-                baseline_loss_val = baseline_loss_tensor_bcast.item()
+                dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
+                self.baseline_loss = total_loss_tensor.item()
 
-                loss_keys = sorted(baseline_losses_vals.keys())
-                losses_values = [baseline_losses_vals[k] for k in loss_keys]
-                baseline_losses_tensor_bcast = torch.tensor(
-                    losses_values, device=self.device
-                )
-                dist.broadcast(baseline_losses_tensor_bcast, src=0)
-                baseline_losses_vals = dict(
-                    zip(loss_keys, baseline_losses_tensor_bcast.cpu().numpy())
-                )
+                loss_keys = sorted(baseline_losses_local.keys())
+                losses_values = [baseline_losses_local[k] for k in loss_keys]
+                losses_tensor = torch.tensor(losses_values, device=self.device)
+                dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
 
-            self.baseline_loss = baseline_loss_val
-            self.baseline_losses = baseline_losses_vals
+                self.baseline_losses = dict(zip(loss_keys, losses_tensor.cpu().numpy()))
+            else:
+                # If not distributed, local is global
+                self.baseline_loss = baseline_loss_local
+                self.baseline_losses = baseline_losses_local
 
         return (
             np.float32(total_loss_global),
             {k: np.float32(v) for k, v in total_losses_global.items()},
-            last_output,  # Will be empty on non-main processes, which is fine
+            last_output,
         )
 
     @beartype
