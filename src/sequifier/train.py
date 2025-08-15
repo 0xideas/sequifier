@@ -51,6 +51,14 @@ def train_worker(rank, world_size, config):
         config.validation_data_path, config.read_format, config
     )
 
+    valid_sampler = (
+        DistributedSampler(
+            valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+        )
+        if config.training_spec.distributed
+        else None
+    )
+
     train_sampler = (
         DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
         if config.training_spec.distributed
@@ -70,7 +78,10 @@ def train_worker(rank, world_size, config):
 
     # For validation, it's often fine to just run it on the main process
     valid_loader = DataLoader(
-        valid_dataset, batch_size=config.training_spec.batch_size, shuffle=False
+        valid_dataset,
+        batch_size=config.training_spec.batch_size,
+        sampler=valid_sampler,
+        shuffle=False,
     )
 
     # 2. Instantiate and wrap the model
@@ -90,7 +101,7 @@ def train_worker(rank, world_size, config):
 
     # 3. Start training
     model.train_model(
-        train_loader, valid_loader, train_sampler
+        train_loader, valid_loader, train_sampler, valid_sampler
     )  # Use .module to access original methods
 
     if config.training_spec.distributed:
@@ -414,7 +425,8 @@ class TransformerModel(nn.Module):
         self,
         train_loader: DataLoader,
         valid_loader: DataLoader,
-        sampler: Optional[DistributedSampler],
+        train_sampler: Optional[DistributedSampler],
+        valid_sampler: Optional[DistributedSampler],
     ) -> None:
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
@@ -429,7 +441,14 @@ class TransformerModel(nn.Module):
                 and not np.isnan(total_loss)  # type: ignore # noqa: F821
             ):
                 epoch_start_time = time.time()
-                self._train_epoch(train_loader, epoch, sampler)
+
+                if train_sampler:
+                    train_sampler.set_epoch(epoch)
+                self._train_epoch(train_loader, epoch)
+
+                if valid_sampler:
+                    valid_sampler.set_epoch(epoch)
+
                 total_loss, total_losses, output = self._evaluate(valid_loader)
                 elapsed = time.time() - epoch_start_time
 
@@ -460,12 +479,8 @@ class TransformerModel(nn.Module):
         self,
         train_loader: DataLoader,
         epoch: int,
-        sampler: Optional[DistributedSampler],
     ) -> None:
         self.train()
-
-        if sampler:
-            sampler.set_epoch(epoch)
 
         total_loss = 0.0
         start_time = time.time()
