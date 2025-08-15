@@ -95,14 +95,17 @@ def train_worker(rank, world_size, config):
 
     # Pass rank to model for logging/saving logic
     model.rank = rank
+    # Set the device on the model instance to the rank-specific target device.
+    # This ensures that data tensors are moved to the correct GPU in the training loop.
+    model.device = target
 
     if config.training_spec.distributed:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
     # 3. Start training
-    model.train_model(
-        train_loader, valid_loader, train_sampler, valid_sampler
-    )  # Use .module to access original methods
+    # When using DDP, the original model is accessed via the .module attribute
+    original_model = model.module if config.training_spec.distributed else model
+    original_model.train_model(train_loader, valid_loader, train_sampler, valid_sampler)
 
     if config.training_spec.distributed:
         cleanup()
