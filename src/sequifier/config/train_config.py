@@ -205,6 +205,9 @@ class TrainingSpecModel(BaseModel):
         )
     )
     continue_training: bool = True
+    distributed: bool = False
+    world_size: int = 1
+    backend: str = "nccl"
 
     def __init__(self, **kwargs):
         super().__init__(

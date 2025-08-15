@@ -51,6 +51,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     else:
         data = pl.read_csv(config.data_path)
 
+    print(f"{data.dtypes = }")
     model_paths = (
         config.model_path
         if isinstance(config.model_path, list)
