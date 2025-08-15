@@ -84,7 +84,7 @@ def train_worker(rank, world_size, config):
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
     # 3. Start training
-    model.module.train_model(
+    model.train_model(
         train_loader, valid_loader, train_sampler
     )  # Use .module to access original methods
 
