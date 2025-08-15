@@ -10,7 +10,7 @@ from sequifier.helpers import subset_to_selected_columns  # noqa: E402
 
 
 class SequifierDataset(Dataset):
-    """Custom PyTorch Dataset for Sequifier data."""
+    """Custom PyTorch Dataset for Sequifier data using pre-aggregation."""
 
     def __init__(self, data_path, read_format, config):
         self.config = config
@@ -19,60 +19,52 @@ class SequifierDataset(Dataset):
             for col in config.column_types
         }
 
-        # Load the entire dataset but keep it in efficient Polars format
-        self.data = read_data(
-            normalize_path(data_path, config.project_path), read_format
-        )
+        # Load the initial data
+        data = read_data(normalize_path(data_path, config.project_path), read_format)
         if config.selected_columns is not None:
-            self.data = subset_to_selected_columns(self.data, config.selected_columns)
+            data = subset_to_selected_columns(data, config.selected_columns)
 
-        # Pre-calculate the unique samples to determine the dataset length
-        self.samples = (
-            self.data.group_by(["sequenceId", "subsequenceId"])
-            .agg(pl.count())
+        joint_seq_cols = [str(c) for c in range(self.config.seq_length, -1, -1)]
+
+        merged_cols = []
+        for col in self.config.selected_columns + self.config.target_columns:
+            if col not in merged_cols:
+                merged_cols.append(col)
+
+        aggs = []
+        for col_name in merged_cols:
+            aggs.append(
+                pl.col(joint_seq_cols)
+                .filter(pl.col("inputCol") == col_name)
+                .flatten()
+                .alias(col_name)
+            )
+
+        self.precomputed_data = (
+            data.group_by(["sequenceId", "subsequenceId"])
+            .agg(aggs)
             .sort(["sequenceId", "subsequenceId"])
         )
-        self.n_samples = len(self.samples)
+        self.n_samples = len(self.precomputed_data)
 
     def __len__(self):
         return self.n_samples
 
     def __getitem__(self, idx):
-        # Get the identifiers for the i-th sample
-        sample_ids = self.samples[idx]
-        seq_id = sample_ids.get_column("sequenceId").item()
-        subseq_id = sample_ids.get_column("subsequenceId").item()
-
-        # Filter the full dataframe to get only the rows for this specific sample
-        sample_df = self.data.filter(
-            (pl.col("sequenceId") == seq_id) & (pl.col("subsequenceId") == subseq_id)
-        )
-
-        # Use a modified version of the original numpy_to_pytorch logic here for a single sample
-        X, y = self._convert_sample_to_tensors(sample_df)
-        return X, y
-
-    def _convert_sample_to_tensors(self, sample_df: pl.DataFrame):
-        """Converts a small Polars DataFrame for one sample into tensors."""
-        # This logic is adapted from helpers.numpy_to_pytorch
-        targets = {}
-        target_seq_cols = [str(c) for c in range(self.config.seq_length - 1, -1, -1)]
-        for col in self.config.target_columns:
-            targets[col] = torch.tensor(
-                sample_df.filter(pl.col("inputCol") == col)
-                .select(target_seq_cols)
-                .to_numpy(),
-                dtype=self.column_types[col],
-            ).squeeze(0)  # Squeeze the batch dimension of 1
+        sample_row = self.precomputed_data[idx]
 
         sequence = {}
-        input_seq_cols = [str(c) for c in range(self.config.seq_length, 0, -1)]
-        for col in self.config.selected_columns:
-            sequence[col] = torch.tensor(
-                sample_df.filter(pl.col("inputCol") == col)
-                .select(input_seq_cols)
-                .to_numpy(),
-                dtype=self.column_types[col],
-            ).squeeze(0)  # Squeeze the batch dimension of 1
+        for col_name in self.config.selected_columns:
+            sequence_data = sample_row.get_column(col_name).to_list()[0][:-1]
+            sequence[col_name] = torch.tensor(
+                sequence_data, dtype=self.column_types[col_name]
+            )
+
+        targets = {}
+        for col_name in self.config.target_columns:
+            target_data = sample_row.get_column(col_name).to_list()[0][1:]
+            targets[col_name] = torch.tensor(
+                target_data, dtype=self.column_types[col_name]
+            )
 
         return sequence, targets
