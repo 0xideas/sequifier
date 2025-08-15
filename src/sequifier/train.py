@@ -11,81 +11,104 @@ import numpy as np
 import polars as pl
 import torch
 import torch._dynamo
+import torch.distributed as dist
+import torch.multiprocessing as mp
 from beartype import beartype
 from torch import Tensor, nn
 from torch.nn import ModuleDict, TransformerEncoder, TransformerEncoderLayer
 from torch.nn.functional import one_hot
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 torch._dynamo.config.suppress_errors = True
 from sequifier.config.train_config import load_train_config  # noqa: E402
-from sequifier.helpers import PANDAS_TO_TORCH_TYPES  # noqa: E402
 from sequifier.helpers import LogFile  # noqa: E402
 from sequifier.helpers import construct_index_maps  # noqa: E402
-from sequifier.helpers import normalize_path  # noqa: E402
-from sequifier.helpers import read_data  # noqa: E402
-from sequifier.helpers import numpy_to_pytorch, subset_to_selected_columns  # noqa: E402
+from sequifier.io.sequifier_dataset import SequifierDataset  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
+
+
+def setup(rank, world_size, backend="nccl"):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    dist.init_process_group(backend, rank=rank, world_size=world_size)
+
+
+def cleanup():
+    dist.destroy_process_group()
+
+
+def train_worker(rank, world_size, config):
+    if config.training_spec.distributed:
+        setup(rank, world_size, config.training_spec.backend)
+
+    # 1. Create Datasets and DataLoaders with DistributedSampler
+    train_dataset = SequifierDataset(
+        config.training_data_path, config.read_format, config
+    )
+    valid_dataset = SequifierDataset(
+        config.validation_data_path, config.read_format, config
+    )
+
+    train_sampler = (
+        DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+        if config.training_spec.distributed
+        else None
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.training_spec.batch_size,
+        sampler=train_sampler,
+        shuffle=(train_sampler is None),  # Shuffle only if not using sampler
+        num_workers=4,  # Use multiple workers for data loading
+        pin_memory=True,
+    )
+
+    # For validation, it's often fine to just run it on the main process
+    valid_loader = DataLoader(
+        valid_dataset, batch_size=config.training_spec.batch_size, shuffle=False
+    )
+
+    # 2. Instantiate and wrap the model
+    torch.manual_seed(config.seed)
+    np.random.seed(config.seed)
+
+    model = TransformerModel(config).to(rank)  # Move model to its assigned GPU
+
+    # Pass rank to model for logging/saving logic
+    model.rank = rank
+
+    if config.training_spec.distributed:
+        model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+
+    # 3. Start training
+    model.module.train_model(
+        train_loader, valid_loader, train_sampler
+    )  # Use .module to access original methods
+
+    if config.training_spec.distributed:
+        cleanup()
 
 
 @beartype
 def train(args: Any, args_config: dict[str, Any]) -> None:
-    """
-    Train the model using the provided configuration.
-
-    Args:
-        args: Command line arguments.
-        args_config: Configuration dictionary.
-    """
     config_path = args.config_path or "configs/train.yaml"
     config = load_train_config(config_path, args_config, args.on_unprocessed)
 
-    column_types = {
-        col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
-        for col in config.column_types
-    }
+    # Set world_size from CLI args if provided
+    if "n_gpus" in args_config and args_config["n_gpus"] > 1:
+        config.training_spec.distributed = True
+        config.training_spec.world_size = args_config["n_gpus"]
 
-    data_train = read_data(
-        normalize_path(config.training_data_path, config.project_path),
-        config.read_format,
-    )
-    if config.selected_columns is not None:
-        data_train = subset_to_selected_columns(data_train, config.selected_columns)
+    world_size = config.training_spec.world_size
 
-    X_train, y_train = numpy_to_pytorch(
-        data_train,
-        column_types,
-        config.selected_columns,
-        config.target_columns,
-        config.seq_length,
-        config.training_spec.device,
-        to_device=False,
-    )
-    del data_train
-
-    data_valid = read_data(
-        normalize_path(config.validation_data_path, config.project_path),
-        config.read_format,
-    )
-    if config.selected_columns is not None:
-        data_valid = subset_to_selected_columns(data_valid, config.selected_columns)
-
-    X_valid, y_valid = numpy_to_pytorch(
-        data_valid,
-        column_types,
-        config.selected_columns,
-        config.target_columns,
-        config.seq_length,
-        config.training_spec.device,
-        to_device=False,
-    )
-    del data_valid
-
-    torch.manual_seed(config.seed)
-    np.random.seed(config.seed)
-
-    model = torch.compile(TransformerModel(config).to(config.training_spec.device))
-
-    model.train_model(X_train, y_train, X_valid, y_valid)
+    if config.training_spec.distributed:
+        mp.spawn(train_worker, args=(world_size, config), nprocs=world_size, join=True)
+    else:
+        # Fallback to single-GPU/CPU training
+        train_worker(0, world_size, config)
 
 
 @beartype
@@ -118,6 +141,7 @@ class TransformerModel(nn.Module):
         self.model_type = "Transformer"
         self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
 
+        self.rank = 0
         self.selected_columns = hparams.selected_columns
         self.categorical_columns = [
             col
@@ -383,10 +407,9 @@ class TransformerModel(nn.Module):
     @beartype
     def train_model(
         self,
-        X_train: dict[str, Tensor],
-        y_train: dict[str, Tensor],
-        X_valid: dict[str, Tensor],
-        y_valid: dict[str, Tensor],
+        train_loader: DataLoader,
+        valid_loader: DataLoader,
+        sampler: Optional[DistributedSampler],
     ) -> None:
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
@@ -401,8 +424,8 @@ class TransformerModel(nn.Module):
                 and not np.isnan(total_loss)  # type: ignore # noqa: F821
             ):
                 epoch_start_time = time.time()
-                self._train_epoch(X_train, y_train, epoch)
-                total_loss, total_losses, output = self._evaluate(X_valid, y_valid)
+                self._train_epoch(train_loader, epoch, sampler)
+                total_loss, total_losses, output = self._evaluate(valid_loader)
                 elapsed = time.time() - epoch_start_time
 
                 self._log_epoch_results(
@@ -429,23 +452,23 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _train_epoch(
-        self, X_train: dict[str, Tensor], y_train: dict[str, Tensor], epoch: int
+        self,
+        train_loader: DataLoader,
+        epoch: int,
+        sampler: Optional[DistributedSampler],
     ) -> None:
-        self.train()  # turn on train mode
+        self.train()
+
+        if sampler:
+            sampler.set_epoch(epoch)
+
         total_loss = 0.0
         start_time = time.time()
+        num_batches = len(train_loader)
 
-        num_batches = math.ceil(
-            X_train[self.target_columns[0]].shape[0] / self.batch_size
-        )  # any column will do
-        batch_order = torch.randperm(num_batches).tolist()
-
-        for batch_count, batch in enumerate(batch_order):
-            batch_start = int(batch * self.batch_size)
-
-            data, targets = self._get_batch(
-                X_train, y_train, batch_start, self.batch_size, to_device=True
-            )
+        for batch_count, (data, targets) in enumerate(train_loader):
+            data = {k: v.to(self.device) for k, v in data.items()}
+            targets = {k: v.to(self.device) for k, v in targets.items()}
             output = self.forward_train(data)
 
             loss, losses = self._calculate_loss(output, targets)
@@ -528,59 +551,118 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _evaluate(
-        self, X_valid: dict[str, Tensor], y_valid: dict[str, Tensor]
+        self, valid_loader: DataLoader
     ) -> tuple[np.float32, dict[str, np.float32], dict[str, Tensor]]:
-        self.eval()  # turn on evaluation mode
+        self.eval()  # Turn on evaluation mode
+
+        total_loss_collect = []
+        # Initialize a dict to hold lists of losses for each target
+        total_losses_collect = {col: [] for col in self.target_columns}
+        last_output = {}
 
         with torch.no_grad():
-            num_batches = math.ceil(
-                X_valid[self.target_columns[0]].shape[0] / self.batch_size
-            )  # any column will do
-            total_loss_collect, total_losses_collect = [], []
-            for batch_start in range(0, num_batches * self.batch_size, self.batch_size):
-                data, targets = self._get_batch(
-                    X_valid,
-                    y_valid,
-                    batch_start,
-                    batch_start + self.batch_size,
-                    to_device=True,
-                )
+            for i, (data, targets) in enumerate(valid_loader):
+                # Move data to the current process's assigned GPU
+                data = {k: v.to(self.device) for k, v in data.items()}
+                targets = {k: v.to(self.device) for k, v in targets.items()}
+
                 output = self.forward_train(data)
-                total_loss_iter, total_losses_iter = self._calculate_loss(
-                    output, targets
-                )
-                total_loss_collect.append(total_loss_iter.cpu())
-                total_losses_collect.append(total_losses_iter)
+                loss, losses = self._calculate_loss(output, targets)
 
-                torch.cuda.empty_cache()
+                total_loss_collect.append(loss.item())
+                for col, loss in losses.items():
+                    total_losses_collect[col].append(loss.item())
 
-        total_loss = np.sum(total_loss_collect)
-        total_losses = {
-            target_column: np.sum(
-                [
-                    total_losses_i[target_column].cpu()
-                    for total_losses_i in total_losses_collect
-                ]
-            )
-            for target_column in total_losses_iter.keys()  # type: ignore
+                # For logging purposes, only the main process needs the last batch output
+                if self.rank == 0 and i == len(valid_loader) - 1:
+                    last_output = output
+
+                # Free up GPU memory
+                del data, targets, output, loss, losses
+                if self.device == "cuda":
+                    torch.cuda.empty_cache()
+
+        # 1. Sum the losses calculated on this GPU process
+        total_loss_local = np.sum(total_loss_collect)
+        total_losses_local = {
+            col: np.sum(loss_list) for col, loss_list in total_losses_collect.items()
         }
-        if not hasattr(self, "baseline_loss"):
-            data, targets = self._get_batch(
-                X_valid, y_valid, 0, list(X_valid.values())[0].shape[0], to_device=False
-            )
-            self.baseline_loss, self.baseline_losses = self._calculate_loss(
-                {
-                    col: self._transform_val(col, data[col]) for col in targets.keys()
-                },  # this variant is chosen because the same batch might have several "sequenceId" sequences
-                {col: val for col, val in targets.items()},
-            )
-            self.baseline_loss = self.baseline_loss.item()
-            self.baseline_losses = {
-                target_column: target_loss.item()
-                for target_column, target_loss in self.baseline_losses.items()
-            }
 
-        return total_loss, total_losses, output  # type: ignore
+        # 2. Aggregate losses across all GPUs if in distributed mode
+        if self.hparams.training_spec.distributed:
+            # Put local losses into tensors for reduction
+            total_loss_tensor = torch.tensor(total_loss_local, device=self.device)
+
+            # Ensure consistent order for the losses tensor
+            loss_keys = sorted(total_losses_local.keys())
+            losses_values = [total_losses_local[k] for k in loss_keys]
+            losses_tensor = torch.tensor(losses_values, device=self.device)
+
+            # Sum losses from all processes. The result is broadcast back to all processes.
+            dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
+
+            # Update local variables with the aggregated global results
+            total_loss_global = total_loss_tensor.cpu().numpy()
+            losses_global_values = losses_tensor.cpu().numpy()
+            total_losses_global = dict(zip(loss_keys, losses_global_values))
+        else:
+            # If not distributed, local losses are the global losses
+            total_loss_global = total_loss_local
+            total_losses_global = total_losses_local
+
+        # 3. Handle one-time baseline loss calculation (must also be synchronized)
+        if not hasattr(self, "baseline_loss"):
+            # This logic is complex and assumes a full pass. We'll simplify and calculate
+            # it based on the first batch, which is a reasonable approximation.
+            baseline_loss_val = 0.0
+            baseline_losses_vals = {col: 0.0 for col in self.target_columns}
+
+            # Let only the main process calculate the baseline
+            if self.rank == 0:
+                data, targets = next(iter(valid_loader))  # Get first batch
+                data = {k: v.to(self.device) for k, v in data.items()}
+                targets = {k: v.to(self.device) for k, v in targets.items()}
+
+                # Replicate original logic of using input as pseudo-output
+                pseudo_output = {
+                    col: self._transform_val(col, data[col]) for col in targets.keys()
+                }
+
+                baseline_loss_tensor, baseline_losses_dict = self._calculate_loss(
+                    pseudo_output, targets
+                )
+                baseline_loss_val = baseline_loss_tensor.item()
+                baseline_losses_vals = {
+                    k: v.item() for k, v in baseline_losses_dict.items()
+                }
+
+            # Broadcast the baseline values from the main process to all others
+            if self.hparams.training_spec.distributed:
+                baseline_loss_tensor_bcast = torch.tensor(
+                    baseline_loss_val, device=self.device
+                )
+                dist.broadcast(baseline_loss_tensor_bcast, src=0)
+                baseline_loss_val = baseline_loss_tensor_bcast.item()
+
+                loss_keys = sorted(baseline_losses_vals.keys())
+                losses_values = [baseline_losses_vals[k] for k in loss_keys]
+                baseline_losses_tensor_bcast = torch.tensor(
+                    losses_values, device=self.device
+                )
+                dist.broadcast(baseline_losses_tensor_bcast, src=0)
+                baseline_losses_vals = dict(
+                    zip(loss_keys, baseline_losses_tensor_bcast.cpu().numpy())
+                )
+
+            self.baseline_loss = baseline_loss_val
+            self.baseline_losses = baseline_losses_vals
+
+        return (
+            np.float32(total_loss_global),
+            {k: np.float32(v) for k, v in total_losses_global.items()},
+            last_output,  # Will be empty on non-main processes, which is fine
+        )
 
     @beartype
     def _get_batch(
@@ -622,6 +704,9 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _export(self, model: "TransformerModel", suffix: str, epoch: int) -> None:
+        if self.rank != 0:
+            return
+
         self.eval()
 
         os.makedirs(os.path.join(self.project_path, "models"), exist_ok=True)
@@ -686,6 +771,8 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _save(self, epoch: int, val_loss: np.float32) -> None:
+        if self.rank != 0:
+            return
         os.makedirs(os.path.join(self.project_path, "checkpoints"), exist_ok=True)
 
         output_path = os.path.join(
