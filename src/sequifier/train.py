@@ -62,8 +62,10 @@ def train_worker(rank, world_size, config):
         batch_size=config.training_spec.batch_size,
         sampler=train_sampler,
         shuffle=(train_sampler is None),  # Shuffle only if not using sampler
-        num_workers=4,  # Use multiple workers for data loading
-        pin_memory=True,
+        num_workers=0
+        if config.training_spec.device in ["mps", "cpu"]
+        else 4,  # Use multiple workers for data loading
+        pin_memory=config.training_spec.device not in ["mps", "cpu"],
     )
 
     # For validation, it's often fine to just run it on the main process
