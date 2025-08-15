@@ -48,13 +48,17 @@ def load_inferer_config(
         config_values["categorical_columns"] = [
             col
             for col, type_ in dd_config["column_types"].items()
-            if type_ == "Int64" and col in config_values["selected_columns"]
+            if "int64" in type_.lower() and col in config_values["selected_columns"]
         ]
         config_values["real_columns"] = [
             col
             for col, type_ in dd_config["column_types"].items()
-            if type_ == "Float64" and col in config_values["selected_columns"]
+            if "float64" in type_.lower() and col in config_values["selected_columns"]
         ]
+        assert (
+            len(config_values["real_columns"] + config_values["categorical_columns"])
+            > 0
+        )
         config_values["data_path"] = normalize_path(
             config_values.get(
                 "data_path",
