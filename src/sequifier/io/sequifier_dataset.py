@@ -34,10 +34,10 @@ class SequifierDataset(Dataset):
         aggs = []
         for col_name in merged_cols:
             aggs.append(
-                pl.col(joint_seq_cols)
+                pl.concat_list(joint_seq_cols)
                 .filter(pl.col("inputCol") == col_name)
                 .flatten()
-                .alias(col_name)
+                .alias(f"seq_{col_name}")
             )
 
         self.precomputed_data = (
@@ -55,14 +55,14 @@ class SequifierDataset(Dataset):
 
         sequence = {}
         for col_name in self.config.selected_columns:
-            sequence_data = sample_row.get_column(col_name).to_list()[0][:-1]
+            sequence_data = sample_row.get_column(f"seq_{col_name}").to_list()[0][:-1]
             sequence[col_name] = torch.tensor(
                 sequence_data, dtype=self.column_types[col_name]
             )
 
         targets = {}
         for col_name in self.config.target_columns:
-            target_data = sample_row.get_column(col_name).to_list()[0][1:]
+            target_data = sample_row.get_column(f"seq_{col_name}").to_list()[0][1:]
             targets[col_name] = torch.tensor(
                 target_data, dtype=self.column_types[col_name]
             )
