@@ -28,6 +28,9 @@ from sequifier.helpers import construct_index_maps  # noqa: E402
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
 )
+from sequifier.io.sequifier_dataset_from_folder import (  # noqa: E402
+    SequifierDatasetFromFolder,
+)
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 
 
@@ -41,17 +44,17 @@ def cleanup():
     dist.destroy_process_group()
 
 
-def train_worker(rank, world_size, config):
+def train_worker(rank, world_size, config, from_folder):
     if config.training_spec.distributed:
         setup(rank, world_size, config.training_spec.backend)
 
     # 1. Create Datasets and DataLoaders with DistributedSampler
-    train_dataset = SequifierDatasetFromFile(
-        config.training_data_path, config.read_format, config
-    )
-    valid_dataset = SequifierDatasetFromFile(
-        config.validation_data_path, config.read_format, config
-    )
+    if from_folder:
+        train_dataset = SequifierDatasetFromFolder(config.training_data_path, config)
+        valid_dataset = SequifierDatasetFromFolder(config.validation_data_path, config)
+    else:
+        train_dataset = SequifierDatasetFromFile(config.training_data_path, config)
+        valid_dataset = SequifierDatasetFromFile(config.validation_data_path, config)
 
     valid_sampler = (
         DistributedSampler(
@@ -123,11 +126,17 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
 
     world_size = config.training_spec.world_size
 
+    from_folder = config.read_format == "pt"
     if config.training_spec.distributed:
-        mp.spawn(train_worker, args=(world_size, config), nprocs=world_size, join=True)
+        mp.spawn(
+            train_worker,
+            args=(world_size, config, from_folder),
+            nprocs=world_size,
+            join=True,
+        )
     else:
         # Fallback to single-GPU/CPU training
-        train_worker(0, world_size, config)
+        train_worker(0, world_size, config, from_folder)
 
 
 @beartype

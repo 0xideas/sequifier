@@ -12,7 +12,8 @@ from sequifier.helpers import subset_to_selected_columns  # noqa: E402
 class SequifierDatasetFromFile(Dataset):
     """Custom PyTorch Dataset for Sequifier data using pre-aggregation."""
 
-    def __init__(self, data_path, read_format, config):
+    def __init__(self, data_path, config):
+        read_format = config.read_format
         self.config = config
         self.column_types = {
             col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]

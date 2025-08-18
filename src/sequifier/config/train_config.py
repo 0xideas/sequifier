@@ -127,6 +127,10 @@ def load_train_config(
         ) as f:
             dd_config = json.loads(f.read())
 
+        split_paths = dd_config["split_paths"]
+        if config_values["read_format"] == "pt":
+            split_paths = [path.replace(".pt", "") for path in split_paths]
+
         config_values["column_types"] = config_values.get(
             "column_types", dd_config["column_types"]
         )
@@ -154,13 +158,13 @@ def load_train_config(
             "n_classes", dd_config["n_classes"]
         )
         config_values["training_data_path"] = normalize_path(
-            config_values.get("training_data_path", dd_config["split_paths"][0]),
+            config_values.get("training_data_path", split_paths[0]),
             config_values["project_path"],
         )
         config_values["validation_data_path"] = normalize_path(
             config_values.get(
                 "validation_data_path",
-                dd_config["split_paths"][min(1, len(dd_config["split_paths"]) - 1)],
+                split_paths[min(1, len(split_paths) - 1)],
             ),
             config_values["project_path"],
         )
@@ -307,7 +311,8 @@ class TrainModel(BaseModel):
         assert v in [
             "csv",
             "parquet",
-        ], "Currently only 'csv' and 'parquet' are supported"
+            "pt",
+        ], "Currently only 'csv', 'parquet' and 'pt' are supported"
         return v
 
     @validator("training_spec")
