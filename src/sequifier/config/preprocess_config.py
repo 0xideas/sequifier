@@ -56,10 +56,18 @@ class PreprocessorModel(BaseModel):
 
     @validator("read_format", "write_format", always=True)
     def validate_format(cls, v: str) -> str:
-        supported_formats = ["csv", "parquet"]
+        supported_formats = ["csv", "parquet", "pt"]
         if v not in supported_formats:
             raise ValueError(
                 f"Currently only {', '.join(supported_formats)} are supported"
+            )
+        return v
+
+    @validator("combine_into_single_file", always=True)
+    def validate_format2(cls, v: bool, values: dict):
+        if v is False and values["write_format"] != "pt":
+            raise ValueError(
+                "Only with write_format 'pt' can combine_into_single_file be set to False"
             )
         return v
 
