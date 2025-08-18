@@ -55,6 +55,7 @@ class Preprocessor:
         if self.combine_into_single_file:
             self.target_dir = "temp"
         else:
+            assert write_format == "pt"
             self.target_dir = self.data_name_root
 
         self.seed = seed
@@ -112,7 +113,7 @@ class Preprocessor:
             group_proportions,
             write_format,
         )
-        self._cleanup()
+        self._cleanup(write_format)
 
     @beartype
     def _setup_directories(self) -> None:
@@ -244,16 +245,12 @@ class Preprocessor:
             )
 
     @beartype
-    def _cleanup(self) -> None:
+    def _cleanup(self, write_format: str) -> None:
         temp_output_path = os.path.join(self.project_path, "data", self.target_dir)
         directory = Path(temp_output_path)
 
         if not self.target_dir == "temp":
-            pattern = re.compile(r".+split\d+-\d+-\d+\.\w+")
-            for file_path in directory.iterdir():
-                if file_path.is_file() and pattern.match(file_path.name):
-                    file_path.unlink()
-
+            assert write_format == "pt"
             for i, split_path in enumerate(self.split_paths):
                 split = f"split{i}"
                 folder_path = os.path.join(
@@ -262,7 +259,7 @@ class Preprocessor:
                 assert folder_path in split_path
                 os.makedirs(folder_path, exist_ok=True)
 
-                pattern = re.compile(rf".+split{i}-\d+\.\w+")
+                pattern = re.compile(rf".+split{i}-\d+-\d+\.\w+")
 
                 for file_path in directory.iterdir():
                     if file_path.is_file() and pattern.match(file_path.name):
