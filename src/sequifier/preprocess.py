@@ -2,7 +2,9 @@ import json
 import math
 import multiprocessing
 import os
+import re
 import shutil
+from pathlib import Path
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -37,6 +39,7 @@ class Preprocessor:
         data_path: str,
         read_format: str,
         write_format: str,
+        combine_into_single_file: bool,
         selected_columns: Optional[list[str]],
         group_proportions: list[float],
         seq_length: int,
@@ -46,6 +49,14 @@ class Preprocessor:
         n_cores: Optional[int],
     ):
         self.project_path = project_path
+
+        self.data_name_root = os.path.splitext(os.path.basename(data_path))[0]
+        self.combine_into_single_file = combine_into_single_file
+        if self.combine_into_single_file:
+            self.target_dir = "temp"
+        else:
+            self.target_dir = self.data_name_root
+
         self.seed = seed
         np.random.seed(seed)
 
@@ -106,7 +117,7 @@ class Preprocessor:
     @beartype
     def _setup_directories(self) -> None:
         os.makedirs(os.path.join(self.project_path, "data"), exist_ok=True)
-        temp_path = os.path.join(self.project_path, "data", "temp")
+        temp_path = os.path.join(self.project_path, "data", self.target_dir)
         if os.path.exists(temp_path):
             shutil.rmtree(temp_path)
         os.makedirs(temp_path)
@@ -123,7 +134,6 @@ class Preprocessor:
         assert (
             data.null_count().sum().sum_horizontal().item() == 0
         ), f"NaN or null values not accepted: {data.null_count()}"
-        self.data_name_root = os.path.splitext(os.path.basename(data_path))[0]
 
         if selected_columns:
             selected_columns_filtered = [
@@ -142,7 +152,7 @@ class Preprocessor:
 
     @beartype
     def _setup_split_paths(self, write_format: str, n_splits: int) -> None:
-        self.split_paths = [
+        split_paths = [
             os.path.join(
                 self.project_path,
                 "data",
@@ -150,6 +160,8 @@ class Preprocessor:
             )
             for i in range(n_splits)
         ]
+
+        self.split_paths = split_paths
 
     @beartype
     def _process_columns(
@@ -211,6 +223,7 @@ class Preprocessor:
                 seq_step_sizes,
                 data_columns,
                 group_proportions,
+                self.target_dir,
                 write_format,
             )
             for i, (start, end) in enumerate(batch_limits)
@@ -220,19 +233,44 @@ class Preprocessor:
         with multiprocessing.Pool(processes=len(batches)) as pool:
             pool.starmap(preprocess_batch, batches)
 
-        combine_multiprocessing_outputs(
-            self.project_path,
-            len(group_proportions),
-            len(batches),
-            self.data_name_root,
-            write_format,
-        )
+        if self.combine_into_single_file:
+            combine_multiprocessing_outputs(
+                self.project_path,
+                self.target_dir,
+                len(group_proportions),
+                len(batches),
+                self.data_name_root,
+                write_format,
+            )
 
     @beartype
     def _cleanup(self) -> None:
-        delete_path = os.path.join(self.project_path, "data", "temp")
-        assert len(delete_path) > 9
-        os.system(f"rm -rf {delete_path}*")
+        temp_output_path = os.path.join(self.project_path, "data", self.target_dir)
+        directory = Path(temp_output_path)
+
+        if not self.target_dir == "temp":
+            pattern = re.compile(r".+split\d+-\d+-\d+\.\w+")
+            for file_path in directory.iterdir():
+                if file_path.is_file() and pattern.match(file_path.name):
+                    file_path.unlink()
+
+            for i, split_path in enumerate(self.split_paths):
+                split = f"split{i}"
+                folder_path = os.path.join(
+                    self.project_path, "data", f"{self.data_name_root}-{split}"
+                )
+                assert folder_path in split_path
+                os.makedirs(folder_path, exist_ok=True)
+
+                pattern = re.compile(rf".+split{i}-\d+\.\w+")
+
+                for file_path in directory.iterdir():
+                    if file_path.is_file() and pattern.match(file_path.name):
+                        destination = Path(folder_path) / file_path.name
+                        shutil.move(str(file_path), str(destination))
+
+        if not os.listdir(directory) or self.target_dir == "temp":
+            shutil.rmtree(directory)
 
     @beartype
     def _export_metadata(
@@ -323,6 +361,7 @@ def preprocess_batch(
     seq_step_sizes: list[int],
     data_columns: list[str],
     group_proportions: list[float],
+    target_dir: str,
     write_format: str,
 ) -> None:
     sequence_ids = sorted(batch.get_column("sequenceId").unique().to_list())
@@ -347,7 +386,7 @@ def preprocess_batch(
             split_path_batch_seq = split_path.replace(
                 f".{write_format}", f"-{process_id}-{i}.{write_format}"
             )
-            split_path_batch_seq = insert_top_folder(split_path_batch_seq, "temp")
+            split_path_batch_seq = insert_top_folder(split_path_batch_seq, target_dir)
 
             if write_format == "csv":
                 write_data(split, split_path_batch_seq, "csv")
@@ -360,7 +399,7 @@ def preprocess_batch(
         out_path = split_path.replace(
             f".{write_format}", f"-{process_id}.{write_format}"
         )
-        out_path = insert_top_folder(out_path, "temp")
+        out_path = insert_top_folder(out_path, target_dir)
 
         if write_format == "csv":
             command = " ".join(["csvstack"] + written_files[j] + [f"> {out_path}"])
@@ -465,6 +504,7 @@ def cast_columns_to_string(data: pl.DataFrame) -> pl.DataFrame:
 @beartype
 def combine_multiprocessing_outputs(
     project_path: str,
+    target_dir: str,
     n_splits: int,
     n_batches: int,
     dataset_name: str,
@@ -479,7 +519,7 @@ def combine_multiprocessing_outputs(
             os.path.join(
                 project_path,
                 "data",
-                "temp",
+                target_dir,
                 f"{dataset_name}-split{split}-{batch}.{write_format}",
             )
             for batch in range(n_batches)
