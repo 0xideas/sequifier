@@ -38,6 +38,7 @@ class PreprocessorModel(BaseModel):
     data_path: str
     read_format: str = "csv"
     write_format: str = "parquet"
+    combine_into_single_file: bool = True
     selected_columns: Optional[list[str]]
 
     group_proportions: list[float]
