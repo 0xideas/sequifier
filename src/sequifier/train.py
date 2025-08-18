@@ -25,7 +25,9 @@ torch._dynamo.config.suppress_errors = True
 from sequifier.config.train_config import load_train_config  # noqa: E402
 from sequifier.helpers import LogFile  # noqa: E402
 from sequifier.helpers import construct_index_maps  # noqa: E402
-from sequifier.io.sequifier_dataset import SequifierDataset  # noqa: E402
+from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
+    SequifierDatasetFromFile,
+)
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 
 
@@ -44,10 +46,10 @@ def train_worker(rank, world_size, config):
         setup(rank, world_size, config.training_spec.backend)
 
     # 1. Create Datasets and DataLoaders with DistributedSampler
-    train_dataset = SequifierDataset(
+    train_dataset = SequifierDatasetFromFile(
         config.training_data_path, config.read_format, config
     )
-    valid_dataset = SequifierDataset(
+    valid_dataset = SequifierDatasetFromFile(
         config.validation_data_path, config.read_format, config
     )
 

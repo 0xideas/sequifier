@@ -9,7 +9,7 @@ from sequifier.helpers import read_data  # noqa: E402
 from sequifier.helpers import subset_to_selected_columns  # noqa: E402
 
 
-class SequifierDataset(Dataset):
+class SequifierDatasetFromFile(Dataset):
     """Custom PyTorch Dataset for Sequifier data using pre-aggregation."""
 
     def __init__(self, data_path, read_format, config):
