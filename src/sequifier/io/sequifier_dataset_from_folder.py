@@ -70,6 +70,11 @@ class SequifierDatasetFromFolder(Dataset):
             col: torch.cat(tensors) for col, tensors in all_targets.items() if tensors
         }
 
+        for tensor in self.sequences.values():
+            tensor.share_memory_()
+        for tensor in self.targets.values():
+            tensor.share_memory_()
+
         print(
             f"Rank {config.training_spec.device}: Dataset pre-loading complete. Total samples: {self.n_samples}"
         )
