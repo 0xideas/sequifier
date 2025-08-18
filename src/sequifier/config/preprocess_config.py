@@ -47,6 +47,7 @@ class PreprocessorModel(BaseModel):
     max_rows: Optional[int]
     seed: int
     n_cores: Optional[int]
+    batches_per_file: int = 1024  # New configurable parameter
 
     @validator("data_path", always=True)
     def validate_data_path(cls, v: str) -> str:
@@ -97,6 +98,12 @@ class PreprocessorModel(BaseModel):
             )
         if not all(step > 0 for step in v):
             raise ValueError(f"All seq_step_sizes must be positive integers: {v}")
+        return v
+
+    @validator("batches_per_file")
+    def validate_batches_per_file(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("batches_per_file must be a positive integer")
         return v
 
     def __init__(self, **kwargs):
