@@ -102,6 +102,8 @@ def train_worker(rank, world_size, config, from_folder):
     # This ensures that data tensors are moved to the correct GPU in the training loop.
     model.device = target
 
+    model = torch.compile(model)
+
     if config.training_spec.distributed:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
