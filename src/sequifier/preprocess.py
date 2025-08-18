@@ -48,8 +48,10 @@ class Preprocessor:
         max_rows: Optional[int],
         seed: int,
         n_cores: Optional[int],
+        batches_per_file: int,
     ):
         self.project_path = project_path
+        self.batches_per_file = batches_per_file
 
         self.data_name_root = os.path.splitext(os.path.basename(data_path))[0]
         self.combine_into_single_file = combine_into_single_file
@@ -230,6 +232,7 @@ class Preprocessor:
                 group_proportions,
                 self.target_dir,
                 write_format,
+                self.batches_per_file,
             )
             for i, (start, end) in enumerate(batch_limits)
             if (end - start) > 0
@@ -445,6 +448,33 @@ def process_and_write_data_pt(
 
 
 @beartype
+def _write_accumulated_sequences(
+    sequences_to_write: list[pl.DataFrame],
+    split_path: str,
+    write_format: str,
+    process_id: int,
+    file_index: int,
+    target_dir: str,
+    seq_length: int,
+    col_types: dict[str, str],
+):
+    """Helper to write a batch of accumulated sequences to a single file."""
+    if not sequences_to_write:
+        return
+
+    combined_df = pl.concat(sequences_to_write)
+
+    # Construct a unique filename for the batched file
+    split_path_batch_seq = split_path.replace(
+        f".{write_format}", f"-{process_id}-{file_index}.{write_format}"
+    )
+    out_path = insert_top_folder(split_path_batch_seq, target_dir)
+
+    # Write the combined data
+    process_and_write_data_pt(combined_df, seq_length, out_path, col_types)
+
+
+@beartype
 def preprocess_batch(
     process_id: int,
     batch: pl.DataFrame,
@@ -457,53 +487,109 @@ def preprocess_batch(
     group_proportions: list[float],
     target_dir: str,
     write_format: str,
+    batches_per_file: int,
 ) -> None:
     sequence_ids = sorted(batch.get_column("sequenceId").unique().to_list())
-    written_files: dict[int, list[str]] = {i: [] for i in range(len(split_paths))}
-    for i, sequence_id in enumerate(sequence_ids):
-        data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
-        group_bounds = get_group_bounds(data_subset, group_proportions)
-        sequences = {
-            i: cast_columns_to_string(
-                extract_sequences(
-                    data_subset.slice(lb, ub - lb),
-                    schema,
-                    seq_length,
-                    seq_step_sizes[i],
-                    data_columns,
-                )
-            )
-            for i, (lb, ub) in enumerate(group_bounds)
-        }
 
-        for split_path, (group, split) in zip(split_paths, sequences.items()):
-            split_path_batch_seq = split_path.replace(
-                f".{write_format}", f"-{process_id}-{i}.{write_format}"
+    if write_format == "pt":
+        # New logic for batching sequences into files for .pt format
+        sequences_by_split = {i: [] for i in range(len(split_paths))}
+        file_indices = {i: 0 for i in range(len(split_paths))}
+
+        for i, sequence_id in enumerate(sequence_ids):
+            data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
+            group_bounds = get_group_bounds(data_subset, group_proportions)
+            sequences = {
+                i: cast_columns_to_string(
+                    extract_sequences(
+                        data_subset.slice(lb, ub - lb),
+                        schema,
+                        seq_length,
+                        seq_step_sizes[i],
+                        data_columns,
+                    )
+                )
+                for i, (lb, ub) in enumerate(group_bounds)
+            }
+
+            for group, split_df in sequences.items():
+                if not split_df.is_empty():
+                    sequences_by_split[group].append(split_df)
+
+                # Check if the accumulator for this split has reached the desired size
+                if len(sequences_by_split[group]) >= batches_per_file:
+                    _write_accumulated_sequences(
+                        sequences_by_split[group],
+                        split_paths[group],
+                        write_format,
+                        process_id,
+                        file_indices[group],
+                        target_dir,
+                        seq_length,
+                        col_types,
+                    )
+                    # Reset the accumulator and increment the file index
+                    sequences_by_split[group] = []
+                    file_indices[group] += 1
+
+        # After the loop, write any remaining sequences that didn't fill a full batch
+        for group in range(len(split_paths)):
+            _write_accumulated_sequences(
+                sequences_by_split[group],
+                split_paths[group],
+                write_format,
+                process_id,
+                file_indices[group],
+                target_dir,
+                seq_length,
+                col_types,
             )
-            split_path_batch_seq = insert_top_folder(split_path_batch_seq, target_dir)
+
+    else:
+        # Original logic for 'csv' and 'parquet' formats
+        written_files: dict[int, list[str]] = {i: [] for i in range(len(split_paths))}
+        for i, sequence_id in enumerate(sequence_ids):
+            data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
+            group_bounds = get_group_bounds(data_subset, group_proportions)
+            sequences = {
+                i: cast_columns_to_string(
+                    extract_sequences(
+                        data_subset.slice(lb, ub - lb),
+                        schema,
+                        seq_length,
+                        seq_step_sizes[i],
+                        data_columns,
+                    )
+                )
+                for i, (lb, ub) in enumerate(group_bounds)
+            }
+
+            for split_path, (group, split) in zip(split_paths, sequences.items()):
+                split_path_batch_seq = split_path.replace(
+                    f".{write_format}", f"-{process_id}-{i}.{write_format}"
+                )
+                split_path_batch_seq = insert_top_folder(
+                    split_path_batch_seq, target_dir
+                )
+
+                if write_format == "csv":
+                    write_data(split, split_path_batch_seq, "csv")
+                elif write_format == "parquet":
+                    write_data(split, split_path_batch_seq, "parquet")
+
+                written_files[group].append(split_path_batch_seq)
+
+        for j, split_path in enumerate(split_paths):
+            out_path = split_path.replace(
+                f".{write_format}", f"-{process_id}.{write_format}"
+            )
+            out_path = insert_top_folder(out_path, target_dir)
 
             if write_format == "csv":
-                write_data(split, split_path_batch_seq, "csv")
+                command = " ".join(["csvstack"] + written_files[j] + [f"> {out_path}"])
+                os.system(command)
             elif write_format == "parquet":
-                write_data(split, split_path_batch_seq, "parquet")
-            elif write_format == "pt":
-                process_and_write_data_pt(
-                    split, seq_length, split_path_batch_seq, col_types
-                )
-
-            written_files[group].append(split_path_batch_seq)
-
-    for j, split_path in enumerate(split_paths):
-        out_path = split_path.replace(
-            f".{write_format}", f"-{process_id}.{write_format}"
-        )
-        out_path = insert_top_folder(out_path, target_dir)
-
-        if write_format == "csv":
-            command = " ".join(["csvstack"] + written_files[j] + [f"> {out_path}"])
-            os.system(command)
-        elif write_format == "parquet":
-            combine_parquet_files(written_files[j], out_path)
+                combine_parquet_files(written_files[j], out_path)
 
 
 @beartype
