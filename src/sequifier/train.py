@@ -499,8 +499,16 @@ class TransformerModel(nn.Module):
         num_batches = len(train_loader)
 
         for batch_count, (data, targets) in enumerate(train_loader):
-            data = {k: v.to(self.device) for k, v in data.items()}
-            targets = {k: v.to(self.device) for k, v in targets.items()}
+            data = {
+                k: v.to(self.device)
+                for k, v in data.items()
+                if k in self.selected_columns
+            }
+            targets = {
+                k: v.to(self.device)
+                for k, v in targets.items()
+                if k in self.target_column_types
+            }
             output = self.forward_train(data)
 
             loss, losses = self._calculate_loss(output, targets)
@@ -595,8 +603,16 @@ class TransformerModel(nn.Module):
         with torch.no_grad():
             for i, (data, targets) in enumerate(valid_loader):
                 # Move data to the current process's assigned GPU
-                data = {k: v.to(self.device) for k, v in data.items()}
-                targets = {k: v.to(self.device) for k, v in targets.items()}
+                data = {
+                    k: v.to(self.device)
+                    for k, v in data.items()
+                    if k in self.selected_columns
+                }
+                targets = {
+                    k: v.to(self.device)
+                    for k, v in targets.items()
+                    if k in self.target_column_types
+                }
 
                 output = self.forward_train(data)
                 loss, losses = self._calculate_loss(output, targets)
@@ -650,9 +666,16 @@ class TransformerModel(nn.Module):
 
             # Iterate over the sharded validation loader
             for data, targets in valid_loader:
-                data = {k: v.to(self.device) for k, v in data.items()}
-                targets = {k: v.to(self.device) for k, v in targets.items()}
-
+                data = {
+                    k: v.to(self.device)
+                    for k, v in data.items()
+                    if k in self.selected_columns
+                }
+                targets = {
+                    k: v.to(self.device)
+                    for k, v in targets.items()
+                    if k in self.target_column_types
+                }
                 # Replicate original logic of using input as pseudo-output
                 pseudo_output = {
                     col: self._transform_val(col, data[col]) for col in targets.keys()
