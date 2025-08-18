@@ -1,6 +1,6 @@
 project_path: tests/project_folder
 model_name: model-categorical-multitarget-5
-read_format: parquet
+read_format: pt
 ddconfig_path: configs/ddconfigs/test-data-categorical-multitarget-5.json
 
 selected_columns: null

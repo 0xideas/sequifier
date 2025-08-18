@@ -14,7 +14,7 @@ import torch
 from beartype import beartype
 
 from sequifier.config.preprocess_config import load_preprocessor_config
-from sequifier.helpers import read_data, write_data
+from sequifier.helpers import PANDAS_TO_TORCH_TYPES, read_data, write_data
 
 
 @beartype
@@ -111,6 +111,7 @@ class Preprocessor:
             seq_length,
             seq_step_sizes,
             data_columns,
+            col_types,
             group_proportions,
             write_format,
         )
@@ -210,6 +211,7 @@ class Preprocessor:
         seq_length: int,
         seq_step_sizes: list[int],
         data_columns: list[str],
+        col_types: dict[str, str],
         group_proportions: list[float],
         write_format: str,
     ) -> None:
@@ -224,6 +226,7 @@ class Preprocessor:
                 seq_length,
                 seq_step_sizes,
                 data_columns,
+                col_types,
                 group_proportions,
                 self.target_dir,
                 write_format,
@@ -267,6 +270,8 @@ class Preprocessor:
                         destination = Path(folder_path) / file_path.name
                         shutil.move(str(file_path), str(destination))
 
+                self._create_metadata_for_folder(folder_path)
+
         if not os.listdir(directory) or self.target_dir == "temp":
             shutil.rmtree(directory)
 
@@ -296,6 +301,48 @@ class Preprocessor:
             "w",
         ) as f:
             json.dump(data_driven_config, f)
+
+    @beartype
+    def _create_metadata_for_folder(self, folder_path: str) -> None:
+        """
+        Scans a directory for .pt files, counts samples in each, and writes metadata.json.
+        """
+        batch_files_metadata = []
+        total_samples = 0
+        directory = Path(folder_path)
+
+        # Find all .pt files in the target folder
+        pt_files = sorted(
+            [f for f in directory.iterdir() if f.is_file() and f.suffix == ".pt"]
+        )
+
+        for file_path in pt_files:
+            try:
+                # Load the tensor file to inspect its contents
+                sequences_dict, _ = torch.load(file_path)
+                if sequences_dict:
+                    # All tensors in the dict have the same number of samples (batch size)
+                    n_samples = sequences_dict[list(sequences_dict.keys())[0]].shape[0]
+
+                    # Store the file's name (relative path) and its sample count
+                    batch_files_metadata.append(
+                        {"path": file_path.name, "samples": n_samples}
+                    )
+                    total_samples += n_samples
+            except Exception as e:
+                # Add a warning for robustness in case a file is corrupted
+                print(f"Warning: Could not process file {file_path} for metadata: {e}")
+
+        # Final metadata structure required by SequifierDatasetFromFolder
+        metadata = {
+            "total_samples": total_samples,
+            "batch_files": batch_files_metadata,
+        }
+
+        # Write the metadata to a json file in the same folder
+        metadata_path = directory / "metadata.json"
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=4)
 
 
 @beartype
@@ -350,21 +397,13 @@ def get_group_bounds(data_subset: pl.DataFrame, group_proportions: list[float]):
 
 
 @beartype
-def process_and_write_data_pt(data: pl.DataFrame, seq_length: int, path: str):
+def process_and_write_data_pt(
+    data: pl.DataFrame, seq_length: int, path: str, column_types: dict[str, str]
+):
     if data.is_empty():
         return
 
     sequence_cols = [str(c) for c in range(seq_length - 1, -1, -1)]
-
-    polars_dtype = data.schema[sequence_cols[0]]
-    if isinstance(polars_dtype, pl.datatypes.Int64):
-        torch_dtype = torch.int64
-    elif isinstance(polars_dtype, pl.datatypes.Float64):
-        torch_dtype = torch.float32
-    else:
-        raise TypeError(
-            f"Unsupported Polars dtype for sequence columns: {polars_dtype}"
-        )
 
     all_feature_cols = data.get_column("inputCol").unique().to_list()
 
@@ -389,9 +428,12 @@ def process_and_write_data_pt(data: pl.DataFrame, seq_length: int, path: str):
     targets_dict = {}
 
     for col_name in all_feature_cols:
+        torch_dtype = PANDAS_TO_TORCH_TYPES[column_types[col_name]]
+
         sequences_np = np.vstack(
             aggregated_data.get_column(f"seq_{col_name}").to_numpy(writable=True)
         )
+
         sequences_dict[col_name] = torch.tensor(sequences_np[:, :-1], dtype=torch_dtype)
         targets_dict[col_name] = torch.tensor(sequences_np[:, 1:], dtype=torch_dtype)
 
@@ -411,6 +453,7 @@ def preprocess_batch(
     seq_length: int,
     seq_step_sizes: list[int],
     data_columns: list[str],
+    col_types: dict[str, str],
     group_proportions: list[float],
     target_dir: str,
     write_format: str,
@@ -444,7 +487,9 @@ def preprocess_batch(
             elif write_format == "parquet":
                 write_data(split, split_path_batch_seq, "parquet")
             elif write_format == "pt":
-                process_and_write_data_pt(split, seq_length, split_path_batch_seq)
+                process_and_write_data_pt(
+                    split, seq_length, split_path_batch_seq, col_types
+                )
 
             written_files[group].append(split_path_batch_seq)
 
