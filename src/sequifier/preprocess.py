@@ -10,6 +10,7 @@ from typing import Any, Optional, Union
 import numpy as np
 import polars as pl
 import pyarrow.parquet as pq
+import torch
 from beartype import beartype
 
 from sequifier.config.preprocess_config import load_preprocessor_config
@@ -230,7 +231,7 @@ class Preprocessor:
             for i, (start, end) in enumerate(batch_limits)
             if (end - start) > 0
         ]
-
+        # preprocess_batch(*batches[0])
         with multiprocessing.Pool(processes=len(batches)) as pool:
             pool.starmap(preprocess_batch, batches)
 
@@ -349,6 +350,59 @@ def get_group_bounds(data_subset: pl.DataFrame, group_proportions: list[float]):
 
 
 @beartype
+def process_and_write_data_pt(data: pl.DataFrame, seq_length: int, path: str):
+    if data.is_empty():
+        return
+
+    sequence_cols = [str(c) for c in range(seq_length - 1, -1, -1)]
+
+    polars_dtype = data.schema[sequence_cols[0]]
+    if isinstance(polars_dtype, pl.datatypes.Int64):
+        torch_dtype = torch.int64
+    elif isinstance(polars_dtype, pl.datatypes.Float64):
+        torch_dtype = torch.float32
+    else:
+        raise TypeError(
+            f"Unsupported Polars dtype for sequence columns: {polars_dtype}"
+        )
+
+    all_feature_cols = data.get_column("inputCol").unique().to_list()
+
+    aggs = [
+        pl.concat_list(sequence_cols)
+        .filter(pl.col("inputCol") == col_name)
+        .flatten()
+        .alias(f"seq_{col_name}")
+        for col_name in all_feature_cols
+    ]
+
+    aggregated_data = (
+        data.group_by(["sequenceId", "subsequenceId"])
+        .agg(aggs)
+        .sort(["sequenceId", "subsequenceId"])
+    )
+
+    if aggregated_data.is_empty():
+        return
+
+    sequences_dict = {}
+    targets_dict = {}
+
+    for col_name in all_feature_cols:
+        sequences_np = np.vstack(
+            aggregated_data.get_column(f"seq_{col_name}").to_numpy(writable=True)
+        )
+        sequences_dict[col_name] = torch.tensor(sequences_np[:, :-1], dtype=torch_dtype)
+        targets_dict[col_name] = torch.tensor(sequences_np[:, 1:], dtype=torch_dtype)
+
+    if not sequences_dict:
+        return
+
+    data_to_save = (sequences_dict, targets_dict)
+    torch.save(data_to_save, path)
+
+
+@beartype
 def preprocess_batch(
     process_id: int,
     batch: pl.DataFrame,
@@ -389,6 +443,8 @@ def preprocess_batch(
                 write_data(split, split_path_batch_seq, "csv")
             elif write_format == "parquet":
                 write_data(split, split_path_batch_seq, "parquet")
+            elif write_format == "pt":
+                process_and_write_data_pt(split, seq_length, split_path_batch_seq)
 
             written_files[group].append(split_path_batch_seq)
 
