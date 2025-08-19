@@ -70,6 +70,10 @@ class PreprocessorModel(BaseModel):
             raise ValueError(
                 "Only with write_format 'pt' can combine_into_single_file be set to False"
             )
+        if values["write_format"] == "pt" and v is False:
+            raise ValueError(
+                "With write_format 'pt', combine_into_single_file must be set to False"
+            )
         return v
 
     @validator("group_proportions")
