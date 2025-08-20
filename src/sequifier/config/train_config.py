@@ -320,6 +320,11 @@ class TrainModel(BaseModel):
         assert set(values["target_columns"]) == set(
             v.criterion.keys()
         ), "target_columns and criterion must contain the same values/keys"
+
+        if v.distributed:
+            assert (
+                values["read_format"] == "pt"
+            ), "If distributed is set to 'true', the format has to be 'pt'"
         return v
 
     @validator("column_types")

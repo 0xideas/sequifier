@@ -36,6 +36,7 @@ class SequifierDatasetFromFolder(Dataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
+        self.batch_files_info = metadata["batch_files"]
         self.n_samples = metadata["total_samples"]
 
         print(
