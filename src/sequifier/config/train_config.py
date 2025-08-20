@@ -210,6 +210,7 @@ class TrainingSpecModel(BaseModel):
     )
     continue_training: bool = True
     distributed: bool = False
+    load_full_data_to_ram: bool = True
     world_size: int = 1
     num_workers: int = 0
     backend: str = "nccl"
