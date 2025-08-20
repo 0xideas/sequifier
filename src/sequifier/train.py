@@ -31,6 +31,9 @@ from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
 from sequifier.io.sequifier_dataset_from_folder import (  # noqa: E402
     SequifierDatasetFromFolder,
 )
+from sequifier.io.sequifier_dataset_from_folder_lazy import (  # noqa: E402
+    SequifierDatasetFromFolderLazy,
+)
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 from sequifier.samplers.distributed_grouped_random_sampler import (  # noqa: E402
     DistributedGroupedRandomSampler,
@@ -53,8 +56,20 @@ def train_worker(rank, world_size, config, from_folder):
 
     # 1. Create Datasets and DataLoaders with DistributedSampler
     if from_folder:
-        train_dataset = SequifierDatasetFromFolder(config.training_data_path, config)
-        valid_dataset = SequifierDatasetFromFolder(config.validation_data_path, config)
+        if config.training_spec.load_full_data_to_ram:
+            train_dataset = SequifierDatasetFromFolder(
+                config.training_data_path, config
+            )
+            valid_dataset = SequifierDatasetFromFolder(
+                config.validation_data_path, config
+            )
+        else:
+            train_dataset = SequifierDatasetFromFolderLazy(
+                config.training_data_path, config
+            )
+            valid_dataset = SequifierDatasetFromFolderLazy(
+                config.validation_data_path, config
+            )
     else:
         assert config.training_spec.distributed == False  # noqa: E712
         train_dataset = SequifierDatasetFromFile(config.training_data_path, config)
