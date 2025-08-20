@@ -70,7 +70,7 @@ class PreprocessorModel(BaseModel):
             raise ValueError(
                 "Only with write_format 'pt' can combine_into_single_file be set to False"
             )
-        if values["write_format"] == "pt" and v is False:
+        if values["write_format"] == "pt" and v is True:
             raise ValueError(
                 "With write_format 'pt', combine_into_single_file must be set to False"
             )
