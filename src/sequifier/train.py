@@ -18,7 +18,7 @@ from torch import Tensor, nn
 from torch.nn import ModuleDict, TransformerEncoder, TransformerEncoderLayer
 from torch.nn.functional import one_hot
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
 
 torch._dynamo.config.suppress_errors = True
@@ -32,6 +32,9 @@ from sequifier.io.sequifier_dataset_from_folder import (  # noqa: E402
     SequifierDatasetFromFolder,
 )
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
+from sequifier.samplers.distributed_grouped_random_sampler import (  # noqa: E402
+    DistributedGroupedRandomSampler,
+)
 
 
 def setup(rank, world_size, backend="nccl"):
@@ -53,22 +56,36 @@ def train_worker(rank, world_size, config, from_folder):
         train_dataset = SequifierDatasetFromFolder(config.training_data_path, config)
         valid_dataset = SequifierDatasetFromFolder(config.validation_data_path, config)
     else:
+        assert config.training_spec.distributed == False  # noqa: E712
         train_dataset = SequifierDatasetFromFile(config.training_data_path, config)
         valid_dataset = SequifierDatasetFromFile(config.validation_data_path, config)
 
-    valid_sampler = (
-        DistributedSampler(
-            valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+    if from_folder:
+        if config.training_spec.distributed:
+            # 2. Use the new distributed sampler for the multi-GPU case
+            train_sampler = DistributedGroupedRandomSampler(
+                train_dataset, num_replicas=world_size, rank=rank
+            )
+            valid_sampler = DistributedGroupedRandomSampler(
+                valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+            )
+        else:
+            # Use the simple grouped sampler for the single-GPU case
+            train_sampler = RandomSampler(train_dataset)
+            valid_sampler = None
+    else:
+        train_sampler = (
+            DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+            if config.training_spec.distributed
+            else None
         )
-        if config.training_spec.distributed
-        else None
-    )
-
-    train_sampler = (
-        DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
-        if config.training_spec.distributed
-        else None
-    )
+        valid_sampler = (
+            DistributedSampler(
+                valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+            )
+            if config.training_spec.distributed
+            else None
+        )
 
     train_loader = DataLoader(
         train_dataset,
