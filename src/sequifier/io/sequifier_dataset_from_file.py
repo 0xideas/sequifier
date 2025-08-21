@@ -1,79 +1,93 @@
-# In ./src/sequifier/train.py, near the top with other imports
-import polars as pl
+from typing import Dict, Tuple
+
 import torch
 from torch.utils.data import Dataset
 
-from sequifier.helpers import PANDAS_TO_TORCH_TYPES  # noqa: E402
-from sequifier.helpers import normalize_path  # noqa: E402
-from sequifier.helpers import read_data  # noqa: E402
-from sequifier.helpers import subset_to_selected_columns  # noqa: E402
+from sequifier.config.train_config import TrainModel
+from sequifier.helpers import PANDAS_TO_TORCH_TYPES, numpy_to_pytorch, read_data
 
 
 class SequifierDatasetFromFile(Dataset):
-    """Custom PyTorch Dataset for Sequifier data using pre-aggregation."""
+    """
+    A PyTorch Dataset that pre-loads and pre-converts the entire dataset into
+    large PyTorch tensors in CPU RAM during initialization.
 
-    def __init__(self, data_path, config):
-        read_format = config.read_format
-        self.config = config
-        self.column_types = {
+    This approach mirrors the original data loading logic but encapsulates it
+    within a standard Dataset class. It offers the fastest possible per-epoch
+    batch creation by simply slicing the already-prepared tensors.
+
+    **Trade-offs:**
+    - 👍 **Pros:** Maximum training loop speed, as there is virtually no CPU
+              overhead for batch creation.
+    - 👎 **Cons:** Very high peak RAM usage (~2x dataset size) and a long,
+              blocking initialization time before training can begin.
+    """
+
+    def __init__(self, data_path: str, config: TrainModel):
+        """
+        Initializes the dataset by performing the entire data conversion upfront.
+
+        Args:
+            data_path (str): The path to the data file (e.g., '.parquet').
+            config (TrainModel): The training configuration object.
+        """
+        # --- Initialization: Perform the entire data conversion now ---
+        print(
+            f"🚀 [Dataset] Pre-loading and converting entire dataset from '{data_path}' to tensors..."
+        )
+
+        # 1. Load the raw data file into a Polars DataFrame in RAM.
+        data_df = read_data(data_path, config.read_format)
+
+        column_types = {
             col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
             for col in config.column_types
         }
-
-        # Load the initial data
-        print("SequifierDatasetFromFile: Reading data...")
-        data = read_data(normalize_path(data_path, config.project_path), read_format)
-        if config.selected_columns is not None:
-            print("SequifierDatasetFromFile: Subsetting data...")
-
-            data = subset_to_selected_columns(data, config.selected_columns)
-
-        joint_seq_cols = [str(c) for c in range(self.config.seq_length, -1, -1)]
-
-        merged_cols = []
-        for col in self.config.selected_columns + self.config.target_columns:
-            if col not in merged_cols:
-                merged_cols.append(col)
-
-        print("SequifierDatasetFromFile: Create aggs...")
-
-        aggs = []
-        for col_name in merged_cols:
-            aggs.append(
-                pl.concat_list(joint_seq_cols)
-                .filter(pl.col("inputCol") == col_name)
-                .flatten()
-                .alias(f"seq_{col_name}")
-            )
-
-        print("SequifierDatasetFromFile: Group by & Agg...")
-
-        self.precomputed_data = (
-            data.group_by(["sequenceId", "subsequenceId"])
-            .agg(aggs)
-            .sort(["sequenceId", "subsequenceId"])
+        self.sequences, self.targets = numpy_to_pytorch(
+            data=data_df,
+            column_types=column_types,
+            selected_columns=config.selected_columns,
+            target_columns=config.target_columns,
+            seq_length=config.seq_length,
+            device="cpu",  # Ensure master tensors are created on CPU
+            to_device=False,
         )
-        self.n_samples = len(self.precomputed_data)
-        print("SequifierDatasetFromFile: Init done!")
 
-    def __len__(self):
+        # 3. Discard the now-redundant DataFrame to free up half of the peak RAM.
+        del data_df
+
+        # Determine the total number of samples from the first tensor.
+        first_col = config.selected_columns[0]
+        self.n_samples = self.sequences[first_col].shape[0]
+
+        print(
+            f"✅ [Dataset] Ready. {self.n_samples} samples fully loaded into CPU RAM."
+        )
+
+    def __len__(self) -> int:
+        """Returns the total number of samples in the dataset."""
         return self.n_samples
 
-    def __getitem__(self, idx):
-        sample_row = self.precomputed_data[idx]
+    def __getitem__(
+        self, idx: int
+    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+        """
+        Retrieves a single sample by slicing the pre-loaded tensors.
 
-        sequence = {}
-        for col_name in self.config.selected_columns:
-            sequence_data = sample_row.get_column(f"seq_{col_name}").to_list()[0][:-1]
-            sequence[col_name] = torch.tensor(
-                sequence_data, dtype=self.column_types[col_name]
-            )
+        This operation is extremely fast as it's a simple indexing operation
+        on tensors that are already in memory.
 
-        targets = {}
-        for col_name in self.config.target_columns:
-            target_data = sample_row.get_column(f"seq_{col_name}").to_list()[0][1:]
-            targets[col_name] = torch.tensor(
-                target_data, dtype=self.column_types[col_name]
-            )
+        Args:
+            idx (int): The index of the sample to retrieve.
 
-        return sequence, targets
+        Returns:
+            A tuple containing two dictionaries: one for the input sequences
+            and one for the target sequences.
+        """
+        # Create a dictionary for the input sequences of the requested sample.
+        sequence_item = {key: tensor[idx] for key, tensor in self.sequences.items()}
+
+        # Create a dictionary for the target sequences of the requested sample.
+        target_item = {key: tensor[idx] for key, tensor in self.targets.items()}
+
+        return sequence_item, target_item
