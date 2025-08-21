@@ -125,7 +125,8 @@ def train_worker(rank, world_size, config, from_folder):
             batch_size=None,
             sampler=None,
             num_workers=config.training_spec.num_workers,
-            pin_memory=config.training_spec.device not in ["mps", "cpu"],
+            pin_memory=False,
+            persistent_workers=(config.training_spec.num_workers > 0),
         )
         valid_loader = DataLoader(
             valid_dataset, batch_size=None, sampler=None, shuffle=False
