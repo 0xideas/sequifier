@@ -21,8 +21,11 @@ class SequifierDatasetFromFile(Dataset):
         }
 
         # Load the initial data
+        print("SequifierDatasetFromFile: Reading data...")
         data = read_data(normalize_path(data_path, config.project_path), read_format)
         if config.selected_columns is not None:
+            print("SequifierDatasetFromFile: Subsetting data...")
+
             data = subset_to_selected_columns(data, config.selected_columns)
 
         joint_seq_cols = [str(c) for c in range(self.config.seq_length, -1, -1)]
@@ -31,6 +34,8 @@ class SequifierDatasetFromFile(Dataset):
         for col in self.config.selected_columns + self.config.target_columns:
             if col not in merged_cols:
                 merged_cols.append(col)
+
+        print("SequifierDatasetFromFile: Create aggs...")
 
         aggs = []
         for col_name in merged_cols:
@@ -41,12 +46,15 @@ class SequifierDatasetFromFile(Dataset):
                 .alias(f"seq_{col_name}")
             )
 
+        print("SequifierDatasetFromFile: Group by & Agg...")
+
         self.precomputed_data = (
             data.group_by(["sequenceId", "subsequenceId"])
             .agg(aggs)
             .sort(["sequenceId", "subsequenceId"])
         )
         self.n_samples = len(self.precomputed_data)
+        print("SequifierDatasetFromFile: Init done!")
 
     def __len__(self):
         return self.n_samples

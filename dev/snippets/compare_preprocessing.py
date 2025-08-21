@@ -106,8 +106,8 @@ def load_pt_data(path, cols):
                 contents[file] = torch.load(
                     os.path.join(root, file), map_location="cpu"
                 )
-            except Exception:
-                print(f"failed: {file}")
+            except Exception as e:
+                print(f"failed: {file}: {e}")
 
     data = reconstruct_data(contents, cols)
 

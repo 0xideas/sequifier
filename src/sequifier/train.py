@@ -471,8 +471,12 @@ class TransformerModel(nn.Module):
         self,
         train_loader: DataLoader,
         valid_loader: DataLoader,
-        train_sampler: Optional[DistributedSampler],
-        valid_sampler: Optional[DistributedSampler],
+        train_sampler: Optional[
+            Union[DistributedSampler, DistributedGroupedRandomSampler]
+        ],
+        valid_sampler: Optional[
+            Union[DistributedSampler, DistributedGroupedRandomSampler]
+        ],
     ) -> None:
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
