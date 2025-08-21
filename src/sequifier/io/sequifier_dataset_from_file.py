@@ -39,15 +39,30 @@ class SequifierDatasetFromFile(IterableDataset):
         }
 
         # self.all_tensors now holds both inputs and targets
-        self.all_tensors = numpy_to_pytorch(
+        all_tensors = numpy_to_pytorch(
             data=data_df,
             column_types=column_types,
             all_columns=all_columns,
             seq_length=config.seq_length,
         )
+        self.n_samples = all_tensors[all_columns[0]].shape[0]
+
         del data_df
 
-        self.n_samples = self.all_tensors[all_columns[0]].shape[0]
+        self.sequence_tensors = {
+            key: all_tensors[key] for key in self.config.selected_columns
+        }
+        self.target_tensors = {
+            key: all_tensors[f"{key}_target"] for key in self.config.target_columns
+        }
+        del all_tensors
+
+        if config.training_spec.device != "cpu":
+            for key in self.sequence_tensors:
+                self.sequence_tensors[key] = self.sequence_tensors[key].pin_memory()
+            for key in self.target_tensors:
+                self.target_tensors[key] = self.target_tensors[key].pin_memory()
+
         print(
             f"✅ [IterableDataset] Ready. {self.n_samples} samples loaded into CPU RAM."
         )
@@ -94,12 +109,12 @@ class SequifierDatasetFromFile(IterableDataset):
             batch_indices = indices_for_worker[i:batch_end]
 
             data_batch = {
-                key: self.all_tensors[key][batch_indices]
-                for key in self.config.selected_columns
+                key: tensor[batch_indices]
+                for key, tensor in self.sequence_tensors.items()
             }
             targets_batch = {
-                key: self.all_tensors[f"{key}_target"][batch_indices]
-                for key in self.config.target_columns
+                key: tensor[batch_indices]
+                for key, tensor in self.target_tensors.items()
             }
 
             yield data_batch, targets_batch
