@@ -1,6 +1,7 @@
 from typing import Dict, Iterator, Tuple
 
 import torch
+import torch.distributed as dist
 from torch.utils.data import IterableDataset
 
 from sequifier.config.train_config import TrainModel
@@ -22,6 +23,7 @@ class SequifierDatasetFromFile(IterableDataset):
         self.config = config
         self.batch_size = config.training_spec.batch_size
         self.shuffle = shuffle
+        self.epoch = 0
 
         # Create a unified list of all columns the model might need
         all_columns = sorted(list(set(config.selected_columns + config.target_columns)))
@@ -50,6 +52,10 @@ class SequifierDatasetFromFile(IterableDataset):
             f"✅ [IterableDataset] Ready. {self.n_samples} samples loaded into CPU RAM."
         )
 
+    def set_epoch(self, epoch: int):
+        """Allows the training loop to set the epoch for deterministic shuffling."""
+        self.epoch = epoch
+
     def __len__(self) -> int:
         """Returns the total number of samples in the dataset."""
         return self.n_samples
@@ -57,23 +63,40 @@ class SequifierDatasetFromFile(IterableDataset):
     def __iter__(
         self,
     ) -> Iterator[Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
+        worker_info = torch.utils.data.get_worker_info()
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        rank = dist.get_rank() if dist.is_initialized() else 0
+
+        if worker_info is None:
+            # Single-process data loading
+            worker_id = 0
+            num_workers = 1
+        else:
+            # Multi-process data loading
+            worker_id = worker_info.id
+            num_workers = worker_info.num_workers
+
         indices = torch.arange(self.n_samples)
         if self.shuffle:
-            indices = indices[torch.randperm(self.n_samples)]
+            g = torch.Generator()
+            # Use epoch and seed for a different but deterministic shuffle each epoch
+            g.manual_seed(self.config.seed + self.epoch)
+            indices = indices[torch.randperm(self.n_samples, generator=g)]
 
-        for i in range(0, len(indices), self.batch_size):
+        indices_for_rank = indices[rank::world_size]
+        indices_for_worker = indices_for_rank[worker_id::num_workers]
+
+        for i in range(0, len(indices_for_worker), self.batch_size):
             batch_end = i + self.batch_size
-            if batch_end > len(indices):
+            if batch_end > len(indices_for_worker):
                 continue
 
-            batch_indices = indices[i:batch_end]
+            batch_indices = indices_for_worker[i:batch_end]
 
-            # Create the data and targets dictionaries on the fly for each batch
             data_batch = {
                 key: self.all_tensors[key][batch_indices]
                 for key in self.config.selected_columns
             }
-
             targets_batch = {
                 key: self.all_tensors[f"{key}_target"][batch_indices]
                 for key in self.config.target_columns
