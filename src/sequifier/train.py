@@ -551,12 +551,12 @@ class TransformerModel(nn.Module):
 
         for batch_count, (data, targets) in enumerate(train_loader):
             data = {
-                k: v.to(self.device)
+                k: v.to(self.device, non_blocking=True)
                 for k, v in data.items()
                 if k in self.selected_columns
             }
             targets = {
-                k: v.to(self.device)
+                k: v.to(self.device, non_blocking=True)
                 for k, v in targets.items()
                 if k in self.target_column_types
             }
@@ -655,12 +655,12 @@ class TransformerModel(nn.Module):
             for i, (data, targets) in enumerate(valid_loader):
                 # Move data to the current process's assigned GPU
                 data = {
-                    k: v.to(self.device)
+                    k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
                     if k in self.selected_columns
                 }
                 targets = {
-                    k: v.to(self.device)
+                    k: v.to(self.device, non_blocking=True)
                     for k, v in targets.items()
                     if k in self.target_column_types
                 }
@@ -718,12 +718,12 @@ class TransformerModel(nn.Module):
             # Iterate over the sharded validation loader
             for data, targets in valid_loader:
                 data = {
-                    k: v.to(self.device)
+                    k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
                     if k in self.selected_columns
                 }
                 targets = {
-                    k: v.to(self.device)
+                    k: v.to(self.device, non_blocking=True)
                     for k, v in targets.items()
                     if k in self.target_column_types
                 }
@@ -783,14 +783,14 @@ class TransformerModel(nn.Module):
             return (
                 {
                     col: X[col][batch_start : batch_start + batch_size, :].to(
-                        self.device
+                        self.device, non_blocking=True
                     )
                     for col in X.keys()
                 },
                 {
                     target_column: y[target_column][
                         batch_start : batch_start + batch_size, :
-                    ].to(self.device)
+                    ].to(self.device, non_blocking=True)
                     for target_column in y.keys()
                 },
             )
@@ -822,12 +822,12 @@ class TransformerModel(nn.Module):
                     0,
                     self.n_classes[col],
                     (self.inference_batch_size, self.seq_length),
-                ).to(self.device)
+                ).to(self.device, non_blocking=True)
                 for col in self.categorical_columns
             }
             x_real = {
                 col: torch.rand(self.inference_batch_size, self.seq_length).to(
-                    self.device
+                    self.device, non_blocking=True
                 )
                 for col in self.real_columns
             }
