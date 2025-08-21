@@ -107,9 +107,7 @@ def train_worker(rank, world_size, config, from_folder):
         batch_size=config.training_spec.batch_size,
         sampler=train_sampler,
         shuffle=(train_sampler is None),  # Shuffle only if not using sampler
-        num_workers=0
-        if config.training_spec.device in ["mps", "cpu"]
-        else config.training_spec.num_workers,  # Use multiple workers for data loading
+        num_workers=config.training_spec.num_workers,  # Use multiple workers for data loading
         pin_memory=config.training_spec.device not in ["mps", "cpu"],
     )
 
