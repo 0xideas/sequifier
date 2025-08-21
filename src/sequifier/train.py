@@ -102,22 +102,36 @@ def train_worker(rank, world_size, config, from_folder):
             else None
         )
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=config.training_spec.batch_size,
-        sampler=train_sampler,
-        shuffle=False,  # Shuffle only if not using sampler
-        num_workers=config.training_spec.num_workers,  # Use multiple workers for data loading
-        pin_memory=config.training_spec.device not in ["mps", "cpu"],
-    )
+    if from_folder:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=config.training_spec.batch_size,
+            sampler=train_sampler,
+            shuffle=False,  # Shuffle only if not using sampler
+            num_workers=config.training_spec.num_workers,  # Use multiple workers for data loading
+            pin_memory=config.training_spec.device not in ["mps", "cpu"],
+        )
 
-    # For validation, it's often fine to just run it on the main process
-    valid_loader = DataLoader(
-        valid_dataset,
-        batch_size=config.training_spec.batch_size,
-        sampler=valid_sampler,
-        shuffle=False,
-    )
+        # For validation, it's often fine to just run it on the main process
+        valid_loader = DataLoader(
+            valid_dataset,
+            batch_size=config.training_spec.batch_size,
+            sampler=valid_sampler,
+            shuffle=False,
+        )
+    elif not from_folder:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=None,
+            sampler=None,
+            num_workers=config.training_spec.num_workers,
+            pin_memory=config.training_spec.device not in ["mps", "cpu"],
+        )
+        valid_loader = DataLoader(
+            valid_dataset, batch_size=None, sampler=None, shuffle=False
+        )
+    else:
+        assert False, "not possible"
 
     # 2. Instantiate and wrap the model
     torch.manual_seed(config.seed)
