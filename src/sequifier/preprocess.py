@@ -119,7 +119,6 @@ class Preprocessor:
                     self.data_name_root,
                     write_format,
                 )
-            self._cleanup(write_format)
         else:
             n_classes, id_maps, selected_columns_statistics, col_types, data_columns = (
                 self._get_column_metadata_across_files(
@@ -151,6 +150,8 @@ class Preprocessor:
                 write_format,
                 process_by_file,
             )
+
+        self._cleanup(write_format)
 
     @beartype
     def _get_files_to_process(self, data_path: str, read_format: str) -> list[str]:
