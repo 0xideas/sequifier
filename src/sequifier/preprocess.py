@@ -94,7 +94,7 @@ class Preprocessor:
             schema = self._create_schema(col_types, seq_length)
 
             data = data.sort(["sequenceId", "itemPosition"])
-            self._process_batches(
+            self._process_batches_single_file(
                 data,
                 schema,
                 n_cores,
@@ -115,7 +115,6 @@ class Preprocessor:
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
-
             schema = self._create_schema(col_types, seq_length)
 
     @beartype
@@ -319,7 +318,7 @@ class Preprocessor:
         return id_maps, selected_columns_statistics
 
     @beartype
-    def _process_batches(
+    def _process_batches_single_file(
         self,
         data: pl.DataFrame,
         schema: Any,
