@@ -48,6 +48,7 @@ class PreprocessorModel(BaseModel):
     seed: int
     n_cores: Optional[int]
     batches_per_file: int = 1024  # New configurable parameter
+    process_by_file: bool = True
 
     @validator("data_path", always=True)
     def validate_data_path(cls, v: str) -> str:
