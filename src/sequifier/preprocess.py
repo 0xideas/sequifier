@@ -49,6 +49,7 @@ class Preprocessor:
         seed: int,
         n_cores: Optional[int],
         batches_per_file: int,
+        process_by_file: bool,
     ):
         self.project_path = project_path
         self.batches_per_file = batches_per_file
@@ -72,18 +73,18 @@ class Preprocessor:
         self._setup_split_paths(write_format, len(group_proportions))
 
         if os.path.isfile(data_path):
-            data = self._load_and_preprocess_data(
+            data = _load_and_preprocess_data(
                 data_path, read_format, selected_columns, max_rows
             )
             data_columns = [
                 col for col in data.columns if col not in ["sequenceId", "itemPosition"]
             ]
             id_maps, selected_columns_statistics = {}, {}
-            id_maps, selected_columns_statistics = self._get_column_statistics(
+            id_maps, selected_columns_statistics = _get_column_statistics(
                 data, data_columns, id_maps, selected_columns_statistics, 0
             )
 
-            data, n_classes, col_types = self._apply_column_statistics(
+            data, n_classes, col_types = _apply_column_statistics(
                 data, data_columns, id_maps, selected_columns_statistics
             )
 
@@ -94,7 +95,7 @@ class Preprocessor:
             schema = self._create_schema(col_types, seq_length)
 
             data = data.sort(["sequenceId", "itemPosition"])
-            self._process_batches_single_file(
+            n_batches = _process_batches_single_file(
                 data,
                 schema,
                 n_cores,
@@ -104,10 +105,23 @@ class Preprocessor:
                 col_types,
                 group_proportions,
                 write_format,
+                self.split_paths,
+                self.target_dir,
+                self.batches_per_file,
             )
+
+            if self.combine_into_single_file:
+                combine_multiprocessing_outputs(
+                    self.project_path,
+                    self.target_dir,
+                    len(group_proportions),
+                    n_batches,
+                    self.data_name_root,
+                    write_format,
+                )
             self._cleanup(write_format)
         else:
-            n_classes, id_maps, selected_columns_statistics, col_types = (
+            n_classes, id_maps, selected_columns_statistics, col_types, data_columns = (
                 self._get_column_metadata_across_files(
                     data_path, read_format, max_rows, selected_columns
                 )
@@ -116,6 +130,36 @@ class Preprocessor:
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
             schema = self._create_schema(col_types, seq_length)
+
+            files_to_process = self._get_files_to_process(data_path, read_format)
+
+            self._process_batches_multiple_files(
+                files_to_process,
+                read_format,
+                selected_columns,
+                max_rows,
+                schema,
+                n_cores,
+                seq_length,
+                seq_step_sizes,
+                data_columns,
+                n_classes,
+                id_maps,
+                selected_columns_statistics,
+                col_types,
+                group_proportions,
+                write_format,
+                process_by_file,
+            )
+
+    @beartype
+    def _get_files_to_process(self, data_path: str, read_format: str) -> list[str]:
+        paths_to_process = []
+        for root, dirs, files in os.walk(data_path):
+            for file in files:
+                if file.endswith(read_format):
+                    paths_to_process.append(os.path.join(root, file))
+        return paths_to_process
 
     @beartype
     def _create_schema(
@@ -156,21 +200,22 @@ class Preprocessor:
         dict[str, dict[Union[str, int], int]],
         dict[str, dict[str, float]],
         dict[str, str],
+        list[str],
     ]:
-        n_samples_running_count = 0
+        n_rows_running_count = 0
         id_maps, selected_columns_statistics = {}, {}
         col_types, data_columns = None, None
 
         for root, dirs, files in os.walk(data_path):
             for file in files:
                 if file.endswith(read_format) and (
-                    max_rows is None or n_samples_running_count < max_rows
+                    max_rows is None or n_rows_running_count < max_rows
                 ):
                     print(f"Preprocessing: reading {file}")
                     max_rows_inner = (
-                        None if max_rows is None else n_samples_running_count - max_rows
+                        None if max_rows is None else n_rows_running_count - max_rows
                     )
-                    data = self._load_and_preprocess_data(
+                    data = _load_and_preprocess_data(
                         os.path.join(root, file),
                         read_format,
                         selected_columns,
@@ -190,18 +235,24 @@ class Preprocessor:
                                 str(data.schema[col]) == col_types[col]
                             ), f"{str(data.schema[col]) = } != {col_types[col] = }"
 
-                    id_maps, selected_columns_statistics = self._get_column_statistics(
+                    id_maps, selected_columns_statistics = _get_column_statistics(
                         data,
                         data_columns,
                         id_maps,
                         selected_columns_statistics,
-                        n_samples_running_count,
+                        n_rows_running_count,
                     )
-                    n_samples_running_count += data.shape[0]
+                    n_rows_running_count += data.shape[0]
         assert data_columns is not None
         n_classes = {col: len(id_maps[col]) + 1 for col in data_columns}
         assert col_types is not None
-        return (n_classes, id_maps, selected_columns_statistics, col_types)
+        return (
+            n_classes,
+            id_maps,
+            selected_columns_statistics,
+            col_types,
+            data_columns,
+        )
 
     @beartype
     def _setup_directories(self) -> None:
@@ -210,34 +261,6 @@ class Preprocessor:
         if os.path.exists(temp_path):
             shutil.rmtree(temp_path)
         os.makedirs(temp_path)
-
-    @beartype
-    def _load_and_preprocess_data(
-        self,
-        data_path: str,
-        read_format: str,
-        selected_columns: Optional[list[str]],
-        max_rows: Optional[int],
-    ) -> pl.DataFrame:
-        data = read_data(data_path, read_format, columns=selected_columns)
-        assert (
-            data.null_count().sum().sum_horizontal().item() == 0
-        ), f"NaN or null values not accepted: {data.null_count()}"
-
-        if selected_columns:
-            selected_columns_filtered = [
-                col
-                for col in selected_columns
-                if col not in ["sequenceId", "itemPosition"]
-            ]
-            data = data.select(
-                ["sequenceId", "itemPosition"] + selected_columns_filtered
-            )
-
-        if max_rows:
-            data = data.slice(0, int(max_rows))
-
-        return data
 
     @beartype
     def _setup_split_paths(self, write_format: str, n_splits: int) -> None:
@@ -253,116 +276,110 @@ class Preprocessor:
         self.split_paths = split_paths
 
     @beartype
-    def _apply_column_statistics(
+    def _process_batches_multiple_files(
         self,
-        data: pl.DataFrame,
-        data_columns: list[str],
-        id_maps: dict[str, dict[Union[str, int], int]],
-        selected_columns_statistics: dict[str, dict[str, float]],
-        n_classes: Optional[dict[str, int]] = None,
-        col_types: Optional[dict[str, str]] = None,
-    ) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
-        if n_classes is None:
-            n_classes = {col: len(id_maps[col]) + 1 for col in data_columns}
-
-        if col_types is None:
-            col_types = {col: str(data.schema[col]) for col in data_columns}
-
-        for col in data_columns:
-            data = data.with_columns(pl.col(col).replace(id_maps[col]))
-            data = data.with_columns(
-                (
-                    (pl.col(col) - selected_columns_statistics[col]["mean"])
-                    / (selected_columns_statistics[col]["std"] + 1e-9)
-                ).alias(col)
-            )
-
-        return (data, n_classes, col_types)
-
-    @beartype
-    def _get_column_statistics(
-        self,
-        data: pl.DataFrame,
-        data_columns: list[str],
-        id_maps: dict[str, dict[Union[str, int], int]],
-        selected_columns_statistics: dict[str, dict[str, float]],
-        n_samples_running_count: int,
-    ) -> tuple[
-        dict[str, dict[Union[str, int], int]],
-        dict[str, dict[str, float]],
-    ]:
-        for data_col in data_columns:
-            dtype = data.schema[data_col]
-            if isinstance(dtype, (pl.String, pl.Utf8)) or isinstance(
-                dtype, (pl.Int8, pl.Int16, pl.Int32, pl.Int64)
-            ):
-                new_id_map = create_id_map(data, column=data_col)
-                id_maps[data_col] = combine_maps(new_id_map, id_maps[data_col])
-            elif isinstance(dtype, (pl.Float32, pl.Float64)):
-                combined_mean, combined_std = get_combined_statistics(
-                    data.shape[0],
-                    data.get_column(data_col).mean(),
-                    data.get_column(data_col).std(),
-                    n_samples_running_count,
-                    selected_columns_statistics.get(data_col, {"mean": 0.0})["mean"],
-                    selected_columns_statistics.get(data_col, {"std": 0.0})["std"],
-                )
-
-                selected_columns_statistics[data_col] = {
-                    "std": combined_std,
-                    "mean": combined_mean,
-                }
-            else:
-                raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
-
-        return id_maps, selected_columns_statistics
-
-    @beartype
-    def _process_batches_single_file(
-        self,
-        data: pl.DataFrame,
+        file_paths: list[str],
+        read_format: str,
+        selected_columns: Optional[list[str]],
+        max_rows: Optional[int],
         schema: Any,
         n_cores: Optional[int],
         seq_length: int,
         seq_step_sizes: list[int],
         data_columns: list[str],
+        n_classes: dict[str, int],
+        id_maps: dict[str, dict[Union[int, str], int]],
+        selected_columns_statistics: dict[str, dict[str, float]],
         col_types: dict[str, str],
         group_proportions: list[float],
         write_format: str,
+        process_by_file: bool = True,
     ) -> None:
         n_cores = n_cores or multiprocessing.cpu_count()
-        batch_limits = get_batch_limits(data, n_cores)
-        batches = [
-            (
-                i,
-                data.slice(start, end - start),
-                schema,
-                self.split_paths,
-                seq_length,
-                seq_step_sizes,
-                data_columns,
-                col_types,
-                group_proportions,
-                self.target_dir,
-                write_format,
-                self.batches_per_file,
-            )
-            for i, (start, end) in enumerate(batch_limits)
-            if (end - start) > 0
-        ]
-        # preprocess_batch(*batches[0])
-        with multiprocessing.Pool(processes=len(batches)) as pool:
-            pool.starmap(preprocess_batch, batches)
 
-        if self.combine_into_single_file:
-            combine_multiprocessing_outputs(
-                self.project_path,
-                self.target_dir,
-                len(group_proportions),
-                len(batches),
-                self.data_name_root,
-                write_format,
-            )
+        if process_by_file:
+            n_rows_running_count = 0
+            for path in file_paths:
+                max_rows_inner = (
+                    None if max_rows is None else n_rows_running_count - max_rows
+                )
+                data = _load_and_preprocess_data(
+                    path, read_format, selected_columns, max_rows_inner
+                )
+                data, _, _ = _apply_column_statistics(
+                    data,
+                    data_columns,
+                    id_maps,
+                    selected_columns_statistics,
+                    n_classes,
+                    col_types,
+                )
+
+                n_batches = _process_batches_single_file(
+                    data,
+                    schema,
+                    n_cores,
+                    seq_length,
+                    seq_step_sizes,
+                    data_columns,
+                    col_types,
+                    group_proportions,
+                    write_format,
+                    self.split_paths,
+                    self.target_dir,
+                    self.batches_per_file,
+                )
+
+                if self.combine_into_single_file:
+                    combine_multiprocessing_outputs(
+                        self.project_path,
+                        self.target_dir,
+                        len(group_proportions),
+                        n_batches,
+                        self.data_name_root,
+                        write_format,
+                    )
+                n_rows_running_count += data.shape[0]
+
+        if not process_by_file:
+            n_file_sets = (len(file_paths) // n_cores) + 1
+
+            file_sets = [
+                file_paths[i : i + n_file_sets]
+                for i in range(0, len(file_paths), n_file_sets)
+            ]
+
+            kwargs_1 = {
+                "project_path": self.project_path,
+                "data_name_root": self.data_name_root,
+            }
+            kwargs_2 = {
+                "read_format": read_format,
+                "selected_columns": selected_columns,
+                "max_rows": max_rows,
+                "schema": schema,
+                "seq_length": seq_length,
+                "seq_step_sizes": seq_step_sizes,
+                "data_columns": data_columns,
+                "n_classes": n_classes,
+                "id_maps": id_maps,
+                "selected_columns_statistics": selected_columns_statistics,
+                "col_types": col_types,
+                "group_proportions": group_proportions,
+                "write_format": write_format,
+                "split_paths": self.split_paths,
+                "target_dir": self.target_dir,
+                "batches_per_file": self.batches_per_file,
+                "combine_into_single_file": self.combine_into_single_file,
+            }
+
+            job_params = [
+                list(kwargs_1.values()) + [file_set] + list(kwargs_2.values())
+                for file_set in file_sets
+            ]
+
+            with multiprocessing.Pool(processes=n_cores) as pool:
+                pool.starmap(_process_batches_multiple_files_inner, job_params)
 
     @beartype
     def _cleanup(self, write_format: str) -> None:
@@ -459,6 +476,201 @@ class Preprocessor:
         metadata_path = directory / "metadata.json"
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=4)
+
+
+@beartype
+def _apply_column_statistics(
+    data: pl.DataFrame,
+    data_columns: list[str],
+    id_maps: dict[str, dict[Union[str, int], int]],
+    selected_columns_statistics: dict[str, dict[str, float]],
+    n_classes: Optional[dict[str, int]] = None,
+    col_types: Optional[dict[str, str]] = None,
+) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
+    if n_classes is None:
+        n_classes = {col: len(id_maps[col]) + 1 for col in data_columns}
+
+    if col_types is None:
+        col_types = {col: str(data.schema[col]) for col in data_columns}
+
+    for col in data_columns:
+        data = data.with_columns(pl.col(col).replace(id_maps[col]))
+        data = data.with_columns(
+            (
+                (pl.col(col) - selected_columns_statistics[col]["mean"])
+                / (selected_columns_statistics[col]["std"] + 1e-9)
+            ).alias(col)
+        )
+
+    return (data, n_classes, col_types)
+
+
+@beartype
+def _get_column_statistics(
+    data: pl.DataFrame,
+    data_columns: list[str],
+    id_maps: dict[str, dict[Union[str, int], int]],
+    selected_columns_statistics: dict[str, dict[str, float]],
+    n_rows_running_count: int,
+) -> tuple[
+    dict[str, dict[Union[str, int], int]],
+    dict[str, dict[str, float]],
+]:
+    for data_col in data_columns:
+        dtype = data.schema[data_col]
+        if isinstance(dtype, (pl.String, pl.Utf8)) or isinstance(
+            dtype, (pl.Int8, pl.Int16, pl.Int32, pl.Int64)
+        ):
+            new_id_map = create_id_map(data, column=data_col)
+            id_maps[data_col] = combine_maps(new_id_map, id_maps[data_col])
+        elif isinstance(dtype, (pl.Float32, pl.Float64)):
+            combined_mean, combined_std = get_combined_statistics(
+                data.shape[0],
+                data.get_column(data_col).mean(),
+                data.get_column(data_col).std(),
+                n_rows_running_count,
+                selected_columns_statistics.get(data_col, {"mean": 0.0})["mean"],
+                selected_columns_statistics.get(data_col, {"std": 0.0})["std"],
+            )
+
+            selected_columns_statistics[data_col] = {
+                "std": combined_std,
+                "mean": combined_mean,
+            }
+        else:
+            raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
+
+    return id_maps, selected_columns_statistics
+
+
+@beartype
+def _load_and_preprocess_data(
+    data_path: str,
+    read_format: str,
+    selected_columns: Optional[list[str]],
+    max_rows: Optional[int],
+) -> pl.DataFrame:
+    data = read_data(data_path, read_format, columns=selected_columns)
+    assert (
+        data.null_count().sum().sum_horizontal().item() == 0
+    ), f"NaN or null values not accepted: {data.null_count()}"
+
+    if selected_columns:
+        selected_columns_filtered = [
+            col for col in selected_columns if col not in ["sequenceId", "itemPosition"]
+        ]
+        data = data.select(["sequenceId", "itemPosition"] + selected_columns_filtered)
+
+    if max_rows:
+        data = data.slice(0, int(max_rows))
+
+    return data
+
+
+@beartype
+def _process_batches_multiple_files_inner(
+    project_path: str,
+    data_name_root: str,
+    file_paths: list[str],
+    read_format: str,
+    selected_columns: list[str],
+    max_rows: int,
+    schema: Any,
+    seq_length: int,
+    seq_step_sizes: list[int],
+    data_columns: list[str],
+    n_classes: dict[str, int],
+    id_maps: dict[str, dict[Union[int, str], int]],
+    selected_columns_statistics: dict[str, dict[str, float]],
+    col_types: dict[str, str],
+    group_proportions: list[float],
+    write_format: str,
+    split_paths: list[str],
+    target_dir: str,
+    batches_per_file: int,
+    combine_into_single_file: bool,
+):
+    for path in file_paths:
+        data = _load_and_preprocess_data(path, read_format, selected_columns, max_rows)
+        data, _, _ = _apply_column_statistics(
+            data,
+            data_columns,
+            id_maps,
+            selected_columns_statistics,
+            n_classes,
+            col_types,
+        )
+        n_batches = _process_batches_single_file(
+            data,
+            schema,
+            1,
+            seq_length,
+            seq_step_sizes,
+            data_columns,
+            col_types,
+            group_proportions,
+            write_format,
+            split_paths,
+            target_dir,
+            batches_per_file,
+        )
+
+        if combine_into_single_file:
+            combine_multiprocessing_outputs(
+                project_path,
+                target_dir,
+                len(group_proportions),
+                n_batches,
+                data_name_root,
+                write_format,
+            )
+
+
+@beartype
+def _process_batches_single_file(
+    data: pl.DataFrame,
+    schema: Any,
+    n_cores: Optional[int],
+    seq_length: int,
+    seq_step_sizes: list[int],
+    data_columns: list[str],
+    col_types: dict[str, str],
+    group_proportions: list[float],
+    write_format: str,
+    split_paths: list[str],
+    target_dir: str,
+    batches_per_file: int,
+) -> int:
+    n_cores = n_cores or multiprocessing.cpu_count()
+    batch_limits = get_batch_limits(data, n_cores)
+    batches = [
+        (
+            i,
+            data.slice(start, end - start),
+            schema,
+            split_paths,
+            seq_length,
+            seq_step_sizes,
+            data_columns,
+            col_types,
+            group_proportions,
+            target_dir,
+            write_format,
+            batches_per_file,
+        )
+        for i, (start, end) in enumerate(batch_limits)
+        if (end - start) > 0
+    ]
+
+    assert len(batches) == n_cores, f"{len(batches) = } != {n_cores = }"
+    # preprocess_batch(*batches[0])
+    if len(batches) > 1:
+        with multiprocessing.Pool(processes=n_cores) as pool:
+            pool.starmap(preprocess_batch, batches)
+    else:
+        preprocess_batch(*batches[0])
+
+    return len(batches)
 
 
 @beartype
