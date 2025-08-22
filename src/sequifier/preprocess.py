@@ -300,7 +300,7 @@ class Preprocessor:
 
         if process_by_file:
             n_rows_running_count = 0
-            for path in file_paths:
+            for i, path in enumerate(file_paths):
                 max_rows_inner = (
                     None if max_rows is None else n_rows_running_count - max_rows
                 )
@@ -316,6 +316,11 @@ class Preprocessor:
                     col_types,
                 )
 
+                adjusted_split_paths = [
+                    path.replace(self.data_name_root, f"{self.data_name_root}-{i}")
+                    for path in self.split_paths
+                ]
+
                 n_batches = _process_batches_single_file(
                     data,
                     schema,
@@ -326,7 +331,7 @@ class Preprocessor:
                     col_types,
                     group_proportions,
                     write_format,
-                    self.split_paths,
+                    adjusted_split_paths,
                     self.target_dir,
                     self.batches_per_file,
                 )
@@ -337,7 +342,7 @@ class Preprocessor:
                         self.target_dir,
                         len(group_proportions),
                         n_batches,
-                        self.data_name_root,
+                        f"{self.data_name_root}-{i}",
                         write_format,
                     )
                 n_rows_running_count += data.shape[0]
@@ -495,13 +500,15 @@ def _apply_column_statistics(
         col_types = {col: str(data.schema[col]) for col in data_columns}
 
     for col in data_columns:
-        data = data.with_columns(pl.col(col).replace(id_maps[col]))
-        data = data.with_columns(
-            (
-                (pl.col(col) - selected_columns_statistics[col]["mean"])
-                / (selected_columns_statistics[col]["std"] + 1e-9)
-            ).alias(col)
-        )
+        if col in id_maps:
+            data = data.with_columns(pl.col(col).replace(id_maps[col]))
+        elif col in selected_columns_statistics:
+            data = data.with_columns(
+                (
+                    (pl.col(col) - selected_columns_statistics[col]["mean"])
+                    / (selected_columns_statistics[col]["std"] + 1e-9)
+                ).alias(col)
+            )
 
     return (data, n_classes, col_types)
 
@@ -591,7 +598,7 @@ def _process_batches_multiple_files_inner(
     batches_per_file: int,
     combine_into_single_file: bool,
 ):
-    for path in file_paths:
+    for i, path in enumerate(file_paths):
         data = _load_and_preprocess_data(path, read_format, selected_columns, max_rows)
         data, _, _ = _apply_column_statistics(
             data,
@@ -601,6 +608,11 @@ def _process_batches_multiple_files_inner(
             n_classes,
             col_types,
         )
+        adjusted_split_paths = [
+            path.replace(data_name_root, f"{data_name_root}-{i}")
+            for path in split_paths
+        ]
+
         n_batches = _process_batches_single_file(
             data,
             schema,
@@ -611,7 +623,7 @@ def _process_batches_multiple_files_inner(
             col_types,
             group_proportions,
             write_format,
-            split_paths,
+            adjusted_split_paths,
             target_dir,
             batches_per_file,
         )
@@ -622,7 +634,7 @@ def _process_batches_multiple_files_inner(
                 target_dir,
                 len(group_proportions),
                 n_batches,
-                data_name_root,
+                f"{data_name_root}-{i}",
                 write_format,
             )
 
