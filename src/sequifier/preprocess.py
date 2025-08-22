@@ -299,54 +299,29 @@ class Preprocessor:
         n_cores = n_cores or multiprocessing.cpu_count()
 
         if process_by_file:
-            n_rows_running_count = 0
-            for i, path in enumerate(file_paths):
-                max_rows_inner = (
-                    None if max_rows is None else n_rows_running_count - max_rows
-                )
-                data = _load_and_preprocess_data(
-                    path, read_format, selected_columns, max_rows_inner
-                )
-                data, _, _ = _apply_column_statistics(
-                    data,
-                    data_columns,
-                    id_maps,
-                    selected_columns_statistics,
-                    n_classes,
-                    col_types,
-                )
-
-                adjusted_split_paths = [
-                    path.replace(self.data_name_root, f"{self.data_name_root}-{i}")
-                    for path in self.split_paths
-                ]
-
-                n_batches = _process_batches_single_file(
-                    data,
-                    schema,
-                    n_cores,
-                    seq_length,
-                    seq_step_sizes,
-                    data_columns,
-                    col_types,
-                    group_proportions,
-                    write_format,
-                    adjusted_split_paths,
-                    self.target_dir,
-                    self.batches_per_file,
-                )
-
-                if self.combine_into_single_file:
-                    combine_multiprocessing_outputs(
-                        self.project_path,
-                        self.target_dir,
-                        len(group_proportions),
-                        n_batches,
-                        f"{self.data_name_root}-{i}",
-                        write_format,
-                    )
-                n_rows_running_count += data.shape[0]
-
+            _process_batches_multiple_files_inner(
+                project_path=self.project_path,
+                data_name_root=self.data_name_root,
+                file_paths=file_paths,
+                read_format=read_format,
+                selected_columns=selected_columns,
+                max_rows=max_rows,
+                schema=schema,
+                n_cores=n_cores,
+                seq_length=seq_length,
+                seq_step_sizes=seq_step_sizes,
+                data_columns=data_columns,
+                n_classes=n_classes,
+                id_maps=id_maps,
+                selected_columns_statistics=selected_columns_statistics,
+                col_types=col_types,
+                group_proportions=group_proportions,
+                write_format=write_format,
+                split_paths=self.split_paths,
+                target_dir=self.target_dir,
+                batches_per_file=self.batches_per_file,
+                combine_into_single_file=self.combine_into_single_file,
+            )
         if not process_by_file:
             n_file_sets = (len(file_paths) // n_cores) + 1
 
@@ -364,6 +339,7 @@ class Preprocessor:
                 "selected_columns": selected_columns,
                 "max_rows": max_rows,
                 "schema": schema,
+                "n_cores": 1,
                 "seq_length": seq_length,
                 "seq_step_sizes": seq_step_sizes,
                 "data_columns": data_columns,
@@ -384,7 +360,7 @@ class Preprocessor:
                 for file_set in file_sets
             ]
 
-            with multiprocessing.Pool(processes=n_cores) as pool:
+            with multiprocessing.Pool(processes=len(job_params)) as pool:
                 pool.starmap(_process_batches_multiple_files_inner, job_params)
 
     @beartype
@@ -581,9 +557,10 @@ def _process_batches_multiple_files_inner(
     data_name_root: str,
     file_paths: list[str],
     read_format: str,
-    selected_columns: list[str],
-    max_rows: int,
+    selected_columns: Optional[list[str]],
+    max_rows: Optional[int],
     schema: Any,
+    n_cores: int,
     seq_length: int,
     seq_step_sizes: list[int],
     data_columns: list[str],
@@ -598,45 +575,52 @@ def _process_batches_multiple_files_inner(
     batches_per_file: int,
     combine_into_single_file: bool,
 ):
+    n_rows_running_count = 0
     for i, path in enumerate(file_paths):
-        data = _load_and_preprocess_data(path, read_format, selected_columns, max_rows)
-        data, _, _ = _apply_column_statistics(
-            data,
-            data_columns,
-            id_maps,
-            selected_columns_statistics,
-            n_classes,
-            col_types,
-        )
-        adjusted_split_paths = [
-            path.replace(data_name_root, f"{data_name_root}-{i}")
-            for path in split_paths
-        ]
-
-        n_batches = _process_batches_single_file(
-            data,
-            schema,
-            1,
-            seq_length,
-            seq_step_sizes,
-            data_columns,
-            col_types,
-            group_proportions,
-            write_format,
-            adjusted_split_paths,
-            target_dir,
-            batches_per_file,
-        )
-
-        if combine_into_single_file:
-            combine_multiprocessing_outputs(
-                project_path,
-                target_dir,
-                len(group_proportions),
-                n_batches,
-                f"{data_name_root}-{i}",
-                write_format,
+        max_rows_inner = None if max_rows is None else max_rows - n_rows_running_count
+        if max_rows_inner is None or max_rows_inner > 0:
+            data = _load_and_preprocess_data(
+                path, read_format, selected_columns, max_rows_inner
             )
+            data, _, _ = _apply_column_statistics(
+                data,
+                data_columns,
+                id_maps,
+                selected_columns_statistics,
+                n_classes,
+                col_types,
+            )
+            adjusted_split_paths = [
+                path.replace(data_name_root, f"{data_name_root}-{i}")
+                for path in split_paths
+            ]
+
+            n_batches = _process_batches_single_file(
+                data,
+                schema,
+                n_cores,
+                seq_length,
+                seq_step_sizes,
+                data_columns,
+                col_types,
+                group_proportions,
+                write_format,
+                adjusted_split_paths,
+                target_dir,
+                batches_per_file,
+            )
+
+            if combine_into_single_file:
+                combine_multiprocessing_outputs(
+                    project_path,
+                    target_dir,
+                    len(group_proportions),
+                    n_batches,
+                    f"{data_name_root}-{i}",
+                    write_format,
+                )
+
+            n_rows_running_count += data.shape[0]
 
 
 @beartype
@@ -675,10 +659,9 @@ def _process_batches_single_file(
         if (end - start) > 0
     ]
 
-    assert len(batches) == n_cores, f"{len(batches) = } != {n_cores = }"
     # preprocess_batch(*batches[0])
     if len(batches) > 1:
-        with multiprocessing.Pool(processes=n_cores) as pool:
+        with multiprocessing.Pool(processes=len(batches)) as pool:
             pool.starmap(preprocess_batch, batches)
     else:
         preprocess_batch(*batches[0])
