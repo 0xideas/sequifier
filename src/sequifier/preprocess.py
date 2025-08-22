@@ -69,21 +69,59 @@ class Preprocessor:
         if selected_columns is not None:
             selected_columns = ["sequenceId", "itemPosition"] + selected_columns
 
-        data = self._load_and_preprocess_data(
-            data_path, read_format, selected_columns, max_rows
-        )
         self._setup_split_paths(write_format, len(group_proportions))
 
-        data_columns = [
-            col for col in data.columns if col not in ["sequenceId", "itemPosition"]
-        ]
-        data, n_classes, id_maps, selected_columns_statistics, col_types = (
-            self._process_columns(data, data_columns)
-        )
-        self._export_metadata(
-            id_maps, n_classes, col_types, selected_columns_statistics
-        )
+        if os.path.isfile(data_path):
+            data = self._load_and_preprocess_data(
+                data_path, read_format, selected_columns, max_rows
+            )
+            data_columns = [
+                col for col in data.columns if col not in ["sequenceId", "itemPosition"]
+            ]
+            id_maps, selected_columns_statistics = {}, {}
+            id_maps, selected_columns_statistics = self._get_column_statistics(
+                data, data_columns, id_maps, selected_columns_statistics, 0
+            )
 
+            data, n_classes, col_types = self._apply_column_statistics(
+                data, data_columns, id_maps, selected_columns_statistics
+            )
+
+            self._export_metadata(
+                id_maps, n_classes, col_types, selected_columns_statistics
+            )
+
+            schema = self._create_schema(col_types, seq_length)
+
+            data = data.sort(["sequenceId", "itemPosition"])
+            self._process_batches(
+                data,
+                schema,
+                n_cores,
+                seq_length,
+                seq_step_sizes,
+                data_columns,
+                col_types,
+                group_proportions,
+                write_format,
+            )
+            self._cleanup(write_format)
+        else:
+            n_classes, id_maps, selected_columns_statistics, col_types = (
+                self._get_column_metadata_across_files(
+                    data_path, read_format, max_rows, selected_columns
+                )
+            )
+            self._export_metadata(
+                id_maps, n_classes, col_types, selected_columns_statistics
+            )
+
+            schema = self._create_schema(col_types, seq_length)
+
+    @beartype
+    def _create_schema(
+        self, col_types: dict[str, str], seq_length: int
+    ) -> dict[str, Any]:
         schema = {
             "sequenceId": pl.Int64,
             "subsequenceId": pl.Int64,
@@ -105,19 +143,66 @@ class Preprocessor:
             {str(i): sequence_position_type for i in range(seq_length - 1, -1, -1)}
         )
 
-        data = data.sort(["sequenceId", "itemPosition"])
-        self._process_batches(
-            data,
-            schema,
-            n_cores,
-            seq_length,
-            seq_step_sizes,
-            data_columns,
-            col_types,
-            group_proportions,
-            write_format,
-        )
-        self._cleanup(write_format)
+        return schema
+
+    @beartype
+    def _get_column_metadata_across_files(
+        self,
+        data_path: str,
+        read_format: str,
+        max_rows: Optional[int],
+        selected_columns: Optional[list[str]],
+    ) -> tuple[
+        dict[str, int],
+        dict[str, dict[Union[str, int], int]],
+        dict[str, dict[str, float]],
+        dict[str, str],
+    ]:
+        n_samples_running_count = 0
+        id_maps, selected_columns_statistics = {}, {}
+        col_types, data_columns = None, None
+
+        for root, dirs, files in os.walk(data_path):
+            for file in files:
+                if file.endswith(read_format) and (
+                    max_rows is None or n_samples_running_count < max_rows
+                ):
+                    print(f"Preprocessing: reading {file}")
+                    max_rows_inner = (
+                        None if max_rows is None else n_samples_running_count - max_rows
+                    )
+                    data = self._load_and_preprocess_data(
+                        os.path.join(root, file),
+                        read_format,
+                        selected_columns,
+                        max_rows_inner,
+                    )
+                    data_columns = [
+                        col
+                        for col in data.columns
+                        if col not in ["sequenceId", "itemPosition"]
+                    ]
+
+                    if col_types is None:
+                        col_types = {col: str(data.schema[col]) for col in data_columns}
+                    else:
+                        for col in data_columns:
+                            assert (
+                                str(data.schema[col]) == col_types[col]
+                            ), f"{str(data.schema[col]) = } != {col_types[col] = }"
+
+                    id_maps, selected_columns_statistics = self._get_column_statistics(
+                        data,
+                        data_columns,
+                        id_maps,
+                        selected_columns_statistics,
+                        n_samples_running_count,
+                    )
+                    n_samples_running_count += data.shape[0]
+        assert data_columns is not None
+        n_classes = {col: len(id_maps[col]) + 1 for col in data_columns}
+        assert col_types is not None
+        return (n_classes, id_maps, selected_columns_statistics, col_types)
 
     @beartype
     def _setup_directories(self) -> None:
@@ -169,40 +254,69 @@ class Preprocessor:
         self.split_paths = split_paths
 
     @beartype
-    def _process_columns(
-        self, data: pl.DataFrame, data_columns: list[str]
+    def _apply_column_statistics(
+        self,
+        data: pl.DataFrame,
+        data_columns: list[str],
+        id_maps: dict[str, dict[Union[str, int], int]],
+        selected_columns_statistics: dict[str, dict[str, float]],
+        n_classes: Optional[dict[str, int]] = None,
+        col_types: Optional[dict[str, str]] = None,
+    ) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
+        if n_classes is None:
+            n_classes = {col: len(id_maps[col]) + 1 for col in data_columns}
+
+        if col_types is None:
+            col_types = {col: str(data.schema[col]) for col in data_columns}
+
+        for col in data_columns:
+            data = data.with_columns(pl.col(col).replace(id_maps[col]))
+            data = data.with_columns(
+                (
+                    (pl.col(col) - selected_columns_statistics[col]["mean"])
+                    / (selected_columns_statistics[col]["std"] + 1e-9)
+                ).alias(col)
+            )
+
+        return (data, n_classes, col_types)
+
+    @beartype
+    def _get_column_statistics(
+        self,
+        data: pl.DataFrame,
+        data_columns: list[str],
+        id_maps: dict[str, dict[Union[str, int], int]],
+        selected_columns_statistics: dict[str, dict[str, float]],
+        n_samples_running_count: int,
     ) -> tuple[
-        pl.DataFrame,
-        dict[str, int],
         dict[str, dict[Union[str, int], int]],
         dict[str, dict[str, float]],
-        dict[str, str],
     ]:
-        n_classes, id_maps = {}, {}
-        selected_columns_statistics = {}
-        float_data_columns = []
-
         for data_col in data_columns:
             dtype = data.schema[data_col]
             if isinstance(dtype, (pl.String, pl.Utf8)) or isinstance(
                 dtype, (pl.Int8, pl.Int16, pl.Int32, pl.Int64)
             ):
-                data, sup_id_map = replace_ids(data, column=data_col)
-                id_maps[data_col] = dict(sup_id_map)
-                n_classes[data_col] = data.get_column(data_col).n_unique() + 1
+                new_id_map = create_id_map(data, column=data_col)
+                id_maps[data_col] = combine_maps(new_id_map, id_maps[data_col])
             elif isinstance(dtype, (pl.Float32, pl.Float64)):
-                std = data.get_column(data_col).std()
-                mean = data.get_column(data_col).mean()
-                data = data.with_columns(
-                    ((pl.col(data_col) - mean) / (std + 1e-9)).alias(data_col)
+                combined_mean, combined_std = get_combined_statistics(
+                    data.shape[0],
+                    data.get_column(data_col).mean(),
+                    data.get_column(data_col).std(),
+                    n_samples_running_count,
+                    selected_columns_statistics.get(data_col, {"mean": 0.0})["mean"],
+                    selected_columns_statistics.get(data_col, {"std": 0.0})["std"],
                 )
-                selected_columns_statistics[data_col] = {"std": std, "mean": mean}
-                float_data_columns.append(data_col)
+
+                selected_columns_statistics[data_col] = {
+                    "std": combined_std,
+                    "mean": combined_mean,
+                }
             else:
                 raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
 
-        col_types = {col: str(data.schema[col]) for col in data_columns}
-        return data, n_classes, id_maps, selected_columns_statistics, col_types
+        return id_maps, selected_columns_statistics
 
     @beartype
     def _process_batches(
@@ -349,15 +463,45 @@ class Preprocessor:
 
 
 @beartype
-def replace_ids(
-    data: pl.DataFrame, column: str
-) -> tuple[pl.DataFrame, dict[Union[str, int], int]]:
+def get_combined_statistics(
+    n1: int, mean1: float, std1: float, n2: int, mean2: float, std2: float
+) -> tuple[float, float]:
+    """
+    Calculates the combined standard deviation of two data subsets.
+
+    Args:
+      n1 (int): Number of samples in subset 1.
+      mean1 (float): Mean of subset 1.
+      std1 (float): Standard deviation of subset 1.
+      n2 (int): Number of samples in subset 2.
+      mean2 (float): Mean of subset 2.
+      std2 (float): Standard deviation of subset 2.
+
+    Returns:
+      float: The combined standard deviation of the two subsets.
+    """
+    # Step 1: Calculate the combined mean.
+    combined_mean = (n1 * mean1 + n2 * mean2) / (n1 + n2)
+
+    # Step 2: Calculate the pooled sum of squared differences.
+    # This includes the internal variance of each subset and the variance
+    # between the subset mean and the combined mean.
+    sum_of_squares1 = (n1 - 1) * std1**2 + n1 * (mean1 - combined_mean) ** 2
+    sum_of_squares2 = (n2 - 1) * std2**2 + n2 * (mean2 - combined_mean) ** 2
+
+    # Step 3: Calculate the combined standard deviation.
+    combined_std = math.sqrt((sum_of_squares1 + sum_of_squares2) / (n1 + n2 - 1))
+
+    return combined_mean, combined_std
+
+
+@beartype
+def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]:
     ids = sorted(
         [int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]
     )  # type: ignore
     id_map = {id_: i + 1 for i, id_ in enumerate(ids)}
-    data = data.with_columns(pl.col(column).replace(id_map))
-    return data, id_map
+    return dict(id_map)
 
 
 @beartype
@@ -388,6 +532,15 @@ def get_batch_limits(data: pl.DataFrame, n_batches: int) -> list[tuple[int, int]
         for limit_index in actual_limit_indices
     ] + [data.shape[0]]
     return list(zip(actual_limits[:-1], actual_limits[1:]))
+
+
+@beartype
+def combine_maps(
+    map1: dict[Union[str, int], int], map2: dict[Union[str, int], int]
+) -> dict[Union[str, int], int]:
+    combined_keys = sorted(list(set(list(map1.keys())).union(list(set(map2.keys())))))
+    id_map = {id_: i + 1 for i, id_ in enumerate(combined_keys)}
+    return id_map
 
 
 @beartype
