@@ -47,7 +47,7 @@ class PreprocessorModel(BaseModel):
     max_rows: Optional[int]
     seed: int
     n_cores: Optional[int]
-    batches_per_file: int = 1024  # New configurable parameter
+    batches_per_file: int = 1024
     process_by_file: bool = True
 
     @validator("data_path", always=True)
