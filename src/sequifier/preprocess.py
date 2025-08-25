@@ -60,7 +60,7 @@ class Preprocessor:
             self.target_dir = "temp"
         else:
             assert write_format == "pt"
-            self.target_dir = self.data_name_root
+            self.target_dir = f"{self.data_name_root}-temp"
 
         self.seed = seed
         np.random.seed(seed)
@@ -207,14 +207,18 @@ class Preprocessor:
         id_maps, selected_columns_statistics = {}, {}
         col_types, data_columns = None, None
 
+        print(f"Data path: {data_path}")
         for root, dirs, files in os.walk(data_path):
+            print(f"N Files : {len(files) = }")
             for file in files:
                 if file.endswith(read_format) and (
                     max_rows is None or n_rows_running_count < max_rows
                 ):
                     print(f"Preprocessing: reading {file}")
                     max_rows_inner = (
-                        None if max_rows is None else n_rows_running_count - max_rows
+                        None
+                        if max_rows is None
+                        else max(0, max_rows - n_rows_running_count)
                     )
                     data = _load_and_preprocess_data(
                         os.path.join(root, file),
@@ -245,7 +249,7 @@ class Preprocessor:
                     )
                     n_rows_running_count += data.shape[0]
         assert data_columns is not None
-        n_classes = {col: len(id_maps[col]) + 1 for col in data_columns}
+        n_classes = {col: len(id_maps[col]) + 1 for col in id_maps}
         assert col_types is not None
         return (
             n_classes,
@@ -303,6 +307,7 @@ class Preprocessor:
                 project_path=self.project_path,
                 data_name_root=self.data_name_root,
                 file_paths=file_paths,
+                process_n=None,
                 read_format=read_format,
                 selected_columns=selected_columns,
                 max_rows=max_rows,
@@ -356,11 +361,15 @@ class Preprocessor:
             }
 
             job_params = [
-                list(kwargs_1.values()) + [file_set] + list(kwargs_2.values())
-                for file_set in file_sets
+                list(kwargs_1.values())
+                + [file_set, process_n]
+                + list(kwargs_2.values())
+                for process_n, file_set in enumerate(file_sets)
             ]
 
-            with multiprocessing.Pool(processes=len(job_params)) as pool:
+            with multiprocessing.get_context("spawn").Pool(
+                processes=len(job_params)
+            ) as pool:
                 pool.starmap(_process_batches_multiple_files_inner, job_params)
 
     @beartype
@@ -506,7 +515,7 @@ def _get_column_statistics(
             dtype, (pl.Int8, pl.Int16, pl.Int32, pl.Int64)
         ):
             new_id_map = create_id_map(data, column=data_col)
-            id_maps[data_col] = combine_maps(new_id_map, id_maps[data_col])
+            id_maps[data_col] = combine_maps(new_id_map, id_maps.get(data_col, {}))
         elif isinstance(dtype, (pl.Float32, pl.Float64)):
             combined_mean, combined_std = get_combined_statistics(
                 data.shape[0],
@@ -534,6 +543,7 @@ def _load_and_preprocess_data(
     selected_columns: Optional[list[str]],
     max_rows: Optional[int],
 ) -> pl.DataFrame:
+    print(f"Reading: {data_path}")
     data = read_data(data_path, read_format, columns=selected_columns)
     assert (
         data.null_count().sum().sum_horizontal().item() == 0
@@ -556,6 +566,7 @@ def _process_batches_multiple_files_inner(
     project_path: str,
     data_name_root: str,
     file_paths: list[str],
+    process_n: Optional[int],
     read_format: str,
     selected_columns: Optional[list[str]],
     max_rows: Optional[int],
@@ -590,8 +601,13 @@ def _process_batches_multiple_files_inner(
                 n_classes,
                 col_types,
             )
+            data_name_root2 = (
+                f"{data_name_root}-{process_n}"
+                if process_n is not None
+                else data_name_root
+            )
             adjusted_split_paths = [
-                path.replace(data_name_root, f"{data_name_root}-{i}")
+                path.replace(data_name_root, f"{data_name_root2}-{i}")
                 for path in split_paths
             ]
 
@@ -661,7 +677,7 @@ def _process_batches_single_file(
 
     # preprocess_batch(*batches[0])
     if len(batches) > 1:
-        with multiprocessing.Pool(processes=len(batches)) as pool:
+        with multiprocessing.get_context("spawn").Pool(processes=len(batches)) as pool:
             pool.starmap(preprocess_batch, batches)
     else:
         preprocess_batch(*batches[0])
@@ -803,6 +819,7 @@ def process_and_write_data_pt(
     if not sequences_dict:
         return
 
+    print(f"Writing to file: {path}")
     data_to_save = (sequences_dict, targets_dict)
     torch.save(data_to_save, path)
 
