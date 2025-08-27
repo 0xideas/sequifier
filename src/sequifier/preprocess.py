@@ -650,7 +650,7 @@ def _process_batches_single_file(
     batch_limits = get_batch_limits(data, n_cores)
     batches = [
         (
-            i,
+            process_id,
             data.slice(start, end - start),
             schema,
             split_paths,
@@ -663,11 +663,10 @@ def _process_batches_single_file(
             write_format,
             batches_per_file,
         )
-        for i, (start, end) in enumerate(batch_limits)
+        for process_id, (start, end) in enumerate(batch_limits)
         if (end - start) > 0
     ]
 
-    # preprocess_batch(*batches[0])
     if len(batches) > 1:
         with multiprocessing.get_context("spawn").Pool(processes=len(batches)) as pool:
             pool.starmap(preprocess_batch, batches)
@@ -1074,11 +1073,11 @@ def combine_multiprocessing_outputs(
                 project_path,
                 "data",
                 target_dir,
-                f"{dataset_name}-{core_id}-split{split}-{batch}.{write_format}",
+                f"{dataset_name}-split{split}-{core_id}.{write_format}",
             )
-            for core_id in range(n_cores)
-            for batch in range(n_batches)
+            for core_id in range(n_batches)
         ]
+
         if write_format == "csv":
             command = " ".join(["csvstack"] + files + [f"> {out_path}"])
             os.system(command)
