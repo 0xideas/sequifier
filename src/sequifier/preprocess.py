@@ -64,7 +64,7 @@ class Preprocessor:
 
         self.seed = seed
         np.random.seed(seed)
-
+        self.n_cores = n_cores or multiprocessing.cpu_count()
         self._setup_directories()
 
         if selected_columns is not None:
@@ -98,7 +98,7 @@ class Preprocessor:
             n_batches = _process_batches_single_file(
                 data,
                 schema,
-                n_cores,
+                self.n_cores,
                 seq_length,
                 seq_step_sizes,
                 data_columns,
@@ -118,6 +118,7 @@ class Preprocessor:
                     n_batches,
                     self.data_name_root,
                     write_format,
+                    self.n_cores,
                 )
         else:
             n_classes, id_maps, selected_columns_statistics, col_types, data_columns = (
@@ -138,7 +139,7 @@ class Preprocessor:
                 selected_columns,
                 max_rows,
                 schema,
-                n_cores,
+                self.n_cores,
                 seq_length,
                 seq_step_sizes,
                 data_columns,
@@ -288,7 +289,7 @@ class Preprocessor:
         selected_columns: Optional[list[str]],
         max_rows: Optional[int],
         schema: Any,
-        n_cores: Optional[int],
+        n_cores: int,
         seq_length: int,
         seq_step_sizes: list[int],
         data_columns: list[str],
@@ -300,14 +301,11 @@ class Preprocessor:
         write_format: str,
         process_by_file: bool = True,
     ) -> None:
-        n_cores = n_cores or multiprocessing.cpu_count()
-
         if process_by_file:
             _process_batches_multiple_files_inner(
                 project_path=self.project_path,
                 data_name_root=self.data_name_root,
                 file_paths=file_paths,
-                process_n=None,
                 read_format=read_format,
                 selected_columns=selected_columns,
                 max_rows=max_rows,
@@ -337,7 +335,6 @@ class Preprocessor:
 
             kwargs_1 = {
                 "project_path": self.project_path,
-                "data_name_root": self.data_name_root,
             }
             kwargs_2 = {
                 "read_format": read_format,
@@ -362,7 +359,7 @@ class Preprocessor:
 
             job_params = [
                 list(kwargs_1.values())
-                + [file_set, process_n]
+                + [f"{self.data_name_root}-{process_n}", file_set]
                 + list(kwargs_2.values())
                 for process_n, file_set in enumerate(file_sets)
             ]
@@ -566,7 +563,6 @@ def _process_batches_multiple_files_inner(
     project_path: str,
     data_name_root: str,
     file_paths: list[str],
-    process_n: Optional[int],
     read_format: str,
     selected_columns: Optional[list[str]],
     max_rows: Optional[int],
@@ -601,13 +597,8 @@ def _process_batches_multiple_files_inner(
                 n_classes,
                 col_types,
             )
-            data_name_root2 = (
-                f"{data_name_root}-{process_n}"
-                if process_n is not None
-                else data_name_root
-            )
             adjusted_split_paths = [
-                path.replace(data_name_root, f"{data_name_root2}-{i}")
+                path.replace(data_name_root, f"{data_name_root}-{i}")
                 for path in split_paths
             ]
 
@@ -634,6 +625,7 @@ def _process_batches_multiple_files_inner(
                     n_batches,
                     f"{data_name_root}-{i}",
                     write_format,
+                    n_cores,
                 )
 
             n_rows_running_count += data.shape[0]
@@ -1070,6 +1062,7 @@ def combine_multiprocessing_outputs(
     n_batches: int,
     dataset_name: str,
     write_format: str,
+    n_cores: int,
 ) -> None:
     for split in range(n_splits):
         out_path = os.path.join(
@@ -1081,8 +1074,9 @@ def combine_multiprocessing_outputs(
                 project_path,
                 "data",
                 target_dir,
-                f"{dataset_name}-split{split}-{batch}.{write_format}",
+                f"{dataset_name}-{core_id}-split{split}-{batch}.{write_format}",
             )
+            for core_id in range(n_cores)
             for batch in range(n_batches)
         ]
         if write_format == "csv":
