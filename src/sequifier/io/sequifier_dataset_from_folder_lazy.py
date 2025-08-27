@@ -2,7 +2,6 @@ import bisect
 import collections
 import json
 import os
-import threading
 from typing import Dict, Tuple
 
 import psutil  # Dependency: pip install psutil
@@ -70,9 +69,6 @@ class SequifierDatasetFromFolderLazy(Dataset):
         self.cache: collections.OrderedDict[
             str, Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]
         ] = collections.OrderedDict()
-        # A lock is necessary for thread-safe cache modifications when using
-        # DataLoader with multiple workers.
-        self.cache_lock = threading.Lock()
 
         print(
             f"Initialized lazy dataset from {self.data_dir}. "
@@ -147,25 +143,22 @@ class SequifierDatasetFromFolderLazy(Dataset):
         local_index, file_path = self._find_file_for_index(idx)
 
         # Acquire lock to ensure atomic cache operations
-        with self.cache_lock:
-            # 1. Check for a cache hit
-            if file_path in self.cache:
-                # Mark as recently used by moving it to the end of the OrderedDict.
-                self.cache.move_to_end(file_path)
-                sequences_batch, targets_batch = self.cache[file_path]
+        # 1. Check for a cache hit
+        if file_path in self.cache:
+            # Mark as recently used by moving it to the end of the OrderedDict.
+            self.cache.move_to_end(file_path)
+            sequences_batch, targets_batch = self.cache[file_path]
 
-            # 2. Handle a cache miss
-            else:
-                # Load the data from the .pt file from disk.
-                sequences_batch, targets_batch = torch.load(
-                    file_path, map_location="cpu"
-                )
+        # 2. Handle a cache miss
+        else:
+            # Load the data from the .pt file from disk.
+            sequences_batch, targets_batch = torch.load(file_path, map_location="cpu")
 
-                # Add the newly loaded data to the cache.
-                self.cache[file_path] = (sequences_batch, targets_batch)
+            # Add the newly loaded data to the cache.
+            self.cache[file_path] = (sequences_batch, targets_batch)
 
-                # After adding, check memory and evict old items if necessary.
-                self._evict_lru_items()
+            # After adding, check memory and evict old items if necessary.
+            self._evict_lru_items()
 
         # 3. Retrieve the specific sample from the (now cached) batch tensors.
         sequence = {key: tensor[local_index] for key, tensor in sequences_batch.items()}
