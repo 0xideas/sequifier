@@ -111,15 +111,25 @@ class Preprocessor:
             )
 
             if self.combine_into_single_file:
-                combine_multiprocessing_outputs(
+                files = create_file_paths_for_single_file(
                     self.project_path,
                     self.target_dir,
                     len(group_proportions),
                     n_batches,
                     self.data_name_root,
                     write_format,
-                    self.n_cores,
                 )
+                combine_multiprocessing_outputs(
+                    self.project_path,
+                    self.target_dir,
+                    len(group_proportions),
+                    files,
+                    self.data_name_root,
+                    write_format,
+                    in_target_dir=False,
+                )
+                delete_files(files)
+
         else:
             n_classes, id_maps, selected_columns_statistics, col_types, data_columns = (
                 self._get_column_metadata_across_files(
@@ -305,6 +315,7 @@ class Preprocessor:
             _process_batches_multiple_files_inner(
                 project_path=self.project_path,
                 data_name_root=self.data_name_root,
+                process_id=0,
                 file_paths=file_paths,
                 read_format=read_format,
                 selected_columns=selected_columns,
@@ -325,7 +336,17 @@ class Preprocessor:
                 batches_per_file=self.batches_per_file,
                 combine_into_single_file=self.combine_into_single_file,
             )
-        if not process_by_file:
+            files = create_file_paths_for_multiple_files2(
+                self.project_path,
+                self.target_dir,
+                len(group_proportions),
+                1,
+                {0: len(file_paths)},
+                self.data_name_root,
+                write_format,
+            )
+        else:
+            assert process_by_file is False
             n_file_sets = (len(file_paths) // n_cores) + 1
 
             file_sets = [
@@ -335,6 +356,7 @@ class Preprocessor:
 
             kwargs_1 = {
                 "project_path": self.project_path,
+                "data_name_root": self.data_name_root,
             }
             kwargs_2 = {
                 "read_format": read_format,
@@ -359,15 +381,35 @@ class Preprocessor:
 
             job_params = [
                 list(kwargs_1.values())
-                + [f"{self.data_name_root}-{process_n}", file_set]
+                + [process_id, file_set]
                 + list(kwargs_2.values())
-                for process_n, file_set in enumerate(file_sets)
+                for process_id, file_set in enumerate(file_sets)
             ]
 
             with multiprocessing.get_context("spawn").Pool(
                 processes=len(job_params)
             ) as pool:
                 pool.starmap(_process_batches_multiple_files_inner, job_params)
+
+            files = create_file_paths_for_multiple_files2(
+                self.project_path,
+                self.target_dir,
+                len(group_proportions),
+                len(job_params),
+                {i: len(file_sets[i]) for i in range(len(file_sets))},
+                self.data_name_root,
+                write_format,
+            )
+        combine_multiprocessing_outputs(
+            self.project_path,
+            self.target_dir,
+            len(group_proportions),
+            files,
+            self.data_name_root,
+            write_format,
+            in_target_dir=True,
+        )
+        delete_files(files)
 
     @beartype
     def _cleanup(self, write_format: str) -> None:
@@ -562,6 +604,7 @@ def _load_and_preprocess_data(
 def _process_batches_multiple_files_inner(
     project_path: str,
     data_name_root: str,
+    process_id: int,
     file_paths: list[str],
     read_format: str,
     selected_columns: Optional[list[str]],
@@ -583,7 +626,7 @@ def _process_batches_multiple_files_inner(
     combine_into_single_file: bool,
 ):
     n_rows_running_count = 0
-    for i, path in enumerate(file_paths):
+    for file_id, path in enumerate(file_paths):
         max_rows_inner = None if max_rows is None else max_rows - n_rows_running_count
         if max_rows_inner is None or max_rows_inner > 0:
             data = _load_and_preprocess_data(
@@ -597,8 +640,9 @@ def _process_batches_multiple_files_inner(
                 n_classes,
                 col_types,
             )
+
             adjusted_split_paths = [
-                path.replace(data_name_root, f"{data_name_root}-{i}")
+                path.replace(data_name_root, f"{data_name_root}-{process_id}-{file_id}")
                 for path in split_paths
             ]
 
@@ -618,15 +662,27 @@ def _process_batches_multiple_files_inner(
             )
 
             if combine_into_single_file:
-                combine_multiprocessing_outputs(
+                files = create_file_paths_for_multiple_files1(
                     project_path,
                     target_dir,
                     len(group_proportions),
                     n_batches,
-                    f"{data_name_root}-{i}",
+                    process_id,
+                    file_id,
+                    data_name_root,
                     write_format,
-                    n_cores,
                 )
+                combine_multiprocessing_outputs(
+                    project_path,
+                    target_dir,
+                    len(group_proportions),
+                    files,
+                    f"{data_name_root}-{process_id}-{file_id}",
+                    write_format,
+                    in_target_dir=True,
+                )
+
+                delete_files(files)
 
             n_rows_running_count += data.shape[0]
 
@@ -1054,21 +1110,51 @@ def cast_columns_to_string(data: pl.DataFrame) -> pl.DataFrame:
 
 
 @beartype
-def combine_multiprocessing_outputs(
+def delete_files(files: Union[list[str], dict[int, list[str]]]) -> None:
+    if isinstance(files, dict):
+        files = [x for y in list(files.values()) for x in y]
+    for file in files:
+        os.remove(file)
+
+
+@beartype
+def create_file_paths_for_multiple_files1(
+    project_path: str,
+    target_dir: str,
+    n_splits: int,
+    n_batches: int,
+    process_id: int,
+    file_id: int,
+    dataset_name: str,
+    write_format: str,
+) -> dict[int, list[str]]:
+    files = {}
+    for split in range(n_splits):
+        files_for_split = [
+            os.path.join(
+                project_path,
+                "data",
+                target_dir,
+                f"{dataset_name}-{process_id}-{file_id}-split{split}-{batch_id}.{write_format}",
+            )
+            for batch_id in range(n_batches)
+        ]
+        files[split] = files_for_split
+    return files
+
+
+@beartype
+def create_file_paths_for_single_file(
     project_path: str,
     target_dir: str,
     n_splits: int,
     n_batches: int,
     dataset_name: str,
     write_format: str,
-    n_cores: int,
-) -> None:
+) -> dict[int, list[str]]:
+    files = {}
     for split in range(n_splits):
-        out_path = os.path.join(
-            project_path, "data", f"{dataset_name}-split{split}.{write_format}"
-        )
-
-        files = [
+        files_for_split = [
             os.path.join(
                 project_path,
                 "data",
@@ -1077,12 +1163,59 @@ def combine_multiprocessing_outputs(
             )
             for core_id in range(n_batches)
         ]
+        files[split] = files_for_split
+    return files
+
+
+@beartype
+def create_file_paths_for_multiple_files2(
+    project_path: str,
+    target_dir: str,
+    n_splits: int,
+    n_processes: int,
+    n_files: dict[int, int],
+    dataset_name: str,
+    write_format: str,
+) -> dict[int, list[str]]:
+    files = {}
+    for split in range(n_splits):
+        files_for_split = [
+            os.path.join(
+                project_path,
+                "data",
+                target_dir,
+                f"{dataset_name}-{process_id}-{file_id}-split{split}.{write_format}",
+            )
+            for process_id in range(n_processes)
+            for file_id in range(n_files[process_id])
+        ]
+        files[split] = files_for_split
+
+    return files
+
+
+@beartype
+def combine_multiprocessing_outputs(
+    project_path: str,
+    target_dir: str,
+    n_splits: int,
+    files: dict[int, list[str]],
+    dataset_name: str,
+    write_format: str,
+    in_target_dir: bool = False,
+) -> None:
+    for split in range(n_splits):
+        out_path = os.path.join(
+            project_path, "data", f"{dataset_name}-split{split}.{write_format}"
+        )
+        if in_target_dir:
+            out_path = insert_top_folder(out_path, target_dir)
 
         if write_format == "csv":
-            command = " ".join(["csvstack"] + files + [f"> {out_path}"])
+            command = " ".join(["csvstack"] + files[split] + [f"> {out_path}"])
             os.system(command)
         elif write_format == "parquet":
-            combine_parquet_files(files, out_path)
+            combine_parquet_files(files[split], out_path)
 
 
 @beartype
