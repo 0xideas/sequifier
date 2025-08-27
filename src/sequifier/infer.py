@@ -244,15 +244,9 @@ def get_probs_preds(
     column_types: dict[str, torch.dtype],
     apply_normalization_inversion: bool = True,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
-    X, _ = numpy_to_pytorch(
-        data,
-        column_types,
-        config.selected_columns,
-        config.target_columns,
-        config.seq_length,
-        config.device,
-        to_device=False,
-    )
+    all_columns = sorted(list(set(config.selected_columns + config.target_columns)))
+
+    X = numpy_to_pytorch(data, column_types, all_columns, config.seq_length)
     X = {col: X_col.numpy() for col, X_col in X.items()}
     del data
 
