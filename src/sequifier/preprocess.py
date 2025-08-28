@@ -96,7 +96,8 @@ class Preprocessor:
 
             data = data.sort(["sequenceId", "itemPosition"])
             n_batches = _process_batches_single_file(
-                project_path,
+                self.project_path,
+                self.data_name_root,
                 data,
                 schema,
                 self.n_cores,
@@ -652,8 +653,11 @@ def _process_batches_multiple_files_inner(
                 for path in split_paths
             ]
 
+            data_name_root_inner = f"{data_name_root}-{process_id}-{file_index}"
+
             n_batches = _process_batches_single_file(
                 project_path,
+                data_name_root_inner,
                 data,
                 schema,
                 n_cores,
@@ -698,6 +702,7 @@ def _process_batches_multiple_files_inner(
 @beartype
 def _process_batches_single_file(
     project_path: str,
+    data_name_root: str,
     data: pl.DataFrame,
     schema: Any,
     n_cores: Optional[int],
@@ -718,7 +723,7 @@ def _process_batches_single_file(
     batches = [
         (
             project_path,
-            target_dir,
+            data_name_root,
             process_id,
             data.slice(start, end - start),
             schema,
@@ -995,7 +1000,7 @@ def preprocess_batch(
                         data_subset.slice(lb, ub - lb),
                         schema,
                         seq_length,
-                        seq_step_sizes[i],
+                        seq_step_sizes[j],
                         data_columns,
                     )
                 )
@@ -1237,7 +1242,8 @@ def combine_multiprocessing_outputs(
         print(f"writing to: {out_path}")
         if write_format == "csv":
             command = " ".join(["csvstack"] + input_files[split] + [f"> {out_path}"])
-            os.system(command)
+            result = os.system(command)
+            assert result == 0, f"command '{command}' failes: {result = }"
         elif write_format == "parquet":
             combine_parquet_files(input_files[split], out_path)
 

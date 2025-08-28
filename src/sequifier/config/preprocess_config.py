@@ -67,10 +67,6 @@ class PreprocessorModel(BaseModel):
 
     @validator("combine_into_single_file", always=True)
     def validate_format2(cls, v: bool, values: dict):
-        if v is False and values["write_format"] != "pt":
-            raise ValueError(
-                "Only with write_format 'pt' can combine_into_single_file be set to False"
-            )
         if values["write_format"] == "pt" and v is True:
             raise ValueError(
                 "With write_format 'pt', combine_into_single_file must be set to False"
