@@ -1,0 +1,20 @@
+project_path: tests/project_folder
+data_path: tests/resources/test-data-categorical-multi-file
+combine_into_single_file: false
+read_format: csv
+process_by_file: false
+write_format: pt
+selected_columns: null
+
+batches_per_file: 1
+
+group_proportions:
+- 0.8
+- 0.1
+- 0.1
+seq_length: 8
+seq_step_sizes:
+- 1
+- 1
+- 1
+max_rows: null
