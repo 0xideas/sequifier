@@ -96,6 +96,7 @@ class Preprocessor:
 
             data = data.sort(["sequenceId", "itemPosition"])
             n_batches = _process_batches_single_file(
+                project_path,
                 data,
                 schema,
                 self.n_cores,
@@ -111,7 +112,7 @@ class Preprocessor:
             )
 
             if self.combine_into_single_file:
-                files = create_file_paths_for_single_file(
+                input_files = create_file_paths_for_single_file(
                     self.project_path,
                     self.target_dir,
                     len(group_proportions),
@@ -123,12 +124,12 @@ class Preprocessor:
                     self.project_path,
                     self.target_dir,
                     len(group_proportions),
-                    files,
+                    input_files,
                     self.data_name_root,
                     write_format,
                     in_target_dir=False,
                 )
-                delete_files(files)
+                delete_files(input_files)
 
         else:
             n_classes, id_maps, selected_columns_statistics, col_types, data_columns = (
@@ -336,7 +337,7 @@ class Preprocessor:
                 batches_per_file=self.batches_per_file,
                 combine_into_single_file=self.combine_into_single_file,
             )
-            files = create_file_paths_for_multiple_files2(
+            input_files = create_file_paths_for_multiple_files2(
                 self.project_path,
                 self.target_dir,
                 len(group_proportions),
@@ -385,13 +386,15 @@ class Preprocessor:
                 + list(kwargs_2.values())
                 for process_id, file_set in enumerate(file_sets)
             ]
+            print(f"_process_batches_multiple_files n_cores: {n_cores}")
+            print(f"_process_batches_multiple_files {len(job_params) = }")
 
             with multiprocessing.get_context("spawn").Pool(
                 processes=len(job_params)
             ) as pool:
                 pool.starmap(_process_batches_multiple_files_inner, job_params)
 
-            files = create_file_paths_for_multiple_files2(
+            input_files = create_file_paths_for_multiple_files2(
                 self.project_path,
                 self.target_dir,
                 len(group_proportions),
@@ -400,16 +403,17 @@ class Preprocessor:
                 self.data_name_root,
                 write_format,
             )
-        combine_multiprocessing_outputs(
-            self.project_path,
-            self.target_dir,
-            len(group_proportions),
-            files,
-            self.data_name_root,
-            write_format,
-            in_target_dir=False,
-        )
-        delete_files(files)
+        if self.combine_into_single_file:
+            combine_multiprocessing_outputs(
+                self.project_path,
+                self.target_dir,
+                len(group_proportions),
+                input_files,
+                self.data_name_root,
+                write_format,
+                in_target_dir=False,
+            )
+            delete_files(input_files)
 
     @beartype
     def _cleanup(self, write_format: str) -> None:
@@ -626,7 +630,7 @@ def _process_batches_multiple_files_inner(
     combine_into_single_file: bool,
 ):
     n_rows_running_count = 0
-    for file_id, path in enumerate(file_paths):
+    for file_index, path in enumerate(file_paths):
         max_rows_inner = None if max_rows is None else max_rows - n_rows_running_count
         if max_rows_inner is None or max_rows_inner > 0:
             data = _load_and_preprocess_data(
@@ -642,11 +646,14 @@ def _process_batches_multiple_files_inner(
             )
 
             adjusted_split_paths = [
-                path.replace(data_name_root, f"{data_name_root}-{process_id}-{file_id}")
+                path.replace(
+                    data_name_root, f"{data_name_root}-{process_id}-{file_index}"
+                )
                 for path in split_paths
             ]
 
             n_batches = _process_batches_single_file(
+                project_path,
                 data,
                 schema,
                 n_cores,
@@ -662,13 +669,13 @@ def _process_batches_multiple_files_inner(
             )
 
             if combine_into_single_file:
-                files = create_file_paths_for_multiple_files1(
+                input_files = create_file_paths_for_multiple_files1(
                     project_path,
                     target_dir,
                     len(group_proportions),
                     n_batches,
                     process_id,
-                    file_id,
+                    file_index,
                     data_name_root,
                     write_format,
                 )
@@ -676,19 +683,21 @@ def _process_batches_multiple_files_inner(
                     project_path,
                     target_dir,
                     len(group_proportions),
-                    files,
-                    f"{data_name_root}-{process_id}-{file_id}",
+                    input_files,
+                    data_name_root,
                     write_format,
                     in_target_dir=True,
+                    pre_split_str=f"{process_id}-{file_index}",
                 )
 
-                delete_files(files)
+                delete_files(input_files)
 
             n_rows_running_count += data.shape[0]
 
 
 @beartype
 def _process_batches_single_file(
+    project_path: str,
     data: pl.DataFrame,
     schema: Any,
     n_cores: Optional[int],
@@ -703,9 +712,13 @@ def _process_batches_single_file(
     batches_per_file: int,
 ) -> int:
     n_cores = n_cores or multiprocessing.cpu_count()
+    print(f"_process_batches_single_file n_cores: {n_cores}")
     batch_limits = get_batch_limits(data, n_cores)
+    print(f"_process_batches_single_file {len(batch_limits) = }")
     batches = [
         (
+            project_path,
+            target_dir,
             process_id,
             data.slice(start, end - start),
             schema,
@@ -900,6 +913,8 @@ def _write_accumulated_sequences(
 
 @beartype
 def preprocess_batch(
+    project_path: str,
+    data_name_root: str,
     process_id: int,
     batch: pl.DataFrame,
     schema: Any,
@@ -970,13 +985,12 @@ def preprocess_batch(
             )
 
     else:
-        # Original logic for 'csv' and 'parquet' formats
         written_files: dict[int, list[str]] = {i: [] for i in range(len(split_paths))}
         for i, sequence_id in enumerate(sequence_ids):
             data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
             group_bounds = get_group_bounds(data_subset, group_proportions)
             sequences = {
-                i: cast_columns_to_string(
+                j: cast_columns_to_string(
                     extract_sequences(
                         data_subset.slice(lb, ub - lb),
                         schema,
@@ -985,12 +999,13 @@ def preprocess_batch(
                         data_columns,
                     )
                 )
-                for i, (lb, ub) in enumerate(group_bounds)
+                for j, (lb, ub) in enumerate(group_bounds)
             }
+            post_split_str = f"{process_id}-{i}"
 
             for split_path, (group, split) in zip(split_paths, sequences.items()):
                 split_path_batch_seq = split_path.replace(
-                    f".{write_format}", f"-{process_id}-{i}.{write_format}"
+                    f".{write_format}", f"-{post_split_str}.{write_format}"
                 )
                 split_path_batch_seq = insert_top_folder(
                     split_path_batch_seq, target_dir
@@ -1003,17 +1018,16 @@ def preprocess_batch(
 
                 written_files[group].append(split_path_batch_seq)
 
-        for j, split_path in enumerate(split_paths):
-            out_path = split_path.replace(
-                f".{write_format}", f"-{process_id}.{write_format}"
-            )
-            out_path = insert_top_folder(out_path, target_dir)
-
-            if write_format == "csv":
-                command = " ".join(["csvstack"] + written_files[j] + [f"> {out_path}"])
-                os.system(command)
-            elif write_format == "parquet":
-                combine_parquet_files(written_files[j], out_path)
+        combine_multiprocessing_outputs(
+            project_path,
+            target_dir,
+            len(split_paths),
+            written_files,
+            data_name_root,
+            write_format,
+            in_target_dir=True,
+            post_split_str=f"{process_id}",
+        )
 
 
 @beartype
@@ -1124,7 +1138,7 @@ def create_file_paths_for_multiple_files1(
     n_splits: int,
     n_batches: int,
     process_id: int,
-    file_id: int,
+    file_index: int,
     dataset_name: str,
     write_format: str,
 ) -> dict[int, list[str]]:
@@ -1135,7 +1149,7 @@ def create_file_paths_for_multiple_files1(
                 project_path,
                 "data",
                 target_dir,
-                f"{dataset_name}-{process_id}-{file_id}-split{split}-{batch_id}.{write_format}",
+                f"{dataset_name}-{process_id}-{file_index}-split{split}-{batch_id}.{write_format}",
             )
             for batch_id in range(n_batches)
         ]
@@ -1184,10 +1198,10 @@ def create_file_paths_for_multiple_files2(
                 project_path,
                 "data",
                 target_dir,
-                f"{dataset_name}-{process_id}-{file_id}-split{split}.{write_format}",
+                f"{dataset_name}-{process_id}-{file_index}-split{split}.{write_format}",
             )
             for process_id in range(n_processes)
-            for file_id in range(n_files[process_id])
+            for file_index in range(n_files[process_id])
         ]
         files[split] = files_for_split
 
@@ -1199,24 +1213,33 @@ def combine_multiprocessing_outputs(
     project_path: str,
     target_dir: str,
     n_splits: int,
-    files: dict[int, list[str]],
+    input_files: dict[int, list[str]],
     dataset_name: str,
     write_format: str,
     in_target_dir: bool = False,
+    pre_split_str: Optional[str] = None,
+    post_split_str: Optional[str] = None,
 ) -> None:
     for split in range(n_splits):
-        out_path = os.path.join(
-            project_path, "data", f"{dataset_name}-split{split}.{write_format}"
-        )
+        if pre_split_str is None and post_split_str is None:
+            file_name = f"{dataset_name}-split{split}.{write_format}"
+        elif pre_split_str is not None and post_split_str is None:
+            file_name = f"{dataset_name}-{pre_split_str}-split{split}.{write_format}"
+        elif post_split_str is not None and pre_split_str is None:
+            file_name = f"{dataset_name}-split{split}-{post_split_str}.{write_format}"
+        else:
+            file_name = f"{dataset_name}-{pre_split_str}-split{split}-{post_split_str}.{write_format}"
+
+        out_path = os.path.join(project_path, "data", file_name)
         if in_target_dir:
             out_path = insert_top_folder(out_path, target_dir)
 
         print(f"writing to: {out_path}")
         if write_format == "csv":
-            command = " ".join(["csvstack"] + files[split] + [f"> {out_path}"])
+            command = " ".join(["csvstack"] + input_files[split] + [f"> {out_path}"])
             os.system(command)
         elif write_format == "parquet":
-            combine_parquet_files(files[split], out_path)
+            combine_parquet_files(input_files[split], out_path)
 
 
 @beartype
