@@ -407,7 +407,7 @@ class Preprocessor:
             files,
             self.data_name_root,
             write_format,
-            in_target_dir=True,
+            in_target_dir=False,
         )
         delete_files(files)
 
@@ -518,7 +518,7 @@ def _apply_column_statistics(
     col_types: Optional[dict[str, str]] = None,
 ) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
     if n_classes is None:
-        n_classes = {col: len(id_maps[col]) + 1 for col in data_columns}
+        n_classes = {col: len(id_maps[col]) + 1 for col in id_maps}
 
     if col_types is None:
         col_types = {col: str(data.schema[col]) for col in data_columns}
@@ -1211,6 +1211,7 @@ def combine_multiprocessing_outputs(
         if in_target_dir:
             out_path = insert_top_folder(out_path, target_dir)
 
+        print(f"writing to: {out_path}")
         if write_format == "csv":
             command = " ".join(["csvstack"] + files[split] + [f"> {out_path}"])
             os.system(command)
