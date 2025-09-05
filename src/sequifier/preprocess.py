@@ -717,9 +717,7 @@ def _process_batches_single_file(
     batches_per_file: int,
 ) -> int:
     n_cores = n_cores or multiprocessing.cpu_count()
-    print(f"_process_batches_single_file n_cores: {n_cores}")
     batch_limits = get_batch_limits(data, n_cores)
-    print(f"_process_batches_single_file {len(batch_limits) = }")
     batches = [
         (
             project_path,

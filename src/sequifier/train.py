@@ -42,7 +42,7 @@ from sequifier.samplers.distributed_grouped_random_sampler import (  # noqa: E40
 
 def setup(rank, world_size, backend="nccl"):
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12355"
+    os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
     dist.init_process_group(backend, rank=rank, world_size=world_size)
 
 
@@ -138,19 +138,12 @@ def train_worker(rank, world_size, config, from_folder):
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
 
-    target = (
-        rank if config.training_spec.device == "cuda" else config.training_spec.device
-    )
-    model = TransformerModel(config, rank).to(target)
-
-    # Set the device on the model instance to the rank-specific target device.
-    # This ensures that data tensors are moved to the correct GPU in the training loop.
-    model.device = target
-
-    model = torch.compile(model)
+    model = TransformerModel(config, rank)
 
     if config.training_spec.distributed:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+
+    model = torch.compile(model)
 
     # 3. Start training
     # When using DDP, the original model is accessed via the .module attribute
@@ -217,6 +210,7 @@ class TransformerModel(nn.Module):
         self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
 
         self.rank = rank
+
         self.selected_columns = hparams.selected_columns
         self.categorical_columns = [
             col
@@ -305,6 +299,14 @@ class TransformerModel(nn.Module):
 
         self.device = hparams.training_spec.device
         self.device_max_concat_length = hparams.training_spec.device_max_concat_length
+
+        if hparams.training_spec.device == "cuda" and self.rank is not None:
+            self.device = f"cuda:{self.rank}"
+        else:
+            self.device = hparams.training_spec.device
+
+        self.to(self.device)
+
         self.criterion = self._init_criterion(hparams=hparams)
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
@@ -937,6 +939,16 @@ class TransformerModel(nn.Module):
             self.load_state_dict(checkpoint["model_state_dict"])
             self.start_epoch = checkpoint["epoch"] + 1
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            for state in self.optimizer.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        if k == "step":
+                            # Keep the 'step' tensor on the CPU.
+                            state[k] = v.cpu()
+                        else:
+                            # Move all other state tensors to the model's device.
+                            state[k] = v.to(self.device)
+
             return f"Loading model weights from {latest_model_path}. Total params: {format_number(pytorch_total_params)}"
         else:
             self.start_epoch = 1
