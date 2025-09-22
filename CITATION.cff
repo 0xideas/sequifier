@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: "Luithlen"
+    given-names: "Leon"
+    orcid: "https://orcid.org/0009-0009-1974-8856"
+title: "sequifier - autoregressive transformer models for multivariate sequence modelling"
+version: 0.6.2.8
+date-released: 2025-01-01
+url: "https://github.com/0xideas/sequifier"

@@ -155,3 +155,19 @@ sequifier infer --config_path=[CONFIG PATH]
 and configured using a config file. The default version can be found here:
 
 [configs/infer.yaml](./configs/infer.yaml)
+
+
+## Citation
+
+Please cite with:
+
+```bibtex
+@software{sequifier_2025,
+  author = {Luithlen, Leon},
+  title = {sequifier - autoregressive transformer models for multivariate sequence modelling},
+  year = {2025},
+  publisher = {GitHub},
+  version = {0.6.2.8},
+  url = {https://github.com/0xideas/sequifier}
+}
+```
