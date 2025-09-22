@@ -162,12 +162,12 @@ and configured using a config file. The default version can be found here:
 Please cite with:
 
 ```bibtex
-@software{sequifier,
-  author = {[Leon Luithlen]},
+@software{sequifier_2025,
+  author = {Luithlen, Leon},
   title = {sequifier - autoregressive transformer models for multivariate sequence modelling},
   year = {2025},
-  publisher = {[github]},
-  version = {[e.g., v1.0.0]},
-  url = {[https://github.com/your-username/your-repo-name](https://github.com/your-username/your-repo-name)}
+  publisher = {GitHub},
+  version = {0.6.2.8},
+  url = {https://github.com/0xideas/sequifier}
 }
 ```
