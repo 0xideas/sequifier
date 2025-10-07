@@ -159,11 +159,6 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
     config_path = args.config_path or "configs/train.yaml"
     config = load_train_config(config_path, args_config, args.on_unprocessed)
 
-    # Set world_size from CLI args if provided
-    if "n_gpus" in args_config and args_config["n_gpus"] > 1:
-        config.training_spec.distributed = True
-        config.training_spec.world_size = args_config["n_gpus"]
-
     world_size = config.training_spec.world_size
 
     from_folder = config.read_format == "pt"

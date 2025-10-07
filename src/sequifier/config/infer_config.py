@@ -93,6 +93,11 @@ class InfererModel(BaseModel):
     seq_length: int
     inference_batch_size: int
 
+    distributed: bool = False
+    load_full_data_to_ram: bool = True
+    world_size: int = 1
+    num_workers: int = 0
+
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
     autoregression: bool = Field(default=True)
@@ -119,8 +124,8 @@ class InfererModel(BaseModel):
 
     @validator("read_format", "write_format")
     def validate_format(cls, v: str) -> str:
-        if v not in ["csv", "parquet"]:
-            raise ValueError("Currently only 'csv' and 'parquet' are supported")
+        if v not in ["csv", "parquet", "pt"]:
+            raise ValueError("Currently only 'csv', 'parquet' and 'pt' are supported")
         return v
 
     @validator("target_column_types")
@@ -142,6 +147,14 @@ class InfererModel(BaseModel):
         ):
             raise ValueError(
                 "map_to_id can only be True if at least one target variable is categorical"
+            )
+        return v
+
+    @validator("distributed")
+    def validate_distributed_inference(cls, v: bool, values: dict) -> bool:
+        if v and values.get("read_format") != "pt":
+            raise ValueError(
+                "Distributed inference is only supported for preprocessed '.pt' files. Please set read_format to 'pt'."
             )
         return v
 
