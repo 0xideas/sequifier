@@ -590,6 +590,8 @@ class TransformerModel(nn.Module):
                 total_loss = 0.0
                 start_time = time.time()
 
+            del data, targets, output, loss, losses
+
     @beartype
     def _calculate_loss(
         self, output: dict[str, Tensor], targets: dict[str, Tensor]
