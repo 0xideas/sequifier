@@ -866,6 +866,10 @@ def process_and_write_data_pt(
     if aggregated_data.is_empty():
         return
 
+    sequence_ids_tensor = torch.tensor(
+        aggregated_data.get_column("sequenceId").to_numpy(), dtype=torch.int64
+    )
+
     sequences_dict = {}
     targets_dict = {}
 
@@ -883,7 +887,7 @@ def process_and_write_data_pt(
         return
 
     print(f"Writing to file: {path}")
-    data_to_save = (sequences_dict, targets_dict)
+    data_to_save = (sequences_dict, targets_dict, sequence_ids_tensor)
     torch.save(data_to_save, path)
 
 

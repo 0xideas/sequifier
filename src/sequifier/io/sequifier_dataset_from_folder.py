@@ -53,7 +53,9 @@ class SequifierDatasetFromFolder(Dataset):
         # Load all data files and collect tensors
         for file_info in metadata["batch_files"]:
             file_path = os.path.join(self.data_dir, file_info["path"])
-            sequences_batch, targets_batch = torch.load(file_path, map_location="cpu")
+            sequences_batch, targets_batch, _ = torch.load(
+                file_path, map_location="cpu"
+            )
 
             for col in all_sequences.keys():
                 if col in sequences_batch:

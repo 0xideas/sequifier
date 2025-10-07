@@ -152,7 +152,9 @@ class SequifierDatasetFromFolderLazy(Dataset):
         # 2. Handle a cache miss
         else:
             # Load the data from the .pt file from disk.
-            sequences_batch, targets_batch = torch.load(file_path, map_location="cpu")
+            sequences_batch, targets_batch, _ = torch.load(
+                file_path, map_location="cpu"
+            )
 
             # Add the newly loaded data to the cache.
             self.cache[file_path] = (sequences_batch, targets_batch)
