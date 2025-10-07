@@ -44,6 +44,15 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         id_maps = None
         selected_columns_statistics = {}
 
+    infer_worker(config, args_config, id_maps, selected_columns_statistics)
+
+
+def infer_worker(
+    config: Any,
+    args_config: dict[str, Any],
+    id_maps: Optional[dict[str, dict[str | int, int]]],
+    selected_columns_statistics: dict[str, dict[str, float]],
+):
     print("Reading data...")
     # Step 1: Use Polars for data ingestion
     if config.read_format == "parquet":

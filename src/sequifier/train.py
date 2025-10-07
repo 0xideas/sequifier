@@ -482,10 +482,10 @@ class TransformerModel(nn.Module):
         train_loader: DataLoader,
         valid_loader: DataLoader,
         train_sampler: Optional[
-            Union[DistributedSampler, DistributedGroupedRandomSampler]
+            Union[RandomSampler, DistributedSampler, DistributedGroupedRandomSampler]
         ],
         valid_sampler: Optional[
-            Union[DistributedSampler, DistributedGroupedRandomSampler]
+            Union[RandomSampler, DistributedSampler, DistributedGroupedRandomSampler]
         ],
     ) -> None:
         best_val_loss = float("inf")
@@ -502,11 +502,11 @@ class TransformerModel(nn.Module):
             ):
                 epoch_start_time = time.time()
 
-                if train_sampler:
+                if train_sampler and not isinstance(train_sampler, RandomSampler):
                     train_sampler.set_epoch(epoch)
                 self._train_epoch(train_loader, epoch)
 
-                if valid_sampler:
+                if valid_sampler and not isinstance(valid_sampler, RandomSampler):
                     valid_sampler.set_epoch(epoch)
 
                 total_loss, total_losses, output = self._evaluate(valid_loader)
