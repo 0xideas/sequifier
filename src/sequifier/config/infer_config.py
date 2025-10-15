@@ -44,13 +44,6 @@ def load_inferer_config(
             config_values["selected_columns"] = list(
                 config_values["column_types"].keys()
             )
-        else:
-            if sorted(config_values["selected_columns"]) != sorted(
-                list(config_values["column_types"].keys())
-            ):
-                assert (
-                    config_values["read_format"] != "pt"
-                ), "If inference data is in 'pt' format, "
 
         config_values["categorical_columns"] = [
             col
@@ -108,7 +101,7 @@ class InfererModel(BaseModel):
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
     autoregression: bool = Field(default=True)
-    autoregression_additional_steps: Optional[int] = Field(default=None)
+    autoregression_extra_steps: Optional[int] = Field(default=None)
 
     @validator("training_config_path")
     def validate_training_config_path(cls, v: str) -> str:

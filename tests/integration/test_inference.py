@@ -77,15 +77,24 @@ def predictions(run_inference, model_names_preds, project_path):
             if target_type == "categorical"
             else None
         )
+
         prediction_path = os.path.join(
             project_path,
             "outputs",
             "predictions",
-            f"sequifier-{model_name}-predictions.csv",
+            f"sequifier-{model_name}-predictions",
         )
-        preds[model_name] = pl.read_csv(
-            prediction_path, separator=",", schema_overrides=dtype
-        )
+
+        if target_type == "categorical":
+            contents = []
+            for root, dirs, files in os.walk(prediction_path):
+                for file in files:
+                    contents.append(pl.read_csv(os.path.join(root, file)))
+            preds[model_name] = pl.concat(contents, how="vertical")
+        else:
+            preds[model_name] = pl.read_csv(
+                f"{prediction_path}.csv", separator=",", schema_overrides=dtype
+            )
 
     return preds
 
@@ -94,13 +103,21 @@ def predictions(run_inference, model_names_preds, project_path):
 def probabilities(run_inference, model_names_probs, project_path):
     probs = {}
     for model_name in model_names_probs:
-        prediction_path = os.path.join(
+        probabilities_path = os.path.join(
             project_path,
             "outputs",
             "probabilities",
-            f"sequifier-{model_name}-probabilities.csv",
+            f"sequifier-{model_name}-probabilities",
         )
-        probs[model_name] = pl.read_csv(prediction_path, separator=",")
+        contents = []
+        for root, _, files in os.walk(probabilities_path):
+            for file in files:
+                if file.endswith("csv"):
+                    contents.append(
+                        pl.read_csv(os.path.join(root, file), separator=",")
+                    )
+
+        probs[model_name] = pl.concat(contents, how="vertical")
     return probs
 
 

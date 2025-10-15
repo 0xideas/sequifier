@@ -648,8 +648,7 @@ class TransformerModel(nn.Module):
         total_loss_collect = []
         # Initialize a dict to hold lists of losses for each target
         total_losses_collect = {col: [] for col in self.target_columns}
-        last_output = {}
-
+        output = {}  # for type checking
         with torch.no_grad():
             for i, (data, targets) in enumerate(valid_loader):
                 # Move data to the current process's assigned GPU
@@ -671,12 +670,8 @@ class TransformerModel(nn.Module):
                 for col, loss in losses.items():
                     total_losses_collect[col].append(loss.item())
 
-                # For logging purposes, only the main process needs the last batch output
-                if self.rank == 0 and i == len(valid_loader) - 1:
-                    last_output = output
-
                 # Free up GPU memory
-                del data, targets, output, loss, losses
+                del data, targets, loss, losses
                 if self.device == "cuda":
                     torch.cuda.empty_cache()
 
@@ -766,7 +761,7 @@ class TransformerModel(nn.Module):
         return (
             np.float32(total_loss_global),
             {k: np.float32(v) for k, v in total_losses_global.items()},
-            last_output,
+            output,
         )
 
     @beartype

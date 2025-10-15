@@ -83,9 +83,9 @@ def infer_worker(
     print("Reading data...")
     # Step 1: Use Polars for data ingestion
     if config.read_format == "parquet":
-        dataset = pl.read_parquet(config.data_path)
+        dataset = [pl.read_parquet(config.data_path)]
     elif config.read_format == "csv":
-        dataset = pl.read_csv(config.data_path)
+        dataset = [pl.read_csv(config.data_path)]
     elif config.read_format == "pt":
         assert percentage_limits is not None
         start_pct, end_pct = percentage_limits
@@ -142,10 +142,10 @@ def infer_worker(
                     sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
                     probs, preds = get_probs_preds(config, inferer, data, column_types)
                 else:
-                    if config.autoregression_additional_steps is not None:
+                    if config.autoregression_extra_steps is not None:
                         data = expand_data_by_autoregression(
                             data,
-                            config.autoregression_additional_steps,
+                            config.autoregression_extra_steps,
                             config.seq_length,
                         )
 
@@ -159,8 +159,8 @@ def infer_worker(
                 sequences_dict, _, sequence_ids_tensor = data
                 extra_steps = (
                     0
-                    if config.autoregression_additional_steps is None
-                    else config.autoregression_additional_steps
+                    if config.autoregression_extra_steps is None
+                    else config.autoregression_extra_steps
                 )
                 probs, preds = get_probs_preds_pt(
                     config, inferer, sequences_dict, extra_steps
@@ -199,9 +199,16 @@ def infer_worker(
                 if config.read_format in ["csv", "parquet"]:
                     file_name = f"{model_id}-probabilities.{config.write_format}"
                 else:
-                    file_name = (
-                        f"{model_id}-{data_id}-probabilities.{config.write_format}"
+                    dirname = f"{model_id}-probabilities"
+                    file_name = os.path.join(
+                        dirname,
+                        f"{model_id}-{data_id}-probabilities.{config.write_format}",
                     )
+
+                    dir_path = os.path.join(
+                        config.project_path, "outputs", "probabilities", dirname
+                    )
+                    os.makedirs(dir_path, exist_ok=True)
 
                 for target_column in inferer.target_columns:
                     if inferer.target_column_types[target_column] == "categorical":
@@ -236,7 +243,14 @@ def infer_worker(
             if config.read_format in ["csv", "parquet"]:
                 file_name = f"{model_id}-predictions.{config.write_format}"
             else:
-                file_name = f"{model_id}-{data_id}-predictions.{config.write_format}"
+                dirname = f"{model_id}-predictions"
+                file_name = os.path.join(
+                    dirname, f"{model_id}-{data_id}-predictions.{config.write_format}"
+                )
+                dir_path = os.path.join(
+                    config.project_path, "outputs", "predictions", dirname
+                )
+                os.makedirs(dir_path, exist_ok=True)
 
             predictions_path = os.path.join(
                 config.project_path, "outputs", "predictions", file_name
@@ -252,7 +266,7 @@ def infer_worker(
 
 @beartype
 def expand_data_by_autoregression(
-    data: pl.DataFrame, autoregression_additional_steps: int, seq_length: int
+    data: pl.DataFrame, autoregression_extra_steps: int, seq_length: int
 ) -> pl.DataFrame:
     """
     Expand data for autoregression by adding additional steps using Polars.
@@ -269,7 +283,7 @@ def expand_data_by_autoregression(
     future_frames = []
     data_cols = [str(c) for c in range(seq_length, 0, -1)]
 
-    for offset in range(1, autoregression_additional_steps + 1):
+    for offset in range(1, autoregression_extra_steps + 1):
         future_df_lazy = last_obs_lazy.with_columns(
             (pl.col("subsequenceId") + offset).alias("subsequenceId")
         )
@@ -312,7 +326,11 @@ def get_probs_preds_pt(
     target_cols = inferer.target_columns
 
     # 2. Initialize input and containers for storing results from all steps
-    X = {key: tensor.numpy() for key, tensor in data.items()}
+    X = {
+        key: tensor.numpy()
+        for key, tensor in data.items()
+        if key in config.selected_columns
+    }
     all_probs_list = {col: [] for col in target_cols}
     all_preds_list = {col: [] for col in target_cols}
 

@@ -128,8 +128,6 @@ def load_train_config(
             dd_config = json.loads(f.read())
 
         split_paths = dd_config["split_paths"]
-        if config_values["read_format"] == "pt":
-            split_paths = [path.replace(".pt", "") for path in split_paths]
 
         config_values["column_types"] = config_values.get(
             "column_types", dd_config["column_types"]

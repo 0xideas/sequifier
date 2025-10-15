@@ -85,7 +85,7 @@ These parameters are typically read from the data driven config file created thr
 - `seq_length`: the input sequence length to the model, must be the same as in the training config
 - `inference_batch_size`: batch size for inference, must be the same as in the training config for onnx models, can be different for torch.save models
 - `autoregression`: infer every step after the first step from predicted values, rather than ground truth values, defaults to True
-- `autoregression_additional_steps`: infer not only for the steps in each sequence, but add N additional steps. Only works with autoregressive inference
+- `autoregression_extra_steps`: infer not only for the steps in each sequence, but add N additional steps. Only works with autoregressive inference
 - `training_config_path`: path to the training config, must be passed to infer torch.save models
 - `infer_with_dropout`: apply dropout active during inference, works only with torch.save models, defaults to False
 

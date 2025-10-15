@@ -263,7 +263,7 @@ def run_inference(
             "models", f"sequifier-model-categorical-{model_number}-best-3.onnx"
         )
         data_path_cat = os.path.join(
-            "data", f"test-data-categorical-{model_number}-split2.parquet"
+            "data", f"test-data-categorical-{model_number}-split2"
         )
         ddconfig_path_cat = os.path.join(
             "configs", "ddconfigs", f"test-data-categorical-{model_number}.json"

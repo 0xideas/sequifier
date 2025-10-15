@@ -454,7 +454,9 @@ class Preprocessor:
         data_driven_config = {
             "n_classes": n_classes,
             "id_maps": id_maps,
-            "split_paths": self.split_paths,
+            "split_paths": [
+                split_path.replace(".pt", "") for split_path in self.split_paths
+            ],
             "column_types": col_types,
             "selected_columns_statistics": selected_columns_statistics,
         }

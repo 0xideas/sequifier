@@ -20,4 +20,4 @@ inference_batch_size: 10
 sample_from_distribution_columns: null
 infer_with_dropout: true
 autoregression: true
-autoregression_additional_steps: 20
+autoregression_extra_steps: 20
