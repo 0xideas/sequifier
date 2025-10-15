@@ -68,6 +68,8 @@ def load_inferer_config(
             config_values["project_path"],
         )
 
+    print(config_values)
+
     return InfererModel(**config_values)
 
 
@@ -115,7 +117,7 @@ class InfererModel(BaseModel):
         if v is not None and v > 0:
             if not values["autoregression"]:
                 raise ValueError(
-                    "'autoregression_extra_steps' can only be larger than 0 if 'autoregression' is true"
+                    f"'autoregression_extra_steps' can only be larger than 0 if 'autoregression' is true: {values['autoregression']}"
                 )
 
             if not np.all(
@@ -137,6 +139,7 @@ class InfererModel(BaseModel):
             raise ValueError(
                 "Autoregressive inference with non-identical 'selected_columns' and 'target_columns' is possible but should not be performed"
             )
+        return v
 
     @validator("data_path")
     def validate_data_path(cls, v: str, values: dict) -> str:
