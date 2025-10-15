@@ -89,7 +89,10 @@ def predictions(run_inference, model_names_preds, project_path):
             contents = []
             for root, dirs, files in os.walk(prediction_path):
                 for file in files:
-                    contents.append(pl.read_csv(os.path.join(root, file)))
+                    contents.append(
+                        pl.read_csv(os.path.join(root, file), schema_overrides=dtype)
+                    )
+            assert len(contents) > 0, f"no files found for {prediction_path}"
             preds[model_name] = pl.concat(contents, how="vertical")
         else:
             preds[model_name] = pl.read_csv(
@@ -117,6 +120,7 @@ def probabilities(run_inference, model_names_probs, project_path):
                         pl.read_csv(os.path.join(root, file), separator=",")
                     )
 
+        assert len(contents) > 0, f"no files found for {probabilities_path}"
         probs[model_name] = pl.concat(contents, how="vertical")
     return probs
 

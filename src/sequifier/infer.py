@@ -196,21 +196,21 @@ def infer_worker(
                     exist_ok=True,
                 )
 
-                if config.read_format in ["csv", "parquet"]:
-                    file_name = f"{model_id}-probabilities.{config.write_format}"
-                else:
-                    dirname = f"{model_id}-probabilities"
-                    file_name = os.path.join(
-                        dirname,
-                        f"{model_id}-{data_id}-probabilities.{config.write_format}",
-                    )
-
-                    dir_path = os.path.join(
-                        config.project_path, "outputs", "probabilities", dirname
-                    )
-                    os.makedirs(dir_path, exist_ok=True)
-
                 for target_column in inferer.target_columns:
+                    if config.read_format in ["csv", "parquet"]:
+                        file_name = f"{model_id}-{target_column}-probabilities.{config.write_format}"
+                    else:
+                        dirname = f"{model_id}-{target_column}-probabilities"
+                        file_name = os.path.join(
+                            dirname,
+                            f"{model_id}-{data_id}-probabilities.{config.write_format}",
+                        )
+
+                        dir_path = os.path.join(
+                            config.project_path, "outputs", "probabilities", dirname
+                        )
+                        os.makedirs(dir_path, exist_ok=True)
+
                     if inferer.target_column_types[target_column] == "categorical":
                         probabilities_path = os.path.join(
                             config.project_path, "outputs", "probabilities", file_name
