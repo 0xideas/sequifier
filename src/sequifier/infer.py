@@ -195,13 +195,18 @@ def infer_worker(
                     os.path.join(config.project_path, "outputs", "probabilities"),
                     exist_ok=True,
                 )
+
+                if config.read_format in ["csv", "parquet"]:
+                    file_name = f"{model_id}-probabilities.{config.write_format}"
+                else:
+                    file_name = (
+                        f"{model_id}-{data_id}-probabilities.{config.write_format}"
+                    )
+
                 for target_column in inferer.target_columns:
                     if inferer.target_column_types[target_column] == "categorical":
                         probabilities_path = os.path.join(
-                            config.project_path,
-                            "outputs",
-                            "probabilities",
-                            f"{model_id}-{target_column}-probabilities.{config.write_format}",
+                            config.project_path, "outputs", "probabilities", file_name
                         )
                         print(f"Writing probabilities to {probabilities_path}")
                         # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
