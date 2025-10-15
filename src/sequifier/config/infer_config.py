@@ -2,6 +2,7 @@ import json
 import os
 from typing import Optional, Union
 
+import numpy as np
 import yaml
 from beartype import beartype
 from pydantic import BaseModel, Field, validator
@@ -100,7 +101,7 @@ class InfererModel(BaseModel):
 
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
-    autoregression: bool = Field(default=True)
+    autoregression: bool = Field(default=False)
     autoregression_extra_steps: Optional[int] = Field(default=None)
 
     @validator("training_config_path")
@@ -108,6 +109,34 @@ class InfererModel(BaseModel):
         if not (v is None or os.path.exists(v)):
             raise ValueError(f"{v} does not exist")
         return v
+
+    @validator("autoregression_extra_steps")
+    def validate_autoregression_extra_steps(cls, v: bool, values) -> bool:
+        if v is not None and v > 0:
+            if not values["autoregression"]:
+                raise ValueError(
+                    "'autoregression_extra_steps' can only be larger than 0 if 'autoregression' is true"
+                )
+
+            if not np.all(
+                np.array(sorted(values["selected_columns"]))
+                == np.array(sorted(values["target_columns"]))
+            ):
+                raise ValueError(
+                    "'autoregression_extra_steps' can only be larger than 0 if 'selected_columns' and 'target_columns' are identical"
+                )
+
+        return v
+
+    @validator("autoregression")
+    def validate_autoregression(cls, v: bool, values):
+        if v and not np.all(
+            np.array(sorted(values["selected_columns"]))
+            == np.array(sorted(values["target_columns"]))
+        ):
+            raise ValueError(
+                "Autoregressive inference with non-identical 'selected_columns' and 'target_columns' is possible but should not be performed"
+            )
 
     @validator("data_path")
     def validate_data_path(cls, v: str, values: dict) -> str:
