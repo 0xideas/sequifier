@@ -214,7 +214,8 @@ def infer_worker(
                             pl.DataFrame(
                                 probs[target_column],
                                 schema=[
-                                    str(i) for i in range(probs[target_column].shape[1])
+                                    inferer.index_map[target_column][i]
+                                    for i in range(probs[target_column].shape[1])
                                 ],
                             ),
                             probabilities_path,
