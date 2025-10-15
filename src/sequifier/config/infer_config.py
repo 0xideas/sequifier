@@ -44,6 +44,13 @@ def load_inferer_config(
             config_values["selected_columns"] = list(
                 config_values["column_types"].keys()
             )
+        else:
+            if sorted(config_values["selected_columns"]) != sorted(
+                list(config_values["column_types"].keys())
+            ):
+                assert (
+                    config_values["read_format"] != "pt"
+                ), "If inference data is in 'pt' format, "
 
         config_values["categorical_columns"] = [
             col
