@@ -1,7 +1,7 @@
 import json
 import os
 import warnings
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator, Optional, Union
 
@@ -45,9 +45,12 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         id_maps = None
         selected_columns_statistics = {}
 
-    infer_worker(config, args_config, id_maps, selected_columns_statistics, (0, 100))
+    infer_worker(
+        config, args_config, id_maps, selected_columns_statistics, (0.0, 100.0)
+    )
 
 
+@beartype
 def load_pt_dataset(data_path: str, start_pct: float, end_pct: float) -> Iterator:
     """
     Lazily loads .pt files from a folder within a percentage range.
@@ -73,6 +76,7 @@ def load_pt_dataset(data_path: str, start_pct: float, end_pct: float) -> Iterato
         yield torch.load(pt_file)
 
 
+@beartype
 def infer_worker(
     config: Any,
     args_config: dict[str, Any],
@@ -538,7 +542,8 @@ def verify_variable_order(data: pl.DataFrame) -> None:
     assert is_group_sorted, "subsequenceId must be in ascending order within each sequenceId for autoregression"
 
 
-def format_delta(time_delta):
+@beartype
+def format_delta(time_delta: timedelta) -> str:
     seconds = time_delta.seconds
     microseconds = time_delta.microseconds
     return f"{(seconds + (microseconds/1e6)):.3}"

@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
 
 torch._dynamo.config.suppress_errors = True
-from sequifier.config.train_config import load_train_config  # noqa: E402
+from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.helpers import LogFile  # noqa: E402
 from sequifier.helpers import construct_index_maps  # noqa: E402
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
@@ -40,7 +40,8 @@ from sequifier.samplers.distributed_grouped_random_sampler import (  # noqa: E40
 )
 
 
-def setup(rank, world_size, backend="nccl"):
+@beartype
+def setup(rank: int, world_size: int, backend: str = "nccl"):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
     dist.init_process_group(backend, rank=rank, world_size=world_size)
@@ -50,7 +51,8 @@ def cleanup():
     dist.destroy_process_group()
 
 
-def train_worker(rank, world_size, config, from_folder):
+@beartype
+def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bool):
     if config.training_spec.distributed:
         setup(rank, world_size, config.training_spec.backend)
 
