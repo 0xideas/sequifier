@@ -1024,7 +1024,7 @@ def load_inference_model(
     args_config: dict[str, Any],
     device: str,
     infer_with_dropout: bool,
-) -> torch._dynamo.eval_frame.OptimizedModule:
+) -> torch.nn.Module:
     training_config = load_train_config(
         training_config_path, args_config, args_config["on_unprocessed"]
     )

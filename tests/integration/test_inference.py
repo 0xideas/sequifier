@@ -61,7 +61,7 @@ def targets(model_names_preds, model_names_probs):
     return target_dict
 
 
-def read_multi_file_preds(path, target_type):
+def read_multi_file_preds(path, target_type, file_suffix=None):
     dtype = (
         {TARGET_VARIABLE_DICT[target_type]: str}
         if target_type == "categorical"
@@ -71,9 +71,10 @@ def read_multi_file_preds(path, target_type):
         contents = []
         for root, dirs, files in os.walk(path):
             for file in files:
-                contents.append(
-                    pl.read_csv(os.path.join(root, file), schema_overrides=dtype)
-                )
+                if file_suffix is None or file.endswith(file_suffix):
+                    contents.append(
+                        pl.read_csv(os.path.join(root, file), schema_overrides=dtype)
+                    )
         assert len(contents) > 0, f"no files found for {path}"
         return pl.concat(contents, how="vertical")
     else:
@@ -108,16 +109,10 @@ def probabilities(run_inference, model_names_probs, project_path):
             "probabilities",
             f"sequifier-{model_name}-probabilities",
         )
-        contents = []
-        for root, _, files in os.walk(probabilities_path):
-            for file in files:
-                if file.endswith("csv"):
-                    contents.append(
-                        pl.read_csv(os.path.join(root, file), separator=",")
-                    )
+        probs[model_name] = read_multi_file_preds(
+            probabilities_path, "categorical", "csv"
+        )
 
-        assert len(contents) > 0, f"no files found for {probabilities_path}"
-        probs[model_name] = pl.concat(contents, how="vertical")
     return probs
 
 
