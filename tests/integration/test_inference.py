@@ -17,6 +17,7 @@ def model_names_preds():
     model_names_preds += [
         "model-categorical-multitarget-5-best-3",
         "model-real-1-best-3-autoregression",
+        "model-categorical-1-best-3-autoregression",
     ]
 
     return model_names_preds

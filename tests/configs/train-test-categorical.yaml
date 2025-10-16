@@ -11,6 +11,9 @@ target_column_types:
 seq_length: 8
 inference_batch_size: 10
 
+export_onnx: true
+export_pt: true
+
 model_spec:
   d_model: 200
   nhead: 2

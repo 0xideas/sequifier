@@ -28,7 +28,7 @@ def test_checkpoint_files_exists(run_training, project_path):
 
 
 def test_model_files_exists(run_training, project_path):
-    model_type_formats = {"categorical": ["onnx"], "real": ["onnx", "pt"]}
+    model_type_formats = {"categorical": ["onnx", "pt"], "real": ["onnx", "pt"]}
     found_items = np.array(
         sorted(list(os.listdir(os.path.join(project_path, "models"))))
     )
@@ -45,6 +45,7 @@ def test_model_files_exists(run_training, project_path):
                 "sequifier-model-categorical-multitarget-5-best-3.onnx",
                 "sequifier-model-categorical-multitarget-5-last-3.onnx",
                 "sequifier-model-real-1-best-3-autoregression.pt",
+                "sequifier-model-categorical-1-best-3-autoregression.onnx",
             ]
         )
     )

@@ -90,6 +90,13 @@ def inference_config_path_real_autoregression():
 
 
 @pytest.fixture(scope="session")
+def inference_config_path_categorical_autoregression():
+    return os.path.join(
+        "tests", "configs", "infer-test-categorical-autoregression.yaml"
+    )
+
+
+@pytest.fixture(scope="session")
 def remove_project_path_contents(project_path):
     if os.path.exists(project_path):
         shutil.rmtree(project_path)
@@ -120,6 +127,7 @@ def format_configs_locally(
     inference_config_path_cat_multitarget,
     inference_config_path_real,
     inference_config_path_real_autoregression,
+    inference_config_path_categorical_autoregression,
 ):
     from sys import platform
 
@@ -135,6 +143,7 @@ def format_configs_locally(
             inference_config_path_cat_multitarget,
             inference_config_path_real,
             inference_config_path_real_autoregression,
+            inference_config_path_categorical_autoregression,
         ]
         for config_path in config_paths:
             with open(config_path, "r") as f:
@@ -250,13 +259,28 @@ def run_training(
 
 
 @pytest.fixture(scope="session")
+def copy_autoregression_model(project_path, run_training):
+    model_path = os.path.join(
+        project_path, "models", "sequifier-model-categorical-1-best-3.onnx"
+    )
+    target_path = os.path.join(
+        project_path,
+        "models",
+        "sequifier-model-categorical-1-best-3-autoregression.onnx",
+    )
+    shutil.copyfile(model_path, target_path)
+
+
+@pytest.fixture(scope="session")
 def run_inference(
-    run_training,
     project_path,
+    run_training,
+    copy_autoregression_model,
     inference_config_path_cat,
     inference_config_path_cat_multitarget,
     inference_config_path_real,
     inference_config_path_real_autoregression,
+    inference_config_path_categorical_autoregression,
 ):
     for model_number in [1, 3, 5, 50]:
         model_path_cat = os.path.join(
@@ -291,4 +315,8 @@ def run_inference(
 
     write_and_log(
         f"sequifier infer --config-path={inference_config_path_real_autoregression} --selected-columns={SELECTED_COLUMNS['real'][1]}"
+    )
+
+    write_and_log(
+        f"sequifier infer --config-path={inference_config_path_categorical_autoregression}  --selected-columns=itemId"
     )
