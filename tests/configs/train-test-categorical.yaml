@@ -1,6 +1,6 @@
 project_path: tests/project_folder
 model_name: default
-read_format: parquet
+read_format: pt
 ddconfig_path: configs/ddconfigs/test-data-categorical5.json
 
 selected_columns: null
@@ -10,6 +10,9 @@ target_column_types:
 
 seq_length: 8
 inference_batch_size: 10
+
+export_onnx: true
+export_pt: true
 
 model_spec:
   d_model: 200

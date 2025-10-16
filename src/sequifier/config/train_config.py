@@ -127,6 +127,8 @@ def load_train_config(
         ) as f:
             dd_config = json.loads(f.read())
 
+        split_paths = dd_config["split_paths"]
+
         config_values["column_types"] = config_values.get(
             "column_types", dd_config["column_types"]
         )
@@ -154,13 +156,13 @@ def load_train_config(
             "n_classes", dd_config["n_classes"]
         )
         config_values["training_data_path"] = normalize_path(
-            config_values.get("training_data_path", dd_config["split_paths"][0]),
+            config_values.get("training_data_path", split_paths[0]),
             config_values["project_path"],
         )
         config_values["validation_data_path"] = normalize_path(
             config_values.get(
                 "validation_data_path",
-                dd_config["split_paths"][min(1, len(dd_config["split_paths"]) - 1)],
+                split_paths[min(1, len(split_paths) - 1)],
             ),
             config_values["project_path"],
         )
@@ -205,6 +207,11 @@ class TrainingSpecModel(BaseModel):
         )
     )
     continue_training: bool = True
+    distributed: bool = False
+    load_full_data_to_ram: bool = True
+    world_size: int = 1
+    num_workers: int = 0
+    backend: str = "nccl"
 
     def __init__(self, **kwargs):
         super().__init__(
@@ -303,7 +310,8 @@ class TrainModel(BaseModel):
         assert v in [
             "csv",
             "parquet",
-        ], "Currently only 'csv' and 'parquet' are supported"
+            "pt",
+        ], "Currently only 'csv', 'parquet' and 'pt' are supported"
         return v
 
     @validator("training_spec")
@@ -311,6 +319,11 @@ class TrainModel(BaseModel):
         assert set(values["target_columns"]) == set(
             v.criterion.keys()
         ), "target_columns and criterion must contain the same values/keys"
+
+        if v.distributed:
+            assert (
+                values["read_format"] == "pt"
+            ), "If distributed is set to 'true', the format has to be 'pt'"
         return v
 
     @validator("column_types")

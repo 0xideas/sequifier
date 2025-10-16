@@ -2,8 +2,8 @@ project_path: tests/project_folder
 training_config_path: tests/configs/train-test-categorical.yaml
 ddconfig_path: tests/project_folder/configs/ddconfigs/test-data-categorical-5.json
 model_path: tests/project_folder/models/sequifier-model-categorical-5-best-3.pt
-data_path: tests/project_folder/data/test-data-categorical5-split2.parquet
-read_format: parquet
+data_path: tests/project_folder/data/test-data-categorical5-split2
+read_format: pt
 write_format: csv
 
 selected_columns: null

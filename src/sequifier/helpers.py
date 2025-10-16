@@ -90,59 +90,45 @@ def subset_to_selected_columns(
 def numpy_to_pytorch(
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
-    selected_columns: list[str],
-    target_columns: list[str],
+    all_columns: list[str],  # Changed from selected_columns, target_columns
     seq_length: int,
-    device: str,
-    to_device: bool,
-) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
-    """
-    Converts data from a Polars DataFrame to PyTorch Tensors based on specified columns.
-
-    This function processes a DataFrame that is structured in a "long" format,
-    where one column ('inputCol') identifies the feature or target type, and other
-    columns ('0', '1', '2', ...) contain the sequence data.
-    """
-    targets = {}
-    # Define the column names for the target sequences, e.g., ['29', '28', ..., '0']
+) -> dict[str, Tensor]:  # Now returns a single dictionary
+    # Define both input and target sequence column names
+    input_seq_cols = [str(c) for c in range(seq_length, 0, -1)]
     target_seq_cols = [str(c) for c in range(seq_length - 1, -1, -1)]
 
-    for target_column in target_columns:
-        # Filter for the target, select sequence columns, and convert to a tensor
+    # We will create a unified dictionary
+    unified_tensors = {}
+
+    for col_name in all_columns:
+        # Create the input sequence tensor (e.g., from t=1 to t=L)
+        input_tensor = torch.tensor(
+            data.filter(pl.col("inputCol") == col_name)
+            .select(input_seq_cols)
+            .to_numpy(),
+            dtype=column_types[col_name],
+        )
+        unified_tensors[col_name] = input_tensor
+
+        # Create the target sequence tensor (e.g., from t=0 to t=L-1)
+        # We'll store it with a "_target" suffix to distinguish it
         target_tensor = torch.tensor(
-            data.filter(pl.col("inputCol") == target_column)
+            data.filter(pl.col("inputCol") == col_name)
             .select(target_seq_cols)
             .to_numpy(),
-            dtype=column_types[target_column],
+            dtype=column_types[col_name],
         )
+        unified_tensors[f"{col_name}_target"] = target_tensor
 
-        if to_device:
-            target_tensor = target_tensor.to(device)
-        targets[target_column] = target_tensor
-
-    sequence = {}
-    # Define the column names for the input sequences, e.g., ['30', '29', ..., '1']
-    input_seq_cols = [str(c) for c in range(seq_length, 0, -1)]
-
-    for col in selected_columns:
-        # Filter for the feature, select sequence columns, and convert to a tensor
-        feature_tensor = torch.tensor(
-            data.filter(pl.col("inputCol") == col).select(input_seq_cols).to_numpy(),
-            dtype=column_types[col],
-        )
-
-        if to_device:
-            feature_tensor = feature_tensor.to(device)
-        sequence[col] = feature_tensor
-
-    return sequence, targets
+    return unified_tensors
 
 
 class LogFile:
     """A class for logging to multiple files with different levels."""
 
     @beartype
-    def __init__(self, path: str, open_mode: str):
+    def __init__(self, path: str, open_mode: str, rank: Optional[int] = None):
+        self.rank = rank
         self.levels = [2, 3]
         self._files = {
             level: open(path.replace("[NUMBER]", str(level)), open_mode)
@@ -158,7 +144,8 @@ class LogFile:
                 self._files[level2].write(f"{string}\n")
                 self._files[level2].flush()
         if level >= 3:
-            print(string)
+            if self.rank is None or self.rank == 0:
+                print(string)
 
     @beartype
     def close(self) -> None:

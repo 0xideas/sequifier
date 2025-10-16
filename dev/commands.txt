@@ -8,7 +8,7 @@ sequifier infer --config-path=tests/configs/infer-test-categorical.yaml --ddconf
 
 sequifier preprocess --config-path=tests/configs/preprocess-test-categorical-multitarget.yaml
 
-sequifier train --config-path=tests/configs/train-test-categorical-multitarget.yaml --model-name=model-categorical-5-multitarget
+sequifier train --config-path=tests/configs/train-test-categorical-multitarget.yaml --model-name=model-categorical-multitarget-5
 
 sequifier infer --config-path=tests/configs/infer-test-categorical-multitarget.yaml
 

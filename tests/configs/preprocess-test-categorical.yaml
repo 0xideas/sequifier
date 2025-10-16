@@ -1,7 +1,8 @@
 project_path: tests/project_folder
 data_path: tests/resources/test-data-categorical-5.csv
+combine_into_single_file: false
 read_format: csv
-write_format: parquet
+write_format: pt
 selected_columns: null
 
 group_proportions:

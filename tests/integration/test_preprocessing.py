@@ -4,6 +4,7 @@ import os
 import numpy as np
 import polars as pl
 import pytest
+import torch
 
 
 @pytest.fixture()
@@ -36,7 +37,9 @@ def test_dd_config(dd_configs):
             )
         ), list(dd_config.keys())
 
-        assert dd_config["split_paths"][0].endswith("split0.parquet")
+        assert dd_config["split_paths"][0].endswith("split0.parquet") or dd_config[
+            "split_paths"
+        ][0].endswith("split0")
 
         if "itemId" in dd_config["n_classes"]:
             assert len(dd_config["id_maps"]["itemId"]) == 30
@@ -58,14 +61,79 @@ def test_dd_config(dd_configs):
             assert "mean" in dd_config["selected_columns_statistics"]["itemValue"]
 
 
+def read_preprocessing_outputs(path, variant):
+    if variant == "real":
+        return pl.read_parquet(f"{path}.parquet")
+    elif variant == "categorical":
+        contents = []
+        for root, _, files in os.walk(path):
+            for file in files:
+                if file.endswith("pt"):
+                    sequences, targets, sequence_id = torch.load(
+                        os.path.join(root, file)
+                    )
+                    sequences2 = {}
+                    print(sequences)
+                    for col, vals in sequences.items():
+                        vals2 = np.concatenate(
+                            [vals.numpy(), targets[col][:, -1:].numpy()], axis=1
+                        )
+                        print(vals2.shape)
+
+                        subsequences, prev_seq_id = [], None
+                        for seq_id in sequence_id.numpy():
+                            if prev_seq_id is None or seq_id != prev_seq_id:
+                                subsequences.append(0)
+                            else:
+                                subsequences.append(subsequences[-1] + 1)
+                            prev_seq_id = int(seq_id)
+
+                        for offset in range(vals2.shape[1] - 1, -1, -1):
+                            sequences2[str(offset)] = np.concatenate(
+                                [sequences2.get(str(offset), []), vals2[:, -offset]],
+                                axis=0,
+                            )
+
+                        sequences2["sequenceId"] = np.concatenate(
+                            [
+                                sequences2.get("sequenceId", []),
+                                sequence_id.numpy().astype(int),
+                            ],
+                            axis=0,
+                        )
+                        sequences2["inputCol"] = np.concatenate(
+                            [
+                                sequences2.get("inputCol", []),
+                                np.repeat(col, vals2.shape[0]),
+                            ],
+                            axis=0,
+                        )
+                        sequences2["subsequenceId"] = np.concatenate(
+                            [sequences2.get("subsequenceId", []), subsequences], axis=0
+                        )
+
+                    content = pl.DataFrame(sequences2)
+                    contents.append(content)
+
+        assert len(contents) > 0, f"no files found for {path}"
+        data = pl.concat(contents, how="vertical")
+        other_cols = [
+            col
+            for col in data.columns
+            if col not in ["sequenceId", "subsequenceId", "inputCol"]
+        ]
+        return data[["sequenceId", "subsequenceId", "inputCol"] + other_cols].sort(
+            ["sequenceId", "subsequenceId", "inputCol"]
+        )
+
+
 @pytest.fixture()
 def data_splits(project_path, split_groups):
     data_split_values = {
         f"{j}-{variant}": [
-            pl.read_parquet(
-                os.path.join(
-                    project_path, "data", f"test-data-{variant}-{j}-split{i}.parquet"
-                )
+            read_preprocessing_outputs(
+                os.path.join(project_path, "data", f"test-data-{variant}-{j}-split{i}"),
+                variant,
             )
             for i in range(split_groups[variant])
         ]

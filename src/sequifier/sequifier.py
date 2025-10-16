@@ -91,6 +91,7 @@ def setup_parser() -> ArgumentParser:
 
     parser_train.add_argument("-mn", "--model-name", type=str)
     parser_train.add_argument("-s", "--seed", type=int)
+
     parser_infer.add_argument("-imp", "--model-path", type=str)
     parser_infer.add_argument("-s", "--seed", type=int)
 

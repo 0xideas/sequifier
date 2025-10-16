@@ -11,81 +11,169 @@ import numpy as np
 import polars as pl
 import torch
 import torch._dynamo
+import torch.distributed as dist
+import torch.multiprocessing as mp
 from beartype import beartype
 from torch import Tensor, nn
 from torch.nn import ModuleDict, TransformerEncoder, TransformerEncoderLayer
 from torch.nn.functional import one_hot
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader, RandomSampler
+from torch.utils.data.distributed import DistributedSampler
 
 torch._dynamo.config.suppress_errors = True
-from sequifier.config.train_config import load_train_config  # noqa: E402
-from sequifier.helpers import PANDAS_TO_TORCH_TYPES  # noqa: E402
+from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.helpers import LogFile  # noqa: E402
 from sequifier.helpers import construct_index_maps  # noqa: E402
-from sequifier.helpers import normalize_path  # noqa: E402
-from sequifier.helpers import read_data  # noqa: E402
-from sequifier.helpers import numpy_to_pytorch, subset_to_selected_columns  # noqa: E402
+from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
+    SequifierDatasetFromFile,
+)
+from sequifier.io.sequifier_dataset_from_folder import (  # noqa: E402
+    SequifierDatasetFromFolder,
+)
+from sequifier.io.sequifier_dataset_from_folder_lazy import (  # noqa: E402
+    SequifierDatasetFromFolderLazy,
+)
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
+from sequifier.samplers.distributed_grouped_random_sampler import (  # noqa: E402
+    DistributedGroupedRandomSampler,
+)
+
+
+@beartype
+def setup(rank: int, world_size: int, backend: str = "nccl"):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
+    dist.init_process_group(backend, rank=rank, world_size=world_size)
+
+
+def cleanup():
+    dist.destroy_process_group()
+
+
+@beartype
+def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bool):
+    if config.training_spec.distributed:
+        setup(rank, world_size, config.training_spec.backend)
+
+    # 1. Create Datasets and DataLoaders with DistributedSampler
+    if from_folder:
+        if config.training_spec.load_full_data_to_ram:
+            train_dataset = SequifierDatasetFromFolder(
+                config.training_data_path, config
+            )
+            valid_dataset = SequifierDatasetFromFolder(
+                config.validation_data_path, config
+            )
+        else:
+            train_dataset = SequifierDatasetFromFolderLazy(
+                config.training_data_path, config
+            )
+            valid_dataset = SequifierDatasetFromFolderLazy(
+                config.validation_data_path, config
+            )
+    else:
+        assert config.training_spec.distributed == False  # noqa: E712
+        train_dataset = SequifierDatasetFromFile(config.training_data_path, config)
+        valid_dataset = SequifierDatasetFromFile(config.validation_data_path, config)
+
+    if from_folder:
+        if config.training_spec.distributed:
+            # 2. Use the new distributed sampler for the multi-GPU case
+            train_sampler = DistributedGroupedRandomSampler(
+                train_dataset, num_replicas=world_size, rank=rank
+            )
+            valid_sampler = DistributedGroupedRandomSampler(
+                valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+            )
+        else:
+            # Use the simple grouped sampler for the single-GPU case
+            train_sampler = RandomSampler(train_dataset)
+            valid_sampler = None
+    else:
+        train_sampler = (
+            DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+            if config.training_spec.distributed
+            else None
+        )
+        valid_sampler = (
+            DistributedSampler(
+                valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+            )
+            if config.training_spec.distributed
+            else None
+        )
+
+    if from_folder:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=config.training_spec.batch_size,
+            sampler=train_sampler,
+            shuffle=False,  # Shuffle only if not using sampler
+            num_workers=config.training_spec.num_workers,  # Use multiple workers for data loading
+            pin_memory=config.training_spec.device not in ["mps", "cpu"],
+        )
+
+        # For validation, it's often fine to just run it on the main process
+        valid_loader = DataLoader(
+            valid_dataset,
+            batch_size=config.training_spec.batch_size,
+            sampler=valid_sampler,
+            shuffle=False,
+        )
+    elif not from_folder:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=None,
+            sampler=None,
+            num_workers=config.training_spec.num_workers,
+            pin_memory=False,
+            persistent_workers=(config.training_spec.num_workers > 0),
+        )
+        valid_loader = DataLoader(
+            valid_dataset, batch_size=None, sampler=None, shuffle=False
+        )
+    else:
+        assert False, "not possible"
+
+    # 2. Instantiate and wrap the model
+    torch.manual_seed(config.seed)
+    np.random.seed(config.seed)
+
+    model = TransformerModel(config, rank)
+
+    if config.training_spec.distributed:
+        model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+
+    model = torch.compile(model)
+
+    # 3. Start training
+    # When using DDP, the original model is accessed via the .module attribute
+    original_model = model.module if config.training_spec.distributed else model
+    original_model.train_model(train_loader, valid_loader, train_sampler, valid_sampler)
+
+    if config.training_spec.distributed:
+        cleanup()
 
 
 @beartype
 def train(args: Any, args_config: dict[str, Any]) -> None:
-    """
-    Train the model using the provided configuration.
-
-    Args:
-        args: Command line arguments.
-        args_config: Configuration dictionary.
-    """
     config_path = args.config_path or "configs/train.yaml"
     config = load_train_config(config_path, args_config, args.on_unprocessed)
 
-    column_types = {
-        col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
-        for col in config.column_types
-    }
+    world_size = config.training_spec.world_size
 
-    data_train = read_data(
-        normalize_path(config.training_data_path, config.project_path),
-        config.read_format,
-    )
-    if config.selected_columns is not None:
-        data_train = subset_to_selected_columns(data_train, config.selected_columns)
-
-    X_train, y_train = numpy_to_pytorch(
-        data_train,
-        column_types,
-        config.selected_columns,
-        config.target_columns,
-        config.seq_length,
-        config.training_spec.device,
-        to_device=False,
-    )
-    del data_train
-
-    data_valid = read_data(
-        normalize_path(config.validation_data_path, config.project_path),
-        config.read_format,
-    )
-    if config.selected_columns is not None:
-        data_valid = subset_to_selected_columns(data_valid, config.selected_columns)
-
-    X_valid, y_valid = numpy_to_pytorch(
-        data_valid,
-        column_types,
-        config.selected_columns,
-        config.target_columns,
-        config.seq_length,
-        config.training_spec.device,
-        to_device=False,
-    )
-    del data_valid
-
-    torch.manual_seed(config.seed)
-    np.random.seed(config.seed)
-
-    model = torch.compile(TransformerModel(config).to(config.training_spec.device))
-
-    model.train_model(X_train, y_train, X_valid, y_valid)
+    from_folder = config.read_format == "pt"
+    if config.training_spec.distributed:
+        mp.spawn(
+            train_worker,
+            args=(world_size, config, from_folder),
+            nprocs=world_size,
+            join=True,
+        )
+    else:
+        # Fallback to single-GPU/CPU training
+        train_worker(0, world_size, config, from_folder)
 
 
 @beartype
@@ -112,11 +200,13 @@ def format_number(number: Union[int, float, np.float32]) -> str:
 
 class TransformerModel(nn.Module):
     @beartype
-    def __init__(self, hparams: Any):
+    def __init__(self, hparams: Any, rank: Optional[int] = None):
         super().__init__()
         self.project_path = hparams.project_path
         self.model_type = "Transformer"
         self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
+
+        self.rank = rank
 
         self.selected_columns = hparams.selected_columns
         self.categorical_columns = [
@@ -206,6 +296,14 @@ class TransformerModel(nn.Module):
 
         self.device = hparams.training_spec.device
         self.device_max_concat_length = hparams.training_spec.device_max_concat_length
+
+        if hparams.training_spec.device == "cuda" and self.rank is not None:
+            self.device = f"cuda:{self.rank}"
+        else:
+            self.device = hparams.training_spec.device
+
+        self.to(self.device)
+
         self.criterion = self._init_criterion(hparams=hparams)
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
@@ -383,10 +481,14 @@ class TransformerModel(nn.Module):
     @beartype
     def train_model(
         self,
-        X_train: dict[str, Tensor],
-        y_train: dict[str, Tensor],
-        X_valid: dict[str, Tensor],
-        y_valid: dict[str, Tensor],
+        train_loader: DataLoader,
+        valid_loader: DataLoader,
+        train_sampler: Optional[
+            Union[RandomSampler, DistributedSampler, DistributedGroupedRandomSampler]
+        ],
+        valid_sampler: Optional[
+            Union[RandomSampler, DistributedSampler, DistributedGroupedRandomSampler]
+        ],
     ) -> None:
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
@@ -401,8 +503,15 @@ class TransformerModel(nn.Module):
                 and not np.isnan(total_loss)  # type: ignore # noqa: F821
             ):
                 epoch_start_time = time.time()
-                self._train_epoch(X_train, y_train, epoch)
-                total_loss, total_losses, output = self._evaluate(X_valid, y_valid)
+
+                if train_sampler and not isinstance(train_sampler, RandomSampler):
+                    train_sampler.set_epoch(epoch)
+                self._train_epoch(train_loader, epoch)
+
+                if valid_sampler and not isinstance(valid_sampler, RandomSampler):
+                    valid_sampler.set_epoch(epoch)
+
+                total_loss, total_losses, output = self._evaluate(valid_loader)
                 elapsed = time.time() - epoch_start_time
 
                 self._log_epoch_results(
@@ -429,23 +538,27 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _train_epoch(
-        self, X_train: dict[str, Tensor], y_train: dict[str, Tensor], epoch: int
+        self,
+        train_loader: DataLoader,
+        epoch: int,
     ) -> None:
-        self.train()  # turn on train mode
+        self.train()
+
         total_loss = 0.0
         start_time = time.time()
+        num_batches = len(train_loader)
 
-        num_batches = math.ceil(
-            X_train[self.target_columns[0]].shape[0] / self.batch_size
-        )  # any column will do
-        batch_order = torch.randperm(num_batches).tolist()
-
-        for batch_count, batch in enumerate(batch_order):
-            batch_start = int(batch * self.batch_size)
-
-            data, targets = self._get_batch(
-                X_train, y_train, batch_start, self.batch_size, to_device=True
-            )
+        for batch_count, (data, targets) in enumerate(train_loader):
+            data = {
+                k: v.to(self.device, non_blocking=True)
+                for k, v in data.items()
+                if k in self.selected_columns
+            }
+            targets = {
+                k: v.to(self.device, non_blocking=True)
+                for k, v in targets.items()
+                if k in self.target_column_types
+            }
             output = self.forward_train(data)
 
             loss, losses = self._calculate_loss(output, targets)
@@ -473,6 +586,8 @@ class TransformerModel(nn.Module):
                 )
                 total_loss = 0.0
                 start_time = time.time()
+
+            del data, targets, output, loss, losses
 
     @beartype
     def _calculate_loss(
@@ -528,59 +643,128 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _evaluate(
-        self, X_valid: dict[str, Tensor], y_valid: dict[str, Tensor]
+        self, valid_loader: DataLoader
     ) -> tuple[np.float32, dict[str, np.float32], dict[str, Tensor]]:
-        self.eval()  # turn on evaluation mode
+        self.eval()  # Turn on evaluation mode
 
+        total_loss_collect = []
+        # Initialize a dict to hold lists of losses for each target
+        total_losses_collect = {col: [] for col in self.target_columns}
+        output = {}  # for type checking
         with torch.no_grad():
-            num_batches = math.ceil(
-                X_valid[self.target_columns[0]].shape[0] / self.batch_size
-            )  # any column will do
-            total_loss_collect, total_losses_collect = [], []
-            for batch_start in range(0, num_batches * self.batch_size, self.batch_size):
-                data, targets = self._get_batch(
-                    X_valid,
-                    y_valid,
-                    batch_start,
-                    batch_start + self.batch_size,
-                    to_device=True,
-                )
+            for i, (data, targets) in enumerate(valid_loader):
+                # Move data to the current process's assigned GPU
+                data = {
+                    k: v.to(self.device, non_blocking=True)
+                    for k, v in data.items()
+                    if k in self.selected_columns
+                }
+                targets = {
+                    k: v.to(self.device, non_blocking=True)
+                    for k, v in targets.items()
+                    if k in self.target_column_types
+                }
+
                 output = self.forward_train(data)
-                total_loss_iter, total_losses_iter = self._calculate_loss(
-                    output, targets
-                )
-                total_loss_collect.append(total_loss_iter.cpu())
-                total_losses_collect.append(total_losses_iter)
+                loss, losses = self._calculate_loss(output, targets)
 
-                torch.cuda.empty_cache()
+                total_loss_collect.append(loss.item())
+                for col, loss in losses.items():
+                    total_losses_collect[col].append(loss.item())
 
-        total_loss = np.sum(total_loss_collect)
-        total_losses = {
-            target_column: np.sum(
-                [
-                    total_losses_i[target_column].cpu()
-                    for total_losses_i in total_losses_collect
-                ]
-            )
-            for target_column in total_losses_iter.keys()  # type: ignore
+                # Free up GPU memory
+                del data, targets, loss, losses
+                if self.device == "cuda":
+                    torch.cuda.empty_cache()
+
+        # 1. Sum the losses calculated on this GPU process
+        total_loss_local = np.sum(total_loss_collect)
+        total_losses_local = {
+            col: np.sum(loss_list) for col, loss_list in total_losses_collect.items()
         }
+
+        # 2. Aggregate losses across all GPUs if in distributed mode
+        if self.hparams.training_spec.distributed:
+            # Put local losses into tensors for reduction
+            total_loss_tensor = torch.tensor(total_loss_local, device=self.device)
+
+            # Ensure consistent order for the losses tensor
+            loss_keys = sorted(total_losses_local.keys())
+            losses_values = [total_losses_local[k] for k in loss_keys]
+            losses_tensor = torch.tensor(losses_values, device=self.device)
+
+            # Sum losses from all processes. The result is broadcast back to all processes.
+            dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
+
+            # Update local variables with the aggregated global results
+            total_loss_global = total_loss_tensor.cpu().numpy()
+            losses_global_values = losses_tensor.cpu().numpy()
+            total_losses_global = dict(zip(loss_keys, losses_global_values))
+        else:
+            # If not distributed, local losses are the global losses
+            total_loss_global = total_loss_local
+            total_losses_global = total_losses_local
+
+        # 3. Handle one-time baseline loss calculation (must also be synchronized)
         if not hasattr(self, "baseline_loss"):
-            data, targets = self._get_batch(
-                X_valid, y_valid, 0, list(X_valid.values())[0].shape[0], to_device=False
-            )
-            self.baseline_loss, self.baseline_losses = self._calculate_loss(
-                {
+            baseline_loss_local_collect = []
+            baseline_losses_local_collect = {col: [] for col in self.target_columns}
+
+            # Iterate over the sharded validation loader
+            for data, targets in valid_loader:
+                data = {
+                    k: v.to(self.device, non_blocking=True)
+                    for k, v in data.items()
+                    if k in self.selected_columns
+                }
+                targets = {
+                    k: v.to(self.device, non_blocking=True)
+                    for k, v in targets.items()
+                    if k in self.target_column_types
+                }
+                # Replicate original logic of using input as pseudo-output
+                pseudo_output = {
                     col: self._transform_val(col, data[col]) for col in targets.keys()
-                },  # this variant is chosen because the same batch might have several "sequenceId" sequences
-                {col: val for col, val in targets.items()},
-            )
-            self.baseline_loss = self.baseline_loss.item()
-            self.baseline_losses = {
-                target_column: target_loss.item()
-                for target_column, target_loss in self.baseline_losses.items()
+                }
+
+                loss, losses = self._calculate_loss(pseudo_output, targets)
+
+                baseline_loss_local_collect.append(loss.item())
+                for col, loss_ in losses.items():
+                    baseline_losses_local_collect[col].append(loss_.item())
+
+            # Sum the losses for the local shard
+            baseline_loss_local = np.sum(baseline_loss_local_collect)
+            baseline_losses_local = {
+                col: np.sum(loss_list)
+                for col, loss_list in baseline_losses_local_collect.items()
             }
 
-        return total_loss, total_losses, output  # type: ignore
+            # Broadcast the baseline values from the main process to all others
+            if self.hparams.training_spec.distributed:
+                total_loss_tensor = torch.tensor(
+                    baseline_loss_local, device=self.device
+                )
+                dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
+                self.baseline_loss = total_loss_tensor.item()
+
+                loss_keys = sorted(baseline_losses_local.keys())
+                losses_values = [baseline_losses_local[k] for k in loss_keys]
+                losses_tensor = torch.tensor(losses_values, device=self.device)
+                dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
+
+                self.baseline_losses = dict(zip(loss_keys, losses_tensor.cpu().numpy()))
+            else:
+                # If not distributed, local is global
+                self.baseline_loss = baseline_loss_local
+                self.baseline_losses = baseline_losses_local
+
+        return (
+            np.float32(total_loss_global),
+            {k: np.float32(v) for k, v in total_losses_global.items()},
+            output,
+        )
 
     @beartype
     def _get_batch(
@@ -595,14 +779,14 @@ class TransformerModel(nn.Module):
             return (
                 {
                     col: X[col][batch_start : batch_start + batch_size, :].to(
-                        self.device
+                        self.device, non_blocking=True
                     )
                     for col in X.keys()
                 },
                 {
                     target_column: y[target_column][
                         batch_start : batch_start + batch_size, :
-                    ].to(self.device)
+                    ].to(self.device, non_blocking=True)
                     for target_column in y.keys()
                 },
             )
@@ -622,6 +806,9 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _export(self, model: "TransformerModel", suffix: str, epoch: int) -> None:
+        if self.rank != 0:
+            return
+
         self.eval()
 
         os.makedirs(os.path.join(self.project_path, "models"), exist_ok=True)
@@ -631,12 +818,12 @@ class TransformerModel(nn.Module):
                     0,
                     self.n_classes[col],
                     (self.inference_batch_size, self.seq_length),
-                ).to(self.device)
+                ).to(self.device, non_blocking=True)
                 for col in self.categorical_columns
             }
             x_real = {
                 col: torch.rand(self.inference_batch_size, self.seq_length).to(
-                    self.device
+                    self.device, non_blocking=True
                 )
                 for col in self.real_columns
             }
@@ -686,6 +873,8 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _save(self, epoch: int, val_loss: np.float32) -> None:
+        if self.rank != 0:
+            return
         os.makedirs(os.path.join(self.project_path, "checkpoints"), exist_ok=True)
 
         output_path = os.path.join(
@@ -723,12 +912,12 @@ class TransformerModel(nn.Module):
     def _initialize_log_file(self):
         os.makedirs(os.path.join(self.project_path, "logs"), exist_ok=True)
         open_mode = "w" if self.start_epoch == 1 else "a"
-        self.log_file = LogFile(
-            os.path.join(
-                self.project_path, "logs", f"sequifier-{self.model_name}-[NUMBER].txt"
-            ),
-            open_mode,
+        path = os.path.join(
+            self.project_path, "logs", f"sequifier-{self.model_name}-[NUMBER].txt"
         )
+        if self.rank is not None:
+            path = path.replace("[NUMBER]", f"rank{self.rank}-[NUMBER]")
+        self.log_file = LogFile(path, open_mode, self.rank)
 
     @beartype
     def _load_weights_conditional(self) -> str:
@@ -744,6 +933,16 @@ class TransformerModel(nn.Module):
             self.load_state_dict(checkpoint["model_state_dict"])
             self.start_epoch = checkpoint["epoch"] + 1
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            for state in self.optimizer.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        if k == "step":
+                            # Keep the 'step' tensor on the CPU.
+                            state[k] = v.cpu()
+                        else:
+                            # Move all other state tensors to the model's device.
+                            state[k] = v.to(self.device)
+
             return f"Loading model weights from {latest_model_path}. Total params: {format_number(pytorch_total_params)}"
         else:
             self.start_epoch = 1
@@ -825,7 +1024,7 @@ def load_inference_model(
     args_config: dict[str, Any],
     device: str,
     infer_with_dropout: bool,
-) -> torch._dynamo.eval_frame.OptimizedModule:
+) -> torch.nn.Module:
     training_config = load_train_config(
         training_config_path, args_config, args_config["on_unprocessed"]
     )

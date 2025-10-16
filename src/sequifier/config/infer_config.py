@@ -2,6 +2,7 @@ import json
 import os
 from typing import Optional, Union
 
+import numpy as np
 import yaml
 from beartype import beartype
 from pydantic import BaseModel, Field, validator
@@ -93,15 +94,49 @@ class InfererModel(BaseModel):
     seq_length: int
     inference_batch_size: int
 
+    distributed: bool = False
+    load_full_data_to_ram: bool = True
+    world_size: int = 1
+    num_workers: int = 0
+
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
-    autoregression: bool = Field(default=True)
-    autoregression_additional_steps: Optional[int] = Field(default=None)
+    autoregression: bool = Field(default=False)
+    autoregression_extra_steps: Optional[int] = Field(default=None)
 
     @validator("training_config_path")
     def validate_training_config_path(cls, v: str) -> str:
         if not (v is None or os.path.exists(v)):
             raise ValueError(f"{v} does not exist")
+        return v
+
+    @validator("autoregression_extra_steps")
+    def validate_autoregression_extra_steps(cls, v: bool, values) -> bool:
+        if v is not None and v > 0:
+            if not values["autoregression"]:
+                raise ValueError(
+                    f"'autoregression_extra_steps' can only be larger than 0 if 'autoregression' is true: {values['autoregression']}"
+                )
+
+            if not np.all(
+                np.array(sorted(values["selected_columns"]))
+                == np.array(sorted(values["target_columns"]))
+            ):
+                raise ValueError(
+                    "'autoregression_extra_steps' can only be larger than 0 if 'selected_columns' and 'target_columns' are identical"
+                )
+
+        return v
+
+    @validator("autoregression")
+    def validate_autoregression(cls, v: bool, values):
+        if v and not np.all(
+            np.array(sorted(values["selected_columns"]))
+            == np.array(sorted(values["target_columns"]))
+        ):
+            raise ValueError(
+                "Autoregressive inference with non-identical 'selected_columns' and 'target_columns' is possible but should not be performed"
+            )
         return v
 
     @validator("data_path")
@@ -119,8 +154,8 @@ class InfererModel(BaseModel):
 
     @validator("read_format", "write_format")
     def validate_format(cls, v: str) -> str:
-        if v not in ["csv", "parquet"]:
-            raise ValueError("Currently only 'csv' and 'parquet' are supported")
+        if v not in ["csv", "parquet", "pt"]:
+            raise ValueError("Currently only 'csv', 'parquet' and 'pt' are supported")
         return v
 
     @validator("target_column_types")
@@ -142,6 +177,14 @@ class InfererModel(BaseModel):
         ):
             raise ValueError(
                 "map_to_id can only be True if at least one target variable is categorical"
+            )
+        return v
+
+    @validator("distributed")
+    def validate_distributed_inference(cls, v: bool, values: dict) -> bool:
+        if v and values.get("read_format") != "pt":
+            raise ValueError(
+                "Distributed inference is only supported for preprocessed '.pt' files. Please set read_format to 'pt'."
             )
         return v
 

@@ -38,6 +38,7 @@ class PreprocessorModel(BaseModel):
     data_path: str
     read_format: str = "csv"
     write_format: str = "parquet"
+    combine_into_single_file: bool = True
     selected_columns: Optional[list[str]]
 
     group_proportions: list[float]
@@ -46,6 +47,8 @@ class PreprocessorModel(BaseModel):
     max_rows: Optional[int]
     seed: int
     n_cores: Optional[int]
+    batches_per_file: int = 1024
+    process_by_file: bool = True
 
     @validator("data_path", always=True)
     def validate_data_path(cls, v: str) -> str:
@@ -55,10 +58,18 @@ class PreprocessorModel(BaseModel):
 
     @validator("read_format", "write_format", always=True)
     def validate_format(cls, v: str) -> str:
-        supported_formats = ["csv", "parquet"]
+        supported_formats = ["csv", "parquet", "pt"]
         if v not in supported_formats:
             raise ValueError(
                 f"Currently only {', '.join(supported_formats)} are supported"
+            )
+        return v
+
+    @validator("combine_into_single_file", always=True)
+    def validate_format2(cls, v: bool, values: dict):
+        if values["write_format"] == "pt" and v is True:
+            raise ValueError(
+                "With write_format 'pt', combine_into_single_file must be set to False"
             )
         return v
 
@@ -88,6 +99,12 @@ class PreprocessorModel(BaseModel):
             )
         if not all(step > 0 for step in v):
             raise ValueError(f"All seq_step_sizes must be positive integers: {v}")
+        return v
+
+    @validator("batches_per_file")
+    def validate_batches_per_file(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("batches_per_file must be a positive integer")
         return v
 
     def __init__(self, **kwargs):

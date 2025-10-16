@@ -17,6 +17,7 @@ def model_names_preds():
     model_names_preds += [
         "model-categorical-multitarget-5-best-3",
         "model-real-1-best-3-autoregression",
+        "model-categorical-1-best-3-autoregression",
     ]
 
     return model_names_preds
@@ -39,31 +40,45 @@ def targets(model_names_preds, model_names_probs):
     target_dict = {"preds": {}, "probs": {}}
     for model_name in model_names_preds:
         target_type = "categorical" if "categorical" in model_name else "real"
-        dtype = (
-            {TARGET_VARIABLE_DICT[target_type]: str}
-            if target_type == "categorical"
-            else None
+        file_name = f"sequifier-{model_name}-predictions"
+        target_path = os.path.join(
+            "tests", "resources", "target_outputs", "predictions", file_name
         )
-
-        file_name = f"sequifier-{model_name}-predictions.csv"
-        target = pl.read_csv(
-            os.path.join(
-                "tests", "resources", "target_outputs", "predictions", file_name
-            ),
-            schema_overrides=dtype,
+        target_dict["preds"][model_name] = read_multi_file_preds(
+            target_path, target_type
         )
-        target_dict["preds"][model_name] = target
 
     for model_name in model_names_probs:
-        file_name = f"sequifier-{model_name}-probabilities.csv"
-        target = pl.read_csv(
-            os.path.join(
-                "tests", "resources", "target_outputs", "probabilities", file_name
-            )
+        target_type = "categorical" if "categorical" in model_name else "real"
+        file_name = f"sequifier-{model_name}-probabilities"
+        target_path = os.path.join(
+            "tests", "resources", "target_outputs", "probabilities", file_name
         )
-        target_dict["probs"][model_name] = target
+        target_dict["probs"][model_name] = read_multi_file_preds(
+            target_path, target_type
+        )
 
     return target_dict
+
+
+def read_multi_file_preds(path, target_type, file_suffix=None):
+    dtype = (
+        {TARGET_VARIABLE_DICT[target_type]: str}
+        if target_type == "categorical"
+        else None
+    )
+    if target_type == "categorical":
+        contents = []
+        for root, dirs, files in os.walk(path):
+            for file in files:
+                if file_suffix is None or file.endswith(file_suffix):
+                    contents.append(
+                        pl.read_csv(os.path.join(root, file), schema_overrides=dtype)
+                    )
+        assert len(contents) > 0, f"no files found for {path}"
+        return pl.concat(contents, how="vertical")
+    else:
+        return pl.read_csv(f"{path}.csv", separator=",", schema_overrides=dtype)
 
 
 @pytest.fixture()
@@ -72,20 +87,14 @@ def predictions(run_inference, model_names_preds, project_path):
     for model_name in model_names_preds:
         target_type = "categorical" if "categorical" in model_name else "real"
 
-        dtype = (
-            {TARGET_VARIABLE_DICT[target_type]: str}
-            if target_type == "categorical"
-            else None
-        )
         prediction_path = os.path.join(
             project_path,
             "outputs",
             "predictions",
-            f"sequifier-{model_name}-predictions.csv",
+            f"sequifier-{model_name}-predictions",
         )
-        preds[model_name] = pl.read_csv(
-            prediction_path, separator=",", schema_overrides=dtype
-        )
+
+        preds[model_name] = read_multi_file_preds(prediction_path, target_type)
 
     return preds
 
@@ -94,13 +103,16 @@ def predictions(run_inference, model_names_preds, project_path):
 def probabilities(run_inference, model_names_probs, project_path):
     probs = {}
     for model_name in model_names_probs:
-        prediction_path = os.path.join(
+        probabilities_path = os.path.join(
             project_path,
             "outputs",
             "probabilities",
-            f"sequifier-{model_name}-probabilities.csv",
+            f"sequifier-{model_name}-probabilities",
         )
-        probs[model_name] = pl.read_csv(prediction_path, separator=",")
+        probs[model_name] = read_multi_file_preds(
+            probabilities_path, "categorical", "csv"
+        )
+
     return probs
 
 
