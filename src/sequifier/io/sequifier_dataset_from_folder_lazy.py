@@ -71,7 +71,7 @@ class SequifierDatasetFromFolderLazy(Dataset):
         ] = collections.OrderedDict()
 
         print(
-            f"Initialized lazy dataset from {self.data_dir}. "
+            f"[INFO] Initialized lazy dataset from {self.data_dir}. "
             f"Total samples: {self.n_samples}. RAM threshold: {self.ram_threshold}%"
         )
 
@@ -122,7 +122,7 @@ class SequifierDatasetFromFolderLazy(Dataset):
             # was first inserted, effectively implementing the LRU policy.
             evicted_path, _ = self.cache.popitem(last=False)
             print(
-                f"RAM usage {psutil.virtual_memory().percent:.1f}% > {self.ram_threshold}%. "
+                f"[INFO] RAM usage {psutil.virtual_memory().percent:.1f}% > {self.ram_threshold}%. "
                 f"Evicting {os.path.basename(evicted_path)} from cache."
             )
 

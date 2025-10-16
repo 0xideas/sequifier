@@ -160,6 +160,7 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
 def train(args: Any, args_config: dict[str, Any]) -> None:
     config_path = args.config_path or "configs/train.yaml"
     config = load_train_config(config_path, args_config, args.on_unprocessed)
+    print(f"--- Starting Training for model: {config.model_name} ---")
 
     world_size = config.training_spec.world_size
 
@@ -533,7 +534,7 @@ class TransformerModel(nn.Module):
 
         self._export(self, "last", last_epoch)  # type: ignore
         self._export(best_model, "best", last_epoch)  # type: ignore
-        self.log_file.write("Training transformer complete")
+        self.log_file.write("--- Training Complete ---")
         self.log_file.close()
 
     @beartype
@@ -576,13 +577,11 @@ class TransformerModel(nn.Module):
                 self.optimizer.zero_grad()
 
             total_loss += loss.item()
-            if (batch_count + 1) % self.log_interval == 0:
+            if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
                 lr = self.scheduler.get_last_lr()[0]
                 s_per_batch = (time.time() - start_time) / self.log_interval
                 self.log_file.write(
-                    f"| epoch {epoch:3d} | {(batch_count+1):5d}/{num_batches:5d} batches | "
-                    f"lr {format_number(lr)} | s/batch {format_number(s_per_batch)} | "
-                    f"loss {format_number(total_loss)}"
+                    f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(total_loss)} | LR: {format_number(lr)} | S/Batch {format_number(s_per_batch)}"
                 )
                 total_loss = 0.0
                 start_time = time.time()
@@ -892,7 +891,8 @@ class TransformerModel(nn.Module):
             },
             output_path,
         )
-        self.log_file.write(f"Saved model to {output_path}")
+        if self.rank == 0:
+            self.log_file.write(f"[INFO] Saved model to {output_path}")
 
     @beartype
     def _get_optimizer(self, **kwargs):
@@ -943,10 +943,10 @@ class TransformerModel(nn.Module):
                             # Move all other state tensors to the model's device.
                             state[k] = v.to(self.device)
 
-            return f"Loading model weights from {latest_model_path}. Total params: {format_number(pytorch_total_params)}"
+            return f"[INFO] Resuming training from checkpoint '{latest_model_path}'. Total params: {format_number(pytorch_total_params)}"
         else:
             self.start_epoch = 1
-            return f"Initializing new model with {format_number(pytorch_total_params)} params"
+            return f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
 
     @beartype
     def _get_latest_model_name(self) -> Optional[str]:
@@ -970,51 +970,40 @@ class TransformerModel(nn.Module):
         total_losses: dict[str, np.float32],
         output: dict[str, Tensor],
     ) -> None:
-        lr = self.optimizer.state_dict()["param_groups"][0]["lr"]
+        if self.rank == 0:
+            lr = self.optimizer.state_dict()["param_groups"][0]["lr"]
 
-        self.log_file.write("-" * 89)
-        self.log_file.write(
-            f"| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | lr: {lr} | "
-            f"valid loss {format_number(total_loss)} | baseline loss {format_number(self.baseline_loss)}"
-        )
-
-        if len(total_losses) > 1:
+            self.log_file.write("-" * 89)
             self.log_file.write(
-                ", ".join(
-                    [
-                        f"'{target_column} loss': {format_number(tloss)}"
-                        for target_column, tloss in total_losses.items()
-                    ]
-                ),
-                level=2,
-            )
-            self.log_file.write(
-                ", ".join(
-                    [
-                        f"'{target_column} baseline loss': {format_number(bloss)}"
-                        for target_column, bloss in self.baseline_losses.items()
-                    ]
-                ),
-                level=2,
+                f"[INFO] Validation | Epoch: {epoch:3d} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(lr)}"
             )
 
-        for categorical_column in self.class_share_log_columns:
-            output_values = output[categorical_column].argmax(1).cpu().detach().numpy()
-            output_counts_df = (
-                pl.Series("values", output_values).value_counts().sort("values")
-            )
-            output_counts = output_counts_df.get_column("count")
-
-            output_counts = output_counts / output_counts.sum()
-            value_shares = " | ".join(
-                [
-                    f"{self.index_maps[categorical_column][row['values']]}: {row['count']:5.5f}"
-                    for row in output_counts_df.iter_rows(named=True)
+            if len(total_losses) > 1:
+                loss_strs = [
+                    f"{key}_loss: {format_number(value)}"
+                    for key, value in total_losses.items()
                 ]
-            )
-            self.log_file.write(f"{categorical_column}: {value_shares}")
+                self.log_file.write("[INFO]  - " + ", ".join(loss_strs))
 
-        self.log_file.write("-" * 89)
+            for categorical_column in self.class_share_log_columns:
+                output_values = (
+                    output[categorical_column].argmax(1).cpu().detach().numpy()
+                )
+                output_counts_df = (
+                    pl.Series("values", output_values).value_counts().sort("values")
+                )
+                output_counts = output_counts_df.get_column("count")
+
+                output_counts = output_counts / output_counts.sum()
+                value_shares = " | ".join(
+                    [
+                        f"{self.index_maps[categorical_column][row['values']]}: {row['count']:5.5f}"
+                        for row in output_counts_df.iter_rows(named=True)
+                    ]
+                )
+                self.log_file.write(f"[INFO] {categorical_column}: {value_shares}")
+
+            self.log_file.write("-" * 89)
 
 
 @beartype
@@ -1031,7 +1020,7 @@ def load_inference_model(
 
     with torch.no_grad():
         model = TransformerModel(training_config)
-        model.log_file.write(f"Loading model weights from {model_path}")
+        model.log_file.write(f"[INFO] Loading model weights from {model_path}")
         model_state = torch.load(
             model_path, map_location=torch.device(device), weights_only=False
         )

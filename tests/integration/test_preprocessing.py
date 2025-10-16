@@ -23,7 +23,7 @@ def dd_configs(run_preprocessing, project_path):
 
 def test_dd_config(dd_configs):
     for file_name, dd_config in dd_configs.items():
-        print(file_name)
+        print(f"Verifying dd_config for: {file_name}")
         assert np.all(
             np.array(list(dd_config.keys()))
             == np.array(
@@ -73,12 +73,10 @@ def read_preprocessing_outputs(path, variant):
                         os.path.join(root, file)
                     )
                     sequences2 = {}
-                    print(sequences)
                     for col, vals in sequences.items():
                         vals2 = np.concatenate(
                             [vals.numpy(), targets[col][:, -1:].numpy()], axis=1
                         )
-                        print(vals2.shape)
 
                         subsequences, prev_seq_id = [], None
                         for seq_id in sequence_id.numpy():
