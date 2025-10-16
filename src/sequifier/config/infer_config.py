@@ -68,8 +68,6 @@ def load_inferer_config(
             config_values["project_path"],
         )
 
-    print(config_values)
-
     return InfererModel(**config_values)
 
 

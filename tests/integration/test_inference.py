@@ -40,31 +40,44 @@ def targets(model_names_preds, model_names_probs):
     target_dict = {"preds": {}, "probs": {}}
     for model_name in model_names_preds:
         target_type = "categorical" if "categorical" in model_name else "real"
-        dtype = (
-            {TARGET_VARIABLE_DICT[target_type]: str}
-            if target_type == "categorical"
-            else None
+        file_name = f"sequifier-{model_name}-predictions"
+        target_path = os.path.join(
+            "tests", "resources", "target_outputs", "predictions", file_name
         )
-
-        file_name = f"sequifier-{model_name}-predictions.csv"
-        target = pl.read_csv(
-            os.path.join(
-                "tests", "resources", "target_outputs", "predictions", file_name
-            ),
-            schema_overrides=dtype,
+        target_dict["preds"][model_name] = read_multi_file_preds(
+            target_path, target_type
         )
-        target_dict["preds"][model_name] = target
 
     for model_name in model_names_probs:
-        file_name = f"sequifier-{model_name}-probabilities.csv"
-        target = pl.read_csv(
-            os.path.join(
-                "tests", "resources", "target_outputs", "probabilities", file_name
-            )
+        target_type = "categorical" if "categorical" in model_name else "real"
+        file_name = f"sequifier-{model_name}-probabilities"
+        target_path = os.path.join(
+            "tests", "resources", "target_outputs", "probabilities", file_name
         )
-        target_dict["probs"][model_name] = target
+        target_dict["probs"][model_name] = read_multi_file_preds(
+            target_path, target_type
+        )
 
     return target_dict
+
+
+def read_multi_file_preds(path, target_type):
+    dtype = (
+        {TARGET_VARIABLE_DICT[target_type]: str}
+        if target_type == "categorical"
+        else None
+    )
+    if target_type == "categorical":
+        contents = []
+        for root, dirs, files in os.walk(path):
+            for file in files:
+                contents.append(
+                    pl.read_csv(os.path.join(root, file), schema_overrides=dtype)
+                )
+        assert len(contents) > 0, f"no files found for {path}"
+        return pl.concat(contents, how="vertical")
+    else:
+        return pl.read_csv(f"{path}.csv", separator=",", schema_overrides=dtype)
 
 
 @pytest.fixture()
@@ -73,12 +86,6 @@ def predictions(run_inference, model_names_preds, project_path):
     for model_name in model_names_preds:
         target_type = "categorical" if "categorical" in model_name else "real"
 
-        dtype = (
-            {TARGET_VARIABLE_DICT[target_type]: str}
-            if target_type == "categorical"
-            else None
-        )
-
         prediction_path = os.path.join(
             project_path,
             "outputs",
@@ -86,19 +93,7 @@ def predictions(run_inference, model_names_preds, project_path):
             f"sequifier-{model_name}-predictions",
         )
 
-        if target_type == "categorical":
-            contents = []
-            for root, dirs, files in os.walk(prediction_path):
-                for file in files:
-                    contents.append(
-                        pl.read_csv(os.path.join(root, file), schema_overrides=dtype)
-                    )
-            assert len(contents) > 0, f"no files found for {prediction_path}"
-            preds[model_name] = pl.concat(contents, how="vertical")
-        else:
-            preds[model_name] = pl.read_csv(
-                f"{prediction_path}.csv", separator=",", schema_overrides=dtype
-            )
+        preds[model_name] = read_multi_file_preds(prediction_path, target_type)
 
     return preds
 
