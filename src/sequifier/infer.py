@@ -25,7 +25,7 @@ from sequifier.train import infer_with_model, load_inference_model
 
 @beartype
 def infer(args: Any, args_config: dict[str, Any]) -> None:
-    print("Inferring...")
+    print("--- Starting Inference ---")
     config_path = (
         args.config_path if args.config_path is not None else "configs/infer.yaml"
     )
@@ -84,7 +84,7 @@ def infer_worker(
     selected_columns_statistics: dict[str, dict[str, float]],
     percentage_limits: Optional[tuple[float, float]],
 ):
-    print("Reading data...")
+    print(f"[INFO] Reading data from '{config.data_path}'...")
     # Step 1: Use Polars for data ingestion
     if config.read_format == "parquet":
         dataset = [pl.read_parquet(config.data_path)]
@@ -131,7 +131,7 @@ def infer_worker(
             f".{inferer.inference_model_type}", ""
         )
 
-        print(f"Inferring for {model_id}")
+        print(f"[INFO] Inferring for {model_id}")
 
         for data_id, data in enumerate(dataset):
             # Step 1: Adapt Data Subsetting (now works on Polars DF)
@@ -219,7 +219,7 @@ def infer_worker(
                         probabilities_path = os.path.join(
                             config.project_path, "outputs", "probabilities", file_name
                         )
-                        print(f"Writing probabilities to {probabilities_path}")
+                        print(f"[INFO] Writing probabilities to '{probabilities_path}'")
                         # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
                         write_data(
                             pl.DataFrame(
@@ -259,13 +259,13 @@ def infer_worker(
             predictions_path = os.path.join(
                 config.project_path, "outputs", "predictions", file_name
             )
-            print(f"Writing predictions to {predictions_path}")
+            print(f"[INFO] Writing predictions to '{predictions_path}'")
             write_data(
                 predictions,
                 predictions_path,
                 config.write_format,
             )
-    print("Inference complete")
+    print("--- Inference Complete ---")
 
 
 @beartype
@@ -629,7 +629,7 @@ def get_probs_preds_autoregression(
         t4 = datetime.now()
 
         print(
-            f"subseq-id: {subsequence_id}: total: {format_delta(t4-t0)}s - {format_delta(t1 - t0)}s - {format_delta(t2 - t1)}s - {format_delta(t3 - t2)}s - {format_delta(t4 - t3)}s"
+            f"[DEBUG] Autoregression step {subsequence_id}/{len(subsequence_ids_distinct)}: Total: {format_delta(t4-t0)}s (Filter: {format_delta(t1-t0)}s, Infer: {format_delta(t3-t2)}s, Update: {format_delta(t4-t3)}s)"
         )
 
     sort_order = np.argsort(sort_keys)

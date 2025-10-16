@@ -39,7 +39,7 @@ class SequifierDatasetFromFolder(Dataset):
         self.batch_files_info = metadata["batch_files"]
         self.n_samples = metadata["total_samples"]
 
-        print(f"Pre-loading dataset from {self.data_dir} into RAM...")
+        print(f"[INFO] Loading training dataset into memory from '{self.data_dir}'...")
 
         all_sequences: Dict[str, List[torch.Tensor]] = {
             col: [] for col in config.selected_columns
@@ -76,7 +76,7 @@ class SequifierDatasetFromFolder(Dataset):
         for tensor in self.targets.values():
             tensor.share_memory_()
 
-        print(f"Dataset pre-loading complete. Total samples: {self.n_samples}")
+        print(f"[INFO] Dataset loaded with {self.n_samples} samples.")
 
         # Verify that the number of loaded samples matches the metadata
         first_key = next(iter(self.sequences.keys()))

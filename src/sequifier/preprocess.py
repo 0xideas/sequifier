@@ -26,10 +26,11 @@ def preprocess(args: Any, args_config: dict[str, Any]) -> None:
         args: Command line arguments.
         args_config: Configuration dictionary.
     """
+    print("--- Starting Preprocessing ---")
     config_path = args.config_path or "configs/preprocess.yaml"
     config = load_preprocessor_config(config_path, args_config)
     Preprocessor(**config.dict())
-    print("Preprocessing complete")
+    print("--- Preprocessing Complete ---")
 
 
 class Preprocessor:
@@ -220,14 +221,14 @@ class Preprocessor:
         id_maps, selected_columns_statistics = {}, {}
         col_types, data_columns = None, None
 
-        print(f"Data path: {data_path}")
+        print(f"[INFO] Data path: {data_path}")
         for root, dirs, files in os.walk(data_path):
-            print(f"N Files : {len(files) = }")
+            print(f"[INFO] N Files : {len(files)}")
             for file in files:
                 if file.endswith(read_format) and (
                     max_rows is None or n_rows_running_count < max_rows
                 ):
-                    print(f"Preprocessing: reading {file}")
+                    print(f"[INFO] Preprocessing: reading {file}")
                     max_rows_inner = (
                         None
                         if max_rows is None
@@ -387,8 +388,8 @@ class Preprocessor:
                 + list(kwargs_2.values())
                 for process_id, file_set in enumerate(file_sets)
             ]
-            print(f"_process_batches_multiple_files n_cores: {n_cores}")
-            print(f"_process_batches_multiple_files {len(job_params) = }")
+            print(f"[INFO] _process_batches_multiple_files n_cores: {n_cores}")
+            print(f"[INFO] _process_batches_multiple_files {len(job_params) = }")
 
             with multiprocessing.get_context("spawn").Pool(
                 processes=len(job_params)
@@ -501,7 +502,7 @@ class Preprocessor:
                     total_samples += n_samples
             except Exception as e:
                 # Add a warning for robustness in case a file is corrupted
-                print(f"Warning: Could not process file {file_path} for metadata: {e}")
+                print(f"[WARNING] Could not process file {file_path} for metadata: {e}")
 
         # Final metadata structure required by SequifierDatasetFromFolder
         metadata = {
@@ -589,7 +590,7 @@ def _load_and_preprocess_data(
     selected_columns: Optional[list[str]],
     max_rows: Optional[int],
 ) -> pl.DataFrame:
-    print(f"Reading: {data_path}")
+    print(f"[INFO] Reading data from '{data_path}'...")
     data = read_data(data_path, read_format, columns=selected_columns)
     assert (
         data.null_count().sum().sum_horizontal().item() == 0
@@ -888,7 +889,7 @@ def process_and_write_data_pt(
     if not sequences_dict:
         return
 
-    print(f"Writing to file: {path}")
+    print(f"[INFO] Writing preprocessed data to '{path}'...")
     data_to_save = (sequences_dict, targets_dict, sequence_ids_tensor)
     torch.save(data_to_save, path)
 
@@ -1243,7 +1244,7 @@ def combine_multiprocessing_outputs(
         if in_target_dir:
             out_path = insert_top_folder(out_path, target_dir)
 
-        print(f"writing to: {out_path}")
+        print(f"[INFO] writing to: {out_path}")
         if write_format == "csv":
             command = " ".join(["csvstack"] + input_files[split] + [f"> {out_path}"])
             result = os.system(command)
