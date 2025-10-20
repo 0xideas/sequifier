@@ -1,9 +1,9 @@
 project_path: tests/project_folder
 training_config_path: tests/configs/train-test-categorical.yaml
-ddconfig_path: tests/project_folder/configs/ddconfigs/test-data-categorical-5.json
+ddconfig_path: tests/project_folder/configs/ddconfigs/test-data-categorical-1.json
 model_type: embedding
 model_path: tests/project_folder/models/sequifier-model-categorical-1-best-embedding-3.pt
-data_path: tests/project_folder/data/test-data-categorical5-split2
+data_path: tests/project_folder/data/test-data-categorical-1-split2
 read_format: pt
 write_format: csv
 

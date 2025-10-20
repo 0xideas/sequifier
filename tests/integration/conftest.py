@@ -97,6 +97,11 @@ def inference_config_path_categorical_autoregression():
 
 
 @pytest.fixture(scope="session")
+def inference_config_path_embedding():
+    return os.path.join("tests", "configs", "infer-test-categorical-embedding.yaml")
+
+
+@pytest.fixture(scope="session")
 def remove_project_path_contents(project_path):
     if os.path.exists(project_path):
         shutil.rmtree(project_path)
@@ -281,6 +286,7 @@ def run_inference(
     inference_config_path_real,
     inference_config_path_real_autoregression,
     inference_config_path_categorical_autoregression,
+    inference_config_path_embedding,
 ):
     for model_number in [1, 3, 5, 50]:
         model_path_cat = os.path.join(
@@ -319,4 +325,8 @@ def run_inference(
 
     write_and_log(
         f"sequifier infer --config-path={inference_config_path_categorical_autoregression}  --selected-columns=itemId"
+    )
+
+    write_and_log(
+        f"sequifier infer --config-path={inference_config_path_embedding}  --selected-columns=itemId"
     )
