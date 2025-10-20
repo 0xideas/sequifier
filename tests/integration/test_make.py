@@ -12,6 +12,26 @@ test_project_name = os.path.join("tests", "sequifier-make-test-project")
 def setup_for_test_make():
     os.system(f"sequifier make {test_project_name}")
 
+
+@pytest.fixture
+def config_strings(setup_for_test_make):
+    def load_config_string(path):
+        with open(path, "r") as f:
+            config_string = f.read()
+
+        return config_string
+
+    config_strings = {
+        config_name: load_config_string(
+            os.path.join(test_project_name, "configs", f"{config_name}.yaml")
+        )
+        for config_name in ["preprocess", "train", "infer"]
+    }
+    return config_strings
+
+
+@pytest.fixture
+def adapt_configs(config_strings):
     preprocess_config_path = os.path.join(
         test_project_name, "configs", "preprocess.yaml"
     )
@@ -145,23 +165,12 @@ def test_make(setup_for_test_make):
     shutil.rmtree(test_project_name)
 
 
-def test_config_folder():
+def test_config_folder(config_strings):
     from sequifier.make import (
         infer_config_string,
         preprocess_config_string,
         train_config_string,
     )
-
-    def load_config_string(path):
-        with open(path, "r") as f:
-            config_string = f.read()
-
-        return config_string
-
-    config_strings = {
-        config_name: load_config_string(os.path.join("configs", f"{config_name}.yaml"))
-        for config_name in ["preprocess", "train", "infer"]
-    }
 
     assert config_strings["preprocess"].strip() == preprocess_config_string.strip()
 
