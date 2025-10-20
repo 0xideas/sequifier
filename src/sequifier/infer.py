@@ -108,6 +108,7 @@ def infer_worker(
     )
     for model_path in model_paths:
         inferer = Inferer(
+            config.model_type,
             model_path,
             config.project_path,
             id_maps,
@@ -770,6 +771,7 @@ class Inferer:
     @beartype
     def __init__(
         self,
+        model_type: str,
         model_path: str,
         project_path: str,
         id_maps: Optional[dict[str, dict[Union[str, int], int]]],
@@ -787,6 +789,7 @@ class Inferer:
         args_config: dict[str, Any],
         training_config_path: str,
     ):
+        self.model_type = model_type
         self.map_to_id = map_to_id
         self.selected_columns_statistics = selected_columns_statistics
         target_columns_index_map = [
@@ -829,6 +832,7 @@ class Inferer:
             )
         if self.inference_model_type == "pt":
             self.inference_model = load_inference_model(
+                self.model_type,
                 normalize_path(model_path, project_path),
                 self.training_config_path,
                 self.args_config,

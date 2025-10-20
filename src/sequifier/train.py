@@ -203,6 +203,7 @@ class TransformerEmbeddingModel(nn.Module):
     def __init__(self, transformer_model: "TransformerModel"):
         super().__init__()
         self.transformer_model = transformer_model
+        self.log_file = self.transformer_model.log_file
 
     def forward(self, src: dict[str, Tensor]):
         return self.transformer_model.forward_embed(src)
@@ -899,7 +900,7 @@ class TransformerModel(nn.Module):
             )
             torch.save(
                 {
-                    "model_state_dict": self.state_dict(),
+                    "model_state_dict": model.state_dict(),
                     "export_with_dropout": self.export_with_dropout,
                 },
                 export_path,
@@ -1043,6 +1044,7 @@ class TransformerModel(nn.Module):
 
 @beartype
 def load_inference_model(
+    model_type: str,
     model_path: str,
     training_config_path: str,
     args_config: dict[str, Any],
@@ -1055,6 +1057,14 @@ def load_inference_model(
 
     with torch.no_grad():
         model = TransformerModel(training_config)
+        if model_type == "generative":
+            model = TransformerModel(training_config)
+        elif model_type == "embedding":
+            model_inner = TransformerModel(training_config)
+            model = TransformerEmbeddingModel(model_inner)
+        else:
+            assert False, "impossible"
+
         model.log_file.write(f"[INFO] Loading model weights from {model_path}")
         model_state = torch.load(
             model_path, map_location=torch.device(device), weights_only=False
@@ -1092,9 +1102,6 @@ def infer_with_embedding_model(
                 col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()
             }
             output_gpu = model.forward(data_gpu)
-            import code
-
-            code.interact(local=locals())
             outs0.append(output_gpu.cpu().detach())
             if device == "cuda":
                 torch.cuda.empty_cache()
