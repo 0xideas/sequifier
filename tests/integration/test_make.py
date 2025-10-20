@@ -30,20 +30,6 @@ def config_strings(setup_for_test_make):
     return config_strings
 
 
-def test_config_folder(config_strings):
-    from sequifier.make import (
-        infer_config_string,
-        preprocess_config_string,
-        train_config_string,
-    )
-
-    assert config_strings["preprocess"].strip() == preprocess_config_string.strip()
-
-    assert config_strings["train"].strip() == train_config_string.strip()
-
-    assert config_strings["infer"].strip() == infer_config_string.strip()
-
-
 @pytest.fixture
 def adapt_configs(config_strings):
     preprocess_config_path = os.path.join(
@@ -177,3 +163,17 @@ def test_make(adapt_configs):
 
     # clean up, only if tests didn't fail
     shutil.rmtree(test_project_name)
+
+
+def test_config_folder(config_strings):
+    from sequifier.make import (
+        infer_config_string,
+        preprocess_config_string,
+        train_config_string,
+    )
+
+    assert config_strings["preprocess"].strip() == preprocess_config_string.strip()
+
+    assert config_strings["train"].strip() == train_config_string.strip()
+
+    assert config_strings["infer"].strip() == infer_config_string.strip()
