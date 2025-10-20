@@ -647,6 +647,7 @@ class TransformerModel(nn.Module):
         log_file = self.log_file
         del self.log_file
         model_copy = copy.deepcopy(self)
+        model_copy._initialize_log_file()
         self.log_file = log_file
         return model_copy
 
