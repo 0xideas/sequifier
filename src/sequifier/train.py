@@ -1078,8 +1078,31 @@ def load_inference_model(
 
 
 @beartype
-def infer_with_model(
-    model: torch._dynamo.eval_frame.OptimizedModule,
+def infer_with_embedding_model(
+    model: nn.Module,
+    x: list[dict[str, np.ndarray]],
+    device: str,
+    size: int,
+    target_columns: list[str],
+) -> np.ndarray:
+    outs0 = []
+    with torch.no_grad():
+        for x_sub in x:
+            data_gpu = {
+                col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()
+            }
+            output_gpu = model.forward(data_gpu)
+            outs0.append(output_gpu.cpu().detach())
+            if device == "cuda":
+                torch.cuda.empty_cache()
+
+    outs = np.concatenate(outs0, axis=0)
+    return outs
+
+
+@beartype
+def infer_with_generative_model(
+    model: nn.Module,
     x: list[dict[str, np.ndarray]],
     device: str,
     size: int,
