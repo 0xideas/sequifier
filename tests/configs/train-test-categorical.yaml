@@ -11,6 +11,8 @@ target_column_types:
 seq_length: 8
 inference_batch_size: 10
 
+export_generative_model: true
+export_embedding_model: true
 export_onnx: true
 export_pt: true
 

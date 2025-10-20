@@ -199,6 +199,15 @@ def format_number(number: Union[int, float, np.float32]) -> str:
     return f"{number_adjusted:5.2f}e{order_of_magnitude}"
 
 
+class TransformerEmbeddingModel(nn.Module):
+    def __init__(self, transformer_model: "TransformerModel"):
+        super().__init__()
+        self.transformer_model = transformer_model
+
+    def forward(self, src: dict[str, Tensor]):
+        return self.transformer_model.forward_embed(src)
+
+
 class TransformerModel(nn.Module):
     @beartype
     def __init__(self, hparams: Any, rank: Optional[int] = None):
@@ -232,6 +241,8 @@ class TransformerModel(nn.Module):
         self.index_maps = construct_index_maps(
             hparams.id_maps, self.class_share_log_columns, True
         )
+        self.export_embedding_model = hparams.export_embedding_model
+        self.export_generative_model = hparams.export_generative_model
         self.export_onnx = hparams.export_onnx
         self.export_pt = hparams.export_pt
         self.export_with_dropout = hparams.export_with_dropout
@@ -411,7 +422,7 @@ class TransformerModel(nn.Module):
             return self._recursive_concat(srcs_inner)
 
     @beartype
-    def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
+    def forward_embed(self, src: dict[str, Tensor]) -> Tensor:
         srcs = []
         for col in self.categorical_columns:
             src_t = self.encoder[col](src[col].T) * math.sqrt(self.embedding_size)
@@ -452,6 +463,12 @@ class TransformerModel(nn.Module):
         src2 = self._recursive_concat(srcs)
 
         output = self.transformer_encoder(src2, self.src_mask)
+
+        return output
+
+    @beartype
+    def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
+        output = self.forward_embed(src)
         output = {
             target_column: self.decode(target_column, output)
             for target_column in self.target_columns
@@ -811,6 +828,20 @@ class TransformerModel(nn.Module):
         self.eval()
 
         os.makedirs(os.path.join(self.project_path, "models"), exist_ok=True)
+
+        if self.export_generative_model:
+            self._export_model(model, suffix, epoch)
+        if self.export_embedding_model:
+            model2 = TransformerEmbeddingModel(model)
+            suffix = f"{suffix}-embedding"
+            self._export_model(model2, suffix, epoch)
+
+    def _export_model(
+        self,
+        model: Union["TransformerModel", "TransformerEmbeddingModel"],
+        suffix: str,
+        epoch: int,
+    ) -> None:
         if self.export_onnx:
             x_cat = {
                 col: torch.randint(

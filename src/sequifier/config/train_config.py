@@ -290,12 +290,19 @@ class TrainModel(BaseModel):
     inference_batch_size: int
     seed: int
 
+    export_generative_model: bool
+    export_embedding_model: bool
     export_onnx: bool = True
     export_pt: bool = False
     export_with_dropout: bool = False
 
     model_spec: ModelSpecModel
     training_spec: TrainingSpecModel
+
+    @validator("model_name")
+    def validate_model_name(cls, v):
+        assert "embedding" not in v, "model_name cannot contain 'embedding'"
+        return v
 
     @validator("target_column_types")
     def validate_target_column_types(cls, v, values):
