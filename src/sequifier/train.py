@@ -422,7 +422,7 @@ class TransformerModel(nn.Module):
             return self._recursive_concat(srcs_inner)
 
     @beartype
-    def forward_embed(self, src: dict[str, Tensor]) -> Tensor:
+    def forward_inner(self, src: dict[str, Tensor]) -> Tensor:
         srcs = []
         for col in self.categorical_columns:
             src_t = self.encoder[col](src[col].T) * math.sqrt(self.embedding_size)
@@ -467,8 +467,12 @@ class TransformerModel(nn.Module):
         return output
 
     @beartype
+    def forward_embed(self, src: dict[str, Tensor]) -> Tensor:
+        return self.forward_inner(src)[-1, :, :]
+
+    @beartype
     def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
-        output = self.forward_embed(src)
+        output = self.forward_inner(src)
         output = {
             target_column: self.decode(target_column, output)
             for target_column in self.target_columns
