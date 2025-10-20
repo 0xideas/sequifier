@@ -14,6 +14,9 @@ class_share_log_columns:
 seq_length: 8
 inference_batch_size: 10
 
+export_generative_model: true
+export_embedding_model: true
+
 model_spec:
   d_model: 16
   d_model_by_column:

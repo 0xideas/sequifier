@@ -36,8 +36,14 @@ def model_names_probs():
 
 
 @pytest.fixture()
-def targets(model_names_preds, model_names_probs):
-    target_dict = {"preds": {}, "probs": {}}
+def model_names_embeddings():
+    model_names_embeddings = ["model-categorical-1-best-embedding-3"]
+    return model_names_embeddings
+
+
+@pytest.fixture()
+def targets(model_names_preds, model_names_probs, model_names_embeddings):
+    target_dict = {"preds": {}, "probs": {}, "embeds": {}}
     for model_name in model_names_preds:
         target_type = "categorical" if "categorical" in model_name else "real"
         file_name = f"sequifier-{model_name}-predictions"
@@ -58,6 +64,16 @@ def targets(model_names_preds, model_names_probs):
             target_path, target_type
         )
 
+    for model_name in model_names_embeddings:
+        target_type = "categorical" if "categorical" in model_name else "real"
+        file_name = f"sequifier-{model_name}-embeddings"
+        target_path = os.path.join(
+            "tests", "resources", "target_outputs", "embeddings", file_name
+        )
+        target_dict["embeds"][model_name] = read_multi_file_preds(
+            target_path, target_type
+        )
+
     return target_dict
 
 
@@ -70,7 +86,7 @@ def read_multi_file_preds(path, target_type, file_suffix=None):
     if target_type == "categorical":
         contents = []
         for root, dirs, files in os.walk(path):
-            for file in files:
+            for file in sorted(files):
                 if file_suffix is None or file.endswith(file_suffix):
                     contents.append(
                         pl.read_csv(os.path.join(root, file), schema_overrides=dtype)
@@ -114,6 +130,22 @@ def probabilities(run_inference, model_names_probs, project_path):
         )
 
     return probs
+
+
+@pytest.fixture()
+def embeddings(run_inference, model_names_embeddings, project_path):
+    embeds = {}
+    for model_name in model_names_embeddings:
+        embeddings_path = os.path.join(
+            project_path,
+            "outputs",
+            "embeddings",
+            f"sequifier-{model_name}-embeddings",
+        )
+        embeds[model_name] = read_multi_file_preds(
+            embeddings_path, "categorical", "csv"
+        )
+    return embeds
 
 
 def test_predictions_real(predictions):
@@ -187,9 +219,17 @@ def test_multi_pred(predictions):
     )
 
 
+def test_embeddings(embeddings):
+    for model_name, model_embeddings in embeddings.items():
+        assert model_embeddings.shape[0] == 10
+        assert model_embeddings.shape[1] == 201
+        assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.1
+
+
 @pytest.mark.optional
-def test_identities(targets, predictions, probabilities):
+def test_identities(targets, predictions, probabilities, embeddings):
     for model_name, preds in predictions.items():
+        print(f"{model_name = }")
         equal = preds.to_numpy() == targets["preds"][model_name].to_numpy()
         mean_equal = np.mean(equal.astype(int))
         if model_name != "model-real-1-best-3-autoregression":
@@ -202,5 +242,13 @@ def test_identities(targets, predictions, probabilities):
             ), f"{model_name} preds are not randomized, {preds.to_numpy() = } == {targets['preds'][model_name].to_numpy() = }: {equal = }, {mean_equal = }"
 
     for model_name, probs in probabilities.items():
+        print(f"{model_name = }")
         all_equal = np.all(probs.to_numpy() == targets["probs"][model_name].to_numpy())
         assert all_equal, f"{model_name} probs are not identical to target"
+
+    for model_name, embeds in embeddings.items():
+        print(f"{model_name = }")
+        all_equal = np.all(
+            embeds.to_numpy() == targets["embeds"][model_name].to_numpy()
+        )
+        assert all_equal, f"{model_name} embeddings are not identical to target"

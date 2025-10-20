@@ -75,6 +75,7 @@ class InfererModel(BaseModel):
     project_path: str
     ddconfig_path: str
     model_path: Union[str, list[str]]
+    model_type: str
     data_path: str
     training_config_path: str = Field(default="configs/train.yaml")
     read_format: str = Field(default="parquet")
@@ -104,6 +105,22 @@ class InfererModel(BaseModel):
     autoregression: bool = Field(default=False)
     autoregression_extra_steps: Optional[int] = Field(default=None)
 
+    @validator("model_type")
+    def validate_model_type(cls, v: str) -> str:
+        assert v in [
+            "embedding",
+            "generative",
+        ], f"model_type must be one of 'embedding' and 'generative, {v} isn't"
+        return v
+
+    @validator("output_probabilities")
+    def validate_output_probabilities(cls, v: str, values) -> str:
+        if v and values["model_type"] == "embedding":
+            raise ValueError(
+                "For embedding models, 'output_probabilities' must be set to false"
+            )
+        return v
+
     @validator("training_config_path")
     def validate_training_config_path(cls, v: str) -> str:
         if not (v is None or os.path.exists(v)):
@@ -130,6 +147,8 @@ class InfererModel(BaseModel):
 
     @validator("autoregression")
     def validate_autoregression(cls, v: bool, values):
+        if v and values["model_type"] == "embedding":
+            raise ValueError("Autoregression is not possible for embedding models")
         if v and not np.all(
             np.array(sorted(values["selected_columns"]))
             == np.array(sorted(values["target_columns"]))

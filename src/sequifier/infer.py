@@ -11,7 +11,7 @@ import polars as pl
 import torch
 from beartype import beartype
 
-from sequifier.config.infer_config import load_inferer_config
+from sequifier.config.infer_config import InfererModel, load_inferer_config
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     construct_index_maps,
@@ -20,7 +20,11 @@ from sequifier.helpers import (
     subset_to_selected_columns,
     write_data,
 )
-from sequifier.train import infer_with_model, load_inference_model
+from sequifier.train import (
+    infer_with_embedding_model,
+    infer_with_generative_model,
+    load_inference_model,
+)
 
 
 @beartype
@@ -104,6 +108,7 @@ def infer_worker(
     )
     for model_path in model_paths:
         inferer = Inferer(
+            config.model_type,
             model_path,
             config.project_path,
             id_maps,
@@ -132,140 +137,216 @@ def infer_worker(
         )
 
         print(f"[INFO] Inferring for {model_id}")
+        if config.model_type == "generative":
+            infer_generative(config, inferer, model_id, dataset, column_types)
+        if config.model_type == "embedding":
+            infer_embedding(config, inferer, model_id, dataset, column_types)
 
-        for data_id, data in enumerate(dataset):
-            # Step 1: Adapt Data Subsetting (now works on Polars DF)
-            if config.read_format in ["parquet", "csv"]:
-                if config.selected_columns is not None:
-                    data = subset_to_selected_columns(data, config.selected_columns)
-                if not config.autoregression:
-                    # For the non-autoregressive case, the old logic is still needed here
-                    n_input_cols = data.get_column("inputCol").n_unique()
-                    mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
-                    # Apply the mask to the sequenceId column
-                    sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
-                    probs, preds = get_probs_preds(config, inferer, data, column_types)
-                else:
-                    if config.autoregression_extra_steps is not None:
-                        data = expand_data_by_autoregression(
-                            data,
-                            config.autoregression_extra_steps,
-                            config.seq_length,
-                        )
+    print("--- Inference Complete ---")
 
-                    # Unpack the new third return value
-                    probs, preds, sequence_ids_for_preds = (
-                        get_probs_preds_autoregression(
-                            config, inferer, data, column_types, config.seq_length
-                        )
+
+def infer_embedding(
+    config: "InfererModel",
+    inferer: "Inferer",
+    model_id: str,
+    dataset: Union[list[Any], Iterator[Any]],
+    column_types: dict[str, torch.dtype],
+):
+    for data_id, data in enumerate(dataset):
+        # Step 1: Adapt Data Subsetting (now works on Polars DF)
+        if config.read_format in ["parquet", "csv"]:
+            if config.selected_columns is not None:
+                data = subset_to_selected_columns(data, config.selected_columns)
+            n_input_cols = data.get_column("inputCol").n_unique()
+            mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
+            embeddings = get_embeddings(config, inferer, data, column_types)
+            sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
+        elif config.read_format == "pt":
+            sequences_dict, _, sequence_ids_tensor = data
+            embeddings = get_embeddings_pt(config, inferer, sequences_dict)
+            sequence_ids_for_preds = sequence_ids_tensor.numpy()
+        else:
+            raise Exception("impossible")
+
+        embeddings = pl.DataFrame(
+            {
+                "sequenceId": sequence_ids_for_preds,
+                **dict(
+                    zip(
+                        [str(v) for v in range(embeddings.shape[1])],
+                        [embeddings[:, i] for i in range(embeddings.shape[1])],
                     )
-            elif config.read_format == "pt":
-                sequences_dict, _, sequence_ids_tensor = data
-                extra_steps = (
-                    0
-                    if config.autoregression_extra_steps is None
-                    else config.autoregression_extra_steps
-                )
-                probs, preds = get_probs_preds_pt(
-                    config, inferer, sequences_dict, extra_steps
-                )
-                sequence_ids_for_preds = np.repeat(
-                    sequence_ids_tensor.numpy(), extra_steps + 1
-                )
+                ),
+            }
+        )
+
+        os.makedirs(
+            os.path.join(config.project_path, "outputs", "embeddings"),
+            exist_ok=True,
+        )
+
+        if config.read_format in ["csv", "parquet"]:
+            file_name = f"{model_id}-embeddings.{config.write_format}"
+        else:
+            dirname = f"{model_id}-embeddings"
+            file_name = os.path.join(
+                dirname,
+                f"{model_id}-{data_id}-embeddings.{config.write_format}",
+            )
+
+            dir_path = os.path.join(
+                config.project_path, "outputs", "embeddings", dirname
+            )
+            os.makedirs(dir_path, exist_ok=True)
+
+        embeddings_path = os.path.join(
+            config.project_path, "outputs", "embeddings", file_name
+        )
+        print(f"[INFO] Writing predictions to '{embeddings_path}'")
+        write_data(
+            embeddings,
+            embeddings_path,
+            config.write_format,
+        )
+
+
+def infer_generative(
+    config: "InfererModel",
+    inferer: "Inferer",
+    model_id: str,
+    dataset: Union[list[Any], Iterator[Any]],
+    column_types: dict[str, torch.dtype],
+):
+    for data_id, data in enumerate(dataset):
+        # Step 1: Adapt Data Subsetting (now works on Polars DF)
+        if config.read_format in ["parquet", "csv"]:
+            if config.selected_columns is not None:
+                data = subset_to_selected_columns(data, config.selected_columns)
+            if not config.autoregression:
+                # For the non-autoregressive case, the old logic is still needed here
+                n_input_cols = data.get_column("inputCol").n_unique()
+                mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
+                # Apply the mask to the sequenceId column
+                sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
+                probs, preds = get_probs_preds(config, inferer, data, column_types)
             else:
-                raise Exception("impossible")
-
-            if inferer.map_to_id:
-                for target_column, predictions in preds.items():
-                    if target_column in inferer.index_map:
-                        preds[target_column] = np.array(
-                            [inferer.index_map[target_column][i] for i in predictions]
-                        )
-
-            for target_column, predictions in preds.items():
-                if inferer.target_column_types[target_column] == "real":
-                    preds[target_column] = inferer.invert_normalization(
-                        predictions, target_column
+                if config.autoregression_extra_steps is not None:
+                    data = expand_data_by_autoregression(
+                        data,
+                        config.autoregression_extra_steps,
+                        config.seq_length,
                     )
 
+                # Unpack the new third return value
+                probs, preds, sequence_ids_for_preds = get_probs_preds_autoregression(
+                    config, inferer, data, column_types, config.seq_length
+                )
+        elif config.read_format == "pt":
+            sequences_dict, _, sequence_ids_tensor = data
+            extra_steps = (
+                0
+                if config.autoregression_extra_steps is None
+                else config.autoregression_extra_steps
+            )
+            probs, preds = get_probs_preds_pt(
+                config, inferer, sequences_dict, extra_steps
+            )
+            sequence_ids_for_preds = np.repeat(
+                sequence_ids_tensor.numpy(), extra_steps + 1
+            )
+        else:
+            raise Exception("impossible")
+
+        if inferer.map_to_id:
+            for target_column, predictions in preds.items():
+                if target_column in inferer.index_map:
+                    preds[target_column] = np.array(
+                        [inferer.index_map[target_column][i] for i in predictions]
+                    )
+
+        for target_column, predictions in preds.items():
+            if inferer.target_column_types[target_column] == "real":
+                preds[target_column] = inferer.invert_normalization(
+                    predictions, target_column
+                )
+
+        os.makedirs(
+            os.path.join(config.project_path, "outputs", "predictions"),
+            exist_ok=True,
+        )
+
+        if config.output_probabilities:
+            assert probs is not None
             os.makedirs(
-                os.path.join(config.project_path, "outputs", "predictions"),
+                os.path.join(config.project_path, "outputs", "probabilities"),
                 exist_ok=True,
             )
 
-            if config.output_probabilities:
-                assert probs is not None
-                os.makedirs(
-                    os.path.join(config.project_path, "outputs", "probabilities"),
-                    exist_ok=True,
-                )
+            for target_column in inferer.target_columns:
+                if config.read_format in ["csv", "parquet"]:
+                    file_name = f"{model_id}-{target_column}-probabilities.{config.write_format}"
+                else:
+                    dirname = f"{model_id}-{target_column}-probabilities"
+                    file_name = os.path.join(
+                        dirname,
+                        f"{model_id}-{data_id}-probabilities.{config.write_format}",
+                    )
 
-                for target_column in inferer.target_columns:
-                    if config.read_format in ["csv", "parquet"]:
-                        file_name = f"{model_id}-{target_column}-probabilities.{config.write_format}"
-                    else:
-                        dirname = f"{model_id}-{target_column}-probabilities"
-                        file_name = os.path.join(
-                            dirname,
-                            f"{model_id}-{data_id}-probabilities.{config.write_format}",
-                        )
+                    dir_path = os.path.join(
+                        config.project_path, "outputs", "probabilities", dirname
+                    )
+                    os.makedirs(dir_path, exist_ok=True)
 
-                        dir_path = os.path.join(
-                            config.project_path, "outputs", "probabilities", dirname
-                        )
-                        os.makedirs(dir_path, exist_ok=True)
+                if inferer.target_column_types[target_column] == "categorical":
+                    probabilities_path = os.path.join(
+                        config.project_path, "outputs", "probabilities", file_name
+                    )
+                    print(f"[INFO] Writing probabilities to '{probabilities_path}'")
+                    # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
+                    write_data(
+                        pl.DataFrame(
+                            probs[target_column],
+                            schema=[
+                                inferer.index_map[target_column][i]
+                                for i in range(probs[target_column].shape[1])
+                            ],
+                        ),
+                        probabilities_path,
+                        config.write_format,
+                    )
 
-                    if inferer.target_column_types[target_column] == "categorical":
-                        probabilities_path = os.path.join(
-                            config.project_path, "outputs", "probabilities", file_name
-                        )
-                        print(f"[INFO] Writing probabilities to '{probabilities_path}'")
-                        # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
-                        write_data(
-                            pl.DataFrame(
-                                probs[target_column],
-                                schema=[
-                                    inferer.index_map[target_column][i]
-                                    for i in range(probs[target_column].shape[1])
-                                ],
-                            ),
-                            probabilities_path,
-                            config.write_format,
-                        )
+        n_input_cols = len(config.selected_columns)
+        predictions = pl.DataFrame(
+            {
+                "sequenceId": sequence_ids_for_preds,
+                **{
+                    target_column: preds[target_column].flatten()
+                    for target_column in inferer.target_columns
+                },
+            }
+        )
 
-            n_input_cols = len(config.selected_columns)
-            predictions = pl.DataFrame(
-                {
-                    "sequenceId": sequence_ids_for_preds,
-                    **{
-                        target_column: preds[target_column].flatten()
-                        for target_column in inferer.target_columns
-                    },
-                }
+        if config.read_format in ["csv", "parquet"]:
+            file_name = f"{model_id}-predictions.{config.write_format}"
+        else:
+            dirname = f"{model_id}-predictions"
+            file_name = os.path.join(
+                dirname, f"{model_id}-{data_id}-predictions.{config.write_format}"
             )
-
-            if config.read_format in ["csv", "parquet"]:
-                file_name = f"{model_id}-predictions.{config.write_format}"
-            else:
-                dirname = f"{model_id}-predictions"
-                file_name = os.path.join(
-                    dirname, f"{model_id}-{data_id}-predictions.{config.write_format}"
-                )
-                dir_path = os.path.join(
-                    config.project_path, "outputs", "predictions", dirname
-                )
-                os.makedirs(dir_path, exist_ok=True)
-
-            predictions_path = os.path.join(
-                config.project_path, "outputs", "predictions", file_name
+            dir_path = os.path.join(
+                config.project_path, "outputs", "predictions", dirname
             )
-            print(f"[INFO] Writing predictions to '{predictions_path}'")
-            write_data(
-                predictions,
-                predictions_path,
-                config.write_format,
-            )
-    print("--- Inference Complete ---")
+            os.makedirs(dir_path, exist_ok=True)
+
+        predictions_path = os.path.join(
+            config.project_path, "outputs", "predictions", file_name
+        )
+        print(f"[INFO] Writing predictions to '{predictions_path}'")
+        write_data(
+            predictions,
+            predictions_path,
+            config.write_format,
+        )
 
 
 @beartype
@@ -321,6 +402,17 @@ def expand_data_by_autoregression(
 
 
 @beartype
+def get_embeddings_pt(
+    config: Any,
+    inferer: "Inferer",
+    data: dict[str, torch.Tensor],
+) -> np.ndarray:
+    X = {key: val.numpy() for key, val in data.items()}
+    embeddings = inferer.infer_embedding(X)
+    return embeddings
+
+
+@beartype
 def get_probs_preds_pt(
     config: Any,
     inferer: "Inferer",
@@ -342,12 +434,13 @@ def get_probs_preds_pt(
     # The loop runs `extra_steps + 1` times to get the initial prediction plus all extra steps.
     for i in range(extra_steps + 1):
         if config.output_probabilities:
-            probs_for_step = inferer.infer(X, return_probs=True)
-            preds_for_step = inferer.infer(None, probs_for_step)
+            probs_for_step = inferer.infer_generative(X, return_probs=True)
+            preds_for_step = inferer.infer_generative(None, probs_for_step)
             for col in target_cols:
                 all_probs_list[col].append(probs_for_step[col])
         else:
-            preds_for_step = inferer.infer(X, return_probs=False)
+            preds_for_step = inferer.infer_generative(X, return_probs=False)
+
         for col in target_cols:
             all_preds_list[col].append(preds_for_step[col])
 
@@ -383,6 +476,23 @@ def get_probs_preds_pt(
 
 
 @beartype
+def get_embeddings(
+    config: Any,
+    inferer: "Inferer",
+    data: pl.DataFrame,
+    column_types: dict[str, torch.dtype],
+) -> np.ndarray:
+    all_columns = sorted(list(set(config.selected_columns + config.target_columns)))
+    X = numpy_to_pytorch(data, column_types, all_columns, config.seq_length)
+    X = {col: X_col.numpy() for col, X_col in X.items()}
+    del data
+
+    embeddings = inferer.infer_embedding(X)
+
+    return embeddings
+
+
+@beartype
 def get_probs_preds(
     config: Any,
     inferer: "Inferer",
@@ -396,11 +506,11 @@ def get_probs_preds(
     del data
 
     if config.output_probabilities:
-        probs = inferer.infer(X, return_probs=True)
-        preds = inferer.infer(None, probs)
+        probs = inferer.infer_generative(X, return_probs=True)
+        preds = inferer.infer_generative(None, probs)
     else:
         probs = None
-        preds = inferer.infer(X)
+        preds = inferer.infer_generative(X)
 
     return (probs, preds)
 
@@ -661,6 +771,7 @@ class Inferer:
     @beartype
     def __init__(
         self,
+        model_type: str,
         model_path: str,
         project_path: str,
         id_maps: Optional[dict[str, dict[Union[str, int], int]]],
@@ -678,6 +789,7 @@ class Inferer:
         args_config: dict[str, Any],
         training_config_path: str,
     ):
+        self.model_type = model_type
         self.map_to_id = map_to_id
         self.selected_columns_statistics = selected_columns_statistics
         target_columns_index_map = [
@@ -720,6 +832,7 @@ class Inferer:
             )
         if self.inference_model_type == "pt":
             self.inference_model = load_inference_model(
+                self.model_type,
                 normalize_path(model_path, project_path),
                 self.training_config_path,
                 self.args_config,
@@ -746,7 +859,18 @@ class Inferer:
         return (values * (std - 1e-9)) + mean
 
     @beartype
-    def infer(
+    def infer_embedding(
+        self,
+        x: dict[str, np.ndarray],
+    ) -> np.ndarray:
+        assert x is not None
+        size = x[self.target_columns[0]].shape[0]
+        embedding = self.adjust_and_infer_embedding(x, size)
+
+        return embedding
+
+    @beartype
+    def infer_generative(
         self,
         x: Optional[dict[str, np.ndarray]],
         probs: Optional[dict[str, np.ndarray]] = None,
@@ -777,32 +901,7 @@ class Inferer:
                     f"Not all keys in x are in probs - {x.keys() = } != {probs.keys() = }. Full inference is executed."
                 )
 
-            if self.inference_model_type == "onnx":
-                assert x is not None
-                x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
-                out_subs = [
-                    dict(zip(self.target_columns, self.infer_pure(x_sub)))
-                    for x_sub in x_adjusted
-                ]
-                outs = {
-                    target_column: np.concatenate(
-                        [out_sub[target_column] for out_sub in out_subs], axis=0
-                    )[:size, :]
-                    for target_column in self.target_columns
-                }
-            elif self.inference_model_type == "pt":
-                assert x is not None
-                x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
-                outs = infer_with_model(
-                    self.inference_model,
-                    x_adjusted,
-                    self.device,
-                    size,
-                    self.target_columns,
-                )
-            else:
-                assert False
-                outs = {}  # for type checking
+            outs = self.adjust_and_infer_generative(x, size)
 
             for target_column, target_outs in outs.items():
                 assert not np.any(target_outs == np.inf), target_outs
@@ -831,6 +930,59 @@ class Inferer:
                     outs[target_column] = outs[target_column].argmax(1)
                 else:
                     outs[target_column] = sample_with_cumsum(outs[target_column])
+
+        return outs
+
+    @beartype
+    def adjust_and_infer_embedding(self, x: dict[str, np.ndarray], size: int):
+        if self.inference_model_type == "onnx":
+            assert x is not None
+            x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
+            inference_batch_embeddings = [
+                self.infer_pure(x_sub)[0][:size] for x_sub in x_adjusted
+            ]
+            embeddings = np.concatenate(inference_batch_embeddings, axis=0)
+        elif self.inference_model_type == "pt":
+            x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
+            embeddings = infer_with_embedding_model(
+                self.inference_model,
+                x_adjusted,
+                self.device,
+                size,
+                self.target_columns,
+            )
+        else:
+            assert False, "not possible"
+        return embeddings
+
+    @beartype
+    def adjust_and_infer_generative(self, x: dict[str, np.ndarray], size: int):
+        if self.inference_model_type == "onnx":
+            assert x is not None
+            x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
+            out_subs = [
+                dict(zip(self.target_columns, self.infer_pure(x_sub)))
+                for x_sub in x_adjusted
+            ]
+            outs = {
+                target_column: np.concatenate(
+                    [out_sub[target_column] for out_sub in out_subs], axis=0
+                )[:size, :]
+                for target_column in self.target_columns
+            }
+        elif self.inference_model_type == "pt":
+            assert x is not None
+            x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
+            outs = infer_with_generative_model(
+                self.inference_model,
+                x_adjusted,
+                self.device,
+                size,
+                self.target_columns,
+            )
+        else:
+            assert False
+            outs = {}  # for type checking
 
         return outs
 

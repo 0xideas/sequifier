@@ -1,6 +1,7 @@
 project_path: tests/project_folder
 training_config_path: tests/configs/train-test-categorical-multitarget.yaml
 ddconfig_path: tests/project_folder/configs/ddconfigs/test-data-categorical-multitarget-5.json
+model_type: generative
 model_path: tests/project_folder/models/sequifier-model-categorical-multitarget-5-best-3.onnx
 data_path: tests/project_folder/data/test-data-categorical-multitarget-5-split2
 read_format: pt

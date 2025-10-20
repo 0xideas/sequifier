@@ -31,6 +31,8 @@ target_column_types: # 'criterion' in training_spec must also be adapted
 seq_length: 48
 inference_batch_size: 10
 
+export_generative_model: PLEASE FILL # true or false
+export_embedding_model: PLEASE FILL # true or false
 export_onnx: true
 
 model_spec:
@@ -62,6 +64,7 @@ training_spec:
 
 infer_config_string = """project_path: .
 ddconfig_path: PLEASE FILL
+model_type: PLEASE_FILL # generative or embedding
 model_path: PLEASE FILL
 data_path: PLEASE FILL
 
