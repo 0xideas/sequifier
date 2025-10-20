@@ -1092,6 +1092,9 @@ def infer_with_embedding_model(
                 col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()
             }
             output_gpu = model.forward(data_gpu)
+            import code
+
+            code.interact(local=locals())
             outs0.append(output_gpu.cpu().detach())
             if device == "cuda":
                 torch.cuda.empty_cache()

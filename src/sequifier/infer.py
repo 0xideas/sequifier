@@ -194,7 +194,7 @@ def infer_embedding(
             )
 
             dir_path = os.path.join(
-                config.project_path, "outputs", "probabilities", dirname
+                config.project_path, "outputs", "embeddings", dirname
             )
             os.makedirs(dir_path, exist_ok=True)
 
@@ -935,7 +935,7 @@ class Inferer:
             assert x is not None
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
             inference_batch_embeddings = [
-                self.infer_pure(x_sub) for x_sub in x_adjusted
+                self.infer_pure(x_sub)[0][:size] for x_sub in x_adjusted
             ]
             embeddings = np.concatenate(inference_batch_embeddings, axis=0)
         elif self.inference_model_type == "pt":

@@ -147,7 +147,7 @@ class InfererModel(BaseModel):
 
     @validator("autoregression")
     def validate_autoregression(cls, v: bool, values):
-        if values["model_type"] == "embedding":
+        if v and values["model_type"] == "embedding":
             raise ValueError("Autoregression is not possible for embedding models")
         if v and not np.all(
             np.array(sorted(values["selected_columns"]))
