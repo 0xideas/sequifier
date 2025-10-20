@@ -32,18 +32,22 @@ def test_model_files_exists(run_training, project_path):
     found_items = np.array(
         sorted(list(os.listdir(os.path.join(project_path, "models"))))
     )
+
     expected_items = np.array(
         sorted(
             [
-                f"sequifier-model-{model_type}-{j}-{kind}-3.{model_type_format}"
-                for model_type in ["categorical", "real"]
-                for model_type_format in model_type_formats[model_type]
+                f"sequifier-model-{model_type2}-{j}-{kind}{model_type}-3.{model_type_format}"
+                for model_type2 in ["categorical", "real"]
+                for model_type in ["", "-embedding"]
+                for model_type_format in model_type_formats[model_type2]
                 for j in [1, 3, 5, 50]
                 for kind in ["best", "last"]
             ]
             + [
                 "sequifier-model-categorical-multitarget-5-best-3.onnx",
                 "sequifier-model-categorical-multitarget-5-last-3.onnx",
+                "sequifier-model-categorical-multitarget-5-best-embedding-3.onnx",
+                "sequifier-model-categorical-multitarget-5-last-embedding-3.onnx",
                 "sequifier-model-real-1-best-3-autoregression.pt",
                 "sequifier-model-categorical-1-best-3-autoregression.onnx",
             ]

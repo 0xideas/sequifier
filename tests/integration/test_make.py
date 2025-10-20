@@ -48,6 +48,12 @@ def setup_for_test_make():
                 "ddconfig_path: PLEASE FILL",
                 f"ddconfig_path: {test_project_name}/configs/ddconfigs/test-data-categorical-1.json",
             )
+            .replace(
+                "export_generative_model: PLEASE FILL", "export_generative_model: true"
+            )
+            .replace(
+                "export_embedding_model: PLEASE FILL", "export_embedding_model: false"
+            )
             .replace("[EXAMPLE_INPUT_COLUMN_NAME]", "[itemId]")
             .replace("[EXAMPLE_TARGET_COLUMN_NAME]", "[itemId]")
             .replace("EXAMPLE_TARGET_COLUMN_NAME: real", "itemId: categorical")
@@ -69,6 +75,7 @@ def setup_for_test_make():
             infer_config_string.replace(
                 "project_path: .", f"project_path: {test_project_name}"
             )
+            .replace("model_type: PLEASE_FILL", "model_type: generative")
             .replace(
                 "ddconfig_path: PLEASE FILL",
                 f"ddconfig_path: {test_project_name}/configs/ddconfigs/test-data-categorical-1.json",
