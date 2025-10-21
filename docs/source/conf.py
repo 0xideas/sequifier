@@ -53,7 +53,7 @@ napoleon_use_rtype = True
 
 # Defines how versions are sorted in the version switcher.
 smv_tag_whitelist = r'^v\d+\.\d+\.\d+$'    # Tags like v1.2.3
-smv_branch_whitelist = r'^$'          # Only include the main branch
+smv_branch_whitelist = r'^main$'          # Only include the main branch
 smv_remote_whitelist = r'^origin$'        # Only use the 'origin' remote
 smv_released_pattern = r'^refs/tags/v\d+\.\d+\.\d+$' # Identify released versions from tags
 smv_outputdir_format = '{ref.name}'       # Use branch/tag name for output directory
