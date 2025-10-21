@@ -12,7 +12,7 @@
 project = 'sequifier'
 copyright = '2025, Leon Luithlen'
 author = 'Leon Luithlen'
-release = '0.7.1.2'
+release = '0.7.1.3'
 html_baseurl = 'https://sequifier.com/'
 
 # -- General configuration ---------------------------------------------------
@@ -52,7 +52,7 @@ napoleon_use_rtype = True
 
 
 # Defines how versions are sorted in the version switcher.
-smv_tag_whitelist = r'^v\d+\.\d+\.\d+$'    # Tags like v1.2.3
+smv_tag_whitelist = r'^v\d+\.\d+\.\d+\.\d+$'    # Tags like v1.2.3.4
 smv_branch_whitelist = r'^main$'          # Only include the main branch
 smv_remote_whitelist = r'^origin$'        # Only use the 'origin' remote
 smv_released_pattern = r'^refs/tags/v\d+\.\d+\.\d+$' # Identify released versions from tags
