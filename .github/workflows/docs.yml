@@ -29,9 +29,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-docs.txt # Or docs/requirements-docs.txt if you placed it there
-          # Install your project's dependencies if needed for autodoc to import your code
-          # pip install -r requirements.txt # Or 'pip install .' if you have a setup.py/pyproject.toml
+          pip install -r docs/requirements-docs.txt
+          pip install .
 
       - name: Build versioned documentation
         run: |
