@@ -4,6 +4,36 @@ API Reference
 
 This page contains the auto-generated API reference documentation.
 
+
+Preprocessing Config
+---------------------
+.. automodule:: sequifier.config.preprocess_config
+   :members: PreprocessorModel
+
+Training Config
+---------------------
+.. automodule:: sequifier.config.train_config
+   :members: TrainModel, ModelSpecModel, TrainingSpecModel
+
+Inference Config
+---------------------
+.. automodule:: sequifier.config.infer_config
+   :members: InfererModel
+
+Hyperparameter Search Config
+---------------------
+.. automodule:: sequifier.config.hyperparameter_search_config
+   :members: HyperparameterSearch, ModelSpecHyperparameterSampling, TrainingSpecHyperparameterSampling
+
+Non-standard Optimizers
+---------------------
+.. automodule:: sequifier.optimizers.ademamix
+   :members:
+
+
+Internals
+---------------------
+
 .. automodule:: sequifier.sequifier
    :members:
 
@@ -25,24 +55,6 @@ This page contains the auto-generated API reference documentation.
 .. automodule:: sequifier.helpers
    :members:
 
-Configuration Modules
----------------------
-
-.. automodule:: sequifier.config.train_config
-   :members:
-
-.. automodule:: sequifier.config.preprocess_config
-   :members:
-
-.. automodule:: sequifier.config.infer_config
-   :members:
-
-.. automodule:: sequifier.config.hyperparameter_search_config
-   :members:
-
-
-Input/Output Modules
---------------------
 
 .. automodule:: sequifier.io.yaml
    :members:
@@ -56,22 +68,9 @@ Input/Output Modules
 .. automodule:: sequifier.io.sequifier_dataset_from_file
    :members:
 
-
-Optimizer Modules
------------------
-
-.. automodule:: sequifier.optimizers.ademamix
-   :members:
-
 .. automodule:: sequifier.optimizers.optimizers
    :members:
-
-
-Sampler Modules
----------------
 
 .. automodule:: sequifier.samplers.distributed_grouped_random_sampler
    :members:
 ```
-* `.. automodule::`: Tells Sphinx to import the specified module.
-* `:members:`: Tells Sphinx to document all public members (functions, classes, etc.) found in that module using their docstrings.
