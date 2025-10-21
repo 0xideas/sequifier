@@ -22,6 +22,20 @@ from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 
 @beartype
 def hyperparameter_search(config_path, on_unprocessed) -> None:
+    """Main function for initiating a hyperparameter search process.
+
+    This function loads the hyperparameter search configuration, initializes
+    the searcher, and starts the search.
+
+    Args:
+        config_path (str): Path to the hyperparameter search YAML
+            configuration file.
+        on_unprocessed (bool): Flag indicating whether to run the search
+            on unprocessed data.
+
+    Returns:
+        None
+    """
     hyperparameter_search_config = load_hyperparameter_search_config(
         config_path, on_unprocessed
     )
@@ -32,7 +46,21 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
 
 
 class HyperparameterSearcher:
+    """A class for performing hyperparameter search.
+
+    Manages the hyperparameter search process based on a given configuration.
+    This class handles sampling hyperparameters, creating training configurations,
+    launching training subprocesses, and logging results.
+    """
+
     def __init__(self, hyperparameter_search_config):
+        """Initializes the HyperparameterSearcher instance.
+
+        Args:
+            hyperparameter_search_config (HyperparameterSearchConfig): An object
+                containing the configuration for the hyperparameter search,
+                loaded via `load_hyperparameter_search_config`.
+        """
         self.config = hyperparameter_search_config
         self.normalized_config_path = normalize_path(
             self.config.model_config_write_path,
@@ -44,6 +72,16 @@ class HyperparameterSearcher:
 
     @beartype
     def _get_start_run(self) -> int:
+        """Determines the starting run number by checking existing config files.
+
+        This allows for resuming a search. It finds the highest existing run
+        number (e.g., 'hp_search_name-run-10.yaml') and returns the next
+        integer (e.g., 11). If no previous runs are found, it starts from 1.
+
+        Returns:
+            int: The integer run number to start the search from (e.g., 1 for a
+                new search, or `n+1` if `n` is the last completed run).
+        """
         file_root = f"{self.config.hp_search_name}-run-"
         search_pattern = os.path.join(self.normalized_config_path, f"{file_root}*.yaml")
         files = [os.path.split(file)[1] for file in glob.glob(search_pattern)]
@@ -59,6 +97,15 @@ class HyperparameterSearcher:
 
     @beartype
     def _initialize_log_file(self) -> None:
+        """Sets up the log file for the hyperparameter search.
+
+        It creates the 'logs' directory if it doesn't exist and opens a log file.
+        If starting from run 1, it overwrites (mode 'w'); otherwise, it appends
+        (mode 'a') to the existing log.
+
+        Returns:
+            None
+        """
         os.makedirs(os.path.join(self.config.project_path, "logs"), exist_ok=True)
         open_mode = "w" if self.start_run == 1 else "a"
         self.log_file = LogFile(
@@ -72,6 +119,22 @@ class HyperparameterSearcher:
 
     @beartype
     def _calculate_n_samples(self) -> int:
+        """Calculates the total number of hyperparameter combinations to sample.
+
+        Based on the `search_strategy` ('grid' or 'sample'), it either
+        calculates the total number of combinations or uses the specified
+        `n_samples`. It includes interactive prompts for user confirmation if
+        the strategy is 'grid' or if 'sample' exceeds the total combinations.
+
+        Returns:
+            int: The total number of samples (runs) to execute.
+
+        Raises:
+            Exception: If the `search_strategy` in the config is not 'grid'
+                or 'sample'.
+            AssertionError: If `n_samples` is not set when `search_strategy`
+                is 'sample'.
+        """
         n_combinations = self.config.n_combinations()
         print(f"Found {n_combinations} hyperparameter combinations")
         if self.config.search_strategy == "sample":
@@ -100,6 +163,30 @@ class HyperparameterSearcher:
     def _create_config_and_run(
         self, i: int, seed: int, config: Optional[TrainModel] = None, attempt=0
     ):
+        """Creates a specific training configuration file and executes the run.
+
+        This method samples a configuration (if not provided), writes it to a
+        YAML file, and then launches the `sequifier train` command as a
+        subprocess. It includes retry logic: if a run fails (e.g., CUDA out
+        of memory), it recursively calls itself with a halved batch size,
+        retrying up to 3 times.
+
+        Args:
+            i (int): The current run number (e.g., 1, 2, 3...).
+            seed (int): The random seed to use for this specific run.
+            config (Optional[TrainModel]): A specific `TrainModel` config to
+                use. If `None`, a new config will be sampled using
+                `self.config.sample(i)`. Defaults to `None`.
+            attempt (int): The current retry attempt number (0 for the first
+                try). Defaults to 0.
+
+        Returns:
+            None
+
+        Raises:
+            AssertionError: If the batch size becomes non-positive after
+                halving during a retry.
+        """
         if config is None:
             config = self.config.sample(i)
         full_config_path = os.path.join(
@@ -149,6 +236,15 @@ class HyperparameterSearcher:
 
     @beartype
     def hyperparameter_search(self) -> None:
+        """Performs the hyperparameter search loop.
+
+        It iterates from the `start_run` number up to the total `n_samples`,
+        generating a unique seed for each run and calling
+        `_create_config_and_run` to execute it.
+
+        Returns:
+            None
+        """
         for i in range(self.start_run, self.n_samples + 1):
             seed = int(datetime.now().timestamp() * 1e6) % (2**32)
             np.random.seed(seed)

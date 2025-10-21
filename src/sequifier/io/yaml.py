@@ -49,8 +49,28 @@ def represent_numpy_int(dumper, data):
 
 
 class TrainModelDumper(yaml.Dumper):
+    """A custom YAML dumper for TrainModel objects.
+
+    This dumper extends the base yaml.Dumper to provide custom serialization
+    for TrainModel and related objects, ensuring a clean and readable YAML
+    output. It also modifies the indentation behavior for better formatting.
+    """
+
     # You can add more customizations here if needed, like indent width.
     def increase_indent(self, flow=False, indentless=False):
+        """Increase the indentation level for the YAML output.
+
+        This method overrides the default behavior to force indentation for all
+        block-style collections, improving the readability of the output YAML.
+
+        Args:
+            flow: Whether the context is a flow-style collection.
+            indentless: Whether the context is an indentless sequence.
+
+        Returns:
+            The result of the parent class's increase_indent method, with flow
+            forced to False.
+        """
         return super(TrainModelDumper, self).increase_indent(flow, False)
 
 

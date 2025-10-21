@@ -9,6 +9,27 @@ from torch.optim import Optimizer
 
 
 class AdEMAMix(Optimizer):
+    """Implements the AdEMAMix optimizer.
+
+    This optimizer is based on the paper "AdEMAMix: A Novel Adaptive Optimizer for
+    Deep Learning". It combines the advantages of Adam and EMA, and introduces a
+    mixing term to further improve performance.
+
+    Args:
+        params (iterable): Iterable of parameters to optimize or dicts defining
+            parameter groups.
+        lr (float, optional): Learning rate (default: 1e-3).
+        betas (Tuple[float, float, float], optional): Coefficients used for
+            computing running averages of gradient and its square
+            (default: (0.9, 0.999, 0.9999)).
+        eps (float, optional): Term added to the denominator to improve
+            numerical stability (default: 1e-8).
+        weight_decay (float, optional): Weight decay (L2 penalty) (default: 0).
+        alpha (float, optional): Mixing coefficient (default: 5.0).
+        T_alpha_beta3 (int, optional): Time period for alpha and beta3 scheduling
+            (default: None).
+    """
+
     def __init__(
         self,
         params={},
@@ -41,10 +62,24 @@ class AdEMAMix(Optimizer):
         super(AdEMAMix, self).__init__(params, defaults)
 
     def __setstate__(self, state):
+        """Set the state of the optimizer.
+
+        Args:
+            state (dict): The state of the optimizer.
+        """
         super(AdEMAMix, self).__setstate__(state)
 
     @torch.no_grad()
     def step(self, closure=None):
+        """Perform a single optimization step.
+
+        Args:
+            closure (callable, optional): A closure that reevaluates the model
+                and returns the loss. (default: None)
+
+        Returns:
+            The loss, if the closure is provided. Otherwise, returns None.
+        """
         loss = None
         if closure is not None:
             with torch.enable_grad():
@@ -128,6 +163,27 @@ class AdEMAMix(Optimizer):
         weight_decay,
         eps,
     ):
+        """Perform the AdEMAMix update for a single parameter group.
+
+        Args:
+            params (list[torch.Tensor]): List of parameters to update.
+            grads (list[torch.Tensor]): List of gradients for each parameter.
+            exp_avgs (list[torch.Tensor]): List of exponential moving averages of
+                gradients.
+            exp_avg_sqs (list[torch.Tensor]): List of exponential moving averages
+                of squared gradients.
+            exp_avg_slow (list[torch.Tensor]): List of slow exponential moving
+                averages of gradients.
+            state_steps (list[int]): List of steps for each parameter.
+            beta1 (float): Coefficient for the first moment estimate.
+            beta2 (float): Coefficient for the second moment estimate.
+            beta3 (float): Coefficient for the slow moment estimate.
+            alpha (float): Mixing coefficient.
+            T_alpha_beta3 (int): Time period for alpha and beta3 scheduling.
+            lr (float): Learning rate.
+            weight_decay (float): Weight decay.
+            eps (float): Epsilon term for numerical stability.
+        """
         for i, param in enumerate(params):
             grad = grads[i]
             exp_avg = exp_avgs[i]

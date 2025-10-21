@@ -38,6 +38,14 @@ TORCH_OPTIMIZERS = [
 
 
 def get_optimizer_class(optimizer_name: str) -> torch.optim.Optimizer:
+    """Gets the optimizer class from a string.
+
+    Args:
+        optimizer_name: The name of the optimizer.
+
+    Returns:
+        The optimizer class.
+    """
     if optimizer_name in CUSTOM_OPTIMIZERS:
         if optimizer_name == "AdEMAMix":
             return AdEMAMix

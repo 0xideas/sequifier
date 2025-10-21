@@ -32,6 +32,23 @@ def load_preprocessor_config(
 class PreprocessorModel(BaseModel):
     """
     Pydantic model for preprocessor configuration.
+
+    Attributes:
+        project_path: The path to the sequifier project directory.
+        data_path: The path to the input data file.
+        read_format: The file type of the input data. Can be 'csv' or 'parquet'.
+        write_format: The file type for the preprocessed output data.
+        combine_into_single_file: If True, combines all preprocessed data into a single file.
+        selected_columns: A list of columns to be included in the preprocessing. If None, all columns are used.
+        group_proportions: A list of floats that define the relative sizes of data splits (e.g., for train, validation, test).
+                           The sum of proportions must be 1.0.
+        seq_length: The sequence length for the model inputs.
+        seq_step_sizes: A list of step sizes for creating subsequences within each data split.
+        max_rows: The maximum number of input rows to process. If None, all rows are processed.
+        seed: A random seed for reproducibility.
+        n_cores: The number of CPU cores to use for parallel processing. If None, it uses the available CPU cores.
+        batches_per_file: The number of batches to process per file.
+        process_by_file: A flag to indicate if processing should be done file by file.
     """
 
     project_path: str

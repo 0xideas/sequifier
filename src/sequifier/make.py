@@ -91,6 +91,11 @@ data/
 
 
 def make(args):
+    """Creates a new sequifier project.
+
+    Args:
+        args: The command-line arguments.
+    """
     project_name = args.project_name
 
     assert (

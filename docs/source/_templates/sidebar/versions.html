@@ -1,0 +1,15 @@
+{% if versions %}
+<div class="sidebar-tree">
+  <p class="caption" role="heading">
+    <span class="caption-text">{{ _('Versions') }}</span>
+  </p>
+  <ul>
+    {%- for item in versions.branches %}
+      <li><a href="{{ item.url }}">{{ item.name }}</a></li>
+    {%- endfor %}
+    {%- for item in versions.tags %}
+      <li><a href="{{ item.url }}">{{ item.name }}</a></li>
+    {%- endfor %}
+  </ul>
+</div>
+{% endif %}

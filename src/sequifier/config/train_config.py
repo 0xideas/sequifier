@@ -184,7 +184,32 @@ class DotDict(dict):
 
 
 class TrainingSpecModel(BaseModel):
-    """Pydantic model for training specifications."""
+    """Pydantic model for training specifications.
+
+    Attributes:
+        device: The torch.device to train the model on (e.g., 'cuda', 'cpu', 'mps').
+        device_max_concat_length: Maximum sequence length for concatenation on device.
+        epochs: The total number of epochs to train for.
+        log_interval: The interval in batches for logging.
+        class_share_log_columns: A list of column names for which to log the class share of predictions.
+        early_stopping_epochs: Number of epochs to wait for validation loss improvement before stopping.
+        iter_save: The interval in epochs for checkpointing the model.
+        batch_size: The training batch size.
+        lr: The learning rate.
+        criterion: A dictionary mapping each target column to a loss function.
+        class_weights: A dictionary mapping categorical target columns to a list of class weights.
+        accumulation_steps: The number of gradient accumulation steps.
+        dropout: The dropout value for the transformer model.
+        loss_weights: A dictionary mapping columns to specific loss weights.
+        optimizer: The optimizer configuration.
+        scheduler: The learning rate scheduler configuration.
+        continue_training: If True, continue training from the latest checkpoint.
+        distributed: If True, enables distributed training.
+        load_full_data_to_ram: If True, loads the entire dataset into RAM.
+        world_size: The number of processes for distributed training.
+        num_workers: The number of worker threads for data loading.
+        backend: The distributed training backend (e.g., 'nccl').
+    """
 
     device: str
     device_max_concat_length: int = 12
@@ -250,7 +275,15 @@ class TrainingSpecModel(BaseModel):
 
 
 class ModelSpecModel(BaseModel):
-    """Pydantic model for model specifications."""
+    """Pydantic model for model specifications.
+
+    Attributes:
+        d_model: The number of expected features in the input.
+        d_model_by_column: The embedding dimensions for each input column. Must sum to d_model.
+        nhead: The number of heads in the multi-head attention models.
+        d_hid: The dimension of the feedforward network model.
+        nlayers: The number of layers in the transformer model.
+    """
 
     d_model: int
     d_model_by_column: Optional[dict[str, int]]
@@ -268,7 +301,34 @@ class ModelSpecModel(BaseModel):
 
 
 class TrainModel(BaseModel):
-    """Pydantic model for training configuration."""
+    """Pydantic model for training configuration.
+
+    Attributes:
+        project_path: The path to the sequifier project directory.
+        ddconfig_path: The path to the data-driven configuration file.
+        model_name: The name of the model being trained.
+        training_data_path: The path to the training data.
+        validation_data_path: The path to the validation data.
+        read_format: The file format of the input data (e.g., 'csv', 'parquet').
+        selected_columns: The list of input columns to be used for training.
+        column_types: A dictionary mapping each column to its numeric type ('int64' or 'float64').
+        categorical_columns: A list of columns that are categorical.
+        real_columns: A list of columns that are real-valued.
+        target_columns: The list of target columns for model training.
+        target_column_types: A dictionary mapping target columns to their types ('categorical' or 'real').
+        id_maps: For each categorical column, a map from distinct values to their indexed representation.
+        seq_length: The sequence length of the model's input.
+        n_classes: The number of classes for each categorical column.
+        inference_batch_size: The batch size to be used for inference after model export.
+        seed: The random seed for numpy and PyTorch.
+        export_generative_model: If True, exports the generative model.
+        export_embedding_model: If True, exports the embedding model.
+        export_onnx: If True, exports the model in ONNX format.
+        export_pt: If True, exports the model using torch.save.
+        export_with_dropout: If True, exports the model with dropout enabled.
+        model_spec: The specification of the transformer model architecture.
+        training_spec: The specification of the training run configuration.
+    """
 
     project_path: str
     ddconfig_path: str
