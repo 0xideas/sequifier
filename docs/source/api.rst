@@ -6,7 +6,7 @@ This page contains the auto-generated API reference documentation.
 
 
 Preprocessing Config
----------------------
+-------------------------
 .. automodule:: sequifier.config.preprocess_config
    :members: PreprocessorModel
 
@@ -21,18 +21,18 @@ Inference Config
    :members: InfererModel
 
 Hyperparameter Search Config
----------------------
+---------------------------------
 .. automodule:: sequifier.config.hyperparameter_search_config
    :members: HyperparameterSearch, ModelSpecHyperparameterSampling, TrainingSpecHyperparameterSampling
 
 Non-standard Optimizers
----------------------
+--------------------------
 .. automodule:: sequifier.optimizers.ademamix
    :members:
 
 
 Internals
----------------------
+------------
 
 .. automodule:: sequifier.sequifier
    :members:
