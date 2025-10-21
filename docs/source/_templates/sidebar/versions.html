@@ -1,14 +1,15 @@
-{#
-  This template uses the 'smv_versions' and 'smv_current_version'
-  variables provided automatically by sphinx-multiversion.
-#}
-<h3>Versions</h3>
+{% if versions %}
 <div class="sidebar-tree">
+  <p class="caption" role="heading">
+    <span class="caption-text">{{ _('Versions') }}</span>
+  </p>
   <ul>
-    {%- for item in smv_versions %}
-      <li {% if item.name == smv_current_version.name %}class="current"{% endif %}>
-        <a href="{{ item.url }}">{{ item.name }}</a>
-      </li>
+    {%- for item in versions.branches %}
+      <li><a href="{{ item.url }}">{{ item.name }}</a></li>
+    {%- endfor %}
+    {%- for item in versions.tags %}
+      <li><a href="{{ item.url }}">{{ item.name }}</a></li>
     {%- endfor %}
   </ul>
 </div>
+{% endif %}
