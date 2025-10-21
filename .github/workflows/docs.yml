@@ -60,20 +60,34 @@ jobs:
           path: docs/build/html
 
   deploy:
+    # This job still needs the 'build' job to finish first
     needs: build
     runs-on: ubuntu-latest
-    # Grant GITHUB_TOKEN the permissions required to deploy to GitHub Pages
-    permissions:
-      contents: read
-      pages: write      # to deploy to Pages
-      id-token: write   # to verify the deployment originates from an appropriate source
 
-    # Deploy to the github-pages environment
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    # Add this 'permissions' block to the 'deploy' job
+    # It allows the action to push to your gh-pages branch
+    permissions:
+      contents: write
 
     steps:
+      # This step downloads the 'github-pages' artifact created by the 'build' job
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: github-pages # This is the default name from upload-pages-artifact
+          path: ./docs-build # Download it to a temporary directory
+
+      # This is the new deployment action
       - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          # The token is needed to push to your repo
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+          # The directory to publish (where we downloaded the artifact)
+          publish_dir: ./docs-build
+
+          # This is the most important part:
+          # It cleans the gh-pages branch before deploying,
+          # ensuring old files are always removed.
+          keep_files: false
