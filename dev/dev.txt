@@ -1,8 +1,13 @@
 pytest -m "optional or not optional"
 
+squash merge
+
+pull to main
+
+git tag v[VERSION] -m "v[VERSION]"
+
+git push origin v[VERSION]
+
 python -m build
 
 python -m twine upload dist/*
-
-git tag v[VERSION] -m "v[VERSION]"
-git push origin v[VERSION]
