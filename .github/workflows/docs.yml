@@ -55,8 +55,9 @@ jobs:
         run: echo "www.sequifier.com" > docs/build/html/CNAME
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
+          name: docs-html  # We give the artifact a clear name
           path: docs/build/html
 
   deploy:
@@ -74,8 +75,8 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: github-pages # This is the default name from upload-pages-artifact
-          path: ./docs-build # Download it to a temporary directory
+          name: docs-html # Match the name from the build job
+          path: ./docs-build
 
       # This is the new deployment action
       - name: Deploy to GitHub Pages
