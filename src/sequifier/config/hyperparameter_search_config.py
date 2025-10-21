@@ -79,7 +79,26 @@ def load_hyperparameter_search_config(
 
 
 class TrainingSpecHyperparameterSampling(BaseModel):
-    """Pydantic model for training specifications."""
+    """Pydantic model for training specification hyperparameter sampling.
+
+    Attributes:
+        device: The device to train on (e.g., 'cuda', 'cpu').
+        epochs: A list of possible numbers of epochs to train for.
+        log_interval: The interval in batches for logging.
+        class_share_log_columns: Columns for which to log class share.
+        early_stopping_epochs: Number of epochs for early stopping.
+        iter_save: Interval in epochs for saving model checkpoints.
+        batch_size: A list of possible batch sizes.
+        lr: A list of possible learning rates.
+        criterion: A dictionary mapping target columns to loss functions.
+        class_weights: Optional dictionary mapping columns to class weights.
+        accumulation_steps: A list of possible gradient accumulation steps.
+        dropout: A list of possible dropout rates.
+        loss_weights: Optional dictionary mapping columns to loss weights.
+        optimizer: A list of possible optimizer configurations.
+        scheduler: A list of possible scheduler configurations.
+        continue_training: Flag to continue training from a checkpoint.
+    """
 
     device: str
     epochs: list[int]
@@ -203,7 +222,15 @@ class TrainingSpecHyperparameterSampling(BaseModel):
 
 
 class ModelSpecHyperparameterSampling(BaseModel):
-    """Pydantic model for model specifications."""
+    """Pydantic model for model specification hyperparameter sampling.
+
+    Attributes:
+        d_model: A list of possible numbers of expected features in the input.
+        d_model_by_column: A list of possible embedding dimensions for each input column.
+        nhead: A list of possible numbers of heads in the multi-head attention models.
+        d_hid: A list of possible dimensions of the feedforward network model.
+        nlayers: A list of possible numbers of layers in the transformer model.
+    """
 
     d_model: list[int]
     d_model_by_column: Optional[list[dict[str, int]]]
@@ -271,7 +298,34 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
 
 class HyperparameterSearch(BaseModel):
-    """Pydantic model for training configuration."""
+    """Pydantic model for hyperparameter search configuration.
+
+    Attributes:
+        project_path: The path to the sequifier project directory.
+        ddconfig_path: The path to the data-driven configuration file.
+        hp_search_name: The name for the hyperparameter search.
+        search_strategy: The search strategy, either "sample" or "grid".
+        n_samples: The number of samples to draw for the search.
+        model_config_write_path: The path to write the model configurations to.
+        training_data_path: The path to the training data.
+        validation_data_path: The path to the validation data.
+        read_format: The file format of the input data.
+        selected_columns: A list of lists of columns to be used for training.
+        column_types: A list of dictionaries mapping columns to their types.
+        categorical_columns: A list of lists of categorical columns.
+        real_columns: A list of lists of real-valued columns.
+        target_columns: The list of target columns for model training.
+        target_column_types: A dictionary mapping target columns to their types.
+        id_maps: A dictionary mapping categorical values to their indexed representation.
+        seq_length: A list of possible sequence lengths.
+        n_classes: The number of classes for each categorical column.
+        inference_batch_size: The batch size for inference.
+        export_onnx: If True, exports the model in ONNX format.
+        export_pt: If True, exports the model using torch.save.
+        export_with_dropout: If True, exports the model with dropout enabled.
+        model_hyperparameter_sampling: The sampling configuration for model hyperparameters.
+        training_hyperparameter_sampling: The sampling configuration for training hyperparameters.
+    """
 
     project_path: str
     ddconfig_path: str

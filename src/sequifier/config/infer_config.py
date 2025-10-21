@@ -72,6 +72,39 @@ def load_inferer_config(
 
 
 class InfererModel(BaseModel):
+    """Pydantic model for inference configuration.
+
+    Attributes:
+        project_path: The path to the sequifier project directory.
+        ddconfig_path: The path to the data-driven configuration file.
+        model_path: The path to the trained model file(s).
+        model_type: The type of model, either 'embedding' or 'generative'.
+        data_path: The path to the data to be used for inference.
+        training_config_path: The path to the training configuration file.
+        read_format: The file format of the input data (e.g., 'csv', 'parquet').
+        write_format: The file format for the inference output.
+        selected_columns: The list of input columns used for inference.
+        categorical_columns: A list of columns that are categorical.
+        real_columns: A list of columns that are real-valued.
+        target_columns: The list of target columns for inference.
+        column_types: A dictionary mapping each column to its numeric type ('int64' or 'float64').
+        target_column_types: A dictionary mapping target columns to their types ('categorical' or 'real').
+        output_probabilities: If True, outputs the probability distributions for categorical target columns.
+        map_to_id: If True, maps categorical output values back to their original IDs.
+        seed: The random seed for reproducibility.
+        device: The device to run inference on (e.g., 'cuda', 'cpu', 'mps').
+        seq_length: The sequence length of the model's input.
+        inference_batch_size: The batch size for inference.
+        distributed: If True, enables distributed inference.
+        load_full_data_to_ram: If True, loads the entire dataset into RAM.
+        world_size: The number of processes for distributed inference.
+        num_workers: The number of worker threads for data loading.
+        sample_from_distribution_columns: A list of columns from which to sample from the distribution.
+        infer_with_dropout: If True, applies dropout during inference.
+        autoregression: If True, performs autoregressive inference.
+        autoregression_extra_steps: The number of additional steps for autoregressive inference.
+    """
+
     project_path: str
     ddconfig_path: str
     model_path: Union[str, list[str]]

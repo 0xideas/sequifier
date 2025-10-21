@@ -29,6 +29,12 @@ from sequifier.train import (
 
 @beartype
 def infer(args: Any, args_config: dict[str, Any]) -> None:
+    """Main inference function.
+
+    Args:
+        args: Command line arguments.
+        args_config: Configuration dictionary.
+    """
     print("--- Starting Inference ---")
     config_path = (
         args.config_path if args.config_path is not None else "configs/infer.yaml"
@@ -56,8 +62,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
 
 @beartype
 def load_pt_dataset(data_path: str, start_pct: float, end_pct: float) -> Iterator:
-    """
-    Lazily loads .pt files from a folder within a percentage range.
+    """Lazily loads .pt files from a folder within a percentage range.
 
     Args:
         data_path: Path to folder containing .pt files
@@ -88,6 +93,15 @@ def infer_worker(
     selected_columns_statistics: dict[str, dict[str, float]],
     percentage_limits: Optional[tuple[float, float]],
 ):
+    """Worker function for inference.
+
+    Args:
+        config: The inference configuration.
+        args_config: The command-line arguments.
+        id_maps: A dictionary of id maps for categorical columns.
+        selected_columns_statistics: A dictionary of statistics for numerical columns.
+        percentage_limits: A tuple of percentage limits for loading data.
+    """
     print(f"[INFO] Reading data from '{config.data_path}'...")
     # Step 1: Use Polars for data ingestion
     if config.read_format == "parquet":
@@ -152,6 +166,15 @@ def infer_embedding(
     dataset: Union[list[Any], Iterator[Any]],
     column_types: dict[str, torch.dtype],
 ):
+    """Performs inference with an embedding model.
+
+    Args:
+        config: The inference configuration.
+        inferer: The inferer object.
+        model_id: The id of the model.
+        dataset: The dataset to perform inference on.
+        column_types: A dictionary of column types.
+    """
     for data_id, data in enumerate(dataset):
         # Step 1: Adapt Data Subsetting (now works on Polars DF)
         if config.read_format in ["parquet", "csv"]:
@@ -217,6 +240,15 @@ def infer_generative(
     dataset: Union[list[Any], Iterator[Any]],
     column_types: dict[str, torch.dtype],
 ):
+    """Performs inference with a generative model.
+
+    Args:
+        config: The inference configuration.
+        inferer: The inferer object.
+        model_id: The id of the model.
+        dataset: The dataset to perform inference on.
+        column_types: A dictionary of column types.
+    """
     for data_id, data in enumerate(dataset):
         # Step 1: Adapt Data Subsetting (now works on Polars DF)
         if config.read_format in ["parquet", "csv"]:
@@ -353,9 +385,7 @@ def infer_generative(
 def expand_data_by_autoregression(
     data: pl.DataFrame, autoregression_extra_steps: int, seq_length: int
 ) -> pl.DataFrame:
-    """
-    Expand data for autoregression by adding additional steps using Polars.
-    """
+    """Expand data for autoregression by adding additional steps using Polars."""
     # Ensure data is sorted for window functions
     data = data.sort("sequenceId", "subsequenceId")
 
@@ -407,6 +437,16 @@ def get_embeddings_pt(
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
 ) -> np.ndarray:
+    """Gets embeddings from a PyTorch dataset.
+
+    Args:
+        config: The inference configuration.
+        inferer: The inferer object.
+        data: The data to get embeddings from.
+
+    Returns:
+        The embeddings.
+    """
     X = {key: val.numpy() for key, val in data.items()}
     embeddings = inferer.infer_embedding(X)
     return embeddings
@@ -419,6 +459,17 @@ def get_probs_preds_pt(
     data: dict[str, torch.Tensor],
     extra_steps: int = 0,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
+    """Gets probabilities and predictions from a PyTorch dataset.
+
+    Args:
+        config: The inference configuration.
+        inferer: The inferer object.
+        data: The data to get probabilities and predictions from.
+        extra_steps: The number of extra steps for autoregression.
+
+    Returns:
+        A tuple containing the probabilities and predictions.
+    """
     target_cols = inferer.target_columns
 
     # 2. Initialize input and containers for storing results from all steps
@@ -482,6 +533,17 @@ def get_embeddings(
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
 ) -> np.ndarray:
+    """Gets embeddings from a Polars DataFrame.
+
+    Args:
+        config: The inference configuration.
+        inferer: The inferer object.
+        data: The data to get embeddings from.
+        column_types: A dictionary of column types.
+
+    Returns:
+        The embeddings.
+    """
     all_columns = sorted(list(set(config.selected_columns + config.target_columns)))
     X = numpy_to_pytorch(data, column_types, all_columns, config.seq_length)
     X = {col: X_col.numpy() for col, X_col in X.items()}
@@ -499,6 +561,17 @@ def get_probs_preds(
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
+    """Gets probabilities and predictions from a Polars DataFrame.
+
+    Args:
+        config: The inference configuration.
+        inferer: The inferer object.
+        data: The data to get probabilities and predictions from.
+        column_types: A dictionary of column types.
+
+    Returns:
+        A tuple containing the probabilities and predictions.
+    """
     all_columns = sorted(list(set(config.selected_columns + config.target_columns)))
 
     X = numpy_to_pytorch(data, column_types, all_columns, config.seq_length)
@@ -523,8 +596,7 @@ def fill_in_predictions_pl(
     sequence_ids_present: pl.Series,
     seq_length: int,
 ) -> pl.DataFrame:
-    """
-    Fills in predictions into the main Polars DataFrame using a robust,
+    """Fills in predictions into the main Polars DataFrame using a robust,
     join-based approach that preserves the original DataFrame's structure.
 
     This function broadcasts predictions to all relevant future rows via a join,
@@ -618,9 +690,7 @@ def fill_in_predictions_pl(
 
 @beartype
 def fill_number(number: Union[int, float], max_length: int) -> str:
-    """
-    Fill a number with leading zeros to reach the specified length.
-    """
+    """Fill a number with leading zeros to reach the specified length."""
     number_str = str(number)
     return f"{'0' * (max_length - len(number_str))}{number_str}"
 
@@ -654,6 +724,7 @@ def verify_variable_order(data: pl.DataFrame) -> None:
 
 @beartype
 def format_delta(time_delta: timedelta) -> str:
+    """Formats a timedelta object to a string."""
     seconds = time_delta.seconds
     microseconds = time_delta.microseconds
     return f"{(seconds + (microseconds/1e6)):.3}"
@@ -667,8 +738,7 @@ def get_probs_preds_autoregression(
     column_types: dict[str, torch.dtype],
     seq_length: int,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray], np.ndarray]:
-    """
-    Get probabilities and predictions for autoregression using a Polars-native loop.
+    """Get probabilities and predictions for autoregression using a Polars-native loop.
     This function now also returns the corresponding sequence IDs for each prediction.
     """
     data = data.sort("sequenceId", "subsequenceId")
@@ -768,6 +838,8 @@ def get_probs_preds_autoregression(
 
 
 class Inferer:
+    """A class for performing inference with a trained sequifier model."""
+
     @beartype
     def __init__(
         self,
@@ -789,6 +861,27 @@ class Inferer:
         args_config: dict[str, Any],
         training_config_path: str,
     ):
+        """Initializes the Inferer.
+
+        Args:
+            model_type: The type of model to use for inference.
+            model_path: The path to the trained model.
+            project_path: The path to the sequifier project directory.
+            id_maps: A dictionary of id maps for categorical columns.
+            selected_columns_statistics: A dictionary of statistics for numerical columns.
+            map_to_id: Whether to map the output to the original ids.
+            categorical_columns: A list of categorical columns.
+            real_columns: A list of real columns.
+            selected_columns: A list of selected columns.
+            target_columns: A list of target columns.
+            target_column_types: A dictionary of target column types.
+            sample_from_distribution_columns: A list of columns to sample from the distribution.
+            infer_with_dropout: Whether to use dropout during inference.
+            inference_batch_size: The batch size for inference.
+            device: The device to use for inference.
+            args_config: The command-line arguments.
+            training_config_path: The path to the training configuration file.
+        """
         self.model_type = model_type
         self.map_to_id = map_to_id
         self.selected_columns_statistics = selected_columns_statistics
@@ -844,16 +937,7 @@ class Inferer:
     def invert_normalization(
         self, values: np.ndarray, target_column: str
     ) -> np.ndarray:
-        """
-        Invert the normalization of values for a target column.
-
-        Args:
-            values: Normalized values.
-            target_column: Target column name.
-
-        Returns:
-            Denormalized values.
-        """
+        """Invert the normalization of values for a target column."""
         std = self.selected_columns_statistics[target_column]["std"]
         mean = self.selected_columns_statistics[target_column]["mean"]
         return (values * (std - 1e-9)) + mean
@@ -863,6 +947,7 @@ class Inferer:
         self,
         x: dict[str, np.ndarray],
     ) -> np.ndarray:
+        """Performs inference with an embedding model."""
         assert x is not None
         size = x[self.target_columns[0]].shape[0]
         embedding = self.adjust_and_infer_embedding(x, size)
@@ -876,17 +961,7 @@ class Inferer:
         probs: Optional[dict[str, np.ndarray]] = None,
         return_probs: bool = False,
     ) -> dict[str, np.ndarray]:
-        """
-        Perform inference on the input data.
-
-        Args:
-            x: Input data.
-            probs: Pre-computed probabilities (optional).
-            return_probs: Whether to return probabilities.
-
-        Returns:
-            Dictionary of inference results.
-        """
+        """Perform inference on the input data."""
         if probs is None or (
             x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0
         ):  # type: ignore
@@ -935,6 +1010,7 @@ class Inferer:
 
     @beartype
     def adjust_and_infer_embedding(self, x: dict[str, np.ndarray], size: int):
+        """Adjusts the input and performs inference with an embedding model."""
         if self.inference_model_type == "onnx":
             assert x is not None
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
@@ -957,6 +1033,7 @@ class Inferer:
 
     @beartype
     def adjust_and_infer_generative(self, x: dict[str, np.ndarray], size: int):
+        """Adjusts the input and performs inference with a generative model."""
         if self.inference_model_type == "onnx":
             assert x is not None
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
@@ -990,6 +1067,7 @@ class Inferer:
     def prepare_inference_batches(
         self, x: dict[str, np.ndarray], pad_to_batch_size: bool
     ) -> list[dict[str, np.ndarray]]:
+        """Prepares batches for inference."""
         size = x[self.target_columns[0]].shape[0]
         if size == self.inference_batch_size:
             return [x]
@@ -1016,15 +1094,7 @@ class Inferer:
 
     @beartype
     def infer_pure(self, x: dict[str, np.ndarray]) -> list[np.ndarray]:
-        """
-        Perform pure inference using ONNX session.
-
-        Args:
-            x: Input data.
-
-        Returns:
-            List of output arrays.
-        """
+        """Perform pure inference using ONNX session."""
         ort_inputs = {
             session_input.name: self.expand_to_batch_size(x[col])
             for session_input, col in zip(
@@ -1037,15 +1107,7 @@ class Inferer:
 
     @beartype
     def expand_to_batch_size(self, x: np.ndarray) -> np.ndarray:
-        """
-        Expand input to match the inference batch size.
-
-        Args:
-            x: Input array.
-
-        Returns:
-            Expanded array.
-        """
+        """Expand input to match the inference batch size."""
         repetitions = self.inference_batch_size // x.shape[0]
         filler = self.inference_batch_size % x.shape[0]
         return np.concatenate(([x] * repetitions) + [x[0:filler, :]], axis=0)
@@ -1053,15 +1115,7 @@ class Inferer:
 
 @beartype
 def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-    """
-    Normalize the output probabilities.
-
-    Args:
-        outs: Dictionary of output arrays.
-
-    Returns:
-        Dictionary of normalized probabilities.
-    """
+    """Normalize the output probabilities."""
     normalizer = {
         target_column: np.repeat(
             np.sum(np.exp(target_values), axis=1), target_values.shape[1]
@@ -1077,15 +1131,7 @@ def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
 
 @beartype
 def sample_with_cumsum(probs: np.ndarray) -> np.ndarray:
-    """
-    Sample from cumulative sum of probabilities.
-
-    Args:
-        probs: Probability array.
-
-    Returns:
-        Sampled indices.
-    """
+    """Sample from cumulative sum of probabilities."""
     cumulative_probs = np.cumsum(np.exp(probs), axis=1)
     random_threshold = np.random.rand(cumulative_probs.shape[0], 1)
     random_threshold = np.repeat(random_threshold, probs.shape[1], axis=1)

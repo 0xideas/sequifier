@@ -93,6 +93,17 @@ def numpy_to_pytorch(
     all_columns: list[str],  # Changed from selected_columns, target_columns
     seq_length: int,
 ) -> dict[str, Tensor]:  # Now returns a single dictionary
+    """Converts a Polars DataFrame to a dictionary of PyTorch tensors.
+
+    Args:
+        data: The Polars DataFrame to convert.
+        column_types: A dictionary mapping column names to PyTorch dtypes.
+        all_columns: A list of all columns to include.
+        seq_length: The sequence length.
+
+    Returns:
+        A dictionary of PyTorch tensors.
+    """
     # Define both input and target sequence column names
     input_seq_cols = [str(c) for c in range(seq_length, 0, -1)]
     target_seq_cols = [str(c) for c in range(seq_length - 1, -1, -1)]
@@ -128,6 +139,13 @@ class LogFile:
 
     @beartype
     def __init__(self, path: str, open_mode: str, rank: Optional[int] = None):
+        """Initializes the LogFile.
+
+        Args:
+            path: The path to the log file.
+            open_mode: The open mode for the log file.
+            rank: The rank of the current process.
+        """
         self.rank = rank
         self.levels = [2, 3]
         self._files = {

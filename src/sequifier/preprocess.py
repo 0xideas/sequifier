@@ -19,8 +19,7 @@ from sequifier.helpers import PANDAS_TO_TORCH_TYPES, read_data, write_data
 
 @beartype
 def preprocess(args: Any, args_config: dict[str, Any]) -> None:
-    """
-    Main preprocessing function.
+    """Main preprocessing function.
 
     Args:
         args: Command line arguments.
@@ -34,6 +33,23 @@ def preprocess(args: Any, args_config: dict[str, Any]) -> None:
 
 
 class Preprocessor:
+    """A class for preprocessing data for the sequifier model.
+
+    This class handles loading, preprocessing, and saving data. It supports
+    single-file and multi-file processing, and can handle large datasets by
+    processing them in batches.
+
+    Attributes:
+        project_path (str): The path to the sequifier project directory.
+        batches_per_file (int): The number of batches to process per file.
+        data_name_root (str): The root name of the data file.
+        combine_into_single_file (bool): Whether to combine the output into a single file.
+        target_dir (str): The target directory for temporary files.
+        seed (int): The random seed for reproducibility.
+        n_cores (int): The number of cores to use for parallel processing.
+        split_paths (list[str]): The paths to the output split files.
+    """
+
     @beartype
     def __init__(
         self,
@@ -52,6 +68,24 @@ class Preprocessor:
         batches_per_file: int,
         process_by_file: bool,
     ):
+        """Initializes the Preprocessor with the given parameters.
+
+        Args:
+            project_path: The path to the sequifier project directory.
+            data_path: The path to the input data file.
+            read_format: The file type of the input data.
+            write_format: The file type for the preprocessed output data.
+            combine_into_single_file: Whether to combine the output into a single file.
+            selected_columns: A list of columns to be included in the preprocessing.
+            group_proportions: A list of floats that define the relative sizes of data splits.
+            seq_length: The sequence length for the model inputs.
+            seq_step_sizes: A list of step sizes for creating subsequences.
+            max_rows: The maximum number of input rows to process.
+            seed: A random seed for reproducibility.
+            n_cores: The number of CPU cores to use for parallel processing.
+            batches_per_file: The number of batches to process per file.
+            process_by_file: A flag to indicate if processing should be done file by file.
+        """
         self.project_path = project_path
         self.batches_per_file = batches_per_file
 
@@ -169,6 +203,15 @@ class Preprocessor:
 
     @beartype
     def _get_files_to_process(self, data_path: str, read_format: str) -> list[str]:
+        """Gets a list of files to process from a given data path.
+
+        Args:
+            data_path: The path to the data directory.
+            read_format: The file format to look for.
+
+        Returns:
+            A list of file paths to process.
+        """
         paths_to_process = []
         for root, dirs, files in os.walk(data_path):
             for file in files:
@@ -180,6 +223,15 @@ class Preprocessor:
     def _create_schema(
         self, col_types: dict[str, str], seq_length: int
     ) -> dict[str, Any]:
+        """Creates the schema for the preprocessed data.
+
+        Args:
+            col_types: A dictionary of column types.
+            seq_length: The sequence length.
+
+        Returns:
+            A dictionary representing the schema.
+        """
         schema = {
             "sequenceId": pl.Int64,
             "subsequenceId": pl.Int64,
@@ -217,6 +269,17 @@ class Preprocessor:
         dict[str, str],
         list[str],
     ]:
+        """Gets column metadata across multiple files.
+
+        Args:
+            data_path: The path to the data directory.
+            read_format: The file format to look for.
+            max_rows: The maximum number of rows to process.
+            selected_columns: A list of columns to be included in the preprocessing.
+
+        Returns:
+            A tuple containing the number of classes, id maps, column statistics, column types, and data columns.
+        """
         n_rows_running_count = 0
         id_maps, selected_columns_statistics = {}, {}
         col_types, data_columns = None, None
@@ -275,6 +338,7 @@ class Preprocessor:
 
     @beartype
     def _setup_directories(self) -> None:
+        """Sets up the directories for the preprocessed data."""
         os.makedirs(os.path.join(self.project_path, "data"), exist_ok=True)
         temp_path = os.path.join(self.project_path, "data", self.target_dir)
         if os.path.exists(temp_path):
@@ -283,6 +347,12 @@ class Preprocessor:
 
     @beartype
     def _setup_split_paths(self, write_format: str, n_splits: int) -> None:
+        """Sets up the paths for the output split files.
+
+        Args:
+            write_format: The file format for the output files.
+            n_splits: The number of splits.
+        """
         split_paths = [
             os.path.join(
                 self.project_path,
@@ -314,6 +384,26 @@ class Preprocessor:
         write_format: str,
         process_by_file: bool = True,
     ) -> None:
+        """Processes batches of data from multiple files.
+
+        Args:
+            file_paths: A list of file paths to process.
+            read_format: The file format to read.
+            selected_columns: A list of columns to be included in the preprocessing.
+            max_rows: The maximum number of rows to process.
+            schema: The schema for the preprocessed data.
+            n_cores: The number of cores to use for parallel processing.
+            seq_length: The sequence length for the model inputs.
+            seq_step_sizes: A list of step sizes for creating subsequences.
+            data_columns: A list of data columns.
+            n_classes: A dictionary containing the number of classes for each categorical column.
+            id_maps: A dictionary containing the id maps for each categorical column.
+            selected_columns_statistics: A dictionary containing the statistics for each numerical column.
+            col_types: A dictionary containing the column types.
+            group_proportions: A list of floats that define the relative sizes of data splits.
+            write_format: The file format for the output files.
+            process_by_file: A flag to indicate if processing should be done file by file.
+        """
         if process_by_file:
             _process_batches_multiple_files_inner(
                 project_path=self.project_path,
@@ -419,6 +509,11 @@ class Preprocessor:
 
     @beartype
     def _cleanup(self, write_format: str) -> None:
+        """Cleans up the temporary files and directories.
+
+        Args:
+            write_format: The file format of the output files.
+        """
         temp_output_path = os.path.join(self.project_path, "data", self.target_dir)
         directory = Path(temp_output_path)
 
@@ -452,6 +547,14 @@ class Preprocessor:
         col_types: dict[str, str],
         selected_columns_statistics: dict[str, dict[str, float]],
     ) -> None:
+        """Exports the metadata to a JSON file.
+
+        Args:
+            id_maps: A dictionary containing the id maps for each categorical column.
+            n_classes: A dictionary containing the number of classes for each categorical column.
+            col_types: A dictionary containing the column types.
+            selected_columns_statistics: A dictionary containing the statistics for each numerical column.
+        """
         data_driven_config = {
             "n_classes": n_classes,
             "id_maps": id_maps,
@@ -475,9 +578,7 @@ class Preprocessor:
 
     @beartype
     def _create_metadata_for_folder(self, folder_path: str) -> None:
-        """
-        Scans a directory for .pt files, counts samples in each, and writes metadata.json.
-        """
+        """Scans a directory for .pt files, counts samples in each, and writes metadata.json."""
         batch_files_metadata = []
         total_samples = 0
         directory = Path(folder_path)
@@ -525,6 +626,19 @@ def _apply_column_statistics(
     n_classes: Optional[dict[str, int]] = None,
     col_types: Optional[dict[str, str]] = None,
 ) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
+    """Applies the column statistics to the data.
+
+    Args:
+        data: The data to apply the statistics to.
+        data_columns: A list of data columns.
+        id_maps: A dictionary containing the id maps for each categorical column.
+        selected_columns_statistics: A dictionary containing the statistics for each numerical column.
+        n_classes: A dictionary containing the number of classes for each categorical column.
+        col_types: A dictionary containing the column types.
+
+    Returns:
+        A tuple containing the transformed data, the number of classes, and the column types.
+    """
     if n_classes is None:
         n_classes = {col: len(id_maps[col]) + 1 for col in id_maps}
 
@@ -556,6 +670,18 @@ def _get_column_statistics(
     dict[str, dict[Union[str, int], int]],
     dict[str, dict[str, float]],
 ]:
+    """Gets the column statistics for the given data.
+
+    Args:
+        data: The data to get the statistics from.
+        data_columns: A list of data columns.
+        id_maps: A dictionary containing the id maps for each categorical column.
+        selected_columns_statistics: A dictionary containing the statistics for each numerical column.
+        n_rows_running_count: The running count of the number of rows.
+
+    Returns:
+        A tuple containing the id maps and the column statistics.
+    """
     for data_col in data_columns:
         dtype = data.schema[data_col]
         if isinstance(dtype, (pl.String, pl.Utf8)) or isinstance(
@@ -590,6 +716,17 @@ def _load_and_preprocess_data(
     selected_columns: Optional[list[str]],
     max_rows: Optional[int],
 ) -> pl.DataFrame:
+    """Loads and preprocesses the data.
+
+    Args:
+        data_path: The path to the data file.
+        read_format: The file format to read.
+        selected_columns: A list of columns to be included in the preprocessing.
+        max_rows: The maximum number of rows to process.
+
+    Returns:
+        A polars DataFrame containing the preprocessed data.
+    """
     print(f"[INFO] Reading data from '{data_path}'...")
     data = read_data(data_path, read_format, columns=selected_columns)
     assert (
@@ -633,6 +770,32 @@ def _process_batches_multiple_files_inner(
     batches_per_file: int,
     combine_into_single_file: bool,
 ):
+    """Inner function for processing batches of data from multiple files.
+
+    Args:
+        project_path: The path to the sequifier project directory.
+        data_name_root: The root name of the data file.
+        process_id: The id of the process.
+        file_paths: A list of file paths to process.
+        read_format: The file format to read.
+        selected_columns: A list of columns to be included in the preprocessing.
+        max_rows: The maximum number of rows to process.
+        schema: The schema for the preprocessed data.
+        n_cores: The number of cores to use for parallel processing.
+        seq_length: The sequence length for the model inputs.
+        seq_step_sizes: A list of step sizes for creating subsequences.
+        data_columns: A list of data columns.
+        n_classes: A dictionary containing the number of classes for each categorical column.
+        id_maps: A dictionary containing the id maps for each categorical column.
+        selected_columns_statistics: A dictionary containing the statistics for each numerical column.
+        col_types: A dictionary containing the column types.
+        group_proportions: A list of floats that define the relative sizes of data splits.
+        write_format: The file format for the output files.
+        split_paths: The paths to the output split files.
+        target_dir: The target directory for temporary files.
+        batches_per_file: The number of batches to process per file.
+        combine_into_single_file: Whether to combine the output into a single file.
+    """
     n_rows_running_count = 0
     for file_index, path in enumerate(file_paths):
         max_rows_inner = None if max_rows is None else max_rows - n_rows_running_count
@@ -719,6 +882,27 @@ def _process_batches_single_file(
     target_dir: str,
     batches_per_file: int,
 ) -> int:
+    """Processes batches of data from a single file.
+
+    Args:
+        project_path: The path to the sequifier project directory.
+        data_name_root: The root name of the data file.
+        data: The data to process.
+        schema: The schema for the preprocessed data.
+        n_cores: The number of cores to use for parallel processing.
+        seq_length: The sequence length for the model inputs.
+        seq_step_sizes: A list of step sizes for creating subsequences.
+        data_columns: A list of data columns.
+        col_types: A dictionary containing the column types.
+        group_proportions: A list of floats that define the relative sizes of data splits.
+        write_format: The file format for the output files.
+        split_paths: The paths to the output split files.
+        target_dir: The target directory for temporary files.
+        batches_per_file: The number of batches to process per file.
+
+    Returns:
+        The number of batches processed.
+    """
     n_cores = n_cores or multiprocessing.cpu_count()
     batch_limits = get_batch_limits(data, n_cores)
     batches = [
@@ -755,8 +939,7 @@ def _process_batches_single_file(
 def get_combined_statistics(
     n1: int, mean1: float, std1: float, n2: int, mean2: float, std2: float
 ) -> tuple[float, float]:
-    """
-    Calculates the combined standard deviation of two data subsets.
+    """Calculates the combined standard deviation of two data subsets.
 
     Args:
       n1 (int): Number of samples in subset 1.
@@ -786,6 +969,15 @@ def get_combined_statistics(
 
 @beartype
 def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]:
+    """Creates a map from unique values in a column to an integer index.
+
+    Args:
+        data: The DataFrame containing the column.
+        column: The name of the column.
+
+    Returns:
+        A dictionary mapping unique values to an integer index.
+    """
     ids = sorted(
         [int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]
     )  # type: ignore
@@ -795,6 +987,15 @@ def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]
 
 @beartype
 def get_batch_limits(data: pl.DataFrame, n_batches: int) -> list[tuple[int, int]]:
+    """Calculates the batch limits for a given DataFrame.
+
+    Args:
+        data: The DataFrame to split into batches.
+        n_batches: The number of batches to create.
+
+    Returns:
+        A list of tuples, where each tuple contains the start and end index of a batch.
+    """
     sequence_ids = data.get_column("sequenceId").to_numpy()
     new_sequence_id_indices = np.concatenate(
         [
@@ -827,6 +1028,15 @@ def get_batch_limits(data: pl.DataFrame, n_batches: int) -> list[tuple[int, int]
 def combine_maps(
     map1: dict[Union[str, int], int], map2: dict[Union[str, int], int]
 ) -> dict[Union[str, int], int]:
+    """Combines two id maps.
+
+    Args:
+        map1: The first id map.
+        map2: The second id map.
+
+    Returns:
+        The combined id map.
+    """
     combined_keys = sorted(list(set(list(map1.keys())).union(list(set(map2.keys())))))
     id_map = {id_: i + 1 for i, id_ in enumerate(combined_keys)}
     return id_map
@@ -834,6 +1044,15 @@ def combine_maps(
 
 @beartype
 def get_group_bounds(data_subset: pl.DataFrame, group_proportions: list[float]):
+    """Calculates the group bounds for a given data subset.
+
+    Args:
+        data_subset: The data subset to calculate the group bounds for.
+        group_proportions: A list of floats that define the relative sizes of data splits.
+
+    Returns:
+        A list of tuples, where each tuple contains the start and end index of a group.
+    """
     n = data_subset.shape[0]
     upper_bounds = list((np.cumsum(group_proportions) * n).astype(int))
     lower_bounds = [0] + list(upper_bounds[:-1])
@@ -845,6 +1064,14 @@ def get_group_bounds(data_subset: pl.DataFrame, group_proportions: list[float]):
 def process_and_write_data_pt(
     data: pl.DataFrame, seq_length: int, path: str, column_types: dict[str, str]
 ):
+    """Processes and writes the data to a .pt file.
+
+    Args:
+        data: The data to process and write.
+        seq_length: The sequence length.
+        path: The path to write the file to.
+        column_types: A dictionary containing the column types.
+    """
     if data.is_empty():
         return
 
@@ -938,6 +1165,24 @@ def preprocess_batch(
     write_format: str,
     batches_per_file: int,
 ) -> None:
+    """Processes a batch of data.
+
+    Args:
+        project_path: The path to the sequifier project directory.
+        data_name_root: The root name of the data file.
+        process_id: The id of the process.
+        batch: The batch of data to process.
+        schema: The schema for the preprocessed data.
+        split_paths: The paths to the output split files.
+        seq_length: The sequence length for the model inputs.
+        seq_step_sizes: A list of step sizes for creating subsequences.
+        data_columns: A list of data columns.
+        col_types: A dictionary containing the column types.
+        group_proportions: A list of floats that define the relative sizes of data splits.
+        target_dir: The target directory for temporary files.
+        write_format: The file format for the output files.
+        batches_per_file: The number of batches to process per file.
+    """
     sequence_ids = sorted(batch.get_column("sequenceId").unique().to_list())
 
     if write_format == "pt":
@@ -1048,6 +1293,18 @@ def extract_sequences(
     seq_step_size: int,
     columns: list[str],
 ) -> pl.DataFrame:
+    """Extracts sequences from the data.
+
+    Args:
+        data: The data to extract sequences from.
+        schema: The schema for the preprocessed data.
+        seq_length: The sequence length for the model inputs.
+        seq_step_size: The step size for creating subsequences.
+        columns: A list of data columns.
+
+    Returns:
+        A polars DataFrame containing the extracted sequences.
+    """
     if data.is_empty():
         return pl.DataFrame(schema=schema)
 
@@ -1083,6 +1340,16 @@ def extract_sequences(
 def get_subsequence_starts(
     in_seq_length: int, seq_length: int, seq_step_size: int
 ) -> np.ndarray:
+    """Calculates the start indices for subsequences.
+
+    Args:
+        in_seq_length: The length of the input sequence.
+        seq_length: The length of the subsequences.
+        seq_step_size: The step size for creating subsequences.
+
+    Returns:
+        A numpy array containing the start indices of the subsequences.
+    """
     nseq_adjusted = math.ceil((in_seq_length - seq_length) / seq_step_size)
     seq_step_size_adjusted = math.floor(
         (in_seq_length - seq_length) / max(1, nseq_adjusted)
@@ -1101,6 +1368,17 @@ def extract_subsequences(
     seq_step_size: int,
     columns: list[str],
 ) -> dict[str, list[list[Union[float, int]]]]:
+    """Extracts subsequences from a sequence.
+
+    Args:
+        in_seq: The input sequence.
+        seq_length: The length of the subsequences.
+        seq_step_size: The step size for creating subsequences.
+        columns: A list of data columns.
+
+    Returns:
+        A dictionary containing the extracted subsequences.
+    """
     if not in_seq[columns[0]]:
         return {col: [] for col in columns}
 
@@ -1122,6 +1400,15 @@ def extract_subsequences(
 
 @beartype
 def insert_top_folder(path: str, folder_name: str) -> str:
+    """Inserts a folder into a path.
+
+    Args:
+        path: The path to insert the folder into.
+        folder_name: The name of the folder to insert.
+
+    Returns:
+        The new path.
+    """
     components = os.path.split(path)
     new_components = list(components[:-1]) + [folder_name] + [components[-1]]
     return os.path.join(*new_components)
@@ -1129,12 +1416,25 @@ def insert_top_folder(path: str, folder_name: str) -> str:
 
 @beartype
 def cast_columns_to_string(data: pl.DataFrame) -> pl.DataFrame:
+    """Casts the columns of a DataFrame to strings.
+
+    Args:
+        data: The DataFrame to cast the columns of.
+
+    Returns:
+        The DataFrame with the columns cast to strings.
+    """
     data.columns = [str(col) for col in data.columns]
     return data
 
 
 @beartype
 def delete_files(files: Union[list[str], dict[int, list[str]]]) -> None:
+    """Deletes a list of files.
+
+    Args:
+        files: A list of files to delete.
+    """
     if isinstance(files, dict):
         files = [x for y in list(files.values()) for x in y]
     for file in files:
@@ -1152,6 +1452,21 @@ def create_file_paths_for_multiple_files1(
     dataset_name: str,
     write_format: str,
 ) -> dict[int, list[str]]:
+    """Creates file paths for multiple files.
+
+    Args:
+        project_path: The path to the sequifier project directory.
+        target_dir: The target directory for temporary files.
+        n_splits: The number of splits.
+        n_batches: The number of batches.
+        process_id: The id of the process.
+        file_index: The index of the file.
+        dataset_name: The name of the dataset.
+        write_format: The file format for the output files.
+
+    Returns:
+        A dictionary containing the file paths for each split.
+    """
     files = {}
     for split in range(n_splits):
         files_for_split = [
@@ -1176,6 +1491,19 @@ def create_file_paths_for_single_file(
     dataset_name: str,
     write_format: str,
 ) -> dict[int, list[str]]:
+    """Creates file paths for a single file.
+
+    Args:
+        project_path: The path to the sequifier project directory.
+        target_dir: The target directory for temporary files.
+        n_splits: The number of splits.
+        n_batches: The number of batches.
+        dataset_name: The name of the dataset.
+        write_format: The file format for the output files.
+
+    Returns:
+        A dictionary containing the file paths for each split.
+    """
     files = {}
     for split in range(n_splits):
         files_for_split = [
@@ -1201,6 +1529,20 @@ def create_file_paths_for_multiple_files2(
     dataset_name: str,
     write_format: str,
 ) -> dict[int, list[str]]:
+    """Creates file paths for multiple files.
+
+    Args:
+        project_path: The path to the sequifier project directory.
+        target_dir: The target directory for temporary files.
+        n_splits: The number of splits.
+        n_processes: The number of processes.
+        n_files: A dictionary containing the number of files for each process.
+        dataset_name: The name of the dataset.
+        write_format: The file format for the output files.
+
+    Returns:
+        A dictionary containing the file paths for each split.
+    """
     files = {}
     for split in range(n_splits):
         files_for_split = [
@@ -1230,6 +1572,19 @@ def combine_multiprocessing_outputs(
     pre_split_str: Optional[str] = None,
     post_split_str: Optional[str] = None,
 ) -> None:
+    """Combines the outputs of multiple processes.
+
+    Args:
+        project_path: The path to the sequifier project directory.
+        target_dir: The target directory for temporary files.
+        n_splits: The number of splits.
+        input_files: A dictionary containing the input files for each split.
+        dataset_name: The name of the dataset.
+        write_format: The file format for the output files.
+        in_target_dir: Whether the output files are in the target directory.
+        pre_split_str: A string to prepend to the split number.
+        post_split_str: A string to append to the split number.
+    """
     for split in range(n_splits):
         if pre_split_str is None and post_split_str is None:
             file_name = f"{dataset_name}-split{split}.{write_format}"
@@ -1255,6 +1610,12 @@ def combine_multiprocessing_outputs(
 
 @beartype
 def combine_parquet_files(files: list[str], out_path: str) -> None:
+    """Combines multiple parquet files into a single file.
+
+    Args:
+        files: A list of parquet files to combine.
+        out_path: The path to the output file.
+    """
     schema = pq.ParquetFile(files[0]).schema_arrow
     with pq.ParquetWriter(out_path, schema=schema, compression="snappy") as writer:
         for file in files:

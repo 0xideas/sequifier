@@ -42,17 +42,33 @@ from sequifier.samplers.distributed_grouped_random_sampler import (  # noqa: E40
 
 @beartype
 def setup(rank: int, world_size: int, backend: str = "nccl"):
+    """Sets up the distributed training environment.
+
+    Args:
+        rank: The rank of the current process.
+        world_size: The total number of processes.
+        backend: The distributed backend to use.
+    """
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
     dist.init_process_group(backend, rank=rank, world_size=world_size)
 
 
 def cleanup():
+    """Cleans up the distributed training environment."""
     dist.destroy_process_group()
 
 
 @beartype
 def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bool):
+    """The worker function for distributed training.
+
+    Args:
+        rank: The rank of the current process.
+        world_size: The total number of processes.
+        config: The training configuration.
+        from_folder: Whether to load data from a folder or a file.
+    """
     if config.training_spec.distributed:
         setup(rank, world_size, config.training_spec.backend)
 
@@ -158,6 +174,12 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
 
 @beartype
 def train(args: Any, args_config: dict[str, Any]) -> None:
+    """The main training function.
+
+    Args:
+        args: The command-line arguments.
+        args_config: The configuration dictionary.
+    """
     config_path = args.config_path or "configs/train.yaml"
     config = load_train_config(config_path, args_config, args.on_unprocessed)
     print(f"--- Starting Training for model: {config.model_name} ---")
@@ -179,8 +201,7 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
 
 @beartype
 def format_number(number: Union[int, float, np.float32]) -> str:
-    """
-    Format a number for display.
+    """Format a number for display.
 
     Args:
         number: The number to format.
@@ -200,18 +221,45 @@ def format_number(number: Union[int, float, np.float32]) -> str:
 
 
 class TransformerEmbeddingModel(nn.Module):
+    """A wrapper around the TransformerModel to expose the embedding functionality."""
+
     def __init__(self, transformer_model: "TransformerModel"):
+        """Initializes the TransformerEmbeddingModel.
+
+        Args:
+            transformer_model: The TransformerModel to wrap.
+        """
         super().__init__()
         self.transformer_model = transformer_model
         self.log_file = self.transformer_model.log_file
 
     def forward(self, src: dict[str, Tensor]):
+        """Forward pass for the embedding model.
+
+        Args:
+            src: The input data.
+
+        Returns:
+            The embedded output.
+        """
         return self.transformer_model.forward_embed(src)
 
 
 class TransformerModel(nn.Module):
+    """The main Transformer model for the sequifier.
+
+    This class implements the Transformer model, including the training and
+    evaluation loops, as well as the export functionality.
+    """
+
     @beartype
     def __init__(self, hparams: Any, rank: Optional[int] = None):
+        """Initializes the TransformerModel.
+
+        Args:
+            hparams: The hyperparameters for the model.
+            rank: The rank of the current process.
+        """
         super().__init__()
         self.project_path = hparams.project_path
         self.model_type = "Transformer"
@@ -341,6 +389,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _init_criterion(self, hparams: Any) -> dict[str, Any]:
+        """Initializes the criterion (loss function) for each target column."""
         criterion = {}
         for target_column in self.target_columns:
             criterion_class = eval(
@@ -364,6 +413,7 @@ class TransformerModel(nn.Module):
         categorical_columns: list[str],
         real_columns: list[str],
     ) -> dict[str, int]:
+        """Calculates the embedding dimension for each column."""
         print(f"{len(categorical_columns) = } {len(real_columns) = }")
         assert (len(categorical_columns) + len(real_columns)) > 0, "No columns found"
         if len(categorical_columns) == 0 and len(real_columns) > 0:
@@ -394,10 +444,12 @@ class TransformerModel(nn.Module):
 
     @staticmethod
     def _filter_key(dict_: dict[str, Any], key: str) -> dict[str, Any]:
+        """Filters a key from a dictionary."""
         return {k: v for k, v in dict_.items() if k != key}
 
     @beartype
     def _init_weights(self) -> None:
+        """Initializes the weights of the model."""
         init_std = 0.02
         for col in self.categorical_columns:
             self.encoder[col].weight.data.normal_(mean=0.0, std=init_std)
@@ -411,6 +463,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _recursive_concat(self, srcs: list[Tensor]):
+        """Recursively concatenates a list of tensors."""
         if len(srcs) <= self.device_max_concat_length:
             return torch.cat(srcs, 2)
         else:
@@ -424,6 +477,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def forward_inner(self, src: dict[str, Tensor]) -> Tensor:
+        """The inner forward pass of the model."""
         srcs = []
         for col in self.categorical_columns:
             src_t = self.encoder[col](src[col].T) * math.sqrt(self.embedding_size)
@@ -469,10 +523,12 @@ class TransformerModel(nn.Module):
 
     @beartype
     def forward_embed(self, src: dict[str, Tensor]) -> Tensor:
+        """Forward pass for the embedding model."""
         return self.forward_inner(src)[-1, :, :]
 
     @beartype
     def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
+        """Forward pass for training."""
         output = self.forward_inner(src)
         output = {
             target_column: self.decode(target_column, output)
@@ -483,11 +539,13 @@ class TransformerModel(nn.Module):
 
     @beartype
     def decode(self, target_column: str, output: Tensor) -> Tensor:
+        """Decodes the output of the transformer encoder."""
         decoded = self.decoder[target_column](output)
         return decoded
 
     @beartype
     def apply_softmax(self, target_column: str, output: Tensor) -> Tensor:
+        """Applies softmax to the output of the decoder."""
         if target_column in self.real_columns:
             return output
         else:
@@ -495,6 +553,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def forward(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
+        """The main forward pass of the model."""
         output = self.forward_train(src)
         return {
             target_column: self.apply_softmax(target_column, out[-1, :, :])
@@ -513,6 +572,7 @@ class TransformerModel(nn.Module):
             Union[RandomSampler, DistributedSampler, DistributedGroupedRandomSampler]
         ],
     ) -> None:
+        """Trains the model."""
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
 
@@ -565,6 +625,7 @@ class TransformerModel(nn.Module):
         train_loader: DataLoader,
         epoch: int,
     ) -> None:
+        """Trains the model for one epoch."""
         self.train()
 
         total_loss = 0.0
@@ -614,6 +675,7 @@ class TransformerModel(nn.Module):
     def _calculate_loss(
         self, output: dict[str, Tensor], targets: dict[str, Tensor]
     ) -> tuple[Tensor, dict[str, Tensor]]:
+        """Calculates the loss for the given output and targets."""
         losses = {}
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
@@ -644,6 +706,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _copy_model(self):
+        """Copies the model."""
         log_file = self.log_file
         del self.log_file
         model_copy = copy.deepcopy(self)
@@ -653,6 +716,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _transform_val(self, col: str, val: Tensor) -> Tensor:
+        """Transforms the validation data."""
         if self.target_column_types[col] == "categorical":
             return (
                 one_hot(val, self.n_classes[col])
@@ -667,6 +731,7 @@ class TransformerModel(nn.Module):
     def _evaluate(
         self, valid_loader: DataLoader
     ) -> tuple[np.float32, dict[str, np.float32], dict[str, Tensor]]:
+        """Evaluates the model on the validation set."""
         self.eval()  # Turn on evaluation mode
 
         total_loss_collect = []
@@ -797,6 +862,7 @@ class TransformerModel(nn.Module):
         batch_size: int,
         to_device: bool,
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+        """Gets a batch of data."""
         if to_device:
             return (
                 {
@@ -828,6 +894,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _export(self, model: "TransformerModel", suffix: str, epoch: int) -> None:
+        """Exports the model."""
         if self.rank != 0:
             return
 
@@ -848,6 +915,7 @@ class TransformerModel(nn.Module):
         suffix: str,
         epoch: int,
     ) -> None:
+        """Exports the model to ONNX and/or PyTorch format."""
         if self.export_onnx:
             x_cat = {
                 col: torch.randint(
@@ -909,6 +977,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _save(self, epoch: int, val_loss: np.float32) -> None:
+        """Saves the model checkpoint."""
         if self.rank != 0:
             return
         os.makedirs(os.path.join(self.project_path, "checkpoints"), exist_ok=True)
@@ -933,6 +1002,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _get_optimizer(self, **kwargs):
+        """Gets the optimizer."""
         optimizer_class = get_optimizer_class(self.hparams.training_spec.optimizer.name)
         return optimizer_class(
             self.parameters(), lr=self.hparams.training_spec.lr, **kwargs
@@ -940,6 +1010,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _get_scheduler(self, **kwargs):
+        """Gets the scheduler."""
         scheduler_class = eval(
             f"torch.optim.lr_scheduler.{self.hparams.training_spec.scheduler.name}"
         )
@@ -947,6 +1018,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _initialize_log_file(self):
+        """Initializes the log file."""
         os.makedirs(os.path.join(self.project_path, "logs"), exist_ok=True)
         open_mode = "w" if self.start_epoch == 1 else "a"
         path = os.path.join(
@@ -958,6 +1030,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _load_weights_conditional(self) -> str:
+        """Loads the weights of the model if a checkpoint is found."""
         latest_model_path = self._get_latest_model_name()
         pytorch_total_params = sum(p.numel() for p in self.parameters())
 
@@ -987,6 +1060,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _get_latest_model_name(self) -> Optional[str]:
+        """Gets the name of the latest model checkpoint."""
         checkpoint_path = os.path.join(self.project_path, "checkpoints", "*")
 
         files = glob.glob(checkpoint_path)
@@ -1007,6 +1081,7 @@ class TransformerModel(nn.Module):
         total_losses: dict[str, np.float32],
         output: dict[str, Tensor],
     ) -> None:
+        """Logs the results of an epoch."""
         if self.rank == 0:
             lr = self.optimizer.state_dict()["param_groups"][0]["lr"]
 
@@ -1052,6 +1127,7 @@ def load_inference_model(
     device: str,
     infer_with_dropout: bool,
 ) -> torch.nn.Module:
+    """Loads a trained model for inference."""
     training_config = load_train_config(
         training_config_path, args_config, args_config["on_unprocessed"]
     )
@@ -1096,6 +1172,7 @@ def infer_with_embedding_model(
     size: int,
     target_columns: list[str],
 ) -> np.ndarray:
+    """Performs inference with an embedding model."""
     outs0 = []
     with torch.no_grad():
         for x_sub in x:
@@ -1119,6 +1196,7 @@ def infer_with_generative_model(
     size: int,
     target_columns: list[str],
 ) -> dict[str, np.ndarray]:
+    """Performs inference with a generative model."""
     outs0 = []
     with torch.no_grad():
         for x_sub in x:

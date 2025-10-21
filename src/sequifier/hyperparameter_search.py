@@ -22,6 +22,12 @@ from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 
 @beartype
 def hyperparameter_search(config_path, on_unprocessed) -> None:
+    """Main function for hyperparameter search.
+
+    Args:
+        config_path: Path to the hyperparameter search configuration file.
+        on_unprocessed: Whether to run on unprocessed data.
+    """
     hyperparameter_search_config = load_hyperparameter_search_config(
         config_path, on_unprocessed
     )
@@ -32,7 +38,14 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
 
 
 class HyperparameterSearcher:
+    """A class for performing hyperparameter search."""
+
     def __init__(self, hyperparameter_search_config):
+        """Initializes the HyperparameterSearcher.
+
+        Args:
+            hyperparameter_search_config: The hyperparameter search configuration.
+        """
         self.config = hyperparameter_search_config
         self.normalized_config_path = normalize_path(
             self.config.model_config_write_path,
@@ -44,6 +57,7 @@ class HyperparameterSearcher:
 
     @beartype
     def _get_start_run(self) -> int:
+        """Gets the start run number."""
         file_root = f"{self.config.hp_search_name}-run-"
         search_pattern = os.path.join(self.normalized_config_path, f"{file_root}*.yaml")
         files = [os.path.split(file)[1] for file in glob.glob(search_pattern)]
@@ -59,6 +73,7 @@ class HyperparameterSearcher:
 
     @beartype
     def _initialize_log_file(self) -> None:
+        """Initializes the log file."""
         os.makedirs(os.path.join(self.config.project_path, "logs"), exist_ok=True)
         open_mode = "w" if self.start_run == 1 else "a"
         self.log_file = LogFile(
@@ -72,6 +87,7 @@ class HyperparameterSearcher:
 
     @beartype
     def _calculate_n_samples(self) -> int:
+        """Calculates the number of samples for the hyperparameter search."""
         n_combinations = self.config.n_combinations()
         print(f"Found {n_combinations} hyperparameter combinations")
         if self.config.search_strategy == "sample":
@@ -100,6 +116,14 @@ class HyperparameterSearcher:
     def _create_config_and_run(
         self, i: int, seed: int, config: Optional[TrainModel] = None, attempt=0
     ):
+        """Creates a configuration and runs the training.
+
+        Args:
+            i: The run number.
+            seed: The random seed.
+            config: The training configuration.
+            attempt: The attempt number.
+        """
         if config is None:
             config = self.config.sample(i)
         full_config_path = os.path.join(
@@ -149,6 +173,7 @@ class HyperparameterSearcher:
 
     @beartype
     def hyperparameter_search(self) -> None:
+        """Performs the hyperparameter search."""
         for i in range(self.start_run, self.n_samples + 1):
             seed = int(datetime.now().timestamp() * 1e6) % (2**32)
             np.random.seed(seed)
