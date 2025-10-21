@@ -37,7 +37,9 @@ jobs:
         run: |
           # The key command: sphinx-multiversion builds docs for all whitelisted tags/branches
           # Output is placed in the 'docs/build/html' directory
-          sphinx-multiversion docs docs/build/html
+          sphinx-multiversion docs/source docs/build/html
+      - name: Create CNAME file
+        run: echo "sequifier.com" > docs/build/html/CNAME
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
