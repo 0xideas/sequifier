@@ -12,7 +12,7 @@
 project = 'sequifier'
 copyright = '2025, Leon Luithlen'
 author = 'Leon Luithlen'
-release = '0.7.1.3'
+release = '0.7.1.4'
 html_baseurl = 'https://sequifier.com/'
 
 # -- General configuration ---------------------------------------------------
@@ -55,13 +55,13 @@ napoleon_use_rtype = True
 smv_tag_whitelist = r'^v\d+\.\d+\.\d+\.\d+$'    # Tags like v1.2.3.4
 smv_branch_whitelist = r'^main$'          # Only include the main branch
 smv_remote_whitelist = r'^origin$'        # Only use the 'origin' remote
-smv_released_pattern = r'^refs/tags/v\d+\.\d+\.\d+$' # Identify released versions from tags
+smv_released_pattern = r'^refs/tags/v\d+\.\d+\.\d+\.\d+$' # Match 4-part tags
 smv_outputdir_format = '{ref.name}'       # Use branch/tag name for output directory
 smv_prefer_remote_refs = False            # Use local refs first if they exist
 
 # Optional: Add a banner to warn users viewing non-released versions
 smv_warning_banner_enabled = True
-smv_show_banner_if = r'^(?!v\d+\.\d+\.\d+$).*$' # Show banner on anything not like vX.Y.Z
+smv_show_banner_if = r'^(?!v\d+\.\d+\.\d+\.\d+$).*$' # Show banner on anything not like vX.Y.Z.A
 
 # Custom sidebar configuration to include the version switcher
 html_sidebars = {
