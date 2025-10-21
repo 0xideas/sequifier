@@ -50,8 +50,6 @@ napoleon_use_ivar = False
 napoleon_use_param = True
 napoleon_use_rtype = True
 
-# -- Options for sphinx-multiversion ----------------------------------------
-templates_path = ['_templates'] # Tell Sphinx where templates are
 
 # Defines how versions are sorted in the version switcher.
 smv_tag_whitelist = r'^v\d+\.\d+\.\d+$'    # Tags like v1.2.3

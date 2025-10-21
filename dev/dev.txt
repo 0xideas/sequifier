@@ -3,3 +3,6 @@ pytest -m "optional or not optional"
 python -m build
 
 python -m twine upload dist/*
+
+git tag v[VERSION] -m "v[VERSION]"
+git push origin v[VERSION]
