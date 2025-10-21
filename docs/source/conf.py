@@ -12,7 +12,7 @@
 project = 'sequifier'
 copyright = '2025, Leon Luithlen'
 author = 'Leon Luithlen'
-release = '0.7.1.3'
+release = '0.7.1.4'
 html_baseurl = 'https://sequifier.com/'
 
 # -- General configuration ---------------------------------------------------
