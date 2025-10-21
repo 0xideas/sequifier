@@ -52,7 +52,7 @@ jobs:
           </html>' > docs/build/html/index.html
 
       - name: Create CNAME file
-        run: echo "sequifier.com" > docs/build/html/CNAME
+        run: echo "www.sequifier.com" > docs/build/html/CNAME
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

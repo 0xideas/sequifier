@@ -13,7 +13,7 @@ project = 'sequifier'
 copyright = '2025, Leon Luithlen'
 author = 'Leon Luithlen'
 release = '0.7.1.5'
-html_baseurl = 'https://sequifier.com/'
+html_baseurl = 'https://www.sequifier.com/'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
