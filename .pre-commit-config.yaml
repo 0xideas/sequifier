@@ -36,3 +36,14 @@ repos:
     hooks:
       - id: isort
         args: ["--profile", "black"]
+  - repo: local
+    hooks:
+      - id: version-check
+        name: Check pyproject.toml and conf.py versions
+        entry: hooks/correct_docs_version.py  # Path to your script
+        language: python
+        # This hook will only run if these specific files are staged for commit
+        files: ^(pyproject\.toml|docs/source/conf\.py)$
+        pass_filenames: false
+        # Dependencies needed for the hook's environment
+        additional_dependencies: [tomli]
