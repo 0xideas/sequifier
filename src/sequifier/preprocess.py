@@ -950,7 +950,7 @@ def get_combined_statistics(
       std2 (float): Standard deviation of subset 2.
 
     Returns:
-      float: The combined standard deviation of the two subsets.
+      A tuple of floats containing the combined standard deviation of the two subsets.
     """
     # Step 1: Calculate the combined mean.
     combined_mean = (n1 * mean1 + n2 * mean2) / (n1 + n2)

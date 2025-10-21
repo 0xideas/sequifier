@@ -165,7 +165,7 @@ def infer_embedding(
     model_id: str,
     dataset: Union[list[Any], Iterator[Any]],
     column_types: dict[str, torch.dtype],
-):
+) -> None:
     """Performs inference with an embedding model.
 
     Args:
@@ -248,6 +248,9 @@ def infer_generative(
         model_id: The id of the model.
         dataset: The dataset to perform inference on.
         column_types: A dictionary of column types.
+
+    Returns:
+
     """
     for data_id, data in enumerate(dataset):
         # Step 1: Adapt Data Subsetting (now works on Polars DF)
