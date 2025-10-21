@@ -37,6 +37,20 @@ jobs:
           # The key command: sphinx-multiversion builds docs for all whitelisted tags/branches
           # Output is placed in the 'docs/build/html' directory
           sphinx-multiversion docs/source docs/build/html
+
+      - name: Create root index.html redirect
+        run: |
+          echo '<!DOCTYPE html>
+          <html>
+          <head>
+            <meta http-equiv="refresh" content="0; url=./main/index.html" />
+            <title>Redirecting...</title>
+          </head>
+          <body>
+            <p>If you are not redirected automatically, <a href="./main/index.html">click here to see the documentation</a>.</p>
+          </body>
+          </html>' > docs/build/html/index.html
+
       - name: Create CNAME file
         run: echo "sequifier.com" > docs/build/html/CNAME
 
