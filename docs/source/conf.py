@@ -8,14 +8,14 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath('../src'))
+sys.path.insert(0, os.path.abspath('src'))
 # -- Project information -----------------------------------------------------
 # https://smv_copy_srcdirs.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'sequifier'
 copyright = '2025, Leon Luithlen'
 author = 'Leon Luithlen'
-release = '0.8.0.5'
+release = '0.8.0.6'
 html_baseurl = 'https://www.sequifier.com/'
 
 # -- General configuration ---------------------------------------------------
