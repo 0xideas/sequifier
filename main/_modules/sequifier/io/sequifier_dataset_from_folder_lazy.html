@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/io/sequifier_dataset_from_folder_lazy.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.io.sequifier_dataset_from_folder_lazy - sequifier 0.7.1.5 documentation</title>
+        <title>sequifier.io.sequifier_dataset_from_folder_lazy - sequifier 0.8.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier 0.7.1.5 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier 0.8.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier 0.7.1.5 documentation</span>
+  <span class="sidebar-brand-text">sequifier 0.8.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -207,6 +207,7 @@
   </p>
   <ul>
       <li><a href="sequifier_dataset_from_folder_lazy.html">main</a></li>
+      <li><a href="../../../../v0.7.1.5/index.html">v0.7.1.5</a></li>
   </ul>
 </div>
 </div>
@@ -274,6 +275,8 @@
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">,</span> <span class="n">ram_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">70.0</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Initializes the dataset by reading metadata and setting up the cache.</span>
+<span class="sd">        Each .pt file is expected to contain a tuple:</span>
+<span class="sd">        (sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor).</span>
 
 <span class="sd">        Args:</span>
 <span class="sd">            data_path (str): The path to the directory containing the pre-processed</span>
@@ -311,7 +314,14 @@
         <span class="c1"># --- Initialize cache and thread-safety mechanisms ---</span>
         <span class="c1"># An OrderedDict is used to implement the LRU logic.</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">:</span> <span class="n">collections</span><span class="o">.</span><span class="n">OrderedDict</span><span class="p">[</span>
-            <span class="nb">str</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]</span>
+            <span class="nb">str</span><span class="p">,</span>
+            <span class="n">Tuple</span><span class="p">[</span>
+                <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
+                <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
+                <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+                <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+                <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+            <span class="p">],</span>
         <span class="p">]</span> <span class="o">=</span> <span class="n">collections</span><span class="o">.</span><span class="n">OrderedDict</span><span class="p">()</span>
 
         <span class="nb">print</span><span class="p">(</span>
@@ -378,12 +388,24 @@
 <a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__getitem__">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="fm">__getitem__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">:</span> <span class="nb">int</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]:</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Retrieves a single data sample, loading from disk if not in the cache.</span>
 
 <span class="sd">        This method is the core of the lazy-loading strategy. It is thread-safe</span>
 <span class="sd">        and manages the cache automatically.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            idx: The index of the sample to retrieve.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            A tuple containing:</span>
+<span class="sd">                - sequence (dict): Dictionary of feature tensors for the sample.</span>
+<span class="sd">                - targets (dict): Dictionary of target tensors for the sample.</span>
+<span class="sd">                - sequence_id (int): The sequence ID of the sample.</span>
+<span class="sd">                - subsequence_id (int): The subsequence ID within the sequence.</span>
+<span class="sd">                - start_position (int): The starting item position of the subsequence</span>
+<span class="sd">                                        within the original full sequence.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">idx</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">IndexError</span><span class="p">(</span>
@@ -397,17 +419,33 @@
         <span class="k">if</span> <span class="n">file_path</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">:</span>
             <span class="c1"># Mark as recently used by moving it to the end of the OrderedDict.</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="o">.</span><span class="n">move_to_end</span><span class="p">(</span><span class="n">file_path</span><span class="p">)</span>
-            <span class="n">sequences_batch</span><span class="p">,</span> <span class="n">targets_batch</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">[</span><span class="n">file_path</span><span class="p">]</span>
+            <span class="p">(</span>
+                <span class="n">sequences_batch</span><span class="p">,</span>
+                <span class="n">targets_batch</span><span class="p">,</span>
+                <span class="n">sequence_id_tensor</span><span class="p">,</span>
+                <span class="n">subsequence_id_tensor</span><span class="p">,</span>
+                <span class="n">start_item_positions_tensor</span><span class="p">,</span>
+            <span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">[</span><span class="n">file_path</span><span class="p">]</span>
 
         <span class="c1"># 2. Handle a cache miss</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="c1"># Load the data from the .pt file from disk.</span>
-            <span class="n">sequences_batch</span><span class="p">,</span> <span class="n">targets_batch</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
-                <span class="n">file_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span>
-            <span class="p">)</span>
+            <span class="p">(</span>
+                <span class="n">sequences_batch</span><span class="p">,</span>
+                <span class="n">targets_batch</span><span class="p">,</span>
+                <span class="n">sequence_id_tensor</span><span class="p">,</span>
+                <span class="n">subsequence_id_tensor</span><span class="p">,</span>
+                <span class="n">start_item_positions_tensor</span><span class="p">,</span>
+            <span class="p">)</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">file_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">)</span>
 
             <span class="c1"># Add the newly loaded data to the cache.</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">[</span><span class="n">file_path</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">sequences_batch</span><span class="p">,</span> <span class="n">targets_batch</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">[</span><span class="n">file_path</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">sequences_batch</span><span class="p">,</span>
+                <span class="n">targets_batch</span><span class="p">,</span>
+                <span class="n">sequence_id_tensor</span><span class="p">,</span>
+                <span class="n">subsequence_id_tensor</span><span class="p">,</span>
+                <span class="n">start_item_positions_tensor</span><span class="p">,</span>
+            <span class="p">)</span>
 
             <span class="c1"># After adding, check memory and evict old items if necessary.</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">_evict_lru_items</span><span class="p">()</span>
@@ -416,7 +454,13 @@
         <span class="n">sequence</span> <span class="o">=</span> <span class="p">{</span><span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">]</span> <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">sequences_batch</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
         <span class="n">targets</span> <span class="o">=</span> <span class="p">{</span><span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">]</span> <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">targets_batch</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
 
-        <span class="k">return</span> <span class="n">sequence</span><span class="p">,</span> <span class="n">targets</span></div>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">sequence</span><span class="p">,</span>
+            <span class="n">targets</span><span class="p">,</span>
+            <span class="nb">int</span><span class="p">(</span><span class="n">sequence_id_tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">]),</span>
+            <span class="nb">int</span><span class="p">(</span><span class="n">subsequence_id_tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">]),</span>
+            <span class="nb">int</span><span class="p">(</span><span class="n">start_item_positions_tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">]),</span>
+        <span class="p">)</span></div>
 </div>
 
 </pre></div>
@@ -451,7 +495,7 @@
       
     </aside>
   </div>
-</div><script src="../../../_static/documentation_options.js?v=8ce2e7b8"></script>
+</div><script src="../../../_static/documentation_options.js?v=bcb8667a"></script>
     <script src="../../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

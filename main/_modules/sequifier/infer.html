@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/infer.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.infer - sequifier 0.7.1.5 documentation</title>
+        <title>sequifier.infer - sequifier 0.8.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier 0.7.1.5 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier 0.8.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier 0.7.1.5 documentation</span>
+  <span class="sidebar-brand-text">sequifier 0.8.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -207,6 +207,7 @@
   </p>
   <ul>
       <li><a href="infer.html">main</a></li>
+      <li><a href="../../../v0.7.1.5/index.html">v0.7.1.5</a></li>
   </ul>
 </div>
 </div>
@@ -454,8 +455,8 @@
 <span class="sd">    of DataFrames or an iterator of tensors). For each data chunk, it</span>
 <span class="sd">    calls the appropriate function (`get_embeddings` or `get_embeddings_pt`)</span>
 <span class="sd">    to generate embeddings. It then formats these embeddings into a</span>
-<span class="sd">    Polars DataFrame, associating them with their `sequenceId`, and</span>
-<span class="sd">    writes the resulting DataFrame to the configured output path.</span>
+<span class="sd">    Polars DataFrame, associating them with their `sequenceId` and</span>
+<span class="sd">    `subsequenceId`, and writes the resulting DataFrame to the configured output path.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        config: The `InfererModel` configuration object.</span>
@@ -476,16 +477,19 @@
             <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
             <span class="n">embeddings</span> <span class="o">=</span> <span class="n">get_embeddings</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">)</span>
             <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
+            <span class="n">subsequence_ids_for_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
         <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
-            <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">sequence_ids_tensor</span> <span class="o">=</span> <span class="n">data</span>
+            <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">sequence_ids_tensor</span><span class="p">,</span> <span class="n">subsequence_ids_tensor</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">data</span>
             <span class="n">embeddings</span> <span class="o">=</span> <span class="n">get_embeddings_pt</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">sequences_dict</span><span class="p">)</span>
             <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">sequence_ids_tensor</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+            <span class="n">subsequence_ids_for_preds</span> <span class="o">=</span> <span class="n">subsequence_ids_tensor</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">&quot;impossible&quot;</span><span class="p">)</span>
 
         <span class="n">embeddings</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
             <span class="p">{</span>
                 <span class="s2">&quot;sequenceId&quot;</span><span class="p">:</span> <span class="n">sequence_ids_for_preds</span><span class="p">,</span>
+                <span class="s2">&quot;subsequenceId&quot;</span><span class="p">:</span> <span class="n">subsequence_ids_for_preds</span><span class="p">,</span>
                 <span class="o">**</span><span class="nb">dict</span><span class="p">(</span>
                     <span class="nb">zip</span><span class="p">(</span>
                         <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">embeddings</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])],</span>
@@ -540,7 +544,8 @@
 <span class="sd">    This function manages the generative inference workflow:</span>
 <span class="sd">    1. Iterates through the dataset (chunks).</span>
 <span class="sd">    2. Handles data preparation, including expanding data for autoregression</span>
-<span class="sd">       if configured (`expand_data_by_autoregression`).</span>
+<span class="sd">       if configured (`expand_data_by_autoregression`). It also calculates</span>
+<span class="sd">       the corresponding `itemPosition` for each prediction.</span>
 <span class="sd">    3. Calls the correct function to get probabilities and predictions</span>
 <span class="sd">       based on data format and autoregression settings (e.g.,</span>
 <span class="sd">       `get_probs_preds_autoregression`, `get_probs_preds_pt`).</span>
@@ -549,7 +554,7 @@
 <span class="sd">       - Inverts normalization for real-valued target columns.</span>
 <span class="sd">    5. Saves probabilities to disk (if `config.output_probabilities` is True).</span>
 <span class="sd">    6. Saves the final predictions to disk, formatted as a Polars DataFrame</span>
-<span class="sd">       with `sequenceId` and target columns.</span>
+<span class="sd">       with `sequenceId`, `itemPosition`, and target columns.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        config: The `InfererModel` configuration object.</span>
@@ -572,7 +577,12 @@
                 <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
                 <span class="c1"># Apply the mask to the sequenceId column</span>
                 <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
+                <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                    <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
+                <span class="p">)</span>
                 <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">)</span>
+
             <span class="k">else</span><span class="p">:</span>
                 <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_extra_steps</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                     <span class="n">data</span> <span class="o">=</span> <span class="n">expand_data_by_autoregression</span><span class="p">(</span>
@@ -581,12 +591,15 @@
                         <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span><span class="p">,</span>
                     <span class="p">)</span>
 
+                <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">data</span><span class="p">[</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
+                <span class="p">)</span>
                 <span class="c1"># Unpack the new third return value</span>
                 <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">get_probs_preds_autoregression</span><span class="p">(</span>
                     <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
                 <span class="p">)</span>
         <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
-            <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">sequence_ids_tensor</span> <span class="o">=</span> <span class="n">data</span>
+            <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">sequence_ids_tensor</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">start_positions_tensor</span> <span class="o">=</span> <span class="n">data</span>
             <span class="n">extra_steps</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="mi">0</span>
                 <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_extra_steps</span> <span class="ow">is</span> <span class="kc">None</span>
@@ -597,6 +610,14 @@
             <span class="p">)</span>
             <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span>
                 <span class="n">sequence_ids_tensor</span><span class="o">.</span><span class="n">numpy</span><span class="p">(),</span> <span class="n">extra_steps</span> <span class="o">+</span> <span class="mi">1</span>
+            <span class="p">)</span>
+            <span class="n">item_position_boundaries</span> <span class="o">=</span> <span class="nb">zip</span><span class="p">(</span>
+                <span class="nb">list</span><span class="p">(</span><span class="n">start_positions_tensor</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span><span class="p">),</span>
+                <span class="nb">list</span><span class="p">(</span><span class="n">start_positions_tensor</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span> <span class="o">+</span> <span class="n">extra_steps</span> <span class="o">+</span> <span class="mi">1</span><span class="p">),</span>
+            <span class="p">)</span>
+            <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span>
+                <span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">)</span> <span class="k">for</span> <span class="n">start</span><span class="p">,</span> <span class="n">end</span> <span class="ow">in</span> <span class="n">item_position_boundaries</span><span class="p">],</span>
+                <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">&quot;impossible&quot;</span><span class="p">)</span>
@@ -663,6 +684,7 @@
         <span class="n">predictions</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
             <span class="p">{</span>
                 <span class="s2">&quot;sequenceId&quot;</span><span class="p">:</span> <span class="n">sequence_ids_for_preds</span><span class="p">,</span>
+                <span class="s2">&quot;itemPosition&quot;</span><span class="p">:</span> <span class="n">item_positions_for_preds</span><span class="p">,</span>
                 <span class="o">**</span><span class="p">{</span>
                     <span class="n">target_column</span><span class="p">:</span> <span class="n">preds</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
                     <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_columns</span>
@@ -742,6 +764,8 @@
     <span class="k">for</span> <span class="n">offset</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">autoregression_extra_steps</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
         <span class="n">future_df_lazy</span> <span class="o">=</span> <span class="n">last_obs_lazy</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
             <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="n">offset</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span>
+        <span class="p">)</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+            <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="n">offset</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span>
         <span class="p">)</span>
 
         <span class="c1"># Correctly shift columns to make space for future predictions</span>
@@ -785,14 +809,16 @@
 
 <span class="sd">    This function serves as a wrapper for `Inferer.infer_embedding` when</span>
 <span class="sd">    the input data is already in PyTorch tensor format (from loading `.pt`</span>
-<span class="sd">    files). It converts the tensor dictionary to a NumPy array dictionary</span>
-<span class="sd">    before passing it to the inferer.</span>
+<span class="sd">    files which contain sequences, targets, sequence_ids, subsequence_ids,</span>
+<span class="sd">    and start_positions). It converts the tensor dictionary to a NumPy array</span>
+<span class="sd">    dictionary before passing it to the inferer.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        config: The `InfererModel` configuration object (unused, but</span>
 <span class="sd">            kept for consistent function signature).</span>
 <span class="sd">        inferer: The initialized `Inferer` instance.</span>
-<span class="sd">        data: A dictionary mapping column/feature names to `torch.Tensor`s.</span>
+<span class="sd">        data: A dictionary mapping column/feature names to `torch.Tensor`s</span>
+<span class="sd">              (the sequences part loaded from the .pt file).</span>
 
 <span class="sd">    Returns:</span>
 <span class="sd">        A NumPy array containing the computed embeddings for the batch.</span>
@@ -815,20 +841,23 @@
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Generates predictions from PyTorch tensor data, supporting autoregression.</span>
 
 <span class="sd">    This function performs generative inference on a batch of PyTorch tensor</span>
-<span class="sd">    data. It implements an autoregressive loop:</span>
-<span class="sd">    1. Runs inference on the initial data `X`.</span>
+<span class="sd">    data loaded from `.pt` files (which contain sequences, targets,</span>
+<span class="sd">    sequence_ids, subsequence_ids, and start_positions). It implements an</span>
+<span class="sd">    autoregressive loop:</span>
+<span class="sd">    1. Runs inference on the initial data `X` (sequences).</span>
 <span class="sd">    2. For each subsequent step (`i` in `extra_steps`):</span>
 <span class="sd">       a. Creates the next input `X_next` by shifting the previous input</span>
 <span class="sd">          `X` and appending the prediction from the last step.</span>
 <span class="sd">       b. Runs inference on `X_next`.</span>
 <span class="sd">    3. Collects and reshapes all predictions and probabilities from all</span>
-<span class="sd">       steps into a single flat batch.</span>
+<span class="sd">       steps into a single flat batch, ordered by original sample index, then by step.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        config: The `InfererModel` configuration object, used to check</span>
 <span class="sd">            `output_probabilities` and `selected_columns`.</span>
 <span class="sd">        inferer: The initialized `Inferer` instance.</span>
-<span class="sd">        data: A dictionary mapping column/feature names to `torch.Tensor`s.</span>
+<span class="sd">        data: A dictionary mapping column/feature names to `torch.Tensor`s</span>
+<span class="sd">              (the sequences part loaded from the .pt file).</span>
 <span class="sd">        extra_steps: The number of additional autoregressive steps to</span>
 <span class="sd">            perform. A value of 0 means simple, non-autoregressive</span>
 <span class="sd">            inference.</span>
@@ -836,10 +865,10 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        A tuple `(probs, preds)`:</span>
 <span class="sd">            - `probs`: A dictionary mapping target columns to NumPy arrays</span>
-<span class="sd">              of probabilities, or `None` if `config.output_probabilities`</span>
-<span class="sd">              is False.</span>
+<span class="sd">              of probabilities, ordered by sample index then step,</span>
+<span class="sd">              or `None` if `config.output_probabilities` is False.</span>
 <span class="sd">            - `preds`: A dictionary mapping target columns to NumPy arrays</span>
-<span class="sd">              of final predictions.</span>
+<span class="sd">              of final predictions, ordered by sample index then step.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">target_cols</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_columns</span>
 
@@ -1840,7 +1869,7 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=8ce2e7b8"></script>
+</div><script src="../../_static/documentation_options.js?v=bcb8667a"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>

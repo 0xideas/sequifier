@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/api.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>Preprocessing Config - sequifier 0.7.1.5 documentation</title>
+        <title>Preprocessing Config - sequifier 0.8.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="index.html"><div class="brand">sequifier 0.7.1.5 documentation</div></a>
+      <a href="index.html"><div class="brand">sequifier 0.8.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
   
-  <span class="sidebar-brand-text">sequifier 0.7.1.5 documentation</span>
+  <span class="sidebar-brand-text">sequifier 0.8.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -208,6 +208,7 @@
   </p>
   <ul>
       <li><a href="api.html">main</a></li>
+      <li><a href="../v0.7.1.5/api.html">v0.7.1.5</a></li>
   </ul>
 </div>
 </div>
@@ -2425,8 +2426,9 @@ whose values are lists of file paths to delete.</p>
 <p>This function takes a DataFrame where each row contains all items
 for a single <cite>sequenceId</cite>. It iterates through each <cite>sequenceId</cite>,
 extracts all possible subsequences of <cite>seq_length</cite> using the
-specified <cite>seq_step_size</cite>, and formats them into a new, long-format
-DataFrame that conforms to the provided <cite>schema</cite>.</p>
+specified <cite>seq_step_size</cite>, calculates the starting position of each
+subsequence within the original sequence, and formats them into a new,
+long-format DataFrame that conforms to the provided <cite>schema</cite>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
@@ -2440,7 +2442,9 @@ to create subsequences.</p></li>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
 <dd class="field-even"><p>A new, long-format Polars DataFrame containing the extracted
-subsequences, matching the provided <cite>schema</cite>.</p>
+subsequences, matching the provided <cite>schema</cite>. Includes columns
+for <cite>sequenceId</cite>, <cite>subsequenceId</cite>, <cite>startItemPosition</cite>, <cite>inputCol</cite>,
+and the sequence items (‘0’, ‘1’, …).</p>
 </dd>
 </dl>
 </dd></dl>
@@ -2637,12 +2641,13 @@ config file.</p></li>
 <p>This function takes the long-format sequence DataFrame (<cite>data</cite>),
 aggregates it by <cite>sequenceId</cite> and <cite>subsequenceId</cite>, and pivots it
 so that each <cite>inputCol</cite> becomes its own column containing a list
-of sequence items.</p>
+of sequence items. It also extracts the <cite>startItemPosition</cite>.</p>
 <p>It then converts these lists into NumPy arrays, splits them into
 <cite>sequences</cite> (all but last item) and <cite>targets</cite> (all but first item),
-and converts them to PyTorch tensors. The final data
-<cite>(sequences_dict, targets_dict, sequence_ids_tensor)</cite> is saved
-to a .pt file using <cite>torch.save</cite>.</p>
+and converts them to PyTorch tensors along with sequence/subsequence IDs
+and start positions. The final data tuple
+<cite>(sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor)</cite>
+is saved to a .pt file using <cite>torch.save</cite>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
@@ -3394,15 +3399,17 @@ passing them to <cite>inferer.infer_embedding</cite>.</p>
 <dd><p>Generates embeddings from a batch of PyTorch tensor data.</p>
 <p>This function serves as a wrapper for <cite>Inferer.infer_embedding</cite> when
 the input data is already in PyTorch tensor format (from loading <cite>.pt</cite>
-files). It converts the tensor dictionary to a NumPy array dictionary
-before passing it to the inferer.</p>
+files which contain sequences, targets, sequence_ids, subsequence_ids,
+and start_positions). It converts the tensor dictionary to a NumPy array
+dictionary before passing it to the inferer.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>config</strong> – The <cite>InfererModel</cite> configuration object (unused, but
 kept for consistent function signature).</p></li>
 <li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance.</p></li>
-<li><p><strong>data</strong> – A dictionary mapping column/feature names to <a href="#id5"><span class="problematic" id="id6">`</span></a>torch.Tensor`s.</p></li>
+<li><p><strong>data</strong> – A dictionary mapping column/feature names to <a href="#id5"><span class="problematic" id="id6">`</span></a>torch.Tensor`s
+(the sequences part loaded from the .pt file).</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
@@ -3499,8 +3506,10 @@ to each row in the `preds</cite> arrays.</p></li>
 <span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">get_probs_preds_pt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extra_steps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#get_probs_preds_pt"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.get_probs_preds_pt" title="Link to this definition">¶</a></dt>
 <dd><p>Generates predictions from PyTorch tensor data, supporting autoregression.</p>
 <p>This function performs generative inference on a batch of PyTorch tensor
-data. It implements an autoregressive loop:
-1. Runs inference on the initial data <cite>X</cite>.
+data loaded from <cite>.pt</cite> files (which contain sequences, targets,
+sequence_ids, subsequence_ids, and start_positions). It implements an
+autoregressive loop:
+1. Runs inference on the initial data <cite>X</cite> (sequences).
 2. For each subsequent step (<cite>i</cite> in <cite>extra_steps</cite>):</p>
 <blockquote>
 <div><ol class="loweralpha simple">
@@ -3511,7 +3520,7 @@ data. It implements an autoregressive loop:
 </div></blockquote>
 <ol class="arabic simple" start="3">
 <li><p>Collects and reshapes all predictions and probabilities from all
-steps into a single flat batch.</p></li>
+steps into a single flat batch, ordered by original sample index, then by step.</p></li>
 </ol>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -3519,7 +3528,8 @@ steps into a single flat batch.</p></li>
 <li><p><strong>config</strong> – The <cite>InfererModel</cite> configuration object, used to check
 <cite>output_probabilities</cite> and <cite>selected_columns</cite>.</p></li>
 <li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance.</p></li>
-<li><p><strong>data</strong> – A dictionary mapping column/feature names to <a href="#id7"><span class="problematic" id="id8">`</span></a>torch.Tensor`s.</p></li>
+<li><p><strong>data</strong> – A dictionary mapping column/feature names to <a href="#id7"><span class="problematic" id="id8">`</span></a>torch.Tensor`s
+(the sequences part loaded from the .pt file).</p></li>
 <li><p><strong>extra_steps</strong> – The number of additional autoregressive steps to
 perform. A value of 0 means simple, non-autoregressive
 inference.</p></li>
@@ -3528,10 +3538,10 @@ inference.</p></li>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
 <dd class="field-even"><p><ul class="simple">
 <li><p><cite>probs</cite>: A dictionary mapping target columns to NumPy arrays
-of probabilities, or <cite>None</cite> if <cite>config.output_probabilities</cite>
-is False.</p></li>
+of probabilities, ordered by sample index then step,
+or <cite>None</cite> if <cite>config.output_probabilities</cite> is False.</p></li>
 <li><p><cite>preds</cite>: A dictionary mapping target columns to NumPy arrays
-of final predictions.</p></li>
+of final predictions, ordered by sample index then step.</p></li>
 </ul>
 </p>
 </dd>
@@ -3571,8 +3581,8 @@ loaded configuration file.</p></li>
 of DataFrames or an iterator of tensors). For each data chunk, it
 calls the appropriate function (<cite>get_embeddings</cite> or <cite>get_embeddings_pt</cite>)
 to generate embeddings. It then formats these embeddings into a
-Polars DataFrame, associating them with their <cite>sequenceId</cite>, and
-writes the resulting DataFrame to the configured output path.</p>
+Polars DataFrame, associating them with their <cite>sequenceId</cite> and
+<cite>subsequenceId</cite>, and writes the resulting DataFrame to the configured output path.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
@@ -3597,7 +3607,8 @@ an iterator of loaded PyTorch data (for .pt files).</p></li>
 1. Iterates through the dataset (chunks).
 2. Handles data preparation, including expanding data for autoregression</p>
 <blockquote>
-<div><p>if configured (<cite>expand_data_by_autoregression</cite>).</p>
+<div><p>if configured (<cite>expand_data_by_autoregression</cite>). It also calculates
+the corresponding <cite>itemPosition</cite> for each prediction.</p>
 </div></blockquote>
 <ol class="arabic simple" start="3">
 <li><p>Calls the correct function to get probabilities and predictions
@@ -3608,7 +3619,7 @@ based on data format and autoregression settings (e.g.,
 - Inverts normalization for real-valued target columns.</p></li>
 <li><p>Saves probabilities to disk (if <cite>config.output_probabilities</cite> is True).</p></li>
 <li><p>Saves the final predictions to disk, formatted as a Polars DataFrame
-with <cite>sequenceId</cite> and target columns.</p></li>
+with <cite>sequenceId</cite>, <cite>itemPosition</cite>, and target columns.</p></li>
 </ol>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -4168,10 +4179,39 @@ using the object’s __dict__. This effectively removes the
 system’s memory. It pays a one-time I/O cost at initialization, after which
 all data access during training is extremely fast (RAM access).</p>
 <dl class="py method">
+<dt class="sig sig-object py" id="sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder.__getitem__">
+<span class="sig-name descname"><span class="pre">__getitem__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/io/sequifier_dataset_from_folder.html#SequifierDatasetFromFolder.__getitem__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder.__getitem__" title="Link to this definition">¶</a></dt>
+<dd><p>Retrieves a single sample from the pre-loaded data.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>idx</strong> – The index of the sample to retrieve.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><ul class="simple">
+<li><p>sequence (dict): Dictionary of feature tensors for the sample.</p></li>
+<li><p>targets (dict): Dictionary of target tensors for the sample.</p></li>
+<li><p>sequence_id (int): The sequence ID of the sample.</p></li>
+<li><p>subsequence_id (int): The subsequence ID within the sequence.</p></li>
+<li><dl class="simple">
+<dt>start_position (int): The starting item position of the subsequence</dt><dd><p>within the original full sequence.</p>
+</dd>
+</dl>
+</li>
+</ul>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A tuple containing</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
 <dt class="sig sig-object py" id="sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder.__init__">
 <span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.train_config.TrainModel" title="sequifier.config.train_config.TrainModel"><span class="pre">TrainModel</span></a></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/io/sequifier_dataset_from_folder.html#SequifierDatasetFromFolder.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder.__init__" title="Link to this definition">¶</a></dt>
 <dd><p>Initializes the dataset by loading all .pt files from the data directory
-into memory.</p>
+into memory. Each .pt file is expected to contain a tuple:
+(sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor).</p>
 </dd></dl>
 
 </dd></dl>
@@ -4190,16 +4230,40 @@ configurable threshold.</p>
 for training on datasets larger than the available system memory.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__getitem__">
-<span class="sig-name descname"><span class="pre">__getitem__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/io/sequifier_dataset_from_folder_lazy.html#SequifierDatasetFromFolderLazy.__getitem__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__getitem__" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">__getitem__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/io/sequifier_dataset_from_folder_lazy.html#SequifierDatasetFromFolderLazy.__getitem__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__getitem__" title="Link to this definition">¶</a></dt>
 <dd><p>Retrieves a single data sample, loading from disk if not in the cache.</p>
 <p>This method is the core of the lazy-loading strategy. It is thread-safe
 and manages the cache automatically.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>idx</strong> – The index of the sample to retrieve.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><ul class="simple">
+<li><p>sequence (dict): Dictionary of feature tensors for the sample.</p></li>
+<li><p>targets (dict): Dictionary of target tensors for the sample.</p></li>
+<li><p>sequence_id (int): The sequence ID of the sample.</p></li>
+<li><p>subsequence_id (int): The subsequence ID within the sequence.</p></li>
+<li><dl class="simple">
+<dt>start_position (int): The starting item position of the subsequence</dt><dd><p>within the original full sequence.</p>
+</dd>
+</dl>
+</li>
+</ul>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A tuple containing</p>
+</dd>
+</dl>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__init__">
 <span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.train_config.TrainModel" title="sequifier.config.train_config.TrainModel"><span class="pre">TrainModel</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">ram_threshold</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">70.0</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/io/sequifier_dataset_from_folder_lazy.html#SequifierDatasetFromFolderLazy.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__init__" title="Link to this definition">¶</a></dt>
-<dd><p>Initializes the dataset by reading metadata and setting up the cache.</p>
+<dd><p>Initializes the dataset by reading metadata and setting up the cache.
+Each .pt file is expected to contain a tuple:
+(sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
@@ -4229,6 +4293,29 @@ pre-collated batches.</p>
 <p>This is the idiomatic PyTorch solution for implementing custom ‘en block’
 batching. The __iter__ method handles shuffling and batch slicing, ensuring
 maximum performance.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__iter__">
+<span class="sig-name descname"><span class="pre">__iter__</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Iterator</span><span class="p"><span class="pre">[</span></span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">None</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">None</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">None</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/io/sequifier_dataset_from_file.html#SequifierDatasetFromFile.__iter__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__iter__" title="Link to this definition">¶</a></dt>
+<dd><p>Yields batches of data.</p>
+<p>Handles shuffling (if enabled) and slicing data based on distributed
+rank and worker ID.</p>
+<dl class="field-list">
+<dt class="field-odd">Yields<span class="colon">:</span></dt>
+<dd class="field-odd"><p><em>Iterator[Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]]</em> –</p>
+<dl class="simple">
+<dt>An iterator where each item is a tuple containing:</dt><dd><ul class="simple">
+<li><p>data_batch (dict): Dictionary of feature tensors for the batch.</p></li>
+<li><p>targets_batch (dict): Dictionary of target tensors for the batch.</p></li>
+<li><p>None: Placeholder for sequence_id (not used in this dataset type).</p></li>
+<li><p>None: Placeholder for subsequence_id (not used in this dataset type).</p></li>
+<li><p>None: Placeholder for start_position (not used in this dataset type).</p></li>
+</ul>
+</dd>
+</dl>
+</dd>
+</dl>
+</dd></dl>
+
 <dl class="py method">
 <dt class="sig sig-object py" id="sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__len__">
 <span class="sig-name descname"><span class="pre">__len__</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">int</span></span></span><a class="reference internal" href="_modules/sequifier/io/sequifier_dataset_from_file.html#SequifierDatasetFromFile.__len__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__len__" title="Link to this definition">¶</a></dt>
@@ -4678,6 +4765,7 @@ shuffling order for each epoch.</p>
 <li><a class="reference internal" href="#sequifier.io.yaml.represent_numpy_int"><code class="docutils literal notranslate"><span class="pre">represent_numpy_int()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.io.yaml.represent_sequifier_object"><code class="docutils literal notranslate"><span class="pre">represent_sequifier_object()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFolder</span></code></a><ul>
+<li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder.__getitem__"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFolder.__getitem__()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder.__init__"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFolder.__init__()</span></code></a></li>
 </ul>
 </li>
@@ -4688,6 +4776,7 @@ shuffling order for each epoch.</p>
 </ul>
 </li>
 <li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFile</span></code></a><ul>
+<li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__iter__"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFile.__iter__()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__len__"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFile.__len__()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.set_epoch"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFile.set_epoch()</span></code></a></li>
 </ul>
@@ -4711,7 +4800,7 @@ shuffling order for each epoch.</p>
       
     </aside>
   </div>
-</div><script src="_static/documentation_options.js?v=8ce2e7b8"></script>
+</div><script src="_static/documentation_options.js?v=bcb8667a"></script>
     <script src="_static/doctools.js?v=9bcbadda"></script>
     <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>

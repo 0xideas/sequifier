@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/io/sequifier_dataset_from_file.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.io.sequifier_dataset_from_file - sequifier 0.7.1.5 documentation</title>
+        <title>sequifier.io.sequifier_dataset_from_file - sequifier 0.8.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier 0.7.1.5 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier 0.8.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier 0.7.1.5 documentation</span>
+  <span class="sidebar-brand-text">sequifier 0.8.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -207,6 +207,7 @@
   </p>
   <ul>
       <li><a href="sequifier_dataset_from_file.html">main</a></li>
+      <li><a href="../../../../v0.7.1.5/index.html">v0.7.1.5</a></li>
   </ul>
 </div>
 </div>
@@ -319,9 +320,27 @@
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span></div>
 
 
+<div class="viewcode-block" id="SequifierDatasetFromFile.__iter__">
+<a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__iter__">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="fm">__iter__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]]:</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span>
+        <span class="n">Tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
+    <span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Yields batches of data.</span>
+
+<span class="sd">        Handles shuffling (if enabled) and slicing data based on distributed</span>
+<span class="sd">        rank and worker ID.</span>
+
+<span class="sd">        Yields:</span>
+<span class="sd">            Iterator[Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]]:</span>
+<span class="sd">            An iterator where each item is a tuple containing:</span>
+<span class="sd">                - data_batch (dict): Dictionary of feature tensors for the batch.</span>
+<span class="sd">                - targets_batch (dict): Dictionary of target tensors for the batch.</span>
+<span class="sd">                - None: Placeholder for sequence_id (not used in this dataset type).</span>
+<span class="sd">                - None: Placeholder for subsequence_id (not used in this dataset type).</span>
+<span class="sd">                - None: Placeholder for start_position (not used in this dataset type).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">worker_info</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get_worker_info</span><span class="p">()</span>
         <span class="n">world_size</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_world_size</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">1</span>
         <span class="n">rank</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_rank</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">0</span>
@@ -361,7 +380,8 @@
                 <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
             <span class="p">}</span>
 
-            <span class="k">yield</span> <span class="n">data_batch</span><span class="p">,</span> <span class="n">targets_batch</span></div>
+            <span class="k">yield</span> <span class="n">data_batch</span><span class="p">,</span> <span class="n">targets_batch</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span></div>
+</div>
 
 </pre></div>
         </article>
@@ -395,7 +415,7 @@
       
     </aside>
   </div>
-</div><script src="../../../_static/documentation_options.js?v=8ce2e7b8"></script>
+</div><script src="../../../_static/documentation_options.js?v=bcb8667a"></script>
     <script src="../../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
