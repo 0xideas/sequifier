@@ -1,16 +1,15 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="./">
-  <head>
-<meta charset="utf-8">
+<html class="no-js" lang="en" data-content_root="../../">
+  <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="genindex.html"><link rel="search" title="Search" href="#">
-        <link rel="canonical" href="https://www.sequifier.com/search.html">
+    <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html">
+        <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/make.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-<meta name="robots" content="noindex" />
-<title>Search - sequifier 0.8.0.6 documentation</title><link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
-    <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=580074bf" />
-    <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
+        <title>sequifier.make - sequifier v0.8.0.7 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
 
@@ -162,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="index.html"><div class="brand">sequifier 0.8.0.6 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v0.8.0.7 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -181,11 +180,11 @@
   <aside class="sidebar-drawer">
     <div class="sidebar-container">
       
-      <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier 0.8.0.6 documentation</span>
+  <span class="sidebar-brand-text">sequifier v0.8.0.7 documentation</span>
   
-</a><form class="sidebar-search-container" method="get" action="#" role="search">
+</a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
   <input type="hidden" name="check_keywords" value="yes">
   <input type="hidden" name="area" value="default">
@@ -193,12 +192,12 @@
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
   <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="api.html">Preprocessing Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="api.html#training-config">Training Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="api.html#inference-config">Inference Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="api.html#hyperparameter-search-config">Hyperparameter Search Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="api.html#non-standard-optimizers">Non-standard Optimizers</a></li>
-<li class="toctree-l1"><a class="reference internal" href="api.html#internals">Internals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">Preprocessing Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.train_config">Training Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.sequifier">Internals</a></li>
 </ul>
 
 </div>
@@ -207,8 +206,7 @@
     <span class="caption-text">Versions</span>
   </p>
   <ul>
-      <li><a href="../main/index.html">main</a></li>
-      <li><a href="search.html">v0.8.0.6</a></li>
+      <li><a href="make.html">main</a></li>
   </ul>
 </div>
 </div>
@@ -239,18 +237,128 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          
-<noscript>
-<div class="admonition error">
-  <p class="admonition-title">Error</p>
-  <p>
-    Please activate JavaScript to enable the search functionality.
-  </p>
-</div>
-</noscript>
+          <h1>Source code for sequifier.make</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 
-<div id="search-results"></div>
+<span class="n">preprocess_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_path: .</span>
+<span class="s2">data_path: PLEASE FILL</span>
+<span class="s2">read_format: csv</span>
+<span class="s2">write_format: parquet</span>
+<span class="s2">selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
 
+<span class="s2">group_proportions:</span>
+<span class="s2">- 0.8</span>
+<span class="s2">- 0.1</span>
+<span class="s2">- 0.1</span>
+<span class="s2">seq_length: 48</span>
+<span class="s2">seq_step_sizes:</span>
+<span class="s2">- 1</span>
+<span class="s2">- 1</span>
+<span class="s2">- 1</span>
+<span class="s2">max_rows: null</span>
+<span class="s2">&quot;&quot;&quot;</span>
+
+<span class="n">train_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_path: .</span>
+<span class="s2">model_name: default</span>
+<span class="s2">read_format: parquet</span>
+<span class="s2">ddconfig_path: PLEASE FILL</span>
+
+<span class="s2">selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
+<span class="s2">target_columns: [EXAMPLE_TARGET_COLUMN_NAME]</span>
+<span class="s2">target_column_types: # &#39;criterion&#39; in training_spec must also be adapted</span>
+<span class="s2">  EXAMPLE_TARGET_COLUMN_NAME: real</span>
+
+<span class="s2">seq_length: 48</span>
+<span class="s2">inference_batch_size: 10</span>
+
+<span class="s2">export_generative_model: PLEASE FILL # true or false</span>
+<span class="s2">export_embedding_model: PLEASE FILL # true or false</span>
+<span class="s2">export_onnx: true</span>
+
+<span class="s2">model_spec:</span>
+<span class="s2">  d_model: 128</span>
+<span class="s2">  d_model_by_column: # the size of the embedding of individual variables, must sum to d_model</span>
+<span class="s2">    EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical</span>
+<span class="s2">  nhead: 16</span>
+<span class="s2">  d_hid: 128</span>
+<span class="s2">  nlayers: 3</span>
+<span class="s2">training_spec:</span>
+<span class="s2">  device: cuda</span>
+<span class="s2">  epochs: 1000</span>
+<span class="s2">  iter_save: 10</span>
+<span class="s2">  batch_size: 100</span>
+<span class="s2">  log_interval: 10</span>
+<span class="s2">  lr: 0.0001</span>
+<span class="s2">  accumulation_steps: 1</span>
+<span class="s2">  dropout: 0.2</span>
+<span class="s2">  criterion:</span>
+<span class="s2">    EXAMPLE_TARGET_COLUMN_NAME: MSELoss</span>
+<span class="s2">  optimizer:</span>
+<span class="s2">    name: AdamW</span>
+<span class="s2">  scheduler:</span>
+<span class="s2">    name: CosineAnnealingLR</span>
+<span class="s2">    T_max: 111</span>
+<span class="s2">    eta_min: 0.00001</span>
+<span class="s2">  continue_training: true</span>
+<span class="s2">&quot;&quot;&quot;</span>
+
+<span class="n">infer_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_path: .</span>
+<span class="s2">ddconfig_path: PLEASE FILL</span>
+<span class="s2">model_type: PLEASE_FILL # generative or embedding</span>
+<span class="s2">model_path: PLEASE FILL</span>
+<span class="s2">data_path: PLEASE FILL</span>
+
+<span class="s2">selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
+<span class="s2">target_columns: [EXAMPLE_TARGET_COLUMN_NAME]</span>
+<span class="s2">target_column_types:</span>
+<span class="s2">  EXAMPLE_TARGET_COLUMN_NAME: real</span>
+
+<span class="s2">output_probabilities: false</span>
+<span class="s2">map_to_id: false</span>
+<span class="s2">device: cpu</span>
+<span class="s2">seq_length: 48</span>
+<span class="s2">inference_batch_size: 10</span>
+
+<span class="s2">autoregression: true</span>
+<span class="s2">&quot;&quot;&quot;</span>
+
+<span class="n">gitignore_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;models/</span>
+<span class="s2">logs/</span>
+<span class="s2">checkpoints/</span>
+<span class="s2">outputs/</span>
+<span class="s2">data/</span>
+<span class="s2">.DS_Store&quot;&quot;&quot;</span>
+
+
+<div class="viewcode-block" id="make">
+<a class="viewcode-back" href="../../api.html#sequifier.make.make">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">make</span><span class="p">(</span><span class="n">args</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Creates a new sequifier project.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        args: The command-line arguments.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">project_name</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">project_name</span>
+
+    <span class="k">assert</span> <span class="p">(</span>
+        <span class="n">project_name</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">project_name</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
+    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;project_name &#39;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">&#39; is not admissible&quot;</span>
+
+    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs&quot;</span><span class="p">)</span>
+
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/.gitignore&quot;</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">gitignore_string</span><span class="p">)</span>
+
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs/preprocess.yaml&quot;</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">preprocess_config_string</span><span class="p">)</span>
+
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs/train.yaml&quot;</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">train_config_string</span><span class="p">)</span>
+
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs/infer.yaml&quot;</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">infer_config_string</span><span class="p">)</span></div>
+
+</pre></div>
         </article>
       </div>
       <footer>
@@ -282,12 +390,9 @@
       
     </aside>
   </div>
-</div><script src="_static/documentation_options.js?v=d34972ae"></script>
-    <script src="_static/doctools.js?v=9bcbadda"></script>
-    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
-    <script src="_static/scripts/furo.js?v=46bd48cc"></script>
-    
-<script src="_static/searchtools.js"></script>
-<script src="_static/language_data.js"></script>
-<script src="searchindex.js"></script></body>
+</div><script src="../../_static/documentation_options.js?v=5598ca87"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
+    </body>
 </html>
