@@ -203,8 +203,8 @@ def infer_embedding(
     of DataFrames or an iterator of tensors). For each data chunk, it
     calls the appropriate function (`get_embeddings` or `get_embeddings_pt`)
     to generate embeddings. It then formats these embeddings into a
-    Polars DataFrame, associating them with their `sequenceId`, and
-    writes the resulting DataFrame to the configured output path.
+    Polars DataFrame, associating them with their `sequenceId` and
+    `subsequenceId`, and writes the resulting DataFrame to the configured output path.
 
     Args:
         config: The `InfererModel` configuration object.
@@ -289,7 +289,8 @@ def infer_generative(
     This function manages the generative inference workflow:
     1. Iterates through the dataset (chunks).
     2. Handles data preparation, including expanding data for autoregression
-       if configured (`expand_data_by_autoregression`).
+       if configured (`expand_data_by_autoregression`). It also calculates
+       the corresponding `itemPosition` for each prediction.
     3. Calls the correct function to get probabilities and predictions
        based on data format and autoregression settings (e.g.,
        `get_probs_preds_autoregression`, `get_probs_preds_pt`).
@@ -298,7 +299,7 @@ def infer_generative(
        - Inverts normalization for real-valued target columns.
     5. Saves probabilities to disk (if `config.output_probabilities` is True).
     6. Saves the final predictions to disk, formatted as a Polars DataFrame
-       with `sequenceId` and target columns.
+       with `sequenceId`, `itemPosition`, and target columns.
 
     Args:
         config: The `InfererModel` configuration object.
@@ -547,14 +548,16 @@ def get_embeddings_pt(
 
     This function serves as a wrapper for `Inferer.infer_embedding` when
     the input data is already in PyTorch tensor format (from loading `.pt`
-    files). It converts the tensor dictionary to a NumPy array dictionary
-    before passing it to the inferer.
+    files which contain sequences, targets, sequence_ids, subsequence_ids,
+    and start_positions). It converts the tensor dictionary to a NumPy array
+    dictionary before passing it to the inferer.
 
     Args:
         config: The `InfererModel` configuration object (unused, but
             kept for consistent function signature).
         inferer: The initialized `Inferer` instance.
-        data: A dictionary mapping column/feature names to `torch.Tensor`s.
+        data: A dictionary mapping column/feature names to `torch.Tensor`s
+              (the sequences part loaded from the .pt file).
 
     Returns:
         A NumPy array containing the computed embeddings for the batch.
@@ -574,20 +577,23 @@ def get_probs_preds_pt(
     """Generates predictions from PyTorch tensor data, supporting autoregression.
 
     This function performs generative inference on a batch of PyTorch tensor
-    data. It implements an autoregressive loop:
-    1. Runs inference on the initial data `X`.
+    data loaded from `.pt` files (which contain sequences, targets,
+    sequence_ids, subsequence_ids, and start_positions). It implements an
+    autoregressive loop:
+    1. Runs inference on the initial data `X` (sequences).
     2. For each subsequent step (`i` in `extra_steps`):
        a. Creates the next input `X_next` by shifting the previous input
           `X` and appending the prediction from the last step.
        b. Runs inference on `X_next`.
     3. Collects and reshapes all predictions and probabilities from all
-       steps into a single flat batch.
+       steps into a single flat batch, ordered by original sample index, then by step.
 
     Args:
         config: The `InfererModel` configuration object, used to check
             `output_probabilities` and `selected_columns`.
         inferer: The initialized `Inferer` instance.
-        data: A dictionary mapping column/feature names to `torch.Tensor`s.
+        data: A dictionary mapping column/feature names to `torch.Tensor`s
+              (the sequences part loaded from the .pt file).
         extra_steps: The number of additional autoregressive steps to
             perform. A value of 0 means simple, non-autoregressive
             inference.
@@ -595,10 +601,10 @@ def get_probs_preds_pt(
     Returns:
         A tuple `(probs, preds)`:
             - `probs`: A dictionary mapping target columns to NumPy arrays
-              of probabilities, or `None` if `config.output_probabilities`
-              is False.
+              of probabilities, ordered by sample index then step,
+              or `None` if `config.output_probabilities` is False.
             - `preds`: A dictionary mapping target columns to NumPy arrays
-              of final predictions.
+              of final predictions, ordered by sample index then step.
     """
     target_cols = inferer.target_columns
 

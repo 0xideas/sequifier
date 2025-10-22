@@ -30,6 +30,8 @@ class SequifierDatasetFromFolderLazy(Dataset):
     def __init__(self, data_path: str, config: TrainModel, ram_threshold: float = 70.0):
         """
         Initializes the dataset by reading metadata and setting up the cache.
+        Each .pt file is expected to contain a tuple:
+        (sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor).
 
         Args:
             data_path (str): The path to the directory containing the pre-processed
@@ -141,6 +143,18 @@ class SequifierDatasetFromFolderLazy(Dataset):
 
         This method is the core of the lazy-loading strategy. It is thread-safe
         and manages the cache automatically.
+
+        Args:
+            idx: The index of the sample to retrieve.
+
+        Returns:
+            A tuple containing:
+                - sequence (dict): Dictionary of feature tensors for the sample.
+                - targets (dict): Dictionary of target tensors for the sample.
+                - sequence_id (int): The sequence ID of the sample.
+                - subsequence_id (int): The subsequence ID within the sequence.
+                - start_position (int): The starting item position of the subsequence
+                                        within the original full sequence.
         """
         if not 0 <= idx < self.n_samples:
             raise IndexError(

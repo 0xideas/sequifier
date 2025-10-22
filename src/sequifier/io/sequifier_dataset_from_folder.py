@@ -21,7 +21,8 @@ class SequifierDatasetFromFolder(Dataset):
     def __init__(self, data_path: str, config: TrainModel):
         """
         Initializes the dataset by loading all .pt files from the data directory
-        into memory.
+        into memory. Each .pt file is expected to contain a tuple:
+        (sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor).
         """
         self.data_dir = normalize_path(data_path, config.project_path)
         self.config = config
@@ -105,6 +106,20 @@ class SequifierDatasetFromFolder(Dataset):
     def __getitem__(
         self, idx: int
     ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], int, int, int]:
+        """Retrieves a single sample from the pre-loaded data.
+
+        Args:
+            idx: The index of the sample to retrieve.
+
+        Returns:
+            A tuple containing:
+                - sequence (dict): Dictionary of feature tensors for the sample.
+                - targets (dict): Dictionary of target tensors for the sample.
+                - sequence_id (int): The sequence ID of the sample.
+                - subsequence_id (int): The subsequence ID within the sequence.
+                - start_position (int): The starting item position of the subsequence
+                                        within the original full sequence.
+        """
         if not 0 <= idx < self.n_samples:
             raise IndexError(
                 f"Index {idx} is out of range for a dataset with {self.n_samples} samples."
