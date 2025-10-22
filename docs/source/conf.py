@@ -8,14 +8,14 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath('../../src'))
+sys.path.insert(0, os.path.abspath('../src'))
 # -- Project information -----------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
+# https://smv_copy_srcdirs.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'sequifier'
 copyright = '2025, Leon Luithlen'
 author = 'Leon Luithlen'
-release = '0.8.0.4'
+release = '0.8.0.5'
 html_baseurl = 'https://www.sequifier.com/'
 
 # -- General configuration ---------------------------------------------------
@@ -61,6 +61,7 @@ smv_remote_whitelist = r'^origin$'        # Only use the 'origin' remote
 smv_released_pattern = r'^refs/tags/v\d+\.\d+\.\d+\.\d+$' # Match 4-part tags
 smv_outputdir_format = '{ref.name}'       # Use branch/tag name for output directory
 smv_prefer_remote_refs = False            # Use local refs first if they exist
+smv_copy_srcdirs = ['../../src']
 
 # Optional: Add a banner to warn users viewing non-released versions
 smv_warning_banner_enabled = True
