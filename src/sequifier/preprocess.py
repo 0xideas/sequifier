@@ -675,7 +675,7 @@ class Preprocessor:
         for file_path in pt_files:
             try:
                 # Load the tensor file to inspect its contents
-                sequences_dict, _, _ = torch.load(file_path)
+                sequences_dict, _, _, _, _ = torch.load(file_path)
                 if sequences_dict:
                     # All tensors in the dict have the same number of samples (batch size)
                     n_samples = sequences_dict[list(sequences_dict.keys())[0]].shape[0]

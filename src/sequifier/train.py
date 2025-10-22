@@ -781,7 +781,7 @@ class TransformerModel(nn.Module):
         start_time = time.time()
         num_batches = len(train_loader)
 
-        for batch_count, (data, targets) in enumerate(train_loader):
+        for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
             data = {
                 k: v.to(self.device, non_blocking=True)
                 for k, v in data.items()
@@ -940,7 +940,7 @@ class TransformerModel(nn.Module):
         total_losses_collect = {col: [] for col in self.target_columns}
         output = {}  # for type checking
         with torch.no_grad():
-            for i, (data, targets) in enumerate(valid_loader):
+            for data, targets, _, _, _ in valid_loader:
                 # Move data to the current process's assigned GPU
                 data = {
                     k: v.to(self.device, non_blocking=True)
@@ -1000,7 +1000,7 @@ class TransformerModel(nn.Module):
             baseline_losses_local_collect = {col: [] for col in self.target_columns}
 
             # Iterate over the sharded validation loader
-            for data, targets in valid_loader:
+            for data, targets, _, _, _ in valid_loader:
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
