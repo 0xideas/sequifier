@@ -69,22 +69,18 @@ def read_preprocessing_outputs(path, variant):
         for root, _, files in os.walk(path):
             for file in files:
                 if file.endswith("pt"):
-                    sequences, targets, sequence_id, subsequence_id, start_pos = (
-                        torch.load(os.path.join(root, file))
-                    )
+                    (
+                        sequences,
+                        targets,
+                        sequence_id,
+                        subsequence_id,
+                        start_item_position,
+                    ) = torch.load(os.path.join(root, file))
                     sequences2 = {}
                     for col, vals in sequences.items():
                         vals2 = np.concatenate(
                             [vals.numpy(), targets[col][:, -1:].numpy()], axis=1
                         )
-
-                        subsequences, prev_seq_id = [], None
-                        for seq_id in sequence_id.numpy():
-                            if prev_seq_id is None or seq_id != prev_seq_id:
-                                subsequences.append(0)
-                            else:
-                                subsequences.append(subsequences[-1] + 1)
-                            prev_seq_id = int(seq_id)
 
                         for offset in range(vals2.shape[1] - 1, -1, -1):
                             sequences2[str(offset)] = np.concatenate(
@@ -107,7 +103,14 @@ def read_preprocessing_outputs(path, variant):
                             axis=0,
                         )
                         sequences2["subsequenceId"] = np.concatenate(
-                            [sequences2.get("subsequenceId", []), subsequences], axis=0
+                            [sequences2.get("subsequenceId", []), subsequence_id],
+                            axis=0,
+                        )
+                        sequences2["startItemPosition"] = np.concatenate(
+                            [
+                                sequences2.get("startItemPosition", []),
+                                start_item_position,
+                            ]
                         )
 
                     content = pl.DataFrame(sequences2)
@@ -148,7 +151,7 @@ def test_preprocessed_data_real(data_splits):
         assert len(data_splits[name]) == 2
 
         for i, data in enumerate(data_splits[name]):
-            number_expected_columns = 12
+            number_expected_columns = 13
             assert data.shape[1] == (
                 number_expected_columns
             ), f"{name = } - {i = }: {data.shape = } - {data.columns = }"
@@ -165,7 +168,7 @@ def test_preprocessed_data_categorical(data_splits):
         assert len(data_splits[name]) == 3
 
         for i, data in enumerate(data_splits[name]):
-            number_expected_columns = 12
+            number_expected_columns = 13
             assert data.shape[1] == (
                 number_expected_columns
             ), f"{name = } - {i = }: {data.shape = } - {data.columns = }"

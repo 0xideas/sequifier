@@ -1,3 +1,3 @@
-sequenceId,itemId
-3,124
-4,124
+sequenceId,itemPosition,itemId
+3,8,124
+4,8,124

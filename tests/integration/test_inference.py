@@ -210,7 +210,7 @@ def test_multi_pred(predictions):
     preds = predictions["model-categorical-multitarget-5-best-3"]
 
     assert preds.shape[0] > 0
-    assert preds.shape[1] == 4
+    assert preds.shape[1] == 5
     assert np.all(preds["sup1"].to_numpy() >= 0) and np.all(
         preds["sup1"].to_numpy() < 10
     )
@@ -222,7 +222,7 @@ def test_multi_pred(predictions):
 def test_embeddings(embeddings):
     for model_name, model_embeddings in embeddings.items():
         assert model_embeddings.shape[0] == 10
-        assert model_embeddings.shape[1] == 201
+        assert model_embeddings.shape[1] == 202
         assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.1
 
 
