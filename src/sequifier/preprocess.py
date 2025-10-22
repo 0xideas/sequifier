@@ -254,6 +254,7 @@ class Preprocessor:
         schema = {
             "sequenceId": pl.Int64,
             "subsequenceId": pl.Int64,
+            "startItemPosition": pl.Int64,
             "inputCol": pl.String,
         }
 
@@ -1253,7 +1254,7 @@ def process_and_write_data_pt(
         .flatten()
         .alias(f"seq_{col_name}")
         for col_name in all_feature_cols
-    ]
+    ] + [pl.col("startItemPosition").first().alias("startItemPosition")]
 
     aggregated_data = (
         data.group_by(["sequenceId", "subsequenceId"])
@@ -1267,7 +1268,12 @@ def process_and_write_data_pt(
     sequence_ids_tensor = torch.tensor(
         aggregated_data.get_column("sequenceId").to_numpy(), dtype=torch.int64
     )
-
+    subsequence_ids_tensor = torch.tensor(
+        aggregated_data.get_column("subsequenceId").to_numpy(), dtype=torch.int64
+    )
+    start_item_positions_tensor = torch.tensor(
+        aggregated_data.get_column("startItemPosition").to_numpy(), dtype=torch.int64
+    )
     sequences_dict = {}
     targets_dict = {}
 
@@ -1285,7 +1291,13 @@ def process_and_write_data_pt(
         return
 
     print(f"[INFO] Writing preprocessed data to '{path}'...")
-    data_to_save = (sequences_dict, targets_dict, sequence_ids_tensor)
+    data_to_save = (
+        sequences_dict,
+        targets_dict,
+        sequence_ids_tensor,
+        subsequence_ids_tensor,
+        start_item_positions_tensor,
+    )
     torch.save(data_to_save, path)
 
 
@@ -1514,10 +1526,13 @@ def extract_sequences(
 
         for subsequence_id in range(len(subsequences[columns[0]])):
             for col, subseqs in subsequences.items():
-                row = [in_row["sequenceId"], subsequence_id, col] + subseqs[
-                    subsequence_id
-                ]
-                assert len(row) == (seq_length + 3), f"{row = }"
+                row = [
+                    in_row["sequenceId"],
+                    subsequence_id,
+                    subsequence_id * seq_step_size,
+                    col,
+                ] + subseqs[subsequence_id]
+                assert len(row) == (seq_length + 4), f"{row = }"
                 rows.append(row)
 
     sequences = pl.DataFrame(

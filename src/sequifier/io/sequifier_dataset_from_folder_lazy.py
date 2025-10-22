@@ -67,7 +67,14 @@ class SequifierDatasetFromFolderLazy(Dataset):
         # --- Initialize cache and thread-safety mechanisms ---
         # An OrderedDict is used to implement the LRU logic.
         self.cache: collections.OrderedDict[
-            str, Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]
+            str,
+            Tuple[
+                Dict[str, torch.Tensor],
+                Dict[str, torch.Tensor],
+                torch.Tensor,
+                torch.Tensor,
+                torch.Tensor,
+            ],
         ] = collections.OrderedDict()
 
         print(
@@ -128,7 +135,7 @@ class SequifierDatasetFromFolderLazy(Dataset):
 
     def __getitem__(
         self, idx: int
-    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], int, int, int]:
         """
         Retrieves a single data sample, loading from disk if not in the cache.
 
@@ -147,17 +154,33 @@ class SequifierDatasetFromFolderLazy(Dataset):
         if file_path in self.cache:
             # Mark as recently used by moving it to the end of the OrderedDict.
             self.cache.move_to_end(file_path)
-            sequences_batch, targets_batch = self.cache[file_path]
+            (
+                sequences_batch,
+                targets_batch,
+                sequence_id_tensor,
+                subsequence_id_tensor,
+                start_item_positions_tensor,
+            ) = self.cache[file_path]
 
         # 2. Handle a cache miss
         else:
             # Load the data from the .pt file from disk.
-            sequences_batch, targets_batch, _ = torch.load(
-                file_path, map_location="cpu"
-            )
+            (
+                sequences_batch,
+                targets_batch,
+                sequence_id_tensor,
+                subsequence_id_tensor,
+                start_item_positions_tensor,
+            ) = torch.load(file_path, map_location="cpu")
 
             # Add the newly loaded data to the cache.
-            self.cache[file_path] = (sequences_batch, targets_batch)
+            self.cache[file_path] = (
+                sequences_batch,
+                targets_batch,
+                sequence_id_tensor,
+                subsequence_id_tensor,
+                start_item_positions_tensor,
+            )
 
             # After adding, check memory and evict old items if necessary.
             self._evict_lru_items()
@@ -166,4 +189,10 @@ class SequifierDatasetFromFolderLazy(Dataset):
         sequence = {key: tensor[local_index] for key, tensor in sequences_batch.items()}
         targets = {key: tensor[local_index] for key, tensor in targets_batch.items()}
 
-        return sequence, targets
+        return (
+            sequence,
+            targets,
+            int(sequence_id_tensor[local_index]),
+            int(subsequence_id_tensor[local_index]),
+            int(start_item_positions_tensor[local_index]),
+        )

@@ -225,16 +225,19 @@ def infer_embedding(
             mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
             embeddings = get_embeddings(config, inferer, data, column_types)
             sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
+            subsequence_ids_for_preds = data.get("subsequenceId").filter(mask)
         elif config.read_format == "pt":
-            sequences_dict, _, sequence_ids_tensor = data
+            sequences_dict, _, sequence_ids_tensor, subsequence_ids_tensor, _ = data
             embeddings = get_embeddings_pt(config, inferer, sequences_dict)
             sequence_ids_for_preds = sequence_ids_tensor.numpy()
+            subsequence_ids_for_preds = subsequence_ids_tensor.numpy()
         else:
             raise Exception("impossible")
 
         embeddings = pl.DataFrame(
             {
                 "sequenceId": sequence_ids_for_preds,
+                "subsequenceId": subsequence_ids_for_preds,
                 **dict(
                     zip(
                         [str(v) for v in range(embeddings.shape[1])],
@@ -318,7 +321,12 @@ def infer_generative(
                 mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
                 # Apply the mask to the sequenceId column
                 sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
+                item_positions_for_preds = (
+                    data.get_column("startItemPosition").filter(mask).values
+                    + config.seq_length
+                )
                 probs, preds = get_probs_preds(config, inferer, data, column_types)
+
             else:
                 if config.autoregression_extra_steps is not None:
                     data = expand_data_by_autoregression(
@@ -327,12 +335,15 @@ def infer_generative(
                         config.seq_length,
                     )
 
+                item_positions_for_preds = (
+                    data["startItemPosition"].to_numpy() + config.seq_length
+                )
                 # Unpack the new third return value
                 probs, preds, sequence_ids_for_preds = get_probs_preds_autoregression(
                     config, inferer, data, column_types, config.seq_length
                 )
         elif config.read_format == "pt":
-            sequences_dict, _, sequence_ids_tensor = data
+            sequences_dict, _, sequence_ids_tensor, _, start_positions_tensor = data
             extra_steps = (
                 0
                 if config.autoregression_extra_steps is None
@@ -344,6 +355,13 @@ def infer_generative(
             sequence_ids_for_preds = np.repeat(
                 sequence_ids_tensor.numpy(), extra_steps + 1
             )
+            item_position_boundaries = zip(
+                list(start_positions_tensor + config.seq_length),
+                list(start_positions_tensor + config.seq_length + extra_steps + 1),
+            )
+            item_positions_for_preds = [
+                np.arange(start, end) for start, end in item_position_boundaries
+            ]
         else:
             raise Exception("impossible")
 
@@ -409,6 +427,7 @@ def infer_generative(
         predictions = pl.DataFrame(
             {
                 "sequenceId": sequence_ids_for_preds,
+                "itemPosition": item_positions_for_preds,
                 **{
                     target_column: preds[target_column].flatten()
                     for target_column in inferer.target_columns
@@ -485,6 +504,8 @@ def expand_data_by_autoregression(
     for offset in range(1, autoregression_extra_steps + 1):
         future_df_lazy = last_obs_lazy.with_columns(
             (pl.col("subsequenceId") + offset).alias("subsequenceId")
+        ).with_columns(
+            (pl.col("startItemPosition") + offset).alias("startItemPosition")
         )
 
         # Correctly shift columns to make space for future predictions
