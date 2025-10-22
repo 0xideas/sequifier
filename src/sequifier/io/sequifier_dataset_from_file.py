@@ -73,7 +73,23 @@ class SequifierDatasetFromFile(IterableDataset):
 
     def __iter__(
         self,
-    ) -> Iterator[Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
+    ) -> Iterator[
+        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]
+    ]:
+        """Yields batches of data.
+
+        Handles shuffling (if enabled) and slicing data based on distributed
+        rank and worker ID.
+
+        Yields:
+            Iterator[Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]]:
+            An iterator where each item is a tuple containing:
+                - data_batch (dict): Dictionary of feature tensors for the batch.
+                - targets_batch (dict): Dictionary of target tensors for the batch.
+                - None: Placeholder for sequence_id (not used in this dataset type).
+                - None: Placeholder for subsequence_id (not used in this dataset type).
+                - None: Placeholder for start_position (not used in this dataset type).
+        """
         worker_info = torch.utils.data.get_worker_info()
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_initialized() else 0
@@ -113,4 +129,4 @@ class SequifierDatasetFromFile(IterableDataset):
                 for key, tensor in self.target_tensors.items()
             }
 
-            yield data_batch, targets_batch
+            yield data_batch, targets_batch, None, None, None

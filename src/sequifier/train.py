@@ -769,7 +769,9 @@ class TransformerModel(nn.Module):
         """Trains the model for one epoch.
 
         Iterates through the training DataLoader, computes loss, performs
-        backpropagation, and updates model parameters.
+        backpropagation, and updates model parameters. The DataLoader is expected
+        to yield tuples of (data_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
+        The IDs and positions are currently unused in this training loop.
 
         Args:
             train_loader: DataLoader for the training dataset.
@@ -781,7 +783,7 @@ class TransformerModel(nn.Module):
         start_time = time.time()
         num_batches = len(train_loader)
 
-        for batch_count, (data, targets) in enumerate(train_loader):
+        for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
             data = {
                 k: v.to(self.device, non_blocking=True)
                 for k, v in data.items()
@@ -923,6 +925,9 @@ class TransformerModel(nn.Module):
         Iterates through the validation data, calculates the total loss,
         and aggregates results across all processes if in distributed mode.
         Also calculates a one-time baseline loss on the first call.
+        The DataLoader is expected to yield tuples of
+        (data_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
+        The IDs and positions are currently unused during evaluation.
 
         Args:
             valid_loader: DataLoader for the validation dataset.
@@ -940,7 +945,7 @@ class TransformerModel(nn.Module):
         total_losses_collect = {col: [] for col in self.target_columns}
         output = {}  # for type checking
         with torch.no_grad():
-            for i, (data, targets) in enumerate(valid_loader):
+            for data, targets, _, _, _ in valid_loader:
                 # Move data to the current process's assigned GPU
                 data = {
                     k: v.to(self.device, non_blocking=True)
@@ -1000,7 +1005,7 @@ class TransformerModel(nn.Module):
             baseline_losses_local_collect = {col: [] for col in self.target_columns}
 
             # Iterate over the sharded validation loader
-            for data, targets in valid_loader:
+            for data, targets, _, _, _ in valid_loader:
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()

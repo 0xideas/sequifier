@@ -210,7 +210,7 @@ def test_multi_pred(predictions):
     preds = predictions["model-categorical-multitarget-5-best-3"]
 
     assert preds.shape[0] > 0
-    assert preds.shape[1] == 4
+    assert preds.shape[1] == 5
     assert np.all(preds["sup1"].to_numpy() >= 0) and np.all(
         preds["sup1"].to_numpy() < 10
     )
@@ -222,8 +222,72 @@ def test_multi_pred(predictions):
 def test_embeddings(embeddings):
     for model_name, model_embeddings in embeddings.items():
         assert model_embeddings.shape[0] == 10
-        assert model_embeddings.shape[1] == 201
+        assert model_embeddings.shape[1] == 202
         assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.1
+
+
+def test_predictions_item_position(predictions):
+    """
+    Checks if itemPosition increments correctly within each sequenceId.
+    """
+    for model_name, preds_df in predictions.items():
+        # Ensure correct sorting for comparison
+        preds_df_sorted = preds_df.sort("sequenceId", "itemPosition")
+
+        # Calculate differences and sequence changes
+        preds_with_diffs = preds_df_sorted.with_columns(
+            (pl.col("itemPosition") - pl.col("itemPosition").shift(1)).alias(
+                "pos_diff"
+            ),
+            (pl.col("sequenceId") == pl.col("sequenceId").shift(1)).alias("same_seq"),
+        )
+
+        # Filter for rows within the same sequence (excluding the first row of each sequence)
+        within_sequence_diffs = preds_with_diffs.filter(pl.col("same_seq"))
+
+        # Check if all position differences within sequences are 1
+        incorrect_increments = within_sequence_diffs.filter(pl.col("pos_diff") != 1)
+
+        assert incorrect_increments.height == 0, (
+            f"Model '{model_name}': Found incorrect itemPosition increments within sequences:\n"
+            f"{incorrect_increments}"
+        )
+
+
+def test_embeddings_subsequence_id(embeddings):
+    """
+    Checks if subsequenceId increments correctly within each sequenceId
+    and starts at 0 for each new sequence.
+    """
+    for model_name, embeds_df in embeddings.items():
+        # Ensure correct sorting
+        embeds_df_sorted = embeds_df.sort("sequenceId", "subsequenceId")
+
+        # Calculate differences and sequence changes
+        embeds_with_diffs = embeds_df_sorted.with_columns(
+            (pl.col("subsequenceId") - pl.col("subsequenceId").shift(1)).alias(
+                "subseq_diff"
+            ),
+            (pl.col("sequenceId") == pl.col("sequenceId").shift(1)).alias("same_seq"),
+        )
+
+        # 1. Check if subsequenceId starts at 0 for each new sequence
+        first_subsequences = embeds_with_diffs.filter(
+            pl.col("same_seq") == False  # noqa: E712
+        )  # First row of each sequence
+        incorrect_starts = first_subsequences.filter(pl.col("subsequenceId") != 0)
+        assert incorrect_starts.height == 0, (
+            f"Model '{model_name}': Found sequences where subsequenceId does not start at 0:\n"
+            f"{incorrect_starts}"
+        )
+
+        # 2. Check if subsequenceId increments by 1 within sequences
+        within_sequence_diffs = embeds_with_diffs.filter(pl.col("same_seq"))
+        incorrect_increments = within_sequence_diffs.filter(pl.col("subseq_diff") != 1)
+        assert incorrect_increments.height == 0, (
+            f"Model '{model_name}': Found incorrect subsequenceId increments within sequences:\n"
+            f"{incorrect_increments}"
+        )
 
 
 @pytest.mark.optional

@@ -238,8 +238,9 @@ class Preprocessor:
         """Creates the Polars schema for the intermediate sequence DataFrame.
 
         This schema defines the structure of the DataFrame after sequence
-        extraction, which includes sequence identifiers, the input column name,
-        and columns for each item in the sequence (named '0', '1', ..., 'seq_length-1').
+        extraction, which includes sequence identifiers, the start item position
+        within the original sequence, the input column name, and columns for
+        each item in the sequence (named '0', '1', ..., 'seq_length-1').
 
         Args:
             col_types: A dictionary mapping data column names to their Polars
@@ -248,12 +249,13 @@ class Preprocessor:
 
         Returns:
             A dictionary defining the Polars schema. Keys are column names
-            (e.g., "sequenceId", "subsequenceId", "inputCol", "0", "1", ...)
+            (e.g., "sequenceId", "subsequenceId", "startItemPosition", "inputCol", "0", "1", ...)
             and values are Polars data types (e.g., `pl.Int64`).
         """
         schema = {
             "sequenceId": pl.Int64,
             "subsequenceId": pl.Int64,
+            "startItemPosition": pl.Int64,
             "inputCol": pl.String,
         }
 
@@ -674,7 +676,7 @@ class Preprocessor:
         for file_path in pt_files:
             try:
                 # Load the tensor file to inspect its contents
-                sequences_dict, _, _ = torch.load(file_path)
+                sequences_dict, _, _, _, _ = torch.load(file_path)
                 if sequences_dict:
                     # All tensors in the dict have the same number of samples (batch size)
                     n_samples = sequences_dict[list(sequences_dict.keys())[0]].shape[0]
@@ -1224,13 +1226,14 @@ def process_and_write_data_pt(
     This function takes the long-format sequence DataFrame (`data`),
     aggregates it by `sequenceId` and `subsequenceId`, and pivots it
     so that each `inputCol` becomes its own column containing a list
-    of sequence items.
+    of sequence items. It also extracts the `startItemPosition`.
 
     It then converts these lists into NumPy arrays, splits them into
     `sequences` (all but last item) and `targets` (all but first item),
-    and converts them to PyTorch tensors. The final data
-    `(sequences_dict, targets_dict, sequence_ids_tensor)` is saved
-    to a .pt file using `torch.save`.
+    and converts them to PyTorch tensors along with sequence/subsequence IDs
+    and start positions. The final data tuple
+    `(sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor)`
+    is saved to a .pt file using `torch.save`.
 
     Args:
         data: The long-format Polars DataFrame of extracted sequences.
@@ -1253,7 +1256,7 @@ def process_and_write_data_pt(
         .flatten()
         .alias(f"seq_{col_name}")
         for col_name in all_feature_cols
-    ]
+    ] + [pl.col("startItemPosition").first().alias("startItemPosition")]
 
     aggregated_data = (
         data.group_by(["sequenceId", "subsequenceId"])
@@ -1267,7 +1270,12 @@ def process_and_write_data_pt(
     sequence_ids_tensor = torch.tensor(
         aggregated_data.get_column("sequenceId").to_numpy(), dtype=torch.int64
     )
-
+    subsequence_ids_tensor = torch.tensor(
+        aggregated_data.get_column("subsequenceId").to_numpy(), dtype=torch.int64
+    )
+    start_item_positions_tensor = torch.tensor(
+        aggregated_data.get_column("startItemPosition").to_numpy(), dtype=torch.int64
+    )
     sequences_dict = {}
     targets_dict = {}
 
@@ -1285,7 +1293,13 @@ def process_and_write_data_pt(
         return
 
     print(f"[INFO] Writing preprocessed data to '{path}'...")
-    data_to_save = (sequences_dict, targets_dict, sequence_ids_tensor)
+    data_to_save = (
+        sequences_dict,
+        targets_dict,
+        sequence_ids_tensor,
+        subsequence_ids_tensor,
+        start_item_positions_tensor,
+    )
     torch.save(data_to_save, path)
 
 
@@ -1482,8 +1496,9 @@ def extract_sequences(
     This function takes a DataFrame where each row contains all items
     for a single `sequenceId`. It iterates through each `sequenceId`,
     extracts all possible subsequences of `seq_length` using the
-    specified `seq_step_size`, and formats them into a new, long-format
-    DataFrame that conforms to the provided `schema`.
+    specified `seq_step_size`, calculates the starting position of each
+    subsequence within the original sequence, and formats them into a new,
+    long-format DataFrame that conforms to the provided `schema`.
 
     Args:
         data: The input Polars DataFrame, grouped by "sequenceId".
@@ -1495,7 +1510,9 @@ def extract_sequences(
 
     Returns:
         A new, long-format Polars DataFrame containing the extracted
-        subsequences, matching the provided `schema`.
+        subsequences, matching the provided `schema`. Includes columns
+        for `sequenceId`, `subsequenceId`, `startItemPosition`, `inputCol`,
+        and the sequence items ('0', '1', ...).
     """
     if data.is_empty():
         return pl.DataFrame(schema=schema)
@@ -1514,10 +1531,13 @@ def extract_sequences(
 
         for subsequence_id in range(len(subsequences[columns[0]])):
             for col, subseqs in subsequences.items():
-                row = [in_row["sequenceId"], subsequence_id, col] + subseqs[
-                    subsequence_id
-                ]
-                assert len(row) == (seq_length + 3), f"{row = }"
+                row = [
+                    in_row["sequenceId"],
+                    subsequence_id,
+                    subsequence_id * seq_step_size,
+                    col,
+                ] + subseqs[subsequence_id]
+                assert len(row) == (seq_length + 4), f"{row = }"
                 rows.append(row)
 
     sequences = pl.DataFrame(
