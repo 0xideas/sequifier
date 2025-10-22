@@ -30,7 +30,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r docs/requirements-docs.txt
-          pip install -e .
+          pip install \
+            "polars>=1.31.0,<2.0" \
+            "numpy>=1.23,<2.0" \
+            "torch>=2.4,<2.9" \
+            "torch_optimizer>=0.3.0,<0.4.0" \
+            "onnx>=1.15.0,<2.0.0" \
+            "onnxruntime>=1.17,<2.0" \
+            "onnxscript>=0.5.4" \
+            "pyyaml>=6.0,<7.0" \
+            "pydantic>=1.0,<2.0" \
+            "pyarrow>=15.0" \
+            "fastparquet>=2024.2.0,<2025.0.0" \
+            "beartype>=0.18.5,<0.19.0" \
+            "psutil>=7.0.0,<8.0.0"
 
       - name: Build versioned documentation
         run: |
