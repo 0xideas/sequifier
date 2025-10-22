@@ -322,7 +322,7 @@ def infer_generative(
                 # Apply the mask to the sequenceId column
                 sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
                 item_positions_for_preds = (
-                    data.get_column("startItemPosition").filter(mask).values
+                    data.get_column("startItemPosition").filter(mask).to_numpy()
                     + config.seq_length
                 )
                 probs, preds = get_probs_preds(config, inferer, data, column_types)
@@ -359,9 +359,10 @@ def infer_generative(
                 list(start_positions_tensor + config.seq_length),
                 list(start_positions_tensor + config.seq_length + extra_steps + 1),
             )
-            item_positions_for_preds = [
-                np.arange(start, end) for start, end in item_position_boundaries
-            ]
+            item_positions_for_preds = np.concatenate(
+                [np.arange(start, end) for start, end in item_position_boundaries],
+                axis=0,
+            )
         else:
             raise Exception("impossible")
 

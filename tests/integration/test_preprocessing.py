@@ -69,8 +69,8 @@ def read_preprocessing_outputs(path, variant):
         for root, _, files in os.walk(path):
             for file in files:
                 if file.endswith("pt"):
-                    sequences, targets, sequence_id = torch.load(
-                        os.path.join(root, file)
+                    sequences, targets, sequence_id, subsequence_id, start_pos = (
+                        torch.load(os.path.join(root, file))
                     )
                     sequences2 = {}
                     for col, vals in sequences.items():
