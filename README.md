@@ -12,7 +12,7 @@ The process looks like this:
 
 ### Motivation
 
-The promise is that researchers, data scientists and ml scientists can take their sequential data sets, transform them into a standardized format, and from then use sequifier and configuration files to develop a model for these sequential data, apply it to a test set, and extrapolate these sequences through autoregression for an arbitrary number of steps. This should enable **much faster development and evaluation cycles**.
+Researchers, data scientists and ml scientists can take their sequential data sets, transform them into a standardized format, and from then use sequifier and configuration files to develop a model for these sequential data. These models can be applied to a test set, and be used to extrapolate these sequences through autoregression for an arbitrary number of steps. This should enable **much faster development and evaluation cycles of generative transformer models across domains**.
 
 Importantly, sequifier works for an **arbitrary number of categorical and real valued input and output columns**, and can therefore represent a large set of possible mappings from inputs to outputs. The input and output columns do not have to be identical.
 
@@ -20,7 +20,10 @@ The standardized implementation of a decoder-only autorgressive transformer save
 
 The standardized configuration enables easier experimentation and experiment tracking, and, if results are shared, an **ever-improving basis for decision making on the initial configuration** when applying the transformer architecture to a new problem.
 
-Overall, it should be easy, **even for non-experts in machine learning**, to develop an initial prototype for a transformer model for a new domain. If the results are promising, it might become necessary to implement architecture variants that fall outside the scope of sequifier, but with a much cheaper (in terms of time and effort) initial exploration, many more potential application domains can be investigated.
+Overall, it should be possible, **even for non-experts in machine learning**, to develop an initial prototype for a transformer model for a new domain. If the results are promising, it might become necessary to implement architecture variants that fall outside the scope of sequifier, but with a much cheaper (in terms of time and effort) initial exploration, many more potential application domains can be investigated.
+
+Sequifier can also be used to train and infer **forward-looking embedding models**. These models output the activations of the last shared layer of the transformer, which encapsulate the information contained by the sequence so far that is useful in predicting the next time step.
+
 
 ### Data Formats
 
@@ -38,14 +41,14 @@ The two columns "sequenceId" and "itemPositions" have to be present, and then th
 
 Data of this input format can be transformed into the format that is used for model training and inference, which takes this form:
 
-|sequenceId|subsequenceId|columnName|[Subsequence Length]|[Subsequence Length - 1]|...|0|
-|----------|-------------|----------|--------------------|------------------------|---|-|
-|0|0|column1|"high"|"high"|...|"low"|
-|0|0|column2|12.3|10.2|...|14.9|
-|...|...|...|...|...|...|...|
-|1|0|column1|"medium"|"high"|...|"medium"|
-|1|0|column2|20.6|18.5|...|21.6|
-|...|...|...|...|...|...|...|
+|sequenceId|subsequenceId|startItemPosition|columnName|[Subsequence Length]|[Subsequence Length - 1]|...|0|
+|----------|-------------|-----------------|----------|--------------------|------------------------| - |-|
+|0|0|0|column1|"high"|"high"|...|"low"|
+|0|0|0|column2|12.3|10.2|...|14.9|
+|...|...|...|...|...|...|...|...|
+|1|0|15|column1|"medium"|"high"|...|"medium"|
+|1|0|15|column2|20.6|18.5|...|21.6|
+|...|...|...|...|...|...|...|...|
 
 On inference, the output is returned in the library input format, introduced first.
 
@@ -60,11 +63,11 @@ On inference, the output is returned in the library input format, introduced fir
 
 There are four standalone commands within sequifier: `make`, `preprocess`, `train` and `infer`. `make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, and `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format.
 
-
-
+The input data can be a single csv or parquet file, or a folder of csv or parquet files. The preprocessing output can be a csv or parquet file *per split*, or a folder of multiple torch tensor (pt) files *per split*. The training step does not output any data files (it outputs model files and logs). The inference output can be a single csv or parquet file, or a folder of csv and parquet files. In general, it is recommended to store every step as a single file if the initial input is a single file, and a folder of files if the initial data is a folder of files. For the folder "flow", the preprocessing step write format has to be "pt".
 
 ## Other materials
-To get more details on the specific configuration options, go to these [explanations of config parameters.](config-parameters.md)
+
+To get more details on the specific configuration options, go to these [docs page.](sequifier.com)
 
 If you want to first get a more specific understanding of the transformer architecture, have a look at
 the [Wikipedia article.](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model))
@@ -156,6 +159,9 @@ and configured using a config file. The default version can be found here:
 
 [configs/infer.yaml](./configs/infer.yaml)
 
+### Distributed Training
+
+Sequifier supports distributed training using torch DistributedDataParallel. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt'.
 
 ## Citation
 

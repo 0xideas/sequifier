@@ -263,7 +263,7 @@ class LogFile:
     """
 
     @beartype
-    def __init__(self, path: str, open_mode: str, rank: Optional[int] = None):
+    def __init__(self, path: str, rank: Optional[int] = None):
         """Initializes the LogFile and opens log files.
 
         The `path` argument should be a template containing "[NUMBER]",
@@ -273,7 +273,6 @@ class LogFile:
         Args:
             path: The path template for the log files (e.g.,
                 "run_log_[NUMBER].txt").
-            open_mode: The mode for opening the log files (e.g., "a", "w").
             rank: The rank of the current process (e.g., in distributed
                 training). If None or 0, high-level messages will be
                 printed to stdout.
@@ -281,8 +280,7 @@ class LogFile:
         self.rank = rank
         self.levels = [2, 3]
         self._files = {
-            level: open(path.replace("[NUMBER]", str(level)), open_mode)
-            for level in self.levels
+            level: path.replace("[NUMBER]", str(level)) for level in self.levels
         }
         self._path = path
 
@@ -305,17 +303,11 @@ class LogFile:
         """
         for level2 in self.levels:
             if level2 <= level:
-                self._files[level2].write(f"{string}\n")
-                self._files[level2].flush()
+                with open(self._files[level2], "a+", encoding="utf-8") as f:
+                    f.write(f"{string}\n")
         if level >= 3:
             if self.rank is None or self.rank == 0:
                 print(string)
-
-    @beartype
-    def close(self) -> None:
-        """Closes all open log file handlers."""
-        for file in self._files.values():
-            file.close()
 
 
 @beartype
