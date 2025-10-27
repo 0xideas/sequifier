@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/api.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>Preprocessing Config - sequifier v0.8.0.10 documentation</title>
+        <title>Preprocessing Config - sequifier v0.8.0.9 documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="index.html"><div class="brand">sequifier v0.8.0.10 documentation</div></a>
+      <a href="index.html"><div class="brand">sequifier v0.8.0.9 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
   
-  <span class="sidebar-brand-text">sequifier v0.8.0.10 documentation</span>
+  <span class="sidebar-brand-text">sequifier v0.8.0.9 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -3823,7 +3823,7 @@ on unprocessed data.</p></li>
 
 <dl class="py class" id="module-sequifier.helpers">
 <dt class="sig sig-object py" id="sequifier.helpers.LogFile">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.helpers.</span></span><span class="sig-name descname"><span class="pre">LogFile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/helpers.html#LogFile"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.helpers.LogFile" title="Link to this definition">¶</a></dt>
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.helpers.</span></span><span class="sig-name descname"><span class="pre">LogFile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">open_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/helpers.html#LogFile"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.helpers.LogFile" title="Link to this definition">¶</a></dt>
 <dd><p>Manages logging to multiple files based on verbosity levels.</p>
 <p>This class opens multiple log files based on a path template and a
 hardcoded list of levels (2 and 3). Messages are written to files
@@ -3878,7 +3878,7 @@ levels to their open file handlers.</p>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="sequifier.helpers.LogFile.__init__">
-<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/helpers.html#LogFile.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.helpers.LogFile.__init__" title="Link to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">open_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/helpers.html#LogFile.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.helpers.LogFile.__init__" title="Link to this definition">¶</a></dt>
 <dd><p>Initializes the LogFile and opens log files.</p>
 <p>The <cite>path</cite> argument should be a template containing “[NUMBER]”,
 which will be replaced by the log levels (2 and 3) to create
@@ -3888,12 +3888,19 @@ separate log files.</p>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>path</strong> – The path template for the log files (e.g.,
 “run_log_[NUMBER].txt”).</p></li>
+<li><p><strong>open_mode</strong> – The mode for opening the log files (e.g., “a”, “w”).</p></li>
 <li><p><strong>rank</strong> – The rank of the current process (e.g., in distributed
 training). If None or 0, high-level messages will be
 printed to stdout.</p></li>
 </ul>
 </dd>
 </dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.helpers.LogFile.close">
+<span class="sig-name descname"><span class="pre">close</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/sequifier/helpers.html#LogFile.close"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.helpers.LogFile.close" title="Link to this definition">¶</a></dt>
+<dd><p>Closes all open log file handlers.</p>
 </dd></dl>
 
 <dl class="py method">
@@ -4738,6 +4745,7 @@ shuffling order for each epoch.</p>
 <li><a class="reference internal" href="#sequifier.helpers.LogFile._files"><code class="docutils literal notranslate"><span class="pre">LogFile._files</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.LogFile._path"><code class="docutils literal notranslate"><span class="pre">LogFile._path</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.LogFile.__init__"><code class="docutils literal notranslate"><span class="pre">LogFile.__init__()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.helpers.LogFile.close"><code class="docutils literal notranslate"><span class="pre">LogFile.close()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.LogFile.write"><code class="docutils literal notranslate"><span class="pre">LogFile.write()</span></code></a></li>
 </ul>
 </li>
@@ -4791,7 +4799,7 @@ shuffling order for each epoch.</p>
       
     </aside>
   </div>
-</div><script src="_static/documentation_options.js?v=896621cd"></script>
+</div><script src="_static/documentation_options.js?v=19faed5c"></script>
     <script src="_static/doctools.js?v=9bcbadda"></script>
     <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>
