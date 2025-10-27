@@ -758,7 +758,6 @@ class TransformerModel(nn.Module):
         self._export(self, "last", last_epoch)  # type: ignore
         self._export(best_model, "best", last_epoch)  # type: ignore
         self.log_file.write("--- Training Complete ---")
-        self.log_file.close()
 
     @beartype
     def _train_epoch(
@@ -1285,13 +1284,12 @@ class TransformerModel(nn.Module):
     def _initialize_log_file(self):
         """Initializes the log file."""
         os.makedirs(os.path.join(self.project_path, "logs"), exist_ok=True)
-        open_mode = "w" if self.start_epoch == 1 else "a"
         path = os.path.join(
             self.project_path, "logs", f"sequifier-{self.model_name}-[NUMBER].txt"
         )
         if self.rank is not None:
             path = path.replace("[NUMBER]", f"rank{self.rank}-[NUMBER]")
-        self.log_file = LogFile(path, open_mode, self.rank)
+        self.log_file = LogFile(path, self.rank)
 
     @beartype
     def _load_weights_conditional(self) -> str:

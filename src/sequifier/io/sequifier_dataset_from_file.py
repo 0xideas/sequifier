@@ -55,7 +55,7 @@ class SequifierDatasetFromFile(IterableDataset):
         }
         del all_tensors
 
-        if config.training_spec.device != "cpu":
+        if config.training_spec.device.startswith("cuda"):
             for key in self.sequence_tensors:
                 self.sequence_tensors[key] = self.sequence_tensors[key].pin_memory()
             for key in self.target_tensors:
