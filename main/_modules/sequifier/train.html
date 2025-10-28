@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/train.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.train - sequifier v0.8.0.10 documentation</title>
+        <title>sequifier.train - sequifier v0.8.1.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v0.8.0.10 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v0.8.1.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v0.8.0.10 documentation</span>
+  <span class="sidebar-brand-text">sequifier v0.8.1.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -473,7 +473,7 @@
     <span class="k">elif</span> <span class="n">number</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
         <span class="n">order_of_magnitude</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="n">order_of_magnitude</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">number</span><span class="p">,</span> <span class="mi">10</span><span class="p">))</span>
+        <span class="n">order_of_magnitude</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">number</span><span class="p">),</span> <span class="mi">10</span><span class="p">))</span>
 
     <span class="n">number_adjusted</span> <span class="o">=</span> <span class="n">number</span> <span class="o">*</span> <span class="p">(</span><span class="mi">10</span> <span class="o">**</span> <span class="p">(</span><span class="o">-</span><span class="n">order_of_magnitude</span><span class="p">))</span>
     <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">number_adjusted</span><span class="si">:</span><span class="s2">5.2f</span><span class="si">}</span><span class="s2">e</span><span class="si">{</span><span class="n">order_of_magnitude</span><span class="si">}</span><span class="s2">&quot;</span></div>
@@ -661,6 +661,7 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_scheduler</span><span class="p">(</span>
             <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_filter_key</span><span class="p">(</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">scheduler</span><span class="p">,</span> <span class="s2">&quot;name&quot;</span><span class="p">)</span>
         <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_iter</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">scheduler_step_iter</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">iter_save</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">iter_save</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">continue_training</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">continue_training</span>
@@ -1042,7 +1043,9 @@
                 <span class="k">else</span><span class="p">:</span>
                     <span class="n">n_epochs_no_improvement</span> <span class="o">+=</span> <span class="mi">1</span>
 
-                <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_iter</span> <span class="o">==</span> <span class="s2">&quot;epoch&quot;</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
+
                 <span class="k">if</span> <span class="n">epoch</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">iter_save</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">_save</span><span class="p">(</span><span class="n">epoch</span><span class="p">,</span> <span class="n">total_loss</span><span class="p">)</span>
 
@@ -1114,6 +1117,9 @@
                 <span class="n">start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
 
             <span class="k">del</span> <span class="n">data</span><span class="p">,</span> <span class="n">targets</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">loss</span><span class="p">,</span> <span class="n">losses</span>
+
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_iter</span> <span class="o">==</span> <span class="s2">&quot;batch&quot;</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_calculate_loss</span><span class="p">(</span>
@@ -1309,23 +1315,32 @@
                     <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">targets</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
                     <span class="k">if</span> <span class="n">k</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span>
                 <span class="p">}</span>
-                <span class="c1"># Replicate original logic of using input as pseudo-output</span>
-                <span class="n">pseudo_output</span> <span class="o">=</span> <span class="p">{</span>
-                    <span class="n">col</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_transform_val</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">data</span><span class="p">[</span><span class="n">col</span><span class="p">])</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">targets</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+
+                <span class="n">pseudo_output</span> <span class="o">=</span> <span class="p">{}</span>
+                <span class="n">targets_for_baseline</span> <span class="o">=</span> <span class="p">{}</span>
+                <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">data</span><span class="p">:</span>
+                        <span class="n">pseudo_output</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_transform_val</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">data</span><span class="p">[</span><span class="n">col</span><span class="p">])</span>
+                        <span class="n">targets_for_baseline</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">targets</span><span class="p">[</span><span class="n">col</span><span class="p">]</span>
+
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">pseudo_output</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="n">loss</span><span class="p">,</span> <span class="n">losses</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_loss</span><span class="p">(</span>
+                        <span class="n">pseudo_output</span><span class="p">,</span> <span class="n">targets_for_baseline</span>
+                    <span class="p">)</span>
+                    <span class="n">baseline_loss_local_collect</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">loss</span><span class="o">.</span><span class="n">item</span><span class="p">())</span>
+                    <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">loss_</span> <span class="ow">in</span> <span class="n">losses</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                        <span class="n">baseline_losses_local_collect</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">loss_</span><span class="o">.</span><span class="n">item</span><span class="p">())</span>
+
+                <span class="c1"># Sum the losses for the local shard</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">baseline_loss_local_collect</span><span class="p">):</span>
+                <span class="n">baseline_loss_local</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">baseline_loss_local_collect</span><span class="p">)</span>
+                <span class="n">baseline_losses_local</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">col</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">loss_list</span><span class="p">)</span>
+                    <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">loss_list</span> <span class="ow">in</span> <span class="n">baseline_losses_local_collect</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
                 <span class="p">}</span>
-
-                <span class="n">loss</span><span class="p">,</span> <span class="n">losses</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_loss</span><span class="p">(</span><span class="n">pseudo_output</span><span class="p">,</span> <span class="n">targets</span><span class="p">)</span>
-
-                <span class="n">baseline_loss_local_collect</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">loss</span><span class="o">.</span><span class="n">item</span><span class="p">())</span>
-                <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">loss_</span> <span class="ow">in</span> <span class="n">losses</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-                    <span class="n">baseline_losses_local_collect</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">loss_</span><span class="o">.</span><span class="n">item</span><span class="p">())</span>
-
-            <span class="c1"># Sum the losses for the local shard</span>
-            <span class="n">baseline_loss_local</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">baseline_loss_local_collect</span><span class="p">)</span>
-            <span class="n">baseline_losses_local</span> <span class="o">=</span> <span class="p">{</span>
-                <span class="n">col</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">loss_list</span><span class="p">)</span>
-                <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">loss_list</span> <span class="ow">in</span> <span class="n">baseline_losses_local_collect</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-            <span class="p">}</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">baseline_loss_local</span> <span class="o">=</span> <span class="o">-</span><span class="mf">1.0</span>
+                <span class="n">baseline_losses_local</span> <span class="o">=</span> <span class="p">{</span><span class="n">col</span><span class="p">:</span> <span class="o">-</span><span class="mf">1.0</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">}</span>
 
             <span class="c1"># Broadcast the baseline values from the main process to all others</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
@@ -1883,7 +1898,7 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=896621cd"></script>
+</div><script src="../../_static/documentation_options.js?v=efc41013"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>

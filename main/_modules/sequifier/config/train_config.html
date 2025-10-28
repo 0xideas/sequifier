@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/config/train_config.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.config.train_config - sequifier v0.8.0.10 documentation</title>
+        <title>sequifier.config.train_config - sequifier v0.8.1.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v0.8.0.10 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v0.8.1.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v0.8.0.10 documentation</span>
+  <span class="sidebar-brand-text">sequifier v0.8.1.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -449,6 +449,7 @@
 <span class="sd">        loss_weights: A dictionary mapping columns to specific loss weights.</span>
 <span class="sd">        optimizer: The optimizer configuration.</span>
 <span class="sd">        scheduler: The learning rate scheduler configuration.</span>
+<span class="sd">        scheduler_step_iter: The time of the .step() call on the scheduler, either &#39;epoch&#39; or &#39;batch&#39;</span>
 <span class="sd">        continue_training: If True, continue training from the latest checkpoint.</span>
 <span class="sd">        distributed: If True, enables distributed training.</span>
 <span class="sd">        load_full_data_to_ram: If True, loads the entire dataset into RAM.</span>
@@ -477,6 +478,7 @@
             <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;StepLR&quot;</span><span class="p">,</span> <span class="s2">&quot;step_size&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;gamma&quot;</span><span class="p">:</span> <span class="mf">0.99</span><span class="p">}</span>
         <span class="p">)</span>
     <span class="p">)</span>
+    <span class="n">scheduler_step_iter</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;epoch&quot;</span>
     <span class="n">continue_training</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">distributed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">load_full_data_to_ram</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
@@ -491,7 +493,7 @@
 
         <span class="bp">self</span><span class="o">.</span><span class="n">validate_optimizer_config</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;optimizer&quot;</span><span class="p">])</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span> <span class="o">=</span> <span class="n">DotDict</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;optimizer&quot;</span><span class="p">])</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">validate_scheduler_config</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;scheduler&quot;</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">validate_scheduler_config</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;scheduler&quot;</span><span class="p">],</span> <span class="n">kwargs</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span> <span class="o">=</span> <span class="n">DotDict</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;scheduler&quot;</span><span class="p">])</span>
 
     <span class="nd">@validator</span><span class="p">(</span><span class="s2">&quot;criterion&quot;</span><span class="p">)</span>
@@ -512,11 +514,29 @@
         <span class="k">return</span> <span class="n">v</span>
 
     <span class="nd">@validator</span><span class="p">(</span><span class="s2">&quot;scheduler&quot;</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_scheduler_config</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_scheduler_config</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">values</span><span class="p">):</span>
         <span class="k">if</span> <span class="s2">&quot;name&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">v</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;scheduler dict must specify &#39;name&#39; field&quot;</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">v</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">VALID_SCHEDULERS</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;scheduler not valid as not found in </span><span class="si">{</span><span class="n">VALID_SCHEDULERS</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="s2">&quot;total_steps&quot;</span> <span class="ow">in</span> <span class="n">v</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">values</span><span class="p">[</span><span class="s2">&quot;scheduler_step_iter&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;epoch&quot;</span><span class="p">:</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">v</span><span class="p">[</span><span class="s2">&quot;total_steps&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">values</span><span class="p">[</span><span class="s2">&quot;epochs&quot;</span><span class="p">]:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="sa">f</span><span class="s2">&quot;scheduler total steps: </span><span class="si">{</span><span class="n">v</span><span class="p">[</span><span class="s1">&#39;total_steps&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> != </span><span class="si">{</span><span class="n">values</span><span class="p">[</span><span class="s1">&#39;epochs&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">: total epochs&quot;</span>
+                    <span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;[WARNING] </span><span class="si">{</span><span class="n">v</span><span class="p">[</span><span class="s1">&#39;total_steps&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> scheduler steps at </span><span class="si">{</span><span class="n">values</span><span class="p">[</span><span class="s1">&#39;epochs&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> epochs implies </span><span class="si">{</span><span class="n">v</span><span class="p">[</span><span class="s1">&#39;total_steps&#39;</span><span class="p">]</span><span class="o">/</span><span class="n">values</span><span class="p">[</span><span class="s1">&#39;epochs&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> batches. Does this seem correct?&quot;</span>
+                <span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
+
+    <span class="nd">@validator</span><span class="p">(</span><span class="s2">&quot;scheduler_step_iter&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_scheduler_step_iter</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;epoch&quot;</span><span class="p">,</span> <span class="s2">&quot;batch&quot;</span><span class="p">]:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;scheduler_step_iter must be in [&#39;epoch&#39;, &#39;batch&#39;], </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2"> isn&#39;t&quot;</span>
+            <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span></div>
 
 
@@ -699,7 +719,7 @@
       
     </aside>
   </div>
-</div><script src="../../../_static/documentation_options.js?v=896621cd"></script>
+</div><script src="../../../_static/documentation_options.js?v=efc41013"></script>
     <script src="../../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

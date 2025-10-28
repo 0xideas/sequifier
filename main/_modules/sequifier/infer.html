@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/infer.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.infer - sequifier v0.8.0.10 documentation</title>
+        <title>sequifier.infer - sequifier v0.8.1.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v0.8.0.10 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v0.8.1.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v0.8.0.10 documentation</span>
+  <span class="sidebar-brand-text">sequifier v0.8.1.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -574,11 +574,11 @@
         <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;parquet&quot;</span><span class="p">,</span> <span class="s2">&quot;csv&quot;</span><span class="p">]:</span>
             <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">selected_columns</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="n">data</span> <span class="o">=</span> <span class="n">subset_to_selected_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">selected_columns</span><span class="p">)</span>
+            <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
             <span class="k">if</span> <span class="ow">not</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression</span><span class="p">:</span>
                 <span class="c1"># For the non-autoregressive case, the old logic is still needed here</span>
-                <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
-                <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
                 <span class="c1"># Apply the mask to the sequenceId column</span>
+                <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
                 <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
                 <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="p">(</span>
                     <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
@@ -593,9 +593,10 @@
                         <span class="n">config</span><span class="o">.</span><span class="n">autoregression_extra_steps</span><span class="p">,</span>
                         <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span><span class="p">,</span>
                     <span class="p">)</span>
-
+                <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
                 <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="n">data</span><span class="p">[</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
+                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                    <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
                 <span class="p">)</span>
                 <span class="c1"># Unpack the new third return value</span>
                 <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">get_probs_preds_autoregression</span><span class="p">(</span>
@@ -1872,7 +1873,7 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=896621cd"></script>
+</div><script src="../../_static/documentation_options.js?v=efc41013"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
