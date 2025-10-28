@@ -316,11 +316,11 @@ def infer_generative(
         if config.read_format in ["parquet", "csv"]:
             if config.selected_columns is not None:
                 data = subset_to_selected_columns(data, config.selected_columns)
+            n_input_cols = data.get_column("inputCol").n_unique()
             if not config.autoregression:
                 # For the non-autoregressive case, the old logic is still needed here
-                n_input_cols = data.get_column("inputCol").n_unique()
-                mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
                 # Apply the mask to the sequenceId column
+                mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
                 sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
                 item_positions_for_preds = (
                     data.get_column("startItemPosition").filter(mask).to_numpy()
@@ -335,9 +335,10 @@ def infer_generative(
                         config.autoregression_extra_steps,
                         config.seq_length,
                     )
-
+                mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
                 item_positions_for_preds = (
-                    data["startItemPosition"].to_numpy() + config.seq_length
+                    data.get_column("startItemPosition").filter(mask).to_numpy()
+                    + config.seq_length
                 )
                 # Unpack the new third return value
                 probs, preds, sequence_ids_for_preds = get_probs_preds_autoregression(

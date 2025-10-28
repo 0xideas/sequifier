@@ -48,7 +48,13 @@ training_spec:
   optimizer:
     name: Shampoo
   scheduler:
-    name: StepLR
-    step_size: 1.0
-    gamma: 0.99
+    name: OneCycleLR
+    max_lr: 0.001
+    pct_start: 0.03
+    div_factor: 1000
+    final_div_factor: 1000
+    anneal_strategy: cos
+    total_steps: 100
+    three_phase: false
+  scheduler_step_iter: 'batch'
   continue_training: false
