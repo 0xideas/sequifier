@@ -215,7 +215,7 @@ def format_number(number: Union[int, float, np.float32]) -> str:
     elif number == 0:
         order_of_magnitude = 0
     else:
-        order_of_magnitude = math.floor(math.log(number, 10))
+        order_of_magnitude = math.floor(math.log(np.abs(number), 10))
 
     number_adjusted = number * (10 ** (-order_of_magnitude))
     return f"{number_adjusted:5.2f}e{order_of_magnitude}"
@@ -1015,23 +1015,32 @@ class TransformerModel(nn.Module):
                     for k, v in targets.items()
                     if k in self.target_column_types
                 }
-                # Replicate original logic of using input as pseudo-output
-                pseudo_output = {
-                    col: self._transform_val(col, data[col]) for col in targets.keys()
+
+                pseudo_output = {}
+                targets_for_baseline = {}
+                for col in self.target_columns:
+                    if col in data:
+                        pseudo_output[col] = self._transform_val(col, data[col])
+                        targets_for_baseline[col] = targets[col]
+
+                if len(pseudo_output) > 0:
+                    loss, losses = self._calculate_loss(
+                        pseudo_output, targets_for_baseline
+                    )
+                    baseline_loss_local_collect.append(loss.item())
+                    for col, loss_ in losses.items():
+                        baseline_losses_local_collect[col].append(loss_.item())
+
+                # Sum the losses for the local shard
+            if len(baseline_loss_local_collect):
+                baseline_loss_local = np.sum(baseline_loss_local_collect)
+                baseline_losses_local = {
+                    col: np.sum(loss_list)
+                    for col, loss_list in baseline_losses_local_collect.items()
                 }
-
-                loss, losses = self._calculate_loss(pseudo_output, targets)
-
-                baseline_loss_local_collect.append(loss.item())
-                for col, loss_ in losses.items():
-                    baseline_losses_local_collect[col].append(loss_.item())
-
-            # Sum the losses for the local shard
-            baseline_loss_local = np.sum(baseline_loss_local_collect)
-            baseline_losses_local = {
-                col: np.sum(loss_list)
-                for col, loss_list in baseline_losses_local_collect.items()
-            }
+            else:
+                baseline_loss_local = -1.0
+                baseline_losses_local = {col: -1.0 for col in self.target_columns}
 
             # Broadcast the baseline values from the main process to all others
             if self.hparams.training_spec.distributed:
