@@ -389,6 +389,7 @@ class TransformerModel(nn.Module):
         self.scheduler = self._get_scheduler(
             **self._filter_key(hparams.training_spec.scheduler, "name")
         )
+        self.scheduler_step_iter = hparams.training_spec.scheduler_step_iter
 
         self.iter_save = hparams.training_spec.iter_save
         self.continue_training = hparams.training_spec.continue_training
@@ -749,7 +750,9 @@ class TransformerModel(nn.Module):
                 else:
                     n_epochs_no_improvement += 1
 
-                self.scheduler.step()
+                if self.scheduler_step_iter == "epoch":
+                    self.scheduler.step()
+
                 if epoch % self.iter_save == 0:
                     self._save(epoch, total_loss)
 
@@ -820,6 +823,9 @@ class TransformerModel(nn.Module):
                 start_time = time.time()
 
             del data, targets, output, loss, losses
+
+            if self.scheduler_step_iter == "batch":
+                self.scheduler.step()
 
     @beartype
     def _calculate_loss(

@@ -203,6 +203,7 @@ class TrainingSpecModel(BaseModel):
         loss_weights: A dictionary mapping columns to specific loss weights.
         optimizer: The optimizer configuration.
         scheduler: The learning rate scheduler configuration.
+        scheduler_step_iter: The time of the .step() call on the scheduler, either 'epoch' or 'batch'
         continue_training: If True, continue training from the latest checkpoint.
         distributed: If True, enables distributed training.
         load_full_data_to_ram: If True, loads the entire dataset into RAM.
@@ -231,6 +232,7 @@ class TrainingSpecModel(BaseModel):
             {"name": "StepLR", "step_size": 1, "gamma": 0.99}
         )
     )
+    scheduler_step_iter: str = "epoch"
     continue_training: bool = True
     distributed: bool = False
     load_full_data_to_ram: bool = True
@@ -245,7 +247,7 @@ class TrainingSpecModel(BaseModel):
 
         self.validate_optimizer_config(kwargs["optimizer"])
         self.optimizer = DotDict(kwargs["optimizer"])
-        self.validate_scheduler_config(kwargs["scheduler"])
+        self.validate_scheduler_config(kwargs["scheduler"], kwargs)
         self.scheduler = DotDict(kwargs["scheduler"])
 
     @validator("criterion")
@@ -266,11 +268,29 @@ class TrainingSpecModel(BaseModel):
         return v
 
     @validator("scheduler")
-    def validate_scheduler_config(cls, v):
+    def validate_scheduler_config(cls, v, values):
         if "name" not in v:
             raise ValueError("scheduler dict must specify 'name' field")
         if v["name"] not in VALID_SCHEDULERS:
             raise ValueError(f"scheduler not valid as not found in {VALID_SCHEDULERS}")
+        if "total_steps" in v:
+            if values["scheduler_step_iter"] == "epoch":
+                if not v["total_steps"] == values["epochs"]:
+                    raise ValueError(
+                        f"scheduler total steps: {v['total_steps']} != {values['epochs']}: total epochs"
+                    )
+            else:
+                print(
+                    f"[WARNING] {v['total_steps']} scheduler steps at {values['epochs']} epochs implies {v['total_steps']/values['epochs']:.2f} batches. Does this seem correct?"
+                )
+        return v
+
+    @validator("scheduler_step_iter")
+    def validate_scheduler_step_iter(cls, v):
+        if v not in ["epoch", "batch"]:
+            raise ValueError(
+                f"scheduler_step_iter must be in ['epoch', 'batch'], {v} isn't"
+            )
         return v
 
 
