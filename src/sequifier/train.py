@@ -287,6 +287,8 @@ class TransformerModel(nn.Module):
             for col in hparams.real_columns
             if self.selected_columns is None or col in self.selected_columns
         ]
+        print(f"[INFO] {self.categorical_columns = }")
+        print(f"[INFO] {self.real_columns = }")
 
         self.target_columns = hparams.target_columns
         self.target_column_types = hparams.target_column_types
@@ -850,7 +852,8 @@ class TransformerModel(nn.Module):
               target column.
         """
         losses = {}
-        for target_column, target_column_type in self.target_column_types.items():
+        for target_column in targets.keys():
+            target_column_type = self.target_column_types[target_column]
             if target_column_type == "categorical":
                 output[target_column] = output[target_column].reshape(
                     -1, self.n_classes[target_column]
@@ -862,7 +865,7 @@ class TransformerModel(nn.Module):
                 output[target_column], targets[target_column].T.contiguous().reshape(-1)
             )
         loss = None
-        for target_column in self.target_columns:
+        for target_column in targets.keys():
             losses[target_column] = losses[target_column] * (
                 self.loss_weights[target_column]
                 if self.loss_weights is not None

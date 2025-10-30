@@ -141,12 +141,12 @@ def load_train_config(
         config_values["categorical_columns"] = [
             col
             for col, type_ in dd_config["column_types"].items()
-            if "int64" in type_.lower() and col in config_values["selected_columns"]
+            if "int" in type_.lower() and col in config_values["selected_columns"]
         ]
         config_values["real_columns"] = [
             col
             for col, type_ in dd_config["column_types"].items()
-            if "float64" in type_.lower() and col in config_values["selected_columns"]
+            if "float" in type_.lower() and col in config_values["selected_columns"]
         ]
         assert (
             len(config_values["real_columns"] + config_values["categorical_columns"])
