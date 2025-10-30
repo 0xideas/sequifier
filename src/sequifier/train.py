@@ -720,49 +720,113 @@ class TransformerModel(nn.Module):
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
 
-        for epoch in range(self.start_epoch, self.hparams.training_spec.epochs + 1):
-            if (
-                self.early_stopping_epochs is None
-                or n_epochs_no_improvement < self.early_stopping_epochs
-            ) and (
-                epoch == self.start_epoch
-                or epoch > self.start_epoch
-                and not np.isnan(total_loss)  # type: ignore # noqa: F821
-            ):
-                epoch_start_time = time.time()
+        last_epoch = None
+        best_model = None
+        try:
+            for epoch in range(self.start_epoch, self.hparams.training_spec.epochs + 1):
+                if (
+                    self.early_stopping_epochs is None
+                    or n_epochs_no_improvement < self.early_stopping_epochs
+                ) and (
+                    epoch == self.start_epoch
+                    or epoch > self.start_epoch
+                    and not np.isnan(total_loss)  # type: ignore # noqa: F821
+                ):
+                    epoch_start_time = time.time()
 
-                if train_sampler and not isinstance(train_sampler, RandomSampler):
-                    train_sampler.set_epoch(epoch)
-                self._train_epoch(train_loader, epoch)
+                    if train_sampler and not isinstance(train_sampler, RandomSampler):
+                        train_sampler.set_epoch(epoch)
+                    self._train_epoch(train_loader, epoch)
 
-                if valid_sampler and not isinstance(valid_sampler, RandomSampler):
-                    valid_sampler.set_epoch(epoch)
+                    if valid_sampler and not isinstance(valid_sampler, RandomSampler):
+                        valid_sampler.set_epoch(epoch)
 
-                total_loss, total_losses, output = self._evaluate(valid_loader)
-                elapsed = time.time() - epoch_start_time
+                    total_loss, total_losses, output = self._evaluate(valid_loader)
+                    elapsed = time.time() - epoch_start_time
 
-                self._log_epoch_results(
-                    epoch, elapsed, total_loss, total_losses, output
-                )
+                    self._log_epoch_results(
+                        epoch, elapsed, total_loss, total_losses, output
+                    )
 
-                if total_loss < best_val_loss:
-                    best_val_loss = total_loss
-                    best_model = self._copy_model()
-                    n_epochs_no_improvement = 0
+                    if total_loss < best_val_loss:
+                        best_val_loss = total_loss
+                        best_model = self._copy_model()
+                        n_epochs_no_improvement = 0
+                    else:
+                        n_epochs_no_improvement += 1
+
+                    if self.scheduler_step_iter == "epoch":
+                        self.scheduler.step()
+
+                    if epoch % self.iter_save == 0:
+                        self._save(epoch, total_loss)
+
+                    last_epoch = epoch
+        except KeyboardInterrupt:
+            self.log_file.write("\n" + "=" * 89)
+            self.log_file.write("[WARNING] Training interrupted by user (Ctrl+C).")
+
+            if self.hparams.training_spec.distributed:
+                dist.barrier()
+
+            if self.rank == 0:  # Only ask and export on the main process
+                answer = ""
+                try:
+                    answer = (
+                        input(
+                            "Do you want to export the 'best' and 'last' models? (y/n): "
+                        )
+                        .lower()
+                        .strip()
+                    )
+                except EOFError:  # Handle non-interactive environments
+                    answer = "n"
+
+                if answer == "y":
+                    self.log_file.write("[INFO] User opted to export models.")
+
+                    # Export last model (current state)
+                    if last_epoch is not None and best_model is not None:
+                        self.log_file.write(
+                            f"[INFO] Exporting 'last' model from epoch {last_epoch}..."
+                        )
+                        self._export(self, "last", last_epoch)
+
+                        # Export best model if it exists
+                        if best_model is not None:
+                            self.log_file.write(
+                                "[INFO] Exporting 'best' model (based on best val loss)..."
+                            )
+                            self._export(best_model, "best", last_epoch)
+                        else:
+                            self.log_file.write(
+                                "[WARNING] No 'best' model was saved (no validation improvement yet)."
+                            )
+
+                        self.log_file.write("[INFO] Models exported.")
+                    else:
+                        self.log_file.write(
+                            "[INFO] Could not export model as no epoch ran."
+                        )
                 else:
-                    n_epochs_no_improvement += 1
+                    self.log_file.write("[INFO] User opted *not* to export. Exiting.")
 
-                if self.scheduler_step_iter == "epoch":
-                    self.scheduler.step()
+        if self.hparams.training_spec.distributed:
+            dist.barrier()
 
-                if epoch % self.iter_save == 0:
-                    self._save(epoch, total_loss)
+        # Only rank 0 should perform the final export
+        if self.rank == 0:
+            if (
+                best_model is None
+            ):  # <-- MODIFICATION: Handle case where no improvement was ever made
+                self.log_file.write(
+                    "[INFO] No validation improvement during training. Saving last model as 'best'."
+                )
+                best_model = self._copy_model()
 
-                last_epoch = epoch
-
-        self._export(self, "last", last_epoch)  # type: ignore
-        self._export(best_model, "best", last_epoch)  # type: ignore
-        self.log_file.write("--- Training Complete ---")
+            self._export(self, "last", last_epoch)  # type: ignore
+            self._export(best_model, "best", last_epoch)  # type: ignore
+            self.log_file.write("--- Training Complete ---")
 
     @beartype
     def _train_epoch(
