@@ -126,8 +126,13 @@ class SequifierDatasetFromFolder(Dataset):
             )
 
         # Accessing data is now just a fast slice from the pre-loaded tensors in RAM
-        sequence = {key: tensor[idx] for key, tensor in self.sequences.items()}
-        targets = {key: tensor[idx] for key, tensor in self.targets.items()}
+        train_seq_len = self.config.seq_length
+        sequence = {
+            key: tensor[idx, -train_seq_len:] for key, tensor in self.sequences.items()
+        }
+        targets = {
+            key: tensor[idx, -train_seq_len:] for key, tensor in self.targets.items()
+        }
         sequence_id = int(self.sequence_ids[idx].item())
         subsequence_id = int(self.subsequence_ids[idx].item())
         start_position = int(self.start_item_positions[idx].item())
