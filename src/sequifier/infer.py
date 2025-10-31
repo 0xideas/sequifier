@@ -1207,7 +1207,7 @@ class Inferer:
             A 2D NumPy array of the resulting embeddings.
         """
         assert x is not None
-        size = x[self.target_columns[0]].shape[0]
+        size = x[list(x.keys())[0]].shape[0]
         embedding = self.adjust_and_infer_embedding(x, size)
 
         return embedding
@@ -1253,7 +1253,7 @@ class Inferer:
             x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0
         ):  # type: ignore
             assert x is not None
-            size = x[self.target_columns[0]].shape[0]
+            size = x[list(x.keys())[0]].shape[0]
             if (
                 probs is not None
                 and len(set(x.keys()).difference(set(probs.keys()))) > 0
@@ -1399,7 +1399,7 @@ class Inferer:
             A list of dictionaries, where each dictionary is a single batch
             ready for inference.
         """
-        size = x[self.target_columns[0]].shape[0]
+        size = x[list(x.keys())[0]].shape[0]
         if size == self.inference_batch_size:
             return [x]
         elif size < self.inference_batch_size:
