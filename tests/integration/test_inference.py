@@ -86,7 +86,7 @@ def read_multi_file_preds(path, target_type, file_suffix=None):
     if target_type == "categorical":
         contents = []
         for root, dirs, files in os.walk(path):
-            for file in sorted(files):
+            for file in sorted(list(files)):
                 if file_suffix is None or file.endswith(file_suffix):
                     contents.append(
                         pl.read_csv(os.path.join(root, file), schema_overrides=dtype)

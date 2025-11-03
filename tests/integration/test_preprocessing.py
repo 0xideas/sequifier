@@ -67,7 +67,7 @@ def read_preprocessing_outputs(path, variant):
     elif variant == "categorical":
         contents = []
         for root, _, files in os.walk(path):
-            for file in files:
+            for file in sorted(list(files)):
                 if file.endswith("pt"):
                     (
                         sequences,

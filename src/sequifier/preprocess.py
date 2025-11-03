@@ -226,7 +226,7 @@ class Preprocessor:
         """
         paths_to_process = []
         for root, dirs, files in os.walk(data_path):
-            for file in files:
+            for file in sorted(list(files)):
                 if file.endswith(read_format):
                     paths_to_process.append(os.path.join(root, file))
         return paths_to_process
@@ -330,7 +330,7 @@ class Preprocessor:
         print(f"[INFO] Data path: {data_path}")
         for root, dirs, files in os.walk(data_path):
             print(f"[INFO] N Files : {len(files)}")
-            for file in files:
+            for file in sorted(list(files)):
                 if file.endswith(read_format) and (
                     max_rows is None or n_rows_running_count < max_rows
                 ):
@@ -1517,6 +1517,8 @@ def extract_sequences(
     if data.is_empty():
         return pl.DataFrame(schema=schema)
 
+    print(f"{data.shape = }")
+
     raw_sequences = data.group_by("sequenceId", maintain_order=True).agg(
         [pl.col(c) for c in columns]
     )
@@ -1539,6 +1541,7 @@ def extract_sequences(
                 ] + subseqs[subsequence_id]
                 assert len(row) == (seq_length + 4), f"{row = }"
                 rows.append(row)
+    print(f"{len(rows) = }")
 
     sequences = pl.DataFrame(
         rows,
