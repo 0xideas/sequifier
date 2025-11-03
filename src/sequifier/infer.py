@@ -135,16 +135,11 @@ def infer_worker(
     """
     print(f"[INFO] Reading data from '{config.data_path}'...")
     # Step 1: Use Polars for data ingestion
+    dataset = None
     if config.read_format == "parquet":
         dataset = [pl.read_parquet(config.data_path)]
     elif config.read_format == "csv":
         dataset = [pl.read_csv(config.data_path)]
-    elif config.read_format == "pt":
-        assert percentage_limits is not None
-        start_pct, end_pct = percentage_limits
-        dataset = load_pt_dataset(config.data_path, start_pct, end_pct)
-    else:
-        raise Exception(f"{config.read_format = } not in ['parquet', 'csv', 'pt']")
 
     model_paths = (
         config.model_path
@@ -152,6 +147,14 @@ def infer_worker(
         else [config.model_path]
     )
     for model_path in model_paths:
+        if config.read_format == "pt":
+            assert percentage_limits is not None
+            start_pct, end_pct = percentage_limits
+            dataset = load_pt_dataset(config.data_path, start_pct, end_pct)
+
+        if dataset is None:
+            raise Exception(f"{config.read_format = } not in ['parquet', 'csv', 'pt']")
+
         inferer = Inferer(
             config.model_type,
             model_path,
