@@ -354,6 +354,7 @@ class Preprocessor:
         assert data_columns is not None
         n_classes = {col: len(id_maps[col]) + 1 for col in id_maps}
         assert col_types is not None
+        files_to_process = sorted(files_to_process)
         return (
             files_to_process,
             n_classes,
@@ -910,10 +911,14 @@ def _process_batches_multiple_files_inner(
         batches_per_file: The number of batches to process per file.
         combine_into_single_file: Whether to combine the output into a single file.
     """
+    n_files = len(file_paths)
+    assert n_files > 0
+    pad_width = len(str(n_files - 1))
     n_rows_running_count = 0
     for file_index, path in enumerate(file_paths):
         max_rows_inner = None if max_rows is None else max_rows - n_rows_running_count
         if max_rows_inner is None or max_rows_inner > 0:
+            file_index_str = str(file_index).zfill(pad_width)
             data = _load_and_preprocess_data(
                 path, read_format, selected_columns, max_rows_inner
             )
@@ -928,12 +933,12 @@ def _process_batches_multiple_files_inner(
 
             adjusted_split_paths = [
                 path.replace(
-                    data_name_root, f"{data_name_root}-{process_id}-{file_index}"
+                    data_name_root, f"{data_name_root}-{process_id}-{file_index_str}"
                 )
                 for path in split_paths
             ]
 
-            data_name_root_inner = f"{data_name_root}-{process_id}-{file_index}"
+            data_name_root_inner = f"{data_name_root}-{process_id}-{file_index_str}"
 
             n_batches = _process_batches_single_file(
                 project_path,
@@ -959,7 +964,7 @@ def _process_batches_multiple_files_inner(
                     len(group_proportions),
                     n_batches,
                     process_id,
-                    file_index,
+                    file_index_str,
                     data_name_root,
                     write_format,
                 )
@@ -971,7 +976,7 @@ def _process_batches_multiple_files_inner(
                     data_name_root,
                     write_format,
                     in_target_dir=True,
-                    pre_split_str=f"{process_id}-{file_index}",
+                    pre_split_str=f"{process_id}-{file_index_str}",
                 )
 
                 delete_files(input_files)
@@ -1670,7 +1675,7 @@ def create_file_paths_for_multiple_files1(
     n_splits: int,
     n_batches: int,
     process_id: int,
-    file_index: int,
+    file_index_str: str,
     dataset_name: str,
     write_format: str,
 ) -> dict[int, list[str]]:
@@ -1681,7 +1686,7 @@ def create_file_paths_for_multiple_files1(
     *before* they are combined.
 
     The naming pattern is:
-    `{dataset_name}-{process_id}-{file_index}-split{split}-{batch_id}.{write_format}`
+    `{dataset_name}-{process_id}-{file_index_str}-split{split}-{batch_id}.{write_format}`
 
     Args:
         project_path: The path to the sequifier project directory.
@@ -1689,7 +1694,7 @@ def create_file_paths_for_multiple_files1(
         n_splits: The number of data splits.
         n_batches: The number of batches created by the process.
         process_id: The ID of the multiprocessing worker.
-        file_index: The index of the file being processed by this worker.
+        file_index_str: The index of the file being processed by this worker.
         dataset_name: The root name of the dataset.
         write_format: The file extension.
 
@@ -1704,7 +1709,7 @@ def create_file_paths_for_multiple_files1(
                 project_path,
                 "data",
                 target_dir,
-                f"{dataset_name}-{process_id}-{file_index}-split{split}-{batch_id}.{write_format}",
+                f"{dataset_name}-{process_id}-{file_index_str}-split{split}-{batch_id}.{write_format}",
             )
             for batch_id in range(n_batches)
         ]
@@ -1791,13 +1796,15 @@ def create_file_paths_for_multiple_files2(
         intermediate combined file paths (str) for that split.
     """
     files = {}
+    n_files_max = max(n_files.values()) if n_files else 1
+    pad_width = len(str(n_files_max - 1))
     for split in range(n_splits):
         files_for_split = [
             os.path.join(
                 project_path,
                 "data",
                 target_dir,
-                f"{dataset_name}-{process_id}-{file_index}-split{split}.{write_format}",
+                f"{dataset_name}-{process_id}-{str(file_index).zfill(pad_width)}-split{split}.{write_format}",
             )
             for process_id in range(n_processes)
             for file_index in range(n_files[process_id])
