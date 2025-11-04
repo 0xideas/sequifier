@@ -202,23 +202,25 @@ def test_preprocessed_data_multi_file(run_preprocessing):
             )
         ):
             for file in files:
-                file_list.append(os.path.join(root, file))
+                file_list.append(file)
 
         file_list = sorted(file_list)
 
         expected_file_list = sorted(
-            unnest(
+            ["metadata.json"]
+            + unnest(
                 [
-                    ["metadata.json"]
-                    + [
-                        f"test-data-categorical-multi-file-{source_file}-0-split{split}-0-{str(seq_id).zfill(2)}"
+                    [
+                        f"test-data-categorical-multi-file-{source_file}-0-split{split}-0-{str(seq_id).zfill(2)}.pt"
                     ]
                     for source_file in range(3)
                     for seq_id in range(13)
                 ]
             )
         )
-
+        assert len(file_list) == len(
+            expected_file_list
+        ), f"{file_list = }, {expected_file_list = }"
         assert np.all(
             np.array(file_list) == np.array(expected_file_list)
         ), f"for split: {split}:\n{set(file_list).difference(set(expected_file_list))} not found\n{set(expected_file_list).difference(set(file_list))} extra"
