@@ -191,27 +191,34 @@ def unnest(list_var):
 
 
 def test_preprocessed_data_multi_file(run_preprocessing):
-    file_list = []
-    for root, _, files in os.walk(os.path.join("tests", "project_folder", "data")):
-        for file in files:
-            file_list.append(os.path.join(root, file))
+    for split in range(3):
+        file_list = []
+        for root, _, files in os.walk(
+            os.path.join(
+                "tests",
+                "project_folder",
+                "data",
+                f"test-data-categorical-multi-file-split{split}",
+            )
+        ):
+            for file in files:
+                file_list.append(os.path.join(root, file))
 
-    file_list = sorted(file_list)
+        file_list = sorted(file_list)
 
-    expected_file_list = sorted(
-        unnest(
-            [
-                ["metadata.json"]
-                + [
-                    f"test-data-categorical-multi-file-{source_file}-0-split{split}-0-{str(seq_id).zfill(2)}"
+        expected_file_list = sorted(
+            unnest(
+                [
+                    ["metadata.json"]
+                    + [
+                        f"test-data-categorical-multi-file-{source_file}-0-split{split}-0-{str(seq_id).zfill(2)}"
+                    ]
+                    for source_file in range(3)
+                    for seq_id in range(13)
                 ]
-                for split in range(3)
-                for source_file in range(3)
-                for seq_id in range(13)
-            ]
+            )
         )
-    )
 
-    assert np.all(
-        np.array(file_list) == np.array(expected_file_list)
-    ), f"{set(file_list).difference(set(expected_file_list))} not found\n{set(expected_file_list).difference(set(file_list))} extra"
+        assert np.all(
+            np.array(file_list) == np.array(expected_file_list)
+        ), f"for split: {split}:\n{set(file_list).difference(set(expected_file_list))} not found\n{set(expected_file_list).difference(set(file_list))} extra"
