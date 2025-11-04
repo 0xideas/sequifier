@@ -50,6 +50,11 @@ def preprocessing_config_path_cat_multitarget():
 
 
 @pytest.fixture(scope="session")
+def preprocessing_config_path_multi_file():
+    return os.path.join("tests", "configs", "preprocess-test-multi-file.yaml")
+
+
+@pytest.fixture(scope="session")
 def preprocessing_config_path_real():
     return os.path.join("tests", "configs", "preprocess-test-real.yaml")
 
@@ -125,6 +130,7 @@ def format_configs_locally(
     preprocessing_config_path_cat,
     preprocessing_config_path_cat_multitarget,
     preprocessing_config_path_real,
+    preprocessing_config_path_multi_file,
     training_config_path_cat,
     training_config_path_cat_multitarget,
     training_config_path_real,
@@ -141,6 +147,7 @@ def format_configs_locally(
             preprocessing_config_path_cat,
             preprocessing_config_path_cat_multitarget,
             preprocessing_config_path_real,
+            preprocessing_config_path_multi_file,
             training_config_path_cat,
             training_config_path_cat_multitarget,
             training_config_path_real,
@@ -190,6 +197,7 @@ def run_preprocessing(
     preprocessing_config_path_cat,
     preprocessing_config_path_cat_multitarget,
     preprocessing_config_path_real,
+    preprocessing_config_path_multi_file,
     format_configs_locally,
     remove_project_path_contents,
 ):
@@ -213,6 +221,10 @@ def run_preprocessing(
 
     write_and_log(
         f"sequifier preprocess --config-path={preprocessing_config_path_cat_multitarget}"
+    )
+
+    write_and_log(
+        f"sequifier preprocess --config-path={preprocessing_config_path_multi_file}"
     )
 
     source_path = os.path.join(

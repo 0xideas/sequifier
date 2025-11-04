@@ -1298,7 +1298,7 @@ def _write_accumulated_sequences(
     split_path: str,
     write_format: str,
     process_id: int,
-    file_index: int,
+    file_index_str: str,
     target_dir: str,
     seq_length: int,
     col_types: dict[str, str],
@@ -1327,7 +1327,7 @@ def _write_accumulated_sequences(
 
     # Construct a unique filename for the batched file
     split_path_batch_seq = split_path.replace(
-        f".{write_format}", f"-{process_id}-{file_index}.{write_format}"
+        f".{write_format}", f"-{process_id}-{file_index_str}.{write_format}"
     )
     out_path = insert_top_folder(split_path_batch_seq, target_dir)
 
@@ -1377,6 +1377,7 @@ def preprocess_batch(
         sequences_by_split = {i: [] for i in range(len(split_paths))}
         file_indices = {i: 0 for i in range(len(split_paths))}
 
+        pad_width = len(str(math.ceil(len(sequence_ids) / batches_per_file) + 1))
         for i, sequence_id in enumerate(sequence_ids):
             data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
             group_bounds = get_group_bounds(data_subset, group_proportions)
@@ -1404,7 +1405,7 @@ def preprocess_batch(
                         split_paths[group],
                         write_format,
                         process_id,
-                        file_indices[group],
+                        str(file_indices[group]).zfill(pad_width),
                         target_dir,
                         seq_length,
                         col_types,
@@ -1420,7 +1421,7 @@ def preprocess_batch(
                 split_paths[group],
                 write_format,
                 process_id,
-                file_indices[group],
+                str(file_indices[group]).zfill(pad_width),
                 target_dir,
                 seq_length,
                 col_types,
