@@ -162,7 +162,8 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
     if config.training_spec.distributed:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True)
 
-    model = torch.compile(model)
+    if config.training_spec.device.startswith("cuda"):
+        model = torch.compile(model)
 
     # 3. Start training
     # When using DDP, the original model is accessed via the .module attribute
@@ -1547,7 +1548,10 @@ def load_inference_model(
                 if isinstance(module, torch.nn.Dropout):
                     module.train()
 
-        model = torch.compile(model).to(device)
+        if device.startswith("cuda"):
+            model = torch.compile(model).to(device)
+        else:
+            model.to(device)
 
     return model
 
