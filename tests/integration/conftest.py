@@ -195,14 +195,17 @@ def run_preprocessing(
 ):
     for data_number in [1, 3, 5, 50]:
         data_path_cat = os.path.join(
-            "tests", "resources", f"test-data-categorical-{data_number}.csv"
+            "tests",
+            "resources",
+            "source_data",
+            f"test-data-categorical-{data_number}.csv",
         )
         write_and_log(
             f"sequifier preprocess --config-path={preprocessing_config_path_cat} --data-path={data_path_cat} --selected-columns=None"
         )
 
         data_path_real = os.path.join(
-            "tests", "resources", f"test-data-real-{data_number}.csv"
+            "tests", "resources", "source_data", f"test-data-real-{data_number}.csv"
         )
         write_and_log(
             f"sequifier preprocess --config-path={preprocessing_config_path_real} --data-path={data_path_real} --selected-columns={SELECTED_COLUMNS['real'][data_number]}"
@@ -213,7 +216,10 @@ def run_preprocessing(
     )
 
     source_path = os.path.join(
-        "tests", "resources", "test-data-real-1-split1-autoregression.csv"
+        "tests",
+        "resources",
+        "source_data",
+        "test-data-real-1-split1-autoregression.csv",
     )
 
     target_path = os.path.join(
