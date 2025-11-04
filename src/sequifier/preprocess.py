@@ -176,17 +176,20 @@ class Preprocessor:
                 delete_files(input_files)
 
         else:
-            n_classes, id_maps, selected_columns_statistics, col_types, data_columns = (
-                self._get_column_metadata_across_files(
-                    data_path, read_format, max_rows, selected_columns
-                )
+            (
+                files_to_process,
+                n_classes,
+                id_maps,
+                selected_columns_statistics,
+                col_types,
+                data_columns,
+            ) = self._get_column_metadata_across_files(
+                data_path, read_format, max_rows, selected_columns
             )
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
             schema = self._create_schema(col_types, seq_length)
-
-            files_to_process = self._get_files_to_process(data_path, read_format)
 
             self._process_batches_multiple_files(
                 files_to_process,
@@ -208,28 +211,6 @@ class Preprocessor:
             )
 
         self._cleanup(write_format)
-
-    @beartype
-    def _get_files_to_process(self, data_path: str, read_format: str) -> list[str]:
-        """Finds all data files within a directory that match the read format.
-
-        This method recursively walks through the given `data_path` directory
-        and collects the full paths of all files that end with the specified
-        `read_format` (e.g., ".csv", ".parquet").
-
-        Args:
-            data_path: The path to the root data directory to search.
-            read_format: The file extension (e.g., "csv", "parquet") to look for.
-
-        Returns:
-            A list of string paths to the files that match the criteria.
-        """
-        paths_to_process = []
-        for root, dirs, files in os.walk(data_path):
-            for file in sorted(list(files)):
-                if file.endswith(read_format):
-                    paths_to_process.append(os.path.join(root, file))
-        return paths_to_process
 
     @beartype
     def _create_schema(
@@ -284,6 +265,7 @@ class Preprocessor:
         max_rows: Optional[int],
         selected_columns: Optional[list[str]],
     ) -> tuple[
+        list[str],
         dict[str, int],
         dict[str, dict[Union[str, int], int]],
         dict[str, dict[str, float]],
@@ -326,7 +308,7 @@ class Preprocessor:
         n_rows_running_count = 0
         id_maps, selected_columns_statistics = {}, {}
         col_types, data_columns = None, None
-
+        files_to_process = []
         print(f"[INFO] Data path: {data_path}")
         for root, dirs, files in os.walk(data_path):
             print(f"[INFO] N Files : {len(files)}")
@@ -335,6 +317,7 @@ class Preprocessor:
                     max_rows is None or n_rows_running_count < max_rows
                 ):
                     print(f"[INFO] Preprocessing: reading {file}")
+                    files_to_process.append(os.path.join(root, file))
                     max_rows_inner = (
                         None
                         if max_rows is None
@@ -372,6 +355,7 @@ class Preprocessor:
         n_classes = {col: len(id_maps[col]) + 1 for col in id_maps}
         assert col_types is not None
         return (
+            files_to_process,
             n_classes,
             id_maps,
             selected_columns_statistics,
