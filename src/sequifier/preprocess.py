@@ -75,6 +75,7 @@ class Preprocessor:
         n_cores: Optional[int],
         batches_per_file: int,
         process_by_file: bool,
+        subsequence_start_mode: str,
     ):
         """Initializes the Preprocessor with the given parameters.
 
@@ -135,7 +136,7 @@ class Preprocessor:
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
 
-            schema = self._create_schema(col_types, seq_length)
+            schema = self._create_schema(col_types, seq_length + 1)
 
             data = data.sort(["sequenceId", "itemPosition"])
             n_batches = _process_batches_single_file(
@@ -153,6 +154,7 @@ class Preprocessor:
                 self.split_paths,
                 self.target_dir,
                 self.batches_per_file,
+                subsequence_start_mode,
             )
 
             if self.combine_into_single_file:
@@ -208,6 +210,7 @@ class Preprocessor:
                 group_proportions,
                 write_format,
                 process_by_file,
+                subsequence_start_mode,
             )
 
         self._cleanup(write_format)
@@ -421,6 +424,7 @@ class Preprocessor:
         group_proportions: list[float],
         write_format: str,
         process_by_file: bool = True,
+        subsequence_start_mode: str = "distribute",
     ) -> None:
         """Processes batches of data from multiple files.
 
@@ -466,6 +470,7 @@ class Preprocessor:
                 target_dir=self.target_dir,
                 batches_per_file=self.batches_per_file,
                 combine_into_single_file=self.combine_into_single_file,
+                subsequence_start_mode=subsequence_start_mode,
             )
             input_files = create_file_paths_for_multiple_files2(
                 self.project_path,
@@ -508,6 +513,7 @@ class Preprocessor:
                 "target_dir": self.target_dir,
                 "batches_per_file": self.batches_per_file,
                 "combine_into_single_file": self.combine_into_single_file,
+                "subsequence_start_mode": subsequence_start_mode,
             }
 
             job_params = [
@@ -884,6 +890,7 @@ def _process_batches_multiple_files_inner(
     target_dir: str,
     batches_per_file: int,
     combine_into_single_file: bool,
+    subsequence_start_mode: str,
 ):
     """Inner function for processing batches of data from multiple files.
 
@@ -955,6 +962,7 @@ def _process_batches_multiple_files_inner(
                 adjusted_split_paths,
                 target_dir,
                 batches_per_file,
+                subsequence_start_mode,
             )
 
             if combine_into_single_file:
@@ -1000,6 +1008,7 @@ def _process_batches_single_file(
     split_paths: list[str],
     target_dir: str,
     batches_per_file: int,
+    subsequence_start_mode: str,
 ) -> int:
     """Processes batches of data from a single file.
 
@@ -1040,6 +1049,7 @@ def _process_batches_single_file(
             target_dir,
             write_format,
             batches_per_file,
+            subsequence_start_mode,
         )
         for process_id, (start, end) in enumerate(batch_limits)
         if (end - start) > 0
@@ -1351,6 +1361,7 @@ def preprocess_batch(
     target_dir: str,
     write_format: str,
     batches_per_file: int,
+    subsequence_start_mode: str,
 ) -> None:
     """Processes a batch of data.
 
@@ -1389,6 +1400,7 @@ def preprocess_batch(
                         seq_length,
                         seq_step_sizes[i],
                         data_columns,
+                        subsequence_start_mode,
                     )
                 )
                 for i, (lb, ub) in enumerate(group_bounds)
@@ -1440,6 +1452,7 @@ def preprocess_batch(
                         seq_length,
                         seq_step_sizes[j],
                         data_columns,
+                        subsequence_start_mode,
                     )
                 )
                 for j, (lb, ub) in enumerate(group_bounds)
@@ -1480,6 +1493,7 @@ def extract_sequences(
     seq_length: int,
     seq_step_size: int,
     columns: list[str],
+    subsequence_start_mode: str,
 ) -> pl.DataFrame:
     """Extracts subsequences from a DataFrame of full sequences.
 
@@ -1518,7 +1532,11 @@ def extract_sequences(
         in_seq_lists_only = {col: in_row[col] for col in columns}
 
         subsequences = extract_subsequences(
-            in_seq_lists_only, seq_length, seq_step_size, columns
+            in_seq_lists_only,
+            seq_length,
+            seq_step_size,
+            columns,
+            subsequence_start_mode,
         )
 
         for subsequence_id in range(len(subsequences[columns[0]])):
@@ -1529,7 +1547,7 @@ def extract_sequences(
                     subsequence_id * seq_step_size,
                     col,
                 ] + subseqs[subsequence_id]
-                assert len(row) == (seq_length + 4), f"{row = }"
+                assert len(row) == (seq_length + 5), f"{row = }"
                 rows.append(row)
     print(f"{len(rows) = }")
 
@@ -1543,7 +1561,7 @@ def extract_sequences(
 
 @beartype
 def get_subsequence_starts(
-    in_seq_length: int, seq_length: int, seq_step_size: int
+    in_seq_length: int, seq_length: int, seq_step_size: int, subsequence_start_mode: str
 ) -> np.ndarray:
     """Calculates the start indices for extracting subsequences.
 
@@ -1561,15 +1579,27 @@ def get_subsequence_starts(
     Returns:
         A numpy array of integer start indices for each subsequence.
     """
-    nseq_adjusted = math.ceil((in_seq_length - seq_length) / seq_step_size)
-    seq_step_size_adjusted = math.floor(
-        (in_seq_length - seq_length) / max(1, nseq_adjusted)
-    )
-    increments = [0] + [max(1, seq_step_size_adjusted)] * nseq_adjusted
-    while np.sum(increments) < (in_seq_length - seq_length):
-        increments[np.argmin(increments[1:]) + 1] += 1
+    assert subsequence_start_mode in [
+        "distribute",
+        "exact",
+    ], f"{subsequence_start_mode = } not in ['distribute', 'exact']"
+    if subsequence_start_mode == "distribute":
+        nseq_adjusted = math.ceil((in_seq_length - seq_length) / seq_step_size)
+        seq_step_size_adjusted = math.floor(
+            (in_seq_length - seq_length) / max(1, nseq_adjusted)
+        )
+        increments = [0] + [max(1, seq_step_size_adjusted)] * nseq_adjusted
+        while np.sum(increments) < (in_seq_length - seq_length):
+            increments[np.argmin(increments[1:]) + 1] += 1
 
-    return np.cumsum(increments)
+        return np.cumsum(increments)
+    if subsequence_start_mode == "exact":
+        assert (
+            (in_seq_length - 1) % seq_length == 0
+        ), "'exact' can only be used if: (in_seq_length - 1) % seq_length == 0"
+        last_possible_start = in_seq_length - seq_length - 1
+        return np.arange(0, last_possible_start + 1, seq_step_size)
+    return np.array([])
 
 
 @beartype
@@ -1578,6 +1608,7 @@ def extract_subsequences(
     seq_length: int,
     seq_step_size: int,
     columns: list[str],
+    subsequence_start_mode: str,
 ) -> dict[str, list[list[Union[float, int]]]]:
     """Extracts subsequences from a dictionary of sequence lists.
 
@@ -1609,11 +1640,11 @@ def extract_subsequences(
     in_seq_length = len(in_seq[columns[0]])
 
     subsequence_starts = get_subsequence_starts(
-        in_seq_length, seq_length, seq_step_size
+        in_seq_length, seq_length, seq_step_size, subsequence_start_mode
     )
 
     return {
-        col: [list(in_seq[col][i : i + seq_length]) for i in subsequence_starts]
+        col: [list(in_seq[col][i : i + seq_length + 1]) for i in subsequence_starts]
         for col in columns
     }
 

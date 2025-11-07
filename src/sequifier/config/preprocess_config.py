@@ -66,6 +66,7 @@ class PreprocessorModel(BaseModel):
     n_cores: Optional[int]
     batches_per_file: int = 1024
     process_by_file: bool = True
+    subsequence_start_mode: str = "distribute"
 
     @validator("data_path", always=True)
     def validate_data_path(cls, v: str) -> str:
@@ -124,10 +125,17 @@ class PreprocessorModel(BaseModel):
             raise ValueError("batches_per_file must be a positive integer")
         return v
 
+    @validator("subsequence_start_mode")
+    def validate_subsequence_start_mode(cls, v: str) -> str:
+        if v not in ["distribute", "exact"]:
+            raise ValueError(
+                "subsequence_start_mode must be one of 'distribute', 'exact'"
+            )
+        return v
+
     def __init__(self, **kwargs):
         default_seq_step_size = [kwargs["seq_length"]] * len(
             kwargs["group_proportions"]
         )
         kwargs["seq_step_sizes"] = kwargs.get("seq_step_sizes", default_seq_step_size)
-        kwargs["seq_length"] += 1
         super().__init__(**kwargs)
