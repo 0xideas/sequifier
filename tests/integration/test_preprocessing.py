@@ -61,71 +61,75 @@ def test_dd_config(dd_configs):
             assert "mean" in dd_config["selected_columns_statistics"]["itemValue"]
 
 
+def load_pt_outputs(path):
+    contents = []
+    for root, _, files in os.walk(path):
+        for file in sorted(list(files)):
+            if file.endswith("pt"):
+                (
+                    sequences,
+                    targets,
+                    sequence_id,
+                    subsequence_id,
+                    start_item_position,
+                ) = torch.load(os.path.join(root, file))
+                sequences2 = {}
+                for col, vals in sequences.items():
+                    vals2 = np.concatenate(
+                        [vals.numpy(), targets[col][:, -1:].numpy()], axis=1
+                    )
+
+                    for offset in range(vals2.shape[1] - 1, -1, -1):
+                        sequences2[str(offset)] = np.concatenate(
+                            [sequences2.get(str(offset), []), vals2[:, -(offset + 1)]],
+                            axis=0,
+                        )
+
+                    sequences2["sequenceId"] = np.concatenate(
+                        [
+                            sequences2.get("sequenceId", []),
+                            sequence_id.numpy().astype(int),
+                        ],
+                        axis=0,
+                    )
+                    sequences2["inputCol"] = np.concatenate(
+                        [
+                            sequences2.get("inputCol", []),
+                            np.repeat(col, vals2.shape[0]),
+                        ],
+                        axis=0,
+                    )
+                    sequences2["subsequenceId"] = np.concatenate(
+                        [sequences2.get("subsequenceId", []), subsequence_id],
+                        axis=0,
+                    )
+                    sequences2["startItemPosition"] = np.concatenate(
+                        [
+                            sequences2.get("startItemPosition", []),
+                            start_item_position,
+                        ]
+                    )
+
+                content = pl.DataFrame(sequences2)
+                contents.append(content)
+
+    assert len(contents) > 0, f"no files found for {path}"
+    data = pl.concat(contents, how="vertical")
+    other_cols = [
+        col
+        for col in data.columns
+        if col not in ["sequenceId", "subsequenceId", "startItemPosition", "inputCol"]
+    ]
+    return data[
+        ["sequenceId", "subsequenceId", "startItemPosition", "inputCol"] + other_cols
+    ].sort(["sequenceId", "subsequenceId", "startItemPosition", "inputCol"])
+
+
 def read_preprocessing_outputs(path, variant):
     if variant == "real":
         return pl.read_parquet(f"{path}.parquet")
     elif variant == "categorical":
-        contents = []
-        for root, _, files in os.walk(path):
-            for file in sorted(list(files)):
-                if file.endswith("pt"):
-                    (
-                        sequences,
-                        targets,
-                        sequence_id,
-                        subsequence_id,
-                        start_item_position,
-                    ) = torch.load(os.path.join(root, file))
-                    sequences2 = {}
-                    for col, vals in sequences.items():
-                        vals2 = np.concatenate(
-                            [vals.numpy(), targets[col][:, -1:].numpy()], axis=1
-                        )
-
-                        for offset in range(vals2.shape[1] - 1, -1, -1):
-                            sequences2[str(offset)] = np.concatenate(
-                                [sequences2.get(str(offset), []), vals2[:, -offset]],
-                                axis=0,
-                            )
-
-                        sequences2["sequenceId"] = np.concatenate(
-                            [
-                                sequences2.get("sequenceId", []),
-                                sequence_id.numpy().astype(int),
-                            ],
-                            axis=0,
-                        )
-                        sequences2["inputCol"] = np.concatenate(
-                            [
-                                sequences2.get("inputCol", []),
-                                np.repeat(col, vals2.shape[0]),
-                            ],
-                            axis=0,
-                        )
-                        sequences2["subsequenceId"] = np.concatenate(
-                            [sequences2.get("subsequenceId", []), subsequence_id],
-                            axis=0,
-                        )
-                        sequences2["startItemPosition"] = np.concatenate(
-                            [
-                                sequences2.get("startItemPosition", []),
-                                start_item_position,
-                            ]
-                        )
-
-                    content = pl.DataFrame(sequences2)
-                    contents.append(content)
-
-        assert len(contents) > 0, f"no files found for {path}"
-        data = pl.concat(contents, how="vertical")
-        other_cols = [
-            col
-            for col in data.columns
-            if col not in ["sequenceId", "subsequenceId", "inputCol"]
-        ]
-        return data[["sequenceId", "subsequenceId", "inputCol"] + other_cols].sort(
-            ["sequenceId", "subsequenceId", "inputCol"]
-        )
+        return load_pt_outputs(path)
 
 
 @pytest.fixture()
@@ -224,3 +228,32 @@ def test_preprocessed_data_multi_file(run_preprocessing):
         assert np.all(
             np.array(file_list) == np.array(expected_file_list)
         ), f"for split: {split}:\n{set(file_list).difference(set(expected_file_list))} not found\n{set(expected_file_list).difference(set(file_list))} extra"
+
+
+def test_preprocessed_data_exact(run_preprocessing):
+    parquet_out_path = os.path.join(
+        "tests",
+        "project_folder",
+        "data",
+        "test-data-categorical-3-equal-split0.parquet",
+    )
+    pt_out_path = os.path.join(
+        "tests", "project_folder", "data", "test-data-categorical-3-equal-split0"
+    )
+
+    parquet_output = pl.read_parquet(parquet_out_path)
+    pt_output = load_pt_outputs(pt_out_path)
+
+    assert np.all(
+        parquet_output.to_numpy()[:, [0, 1, 2, 4, 5, 6, 7, 8, 9]]
+        == pt_output.to_numpy()[:, [0, 1, 2, 4, 5, 6, 7, 8, 9]].astype(int)
+    ), f"{np.sum(parquet_output.to_numpy()[:,[0,1,2,4,5,6,7,8,9]] == pt_output.to_numpy()[:,[0,1,2,4,5,6,7,8,9]].astype(int)) = }"
+
+    assert np.all(
+        parquet_output["sequenceId"].to_numpy() == np.repeat(np.arange(10), 9)
+    )
+
+    assert np.all(
+        parquet_output["subsequenceId"].to_numpy()
+        == np.tile(np.repeat(np.arange(3), 3), 10)
+    )

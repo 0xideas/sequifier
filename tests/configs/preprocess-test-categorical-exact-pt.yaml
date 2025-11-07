@@ -1,18 +1,14 @@
 project_path: tests/project_folder
-data_path: tests/resources/source_data/test-data-categorical-5.csv
+data_path: tests/resources/source_data/test-data-categorical-3-equal.csv
 combine_into_single_file: false
 read_format: csv
 write_format: pt
 selected_columns: null
 
 group_proportions:
-- 0.6
-- 0.2
-- 0.2
-seq_length: 8
+- 1.0
+seq_length: 5
 seq_step_sizes:
-- 1
-- 1
-- 1
+- 5
 max_rows: null
-subsequence_start_mode: distribute
+subsequence_start_mode: exact
