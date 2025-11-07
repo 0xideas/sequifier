@@ -1,0 +1,656 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html">
+        <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/helpers.html">
+
+    <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
+        <title>sequifier.helpers - sequifier v0.9.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../../index.html"><div class="brand">sequifier v0.9.0.0 documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
+  
+  <span class="sidebar-brand-text">sequifier v0.9.0.0 documentation</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">Preprocessing Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.train_config">Training Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.sequifier">Internals</a></li>
+</ul>
+
+</div>
+<div class="sidebar-tree">
+  <p class="caption" role="heading">
+    <span class="caption-text">Versions</span>
+  </p>
+  <ul>
+      <li><a href="../../../main/index.html">main</a></li>
+      <li><a href="../../../v0.8.0.10/index.html">v0.8.0.10</a></li>
+      <li><a href="../../../v0.8.0.7/index.html">v0.8.0.7</a></li>
+      <li><a href="../../../v0.8.0.8/index.html">v0.8.0.8</a></li>
+      <li><a href="../../../v0.8.0.9/index.html">v0.8.0.9</a></li>
+      <li><a href="../../../v0.8.1.0/index.html">v0.8.1.0</a></li>
+      <li><a href="helpers.html">v0.9.0.0</a></li>
+  </ul>
+</div>
+</div>
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <h1>Source code for sequifier.helpers</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">polars</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pl</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">beartype</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
+
+<span class="n">PANDAS_TO_TORCH_TYPES</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;Float64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+    <span class="s2">&quot;float64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+    <span class="s2">&quot;Float32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+    <span class="s2">&quot;float32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+    <span class="s2">&quot;Float16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span>
+    <span class="s2">&quot;float16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span>
+    <span class="s2">&quot;Int64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
+    <span class="s2">&quot;int64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
+    <span class="s2">&quot;Int32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span>
+    <span class="s2">&quot;int32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span>
+    <span class="s2">&quot;Int16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int16</span><span class="p">,</span>
+    <span class="s2">&quot;int16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int16</span><span class="p">,</span>
+    <span class="s2">&quot;Int8&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int8</span><span class="p">,</span>
+    <span class="s2">&quot;int8&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int8</span><span class="p">,</span>
+<span class="p">}</span>
+
+
+<div class="viewcode-block" id="construct_index_maps">
+<a class="viewcode-back" href="../../api.html#sequifier.helpers.construct_index_maps">[docs]</a>
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">construct_index_maps</span><span class="p">(</span>
+    <span class="n">id_maps</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="nb">int</span><span class="p">]]],</span>
+    <span class="n">target_columns_index_map</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
+    <span class="n">map_to_id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">],</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Constructs reverse index maps (int index to original ID).</span>
+
+<span class="sd">    This function creates reverse mappings from the integer indices back to</span>
+<span class="sd">    the original string or integer identifiers. It only performs this</span>
+<span class="sd">    operation if `map_to_id` is True and `id_maps` is provided.</span>
+
+<span class="sd">    A special mapping for index 0 is added:</span>
+<span class="sd">    - If original IDs are strings, 0 maps to &quot;unknown&quot;.</span>
+<span class="sd">    - If original IDs are integers, 0 maps to (minimum original ID) - 1.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        id_maps: A nested dictionary mapping column names to their</span>
+<span class="sd">            respective ID-to-index maps (e.g.,</span>
+<span class="sd">            `{&#39;col_name&#39;: {&#39;original_id&#39;: 1, ...}}`). Expected to be</span>
+<span class="sd">            provided if `map_to_id` is True.</span>
+<span class="sd">        target_columns_index_map: A list of column names for which to</span>
+<span class="sd">            construct the reverse maps.</span>
+<span class="sd">        map_to_id: A boolean flag. If True, the reverse maps are</span>
+<span class="sd">            constructed. If False or None, an empty dictionary is returned.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A dictionary where keys are column names from</span>
+<span class="sd">        `target_columns_index_map` and values are the reverse maps</span>
+<span class="sd">        (index-to-original-ID). Returns an empty dict if `map_to_id`</span>
+<span class="sd">        is not True.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        AssertionError: If `map_to_id` is True but `id_maps` is None.</span>
+<span class="sd">        AssertionError: If the values of a map are not consistently</span>
+<span class="sd">            string or integer (excluding the added &#39;0&#39; key).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">index_map</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">if</span> <span class="n">map_to_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">map_to_id</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="n">id_maps</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">target_columns_index_map</span><span class="p">:</span>
+            <span class="n">map_</span> <span class="o">=</span> <span class="p">{</span><span class="n">v</span><span class="p">:</span> <span class="n">k</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">id_maps</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+            <span class="n">val</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">map_</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
+                <span class="n">map_</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;unknown&quot;</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span>
+                <span class="n">map_</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">map_</span><span class="o">.</span><span class="n">values</span><span class="p">())</span> <span class="o">-</span> <span class="mi">1</span>  <span class="c1"># type: ignore</span>
+            <span class="n">index_map</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">map_</span>
+    <span class="k">return</span> <span class="n">index_map</span></div>
+
+
+
+<div class="viewcode-block" id="read_data">
+<a class="viewcode-back" href="../../api.html#sequifier.helpers.read_data">[docs]</a>
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">read_data</span><span class="p">(</span>
+    <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Reads data from a CSV or Parquet file into a Polars DataFrame.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        path: The file path to read from.</span>
+<span class="sd">        read_format: The format of the file. Supported formats are</span>
+<span class="sd">            &quot;csv&quot; and &quot;parquet&quot;.</span>
+<span class="sd">        columns: An optional list of column names to read. This argument</span>
+<span class="sd">            is only used when `read_format` is &quot;parquet&quot;.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A Polars DataFrame containing the data from the file.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If `read_format` is not &quot;csv&quot; or &quot;parquet&quot;.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;csv&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">pl</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">separator</span><span class="o">=</span><span class="s2">&quot;,&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">pl</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="n">columns</span><span class="p">)</span>
+    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported read format: </span><span class="si">{</span><span class="n">read_format</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="write_data">
+<a class="viewcode-back" href="../../api.html#sequifier.helpers.write_data">[docs]</a>
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">write_data</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">write_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Writes a Polars (or Pandas) DataFrame to a CSV or Parquet file.</span>
+
+<span class="sd">    This function detects the type of the input DataFrame.</span>
+<span class="sd">    - For Polars DataFrames, it uses `.write_csv()` or `.write_parquet()`.</span>
+<span class="sd">    - For other DataFrame types (presumably Pandas), it uses `.to_csv()`</span>
+<span class="sd">      or `.to_parquet()`.</span>
+
+<span class="sd">    Note: The type hint specifies `pl.DataFrame`, but the implementation</span>
+<span class="sd">    includes a fallback path that suggests compatibility with Pandas</span>
+<span class="sd">    DataFrames.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        data: The Polars (or Pandas) DataFrame to write.</span>
+<span class="sd">        path: The destination file path.</span>
+<span class="sd">        write_format: The format to write. Supported formats are</span>
+<span class="sd">            &quot;csv&quot; and &quot;parquet&quot;.</span>
+<span class="sd">        **kwargs: Additional keyword arguments passed to the underlying</span>
+<span class="sd">            write function (e.g., `write_csv` for Polars, `to_csv` for</span>
+<span class="sd">            Pandas).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        None.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If `write_format` is not &quot;csv&quot; or &quot;parquet&quot;.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">write_format</span> <span class="o">==</span> <span class="s2">&quot;csv&quot;</span><span class="p">:</span>
+            <span class="n">data</span><span class="o">.</span><span class="n">write_csv</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">write_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span><span class="p">:</span>
+            <span class="n">data</span><span class="o">.</span><span class="n">write_parquet</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Unsupported write format for Polars DataFrame: </span><span class="si">{</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span>
+
+    <span class="k">if</span> <span class="n">write_format</span> <span class="o">==</span> <span class="s2">&quot;csv&quot;</span><span class="p">:</span>
+        <span class="n">data</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">separator</span><span class="o">=</span><span class="s2">&quot;,&quot;</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">write_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span><span class="p">:</span>
+        <span class="n">data</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported write format: </span><span class="si">{</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="subset_to_selected_columns">
+<a class="viewcode-back" href="../../api.html#sequifier.helpers.subset_to_selected_columns">[docs]</a>
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">subset_to_selected_columns</span><span class="p">(</span>
+    <span class="n">data</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">LazyFrame</span><span class="p">],</span> <span class="n">selected_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">LazyFrame</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Filters a DataFrame to rows where &#39;inputCol&#39; is in a selected list.</span>
+
+<span class="sd">    This function supports both Polars (DataFrame, LazyFrame) and Pandas</span>
+<span class="sd">    DataFrames, dispatching to the appropriate filtering method.</span>
+
+<span class="sd">    - For Polars objects, it uses `data.filter(pl.col(&quot;inputCol&quot;).is_in(...))`.</span>
+<span class="sd">    - For other objects (presumably Pandas), it builds a numpy boolean</span>
+<span class="sd">      mask and filters using `data.loc[...]`.</span>
+
+<span class="sd">    Note: The type hint only specifies Polars objects, but the</span>
+<span class="sd">    implementation includes a fallback path for Pandas-like objects.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        data: The Polars (DataFrame, LazyFrame) or Pandas DataFrame to</span>
+<span class="sd">            filter. It must contain a column named &quot;inputCol&quot;.</span>
+<span class="sd">        selected_columns: A list of values. Rows will be kept if their</span>
+<span class="sd">            value in &quot;inputCol&quot; is present in this list.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A filtered DataFrame or LazyFrame of the same type as the input.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">LazyFrame</span><span class="p">)):</span>
+        <span class="k">return</span> <span class="n">data</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_in</span><span class="p">(</span><span class="n">selected_columns</span><span class="p">))</span>
+
+    <span class="n">column_filters</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;inputCol&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span> <span class="o">==</span> <span class="n">input_col</span><span class="p">)</span> <span class="k">for</span> <span class="n">input_col</span> <span class="ow">in</span> <span class="n">selected_columns</span>
+    <span class="p">]</span>
+    <span class="n">filter_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logical_or</span><span class="o">.</span><span class="n">reduce</span><span class="p">(</span><span class="n">column_filters</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">data</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">filter_</span><span class="p">,</span> <span class="p">:]</span></div>
+
+
+
+<div class="viewcode-block" id="numpy_to_pytorch">
+<a class="viewcode-back" href="../../api.html#sequifier.helpers.numpy_to_pytorch">[docs]</a>
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">numpy_to_pytorch</span><span class="p">(</span>
+    <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
+    <span class="n">all_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>  <span class="c1"># Changed from selected_columns, target_columns</span>
+    <span class="n">seq_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>  <span class="c1"># Now returns a single dictionary</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Converts a long-format Polars DataFrame to a dict of sequence tensors.</span>
+
+<span class="sd">    This function assumes the input DataFrame `data` is in a long format</span>
+<span class="sd">    where each row represents a sequence for a specific feature. It expects</span>
+<span class="sd">    a column named &quot;inputCol&quot; that contains the feature name (e.g.,</span>
+<span class="sd">    &#39;price&#39;, &#39;volume&#39;) and other columns representing time steps (e.g.,</span>
+<span class="sd">    &quot;0&quot;, &quot;1&quot;, ..., &quot;L&quot;).</span>
+
+<span class="sd">    It generates two tensors for each column in `all_columns`:</span>
+<span class="sd">    1.  An &quot;input&quot; tensor (from time steps L down to 1).</span>
+<span class="sd">    2.  A &quot;target&quot; tensor (from time steps L-1 down to 0).</span>
+
+<span class="sd">    Example:</span>
+<span class="sd">        For `seq_length = 3` and `all_columns = [&#39;price&#39;]`, it will create:</span>
+<span class="sd">        - &#39;price&#39;: Tensor from columns [&quot;3&quot;, &quot;2&quot;, &quot;1&quot;]</span>
+<span class="sd">        - &#39;price_target&#39;: Tensor from columns [&quot;2&quot;, &quot;1&quot;, &quot;0&quot;]</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        data: The long-format Polars DataFrame. Must contain &quot;inputCol&quot;</span>
+<span class="sd">            and columns named as strings of integers for time steps.</span>
+<span class="sd">        column_types: A dictionary mapping feature names (from &quot;inputCol&quot;)</span>
+<span class="sd">            to their desired `torch.dtype`.</span>
+<span class="sd">        all_columns: A list of all feature names (from &quot;inputCol&quot;) to</span>
+<span class="sd">            be processed and converted into tensors.</span>
+<span class="sd">        seq_length: The total sequence length (L). This determines the</span>
+<span class="sd">            column names for time steps (e.g., &quot;0&quot; to &quot;L&quot;).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A dictionary mapping feature names to their corresponding PyTorch</span>
+<span class="sd">        tensors. Target tensors are stored with a `_target` suffix</span>
+<span class="sd">        (e.g., `{&#39;price&#39;: &lt;tensor&gt;, &#39;price_target&#39;: &lt;tensor&gt;}`).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Define both input and target sequence column names</span>
+    <span class="n">input_seq_cols</span> <span class="o">=</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">seq_length</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)]</span>
+    <span class="n">target_seq_cols</span> <span class="o">=</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">seq_length</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)]</span>
+
+    <span class="c1"># We will create a unified dictionary</span>
+    <span class="n">unified_tensors</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="k">for</span> <span class="n">col_name</span> <span class="ow">in</span> <span class="n">all_columns</span><span class="p">:</span>
+        <span class="c1"># Create the input sequence tensor (e.g., from t=1 to t=L)</span>
+        <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
+            <span class="n">data</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">col_name</span><span class="p">)</span>
+            <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">input_seq_cols</span><span class="p">)</span>
+            <span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">column_types</span><span class="p">[</span><span class="n">col_name</span><span class="p">],</span>
+        <span class="p">)</span>
+        <span class="n">unified_tensors</span><span class="p">[</span><span class="n">col_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">input_tensor</span>
+
+        <span class="c1"># Create the target sequence tensor (e.g., from t=0 to t=L-1)</span>
+        <span class="c1"># We&#39;ll store it with a &quot;_target&quot; suffix to distinguish it</span>
+        <span class="n">target_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
+            <span class="n">data</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">col_name</span><span class="p">)</span>
+            <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">target_seq_cols</span><span class="p">)</span>
+            <span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">column_types</span><span class="p">[</span><span class="n">col_name</span><span class="p">],</span>
+        <span class="p">)</span>
+        <span class="n">unified_tensors</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col_name</span><span class="si">}</span><span class="s2">_target&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">target_tensor</span>
+
+    <span class="k">return</span> <span class="n">unified_tensors</span></div>
+
+
+
+<div class="viewcode-block" id="LogFile">
+<a class="viewcode-back" href="../../api.html#sequifier.helpers.LogFile">[docs]</a>
+<span class="k">class</span><span class="w"> </span><span class="nc">LogFile</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Manages logging to multiple files based on verbosity levels.</span>
+
+<span class="sd">    This class opens multiple log files based on a path template and a</span>
+<span class="sd">    hardcoded list of levels (2 and 3). Messages are written to files</span>
+<span class="sd">    based on their assigned level, and high-level messages are also</span>
+<span class="sd">    printed to the console on the main process (rank 0).</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        rank (Optional[int]): The rank of the current process, used to</span>
+<span class="sd">            control console output.</span>
+<span class="sd">        levels (list[int]): The hardcoded list of log levels [2, 3]</span>
+<span class="sd">            for which files are created.</span>
+<span class="sd">        _files (dict[int, io.TextIOWrapper]): A dictionary mapping log</span>
+<span class="sd">            levels to their open file handlers.</span>
+<span class="sd">        _path (str): The original path template provided.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="LogFile.__init__">
+<a class="viewcode-back" href="../../api.html#sequifier.helpers.LogFile.__init__">[docs]</a>
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">rank</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initializes the LogFile and opens log files.</span>
+
+<span class="sd">        The `path` argument should be a template containing &quot;[NUMBER]&quot;,</span>
+<span class="sd">        which will be replaced by the log levels (2 and 3) to create</span>
+<span class="sd">        separate log files.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            path: The path template for the log files (e.g.,</span>
+<span class="sd">                &quot;run_log_[NUMBER].txt&quot;).</span>
+<span class="sd">            rank: The rank of the current process (e.g., in distributed</span>
+<span class="sd">                training). If None or 0, high-level messages will be</span>
+<span class="sd">                printed to stdout.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">=</span> <span class="n">rank</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">levels</span> <span class="o">=</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_files</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">level</span><span class="p">:</span> <span class="n">path</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot;[NUMBER]&quot;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">level</span><span class="p">))</span> <span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">levels</span>
+        <span class="p">}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_path</span> <span class="o">=</span> <span class="n">path</span></div>
+
+
+<div class="viewcode-block" id="LogFile.write">
+<a class="viewcode-back" href="../../api.html#sequifier.helpers.LogFile.write">[docs]</a>
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">write</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">string</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">level</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Writes a string to log files and potentially the console.</span>
+
+<span class="sd">        The string is written to all log files whose level is less than</span>
+<span class="sd">        or equal to the specified `level`.</span>
+
+<span class="sd">        - A message with `level=2` goes to file 2.</span>
+<span class="sd">        - A message with `level=3` goes to file 2 and file 3.</span>
+
+<span class="sd">        If `level` is 3 or greater, the message is also printed to stdout</span>
+<span class="sd">        if `self.rank` is None or 0.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            string: The message to log.</span>
+<span class="sd">            level: The verbosity level of the message. Defaults to 3.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">level2</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">levels</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">level2</span> <span class="o">&lt;=</span> <span class="n">level</span><span class="p">:</span>
+                <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_files</span><span class="p">[</span><span class="n">level2</span><span class="p">],</span> <span class="s2">&quot;a+&quot;</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                    <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">string</span><span class="si">}</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">level</span> <span class="o">&gt;=</span> <span class="mi">3</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="nb">print</span><span class="p">(</span><span class="n">string</span><span class="p">)</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="normalize_path">
+<a class="viewcode-back" href="../../api.html#sequifier.helpers.normalize_path">[docs]</a>
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">normalize_path</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">project_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Normalizes a path to be relative to a project path, then joins them.</span>
+
+<span class="sd">    This function ensures that a given `path` is correctly expressed as</span>
+<span class="sd">    an absolute path rooted at `project_path`. It does this by first</span>
+<span class="sd">    removing the `project_path` prefix from `path` (if it exists)</span>
+<span class="sd">    and then joining the result back to `project_path`.</span>
+
+<span class="sd">    This is useful for handling paths that might be provided as either</span>
+<span class="sd">    relative (e.g., &quot;data/file.txt&quot;) or absolute</span>
+<span class="sd">    (e.g., &quot;/abs/path/to/project/data/file.txt&quot;).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        path: The path to normalize.</span>
+<span class="sd">        project_path: The absolute path to the project&#39;s root directory.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        A normalized, absolute path.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">project_path_normalized</span> <span class="o">=</span> <span class="p">(</span><span class="n">project_path</span> <span class="o">+</span> <span class="n">os</span><span class="o">.</span><span class="n">sep</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">sep</span> <span class="o">+</span> <span class="n">os</span><span class="o">.</span><span class="n">sep</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">sep</span><span class="p">)</span>
+    <span class="n">path2</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">project_path</span><span class="p">,</span> <span class="n">path</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">project_path_normalized</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">path2</span></div>
+
+</pre></div>
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          
+          
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2025, Leon Luithlen
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer no-toc">
+      
+      
+      
+    </aside>
+  </div>
+</div><script src="../../_static/documentation_options.js?v=6361650c"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
+    </body>
+</html>
