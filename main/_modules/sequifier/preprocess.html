@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/preprocess.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.preprocess - sequifier v0.9.0.2 documentation</title>
+        <title>sequifier.preprocess - sequifier v0.9.0.3 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v0.9.0.2 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v0.9.0.3 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v0.9.0.2 documentation</span>
+  <span class="sidebar-brand-text">sequifier v0.9.0.3 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -1887,10 +1887,14 @@
 
     <span class="k">if</span> <span class="n">subsequence_start_mode</span> <span class="o">==</span> <span class="s2">&quot;exact&quot;</span><span class="p">:</span>
         <span class="k">assert</span> <span class="p">(</span>
-            <span class="p">(</span><span class="n">in_seq_length</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">%</span> <span class="n">seq_length</span> <span class="o">==</span> <span class="mi">0</span>
-        <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;&#39;exact&#39; can only be used if: (in_seq_length - 1) % seq_length == 0, </span><span class="si">{</span><span class="p">(</span><span class="n">in_seq_length</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="si">= }</span><span class="s2">, </span><span class="si">{</span><span class="n">seq_length</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span>
-        <span class="n">last_possible_start</span> <span class="o">=</span> <span class="n">in_seq_length</span> <span class="o">-</span> <span class="n">seq_length</span> <span class="o">-</span> <span class="mi">1</span>
-        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">last_possible_start</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">seq_step_size</span><span class="p">)</span>
+            <span class="p">((</span><span class="n">in_seq_length</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">-</span> <span class="n">seq_length</span><span class="p">)</span> <span class="o">%</span> <span class="n">seq_step_size</span> <span class="o">==</span> <span class="mi">0</span>
+        <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;&#39;exact&#39; can only be used if: ((in_seq_length - 1) - seq_length) % seq_step_size == 0, </span><span class="si">{</span><span class="p">(</span><span class="n">in_seq_length</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="si">= }</span><span class="s2">, </span><span class="si">{</span><span class="n">seq_length</span><span class="w"> </span><span class="si">= }</span><span class="s2">, </span><span class="si">{</span><span class="n">seq_step_size</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span>
+        <span class="n">last_possible_start</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">in_seq_length</span> <span class="o">-</span> <span class="p">(</span><span class="n">seq_length</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
+        <span class="p">)</span>  <span class="c1"># the latter &#39;-1&#39; is to translate to index</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span>
+            <span class="mi">0</span><span class="p">,</span> <span class="n">last_possible_start</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">seq_step_size</span>
+        <span class="p">)</span>  <span class="c1"># the &#39;+1&#39; is to make it inclusive</span>
     <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([])</span></div>
 
 
@@ -2281,7 +2285,7 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=f0e16b7f"></script>
+</div><script src="../../_static/documentation_options.js?v=5499ef66"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
