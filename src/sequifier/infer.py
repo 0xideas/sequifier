@@ -194,6 +194,7 @@ def infer_worker(
     print("--- Inference Complete ---")
 
 
+@beartype
 def infer_embedding(
     config: "InfererModel",
     inferer: "Inferer",
@@ -207,8 +208,9 @@ def infer_embedding(
     of DataFrames or an iterator of tensors). For each data chunk, it
     calls the appropriate function (`get_embeddings` or `get_embeddings_pt`)
     to generate embeddings. It then formats these embeddings into a
-    Polars DataFrame, associating them with their `sequenceId` and
-    `subsequenceId`, and writes the resulting DataFrame to the configured output path.
+    Polars DataFrame, associating them with their `sequenceId`, `subsequenceId`,
+    and absolute `itemPosition`, and writes the resulting DataFrame to the
+    configured output path.
 
     Args:
         config: The `InfererModel` configuration object.
@@ -221,34 +223,71 @@ def infer_embedding(
             `torch.dtype`.
     """
     for data_id, data in enumerate(dataset):
-        # Step 1: Adapt Data Subsetting (now works on Polars DF)
+        inference_size = inferer.inference_size
+
+        # Step 1: Get embeddings and base position/ID data
         if config.read_format in ["parquet", "csv"]:
             if config.selected_columns is not None:
                 data = subset_to_selected_columns(data, config.selected_columns)
+
+            # Determine the number of input features
             n_input_cols = data.get_column("inputCol").n_unique()
+
+            # Create a mask to select only one row per sequence
             mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
+
             embeddings = get_embeddings(config, inferer, data, column_types)
+
             sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
-            subsequence_ids_for_preds = data.get("subsequenceId").filter(mask)
+            # --- ADDED THIS LINE ---
+            subsequence_ids_for_preds = data.get_column("subsequenceId").filter(mask)
+            item_positions_for_preds_base = (
+                data.get_column("startItemPosition").filter(mask).to_numpy()
+            )
+
         elif config.read_format == "pt":
-            sequences_dict, _, sequence_ids_tensor, subsequence_ids_tensor, _ = data
+            (
+                sequences_dict,
+                _,
+                sequence_ids_tensor,
+                subsequence_ids_tensor,
+                start_positions_tensor,
+            ) = data
             embeddings = get_embeddings_pt(config, inferer, sequences_dict)
+
             sequence_ids_for_preds = sequence_ids_tensor.numpy()
             subsequence_ids_for_preds = subsequence_ids_tensor.numpy()
+            item_positions_for_preds_base = start_positions_tensor.numpy()
+
         else:
             raise Exception("impossible")
 
-        inference_size = inferer.inference_size
+        # Step 2: Calculate absolute positions and repeat IDs
+        # (e.g., for seq_len=50, inf_size=5, offsets are [45, 46, 47, 48, 49])
+        base_offsets = np.arange(config.seq_length - inference_size, config.seq_length)
+
+        # Tile these offsets for each sample in the batch
+        position_offsets_tiled = np.tile(
+            base_offsets, len(item_positions_for_preds_base)
+        )
+
+        # Repeat the base start position for each of the N embedding outputs
+        base_positions_repeated = np.repeat(
+            item_positions_for_preds_base, inference_size
+        )
+
+        # The final position is the start + the relative offset within the sequence
+        final_positions = base_positions_repeated + position_offsets_tiled
+
         sequence_ids_repeated = np.repeat(sequence_ids_for_preds, inference_size)
         subsequence_ids_repeated = np.repeat(subsequence_ids_for_preds, inference_size)
-        positionOffsets = np.tile(
-            np.arange(inference_size), len(sequence_ids_for_preds)
-        )
-        embeddings = pl.DataFrame(
+
+        # Step 3: Build the final DataFrame
+        embeddings_df = pl.DataFrame(
             {
                 "sequenceId": sequence_ids_repeated,
-                "subsequenceId": subsequence_ids_repeated,
-                "positionOffsets": positionOffsets,
+                "subsequenceId": subsequence_ids_repeated,  # <-- ADDED THIS COLUMN
+                "itemPosition": final_positions,
                 **dict(
                     zip(
                         [str(v) for v in range(embeddings.shape[1])],
@@ -258,6 +297,7 @@ def infer_embedding(
             }
         )
 
+        # Step 4: Save the output
         os.makedirs(
             os.path.join(config.project_path, "outputs", "embeddings"),
             exist_ok=True,
@@ -282,7 +322,7 @@ def infer_embedding(
         )
         print(f"[INFO] Writing predictions to '{embeddings_path}'")
         write_data(
-            embeddings,
+            embeddings_df,
             embeddings_path,
             config.write_format,
         )
@@ -352,7 +392,8 @@ def infer_generative(
                     item_positions_for_preds_base, inference_size
                 )
                 position_offsets = np.tile(
-                    np.arange(inference_size), len(item_positions_for_preds_base)
+                    np.arange(-inference_size + 1, 1),
+                    len(item_positions_for_preds_base),
                 )
                 item_positions_for_preds = item_positions_repeated + position_offsets
 
@@ -405,7 +446,8 @@ def infer_generative(
                     item_positions_for_preds_base, inference_size
                 )
                 position_offsets = np.tile(
-                    np.arange(inference_size), len(item_positions_for_preds_base)
+                    np.arange(-inference_size + 1, 1),
+                    len(item_positions_for_preds_base),
                 )
                 item_positions_for_preds = item_positions_repeated + position_offsets
 

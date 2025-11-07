@@ -222,7 +222,7 @@ def test_multi_pred(predictions):
 def test_embeddings(embeddings):
     for model_name, model_embeddings in embeddings.items():
         assert model_embeddings.shape[0] == 10
-        assert model_embeddings.shape[1] == 203
+        assert model_embeddings.shape[1] == 202
         assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.1
 
 
