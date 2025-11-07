@@ -1584,15 +1584,13 @@ def get_subsequence_starts(
         "exact",
     ], f"{subsequence_start_mode = } not in ['distribute', 'exact']"
     if subsequence_start_mode == "distribute":
-        nseq_adjusted = math.ceil((in_seq_length - seq_length) / seq_step_size)
+        nseq_adjusted = math.ceil((in_seq_length - (seq_length + 1)) / seq_step_size)
         seq_step_size_adjusted = math.floor(
-            (in_seq_length - seq_length) / max(1, nseq_adjusted)
+            (in_seq_length - (seq_length + 1)) / max(1, nseq_adjusted)
         )
         increments = [0] + [max(1, seq_step_size_adjusted)] * nseq_adjusted
-        while np.sum(increments) < (in_seq_length - seq_length):
+        while np.sum(increments) < (in_seq_length - (seq_length + 1)):
             increments[np.argmin(increments[1:]) + 1] += 1
-
-        return np.cumsum(increments)
     if subsequence_start_mode == "exact":
         assert (
             (in_seq_length - 1) % seq_length == 0
