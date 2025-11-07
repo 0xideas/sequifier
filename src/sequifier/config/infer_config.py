@@ -126,6 +126,7 @@ class InfererModel(BaseModel):
     seed: int
     device: str
     seq_length: int
+    inference_size: int = 1
     inference_batch_size: int
 
     distributed: bool = False

@@ -169,6 +169,7 @@ def infer_worker(
             config.target_column_types,
             config.sample_from_distribution_columns,
             config.infer_with_dropout,
+            config.inference_size,
             config.inference_batch_size,
             config.device,
             args_config=args_config,
@@ -237,10 +238,17 @@ def infer_embedding(
         else:
             raise Exception("impossible")
 
+        inference_size = inferer.inference_size
+        sequence_ids_repeated = np.repeat(sequence_ids_for_preds, inference_size)
+        subsequence_ids_repeated = np.repeat(subsequence_ids_for_preds, inference_size)
+        positionOffsets = np.tile(
+            np.arange(inference_size), len(sequence_ids_for_preds)
+        )
         embeddings = pl.DataFrame(
             {
-                "sequenceId": sequence_ids_for_preds,
-                "subsequenceId": subsequence_ids_for_preds,
+                "sequenceId": sequence_ids_repeated,
+                "subsequenceId": subsequence_ids_repeated,
+                "positionOffsets": positionOffsets,
                 **dict(
                     zip(
                         [str(v) for v in range(embeddings.shape[1])],
@@ -323,15 +331,19 @@ def infer_generative(
             if not config.autoregression:
                 # For the non-autoregressive case, the old logic is still needed here
                 # Apply the mask to the sequenceId column
+                probs, preds = get_probs_preds(config, inferer, data, column_types)
+
                 mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
                 sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
                 item_positions_for_preds = (
                     data.get_column("startItemPosition").filter(mask).to_numpy()
                     + config.seq_length
                 )
-                probs, preds = get_probs_preds(config, inferer, data, column_types)
 
             else:
+                assert (
+                    inferer.inference_size == 1
+                ), f"{inferer.inference_size = } != 1, is not allowed for autoregressive inference"
                 if config.autoregression_extra_steps is not None:
                     data = expand_data_by_autoregression(
                         data,
@@ -577,6 +589,7 @@ def get_probs_preds_pt(
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
     extra_steps: int = 0,
+    inference_size: int = 1,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """Generates predictions from PyTorch tensor data, supporting autoregression.
 
@@ -601,6 +614,7 @@ def get_probs_preds_pt(
         extra_steps: The number of additional autoregressive steps to
             perform. A value of 0 means simple, non-autoregressive
             inference.
+        inference_size: The number of parallel predictions the model returns.
 
     Returns:
         A tuple `(probs, preds)`:
@@ -1093,6 +1107,7 @@ class Inferer:
         target_column_types: dict[str, str],
         sample_from_distribution_columns: Optional[list[str]],
         infer_with_dropout: bool,
+        inference_size: int,
         inference_batch_size: int,
         device: str,
         args_config: dict[str, Any],
@@ -1137,6 +1152,7 @@ class Inferer:
         self.target_column_types = target_column_types
         self.sample_from_distribution_columns = sample_from_distribution_columns
         self.infer_with_dropout = infer_with_dropout
+        self.inference_size = inference_size
         self.inference_batch_size = inference_batch_size
 
         self.inference_model_type = model_path.split(".")[-1]
@@ -1450,7 +1466,10 @@ class Inferer:
             )
         }
         ort_outs = self.ort_session.run(None, ort_inputs)
-        return ort_outs
+        return [
+            oo.transpose(1, 0, 2).reshape(oo.shape[0] * oo.shape[1], oo.shape[2])
+            for oo in ort_outs
+        ]
 
     @beartype
     def expand_to_batch_size(self, x: np.ndarray) -> np.ndarray:

@@ -1586,7 +1586,11 @@ def infer_with_embedding_model(
                 col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()
             }
             output_gpu = model.forward(data_gpu)
-            outs0.append(output_gpu.cpu().detach())
+            output_cpu = output_gpu.cpu().detach().numpy()
+            output_cpu = output_cpu.transpose(1, 0, 2).reshape(
+                output_cpu.shape[0] * output_cpu.shape[1], output_cpu.shape[2]
+            )
+            outs0.append(output_cpu)
             if device == "cuda":
                 torch.cuda.empty_cache()
 
@@ -1629,7 +1633,16 @@ def infer_with_generative_model(
 
     outs = {
         target_column: np.concatenate(
-            [o[target_column].numpy() for o in outs0],
+            [
+                o[target_column]
+                .numpy()
+                .transpose(1, 0, 2)
+                .reshape(
+                    o[target_column].shape[0] * o[target_column].shape[1],
+                    o[target_column].shape[2],
+                )
+                for o in outs0
+            ],
             axis=0,
         )[:size, :]
         for target_column in target_columns
