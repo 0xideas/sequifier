@@ -50,6 +50,11 @@ def preprocessing_config_path_cat_multitarget():
 
 
 @pytest.fixture(scope="session")
+def preprocessing_config_path_multi_file():
+    return os.path.join("tests", "configs", "preprocess-test-multi-file.yaml")
+
+
+@pytest.fixture(scope="session")
 def preprocessing_config_path_real():
     return os.path.join("tests", "configs", "preprocess-test-real.yaml")
 
@@ -125,6 +130,7 @@ def format_configs_locally(
     preprocessing_config_path_cat,
     preprocessing_config_path_cat_multitarget,
     preprocessing_config_path_real,
+    preprocessing_config_path_multi_file,
     training_config_path_cat,
     training_config_path_cat_multitarget,
     training_config_path_real,
@@ -141,6 +147,7 @@ def format_configs_locally(
             preprocessing_config_path_cat,
             preprocessing_config_path_cat_multitarget,
             preprocessing_config_path_real,
+            preprocessing_config_path_multi_file,
             training_config_path_cat,
             training_config_path_cat_multitarget,
             training_config_path_real,
@@ -190,19 +197,23 @@ def run_preprocessing(
     preprocessing_config_path_cat,
     preprocessing_config_path_cat_multitarget,
     preprocessing_config_path_real,
+    preprocessing_config_path_multi_file,
     format_configs_locally,
     remove_project_path_contents,
 ):
     for data_number in [1, 3, 5, 50]:
         data_path_cat = os.path.join(
-            "tests", "resources", f"test-data-categorical-{data_number}.csv"
+            "tests",
+            "resources",
+            "source_data",
+            f"test-data-categorical-{data_number}.csv",
         )
         write_and_log(
             f"sequifier preprocess --config-path={preprocessing_config_path_cat} --data-path={data_path_cat} --selected-columns=None"
         )
 
         data_path_real = os.path.join(
-            "tests", "resources", f"test-data-real-{data_number}.csv"
+            "tests", "resources", "source_data", f"test-data-real-{data_number}.csv"
         )
         write_and_log(
             f"sequifier preprocess --config-path={preprocessing_config_path_real} --data-path={data_path_real} --selected-columns={SELECTED_COLUMNS['real'][data_number]}"
@@ -212,8 +223,15 @@ def run_preprocessing(
         f"sequifier preprocess --config-path={preprocessing_config_path_cat_multitarget}"
     )
 
+    write_and_log(
+        f"sequifier preprocess --config-path={preprocessing_config_path_multi_file}"
+    )
+
     source_path = os.path.join(
-        "tests", "resources", "test-data-real-1-split1-autoregression.csv"
+        "tests",
+        "resources",
+        "source_data",
+        "test-data-real-1-split1-autoregression.csv",
     )
 
     target_path = os.path.join(

@@ -176,17 +176,20 @@ class Preprocessor:
                 delete_files(input_files)
 
         else:
-            n_classes, id_maps, selected_columns_statistics, col_types, data_columns = (
-                self._get_column_metadata_across_files(
-                    data_path, read_format, max_rows, selected_columns
-                )
+            (
+                files_to_process,
+                n_classes,
+                id_maps,
+                selected_columns_statistics,
+                col_types,
+                data_columns,
+            ) = self._get_column_metadata_across_files(
+                data_path, read_format, max_rows, selected_columns
             )
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
             schema = self._create_schema(col_types, seq_length)
-
-            files_to_process = self._get_files_to_process(data_path, read_format)
 
             self._process_batches_multiple_files(
                 files_to_process,
@@ -208,28 +211,6 @@ class Preprocessor:
             )
 
         self._cleanup(write_format)
-
-    @beartype
-    def _get_files_to_process(self, data_path: str, read_format: str) -> list[str]:
-        """Finds all data files within a directory that match the read format.
-
-        This method recursively walks through the given `data_path` directory
-        and collects the full paths of all files that end with the specified
-        `read_format` (e.g., ".csv", ".parquet").
-
-        Args:
-            data_path: The path to the root data directory to search.
-            read_format: The file extension (e.g., "csv", "parquet") to look for.
-
-        Returns:
-            A list of string paths to the files that match the criteria.
-        """
-        paths_to_process = []
-        for root, dirs, files in os.walk(data_path):
-            for file in files:
-                if file.endswith(read_format):
-                    paths_to_process.append(os.path.join(root, file))
-        return paths_to_process
 
     @beartype
     def _create_schema(
@@ -284,6 +265,7 @@ class Preprocessor:
         max_rows: Optional[int],
         selected_columns: Optional[list[str]],
     ) -> tuple[
+        list[str],
         dict[str, int],
         dict[str, dict[Union[str, int], int]],
         dict[str, dict[str, float]],
@@ -326,15 +308,16 @@ class Preprocessor:
         n_rows_running_count = 0
         id_maps, selected_columns_statistics = {}, {}
         col_types, data_columns = None, None
-
+        files_to_process = []
         print(f"[INFO] Data path: {data_path}")
         for root, dirs, files in os.walk(data_path):
             print(f"[INFO] N Files : {len(files)}")
-            for file in files:
+            for file in sorted(list(files)):
                 if file.endswith(read_format) and (
                     max_rows is None or n_rows_running_count < max_rows
                 ):
                     print(f"[INFO] Preprocessing: reading {file}")
+                    files_to_process.append(os.path.join(root, file))
                     max_rows_inner = (
                         None
                         if max_rows is None
@@ -371,7 +354,9 @@ class Preprocessor:
         assert data_columns is not None
         n_classes = {col: len(id_maps[col]) + 1 for col in id_maps}
         assert col_types is not None
+        files_to_process = sorted(files_to_process)
         return (
+            files_to_process,
             n_classes,
             id_maps,
             selected_columns_statistics,
@@ -926,10 +911,14 @@ def _process_batches_multiple_files_inner(
         batches_per_file: The number of batches to process per file.
         combine_into_single_file: Whether to combine the output into a single file.
     """
+    n_files = len(file_paths)
+    assert n_files > 0
+    pad_width = len(str(n_files - 1))
     n_rows_running_count = 0
     for file_index, path in enumerate(file_paths):
         max_rows_inner = None if max_rows is None else max_rows - n_rows_running_count
         if max_rows_inner is None or max_rows_inner > 0:
+            file_index_str = str(file_index).zfill(pad_width)
             data = _load_and_preprocess_data(
                 path, read_format, selected_columns, max_rows_inner
             )
@@ -944,12 +933,12 @@ def _process_batches_multiple_files_inner(
 
             adjusted_split_paths = [
                 path.replace(
-                    data_name_root, f"{data_name_root}-{process_id}-{file_index}"
+                    data_name_root, f"{data_name_root}-{process_id}-{file_index_str}"
                 )
                 for path in split_paths
             ]
 
-            data_name_root_inner = f"{data_name_root}-{process_id}-{file_index}"
+            data_name_root_inner = f"{data_name_root}-{process_id}-{file_index_str}"
 
             n_batches = _process_batches_single_file(
                 project_path,
@@ -975,7 +964,7 @@ def _process_batches_multiple_files_inner(
                     len(group_proportions),
                     n_batches,
                     process_id,
-                    file_index,
+                    file_index_str,
                     data_name_root,
                     write_format,
                 )
@@ -987,7 +976,7 @@ def _process_batches_multiple_files_inner(
                     data_name_root,
                     write_format,
                     in_target_dir=True,
-                    pre_split_str=f"{process_id}-{file_index}",
+                    pre_split_str=f"{process_id}-{file_index_str}",
                 )
 
                 delete_files(input_files)
@@ -1309,7 +1298,7 @@ def _write_accumulated_sequences(
     split_path: str,
     write_format: str,
     process_id: int,
-    file_index: int,
+    file_index_str: str,
     target_dir: str,
     seq_length: int,
     col_types: dict[str, str],
@@ -1338,7 +1327,7 @@ def _write_accumulated_sequences(
 
     # Construct a unique filename for the batched file
     split_path_batch_seq = split_path.replace(
-        f".{write_format}", f"-{process_id}-{file_index}.{write_format}"
+        f".{write_format}", f"-{process_id}-{file_index_str}.{write_format}"
     )
     out_path = insert_top_folder(split_path_batch_seq, target_dir)
 
@@ -1388,6 +1377,7 @@ def preprocess_batch(
         sequences_by_split = {i: [] for i in range(len(split_paths))}
         file_indices = {i: 0 for i in range(len(split_paths))}
 
+        pad_width = len(str(math.ceil(len(sequence_ids) / batches_per_file) + 1))
         for i, sequence_id in enumerate(sequence_ids):
             data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
             group_bounds = get_group_bounds(data_subset, group_proportions)
@@ -1415,7 +1405,7 @@ def preprocess_batch(
                         split_paths[group],
                         write_format,
                         process_id,
-                        file_indices[group],
+                        str(file_indices[group]).zfill(pad_width),
                         target_dir,
                         seq_length,
                         col_types,
@@ -1431,7 +1421,7 @@ def preprocess_batch(
                 split_paths[group],
                 write_format,
                 process_id,
-                file_indices[group],
+                str(file_indices[group]).zfill(pad_width),
                 target_dir,
                 seq_length,
                 col_types,
@@ -1517,6 +1507,8 @@ def extract_sequences(
     if data.is_empty():
         return pl.DataFrame(schema=schema)
 
+    print(f"{data.shape = }")
+
     raw_sequences = data.group_by("sequenceId", maintain_order=True).agg(
         [pl.col(c) for c in columns]
     )
@@ -1539,6 +1531,7 @@ def extract_sequences(
                 ] + subseqs[subsequence_id]
                 assert len(row) == (seq_length + 4), f"{row = }"
                 rows.append(row)
+    print(f"{len(rows) = }")
 
     sequences = pl.DataFrame(
         rows,
@@ -1683,7 +1676,7 @@ def create_file_paths_for_multiple_files1(
     n_splits: int,
     n_batches: int,
     process_id: int,
-    file_index: int,
+    file_index_str: str,
     dataset_name: str,
     write_format: str,
 ) -> dict[int, list[str]]:
@@ -1694,7 +1687,7 @@ def create_file_paths_for_multiple_files1(
     *before* they are combined.
 
     The naming pattern is:
-    `{dataset_name}-{process_id}-{file_index}-split{split}-{batch_id}.{write_format}`
+    `{dataset_name}-{process_id}-{file_index_str}-split{split}-{batch_id}.{write_format}`
 
     Args:
         project_path: The path to the sequifier project directory.
@@ -1702,7 +1695,7 @@ def create_file_paths_for_multiple_files1(
         n_splits: The number of data splits.
         n_batches: The number of batches created by the process.
         process_id: The ID of the multiprocessing worker.
-        file_index: The index of the file being processed by this worker.
+        file_index_str: The index of the file being processed by this worker.
         dataset_name: The root name of the dataset.
         write_format: The file extension.
 
@@ -1717,7 +1710,7 @@ def create_file_paths_for_multiple_files1(
                 project_path,
                 "data",
                 target_dir,
-                f"{dataset_name}-{process_id}-{file_index}-split{split}-{batch_id}.{write_format}",
+                f"{dataset_name}-{process_id}-{file_index_str}-split{split}-{batch_id}.{write_format}",
             )
             for batch_id in range(n_batches)
         ]
@@ -1804,13 +1797,15 @@ def create_file_paths_for_multiple_files2(
         intermediate combined file paths (str) for that split.
     """
     files = {}
+    n_files_max = max(n_files.values()) if n_files else 1
+    pad_width = len(str(n_files_max - 1))
     for split in range(n_splits):
         files_for_split = [
             os.path.join(
                 project_path,
                 "data",
                 target_dir,
-                f"{dataset_name}-{process_id}-{file_index}-split{split}.{write_format}",
+                f"{dataset_name}-{process_id}-{str(file_index).zfill(pad_width)}-split{split}.{write_format}",
             )
             for process_id in range(n_processes)
             for file_index in range(n_files[process_id])

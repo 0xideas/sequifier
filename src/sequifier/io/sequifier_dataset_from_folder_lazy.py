@@ -200,9 +200,15 @@ class SequifierDatasetFromFolderLazy(Dataset):
             self._evict_lru_items()
 
         # 3. Retrieve the specific sample from the (now cached) batch tensors.
-        sequence = {key: tensor[local_index] for key, tensor in sequences_batch.items()}
-        targets = {key: tensor[local_index] for key, tensor in targets_batch.items()}
-
+        train_seq_len = self.config.seq_length
+        sequence = {
+            key: tensor[local_index, -train_seq_len:]
+            for key, tensor in sequences_batch.items()
+        }
+        targets = {
+            key: tensor[local_index, -train_seq_len:]
+            for key, tensor in targets_batch.items()
+        }
         return (
             sequence,
             targets,

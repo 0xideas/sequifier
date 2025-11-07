@@ -1,5 +1,5 @@
 project_path: tests/project_folder
-data_path: tests/resources/test-data-categorical-multi-file
+data_path: tests/resources/source_data/test-data-categorical-multi-file
 combine_into_single_file: false
 read_format: csv
 process_by_file: false

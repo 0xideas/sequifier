@@ -44,7 +44,7 @@ def adapt_configs(config_strings):
             )
             .replace(
                 "data_path: PLEASE FILL",
-                "data_path: tests/resources/test-data-categorical-1.csv",
+                "data_path: tests/resources/source_data/test-data-categorical-1.csv",
             )
             .replace(
                 "selected_columns: [EXAMPLE_INPUT_COLUMN_NAME]", "selected_columns: "

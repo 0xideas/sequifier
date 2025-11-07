@@ -135,16 +135,11 @@ def infer_worker(
     """
     print(f"[INFO] Reading data from '{config.data_path}'...")
     # Step 1: Use Polars for data ingestion
+    dataset = None
     if config.read_format == "parquet":
         dataset = [pl.read_parquet(config.data_path)]
     elif config.read_format == "csv":
         dataset = [pl.read_csv(config.data_path)]
-    elif config.read_format == "pt":
-        assert percentage_limits is not None
-        start_pct, end_pct = percentage_limits
-        dataset = load_pt_dataset(config.data_path, start_pct, end_pct)
-    else:
-        raise Exception(f"{config.read_format = } not in ['parquet', 'csv', 'pt']")
 
     model_paths = (
         config.model_path
@@ -152,6 +147,14 @@ def infer_worker(
         else [config.model_path]
     )
     for model_path in model_paths:
+        if config.read_format == "pt":
+            assert percentage_limits is not None
+            start_pct, end_pct = percentage_limits
+            dataset = load_pt_dataset(config.data_path, start_pct, end_pct)
+
+        if dataset is None:
+            raise Exception(f"{config.read_format = } not in ['parquet', 'csv', 'pt']")
+
         inferer = Inferer(
             config.model_type,
             model_path,
@@ -1207,7 +1210,7 @@ class Inferer:
             A 2D NumPy array of the resulting embeddings.
         """
         assert x is not None
-        size = x[self.target_columns[0]].shape[0]
+        size = x[list(x.keys())[0]].shape[0]
         embedding = self.adjust_and_infer_embedding(x, size)
 
         return embedding
@@ -1253,7 +1256,7 @@ class Inferer:
             x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0
         ):  # type: ignore
             assert x is not None
-            size = x[self.target_columns[0]].shape[0]
+            size = x[list(x.keys())[0]].shape[0]
             if (
                 probs is not None
                 and len(set(x.keys()).difference(set(probs.keys()))) > 0
@@ -1399,7 +1402,7 @@ class Inferer:
             A list of dictionaries, where each dictionary is a single batch
             ready for inference.
         """
-        size = x[self.target_columns[0]].shape[0]
+        size = x[list(x.keys())[0]].shape[0]
         if size == self.inference_batch_size:
             return [x]
         elif size < self.inference_batch_size:
