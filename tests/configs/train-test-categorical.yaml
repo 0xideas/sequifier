@@ -21,6 +21,7 @@ model_spec:
   nhead: 2
   d_hid: 12
   nlayers: 2
+  inference_size: 1
 training_spec:
   device: cpu
   epochs: 3
