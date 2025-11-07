@@ -1245,7 +1245,7 @@ def process_and_write_data_pt(
     if data.is_empty():
         return
 
-    sequence_cols = [str(c) for c in range(seq_length - 1, -1, -1)]
+    sequence_cols = [str(c) for c in range(seq_length, -1, -1)]
 
     all_feature_cols = data.get_column("inputCol").unique().to_list()
 
