@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath('../../src'))
 project = 'sequifier'
 copyright = '2025, Leon Luithlen'
 author = 'Leon Luithlen'
-release = 'v0.9.0.2'
+release = 'v0.9.0.3'
 html_baseurl = 'https://www.sequifier.com/'
 
 # -- General configuration ---------------------------------------------------
