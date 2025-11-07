@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/train.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.train - sequifier v0.8.1.0 documentation</title>
+        <title>sequifier.train - sequifier v0.9.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v0.8.1.0 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v0.9.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v0.8.1.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v0.9.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -415,7 +415,8 @@
     <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
         <span class="n">model</span> <span class="o">=</span> <span class="n">DDP</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">device_ids</span><span class="o">=</span><span class="p">[</span><span class="n">rank</span><span class="p">],</span> <span class="n">find_unused_parameters</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
-    <span class="n">model</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">):</span>
+        <span class="n">model</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
 
     <span class="c1"># 3. Start training</span>
     <span class="c1"># When using DDP, the original model is accessed via the .module attribute</span>
@@ -560,6 +561,8 @@
             <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">hparams</span><span class="o">.</span><span class="n">real_columns</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">selected_columns</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">selected_columns</span>
         <span class="p">]</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span><span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">target_columns</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">target_column_types</span>
@@ -1012,49 +1015,113 @@
         <span class="n">best_val_loss</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)</span>
         <span class="n">n_epochs_no_improvement</span> <span class="o">=</span> <span class="mi">0</span>
 
-        <span class="k">for</span> <span class="n">epoch</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">epochs</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
-            <span class="k">if</span> <span class="p">(</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span> <span class="ow">is</span> <span class="kc">None</span>
-                <span class="ow">or</span> <span class="n">n_epochs_no_improvement</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span>
-            <span class="p">)</span> <span class="ow">and</span> <span class="p">(</span>
-                <span class="n">epoch</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span>
-                <span class="ow">or</span> <span class="n">epoch</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span>
-                <span class="ow">and</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">total_loss</span><span class="p">)</span>  <span class="c1"># type: ignore # noqa: F821</span>
-            <span class="p">):</span>
-                <span class="n">epoch_start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        <span class="n">last_epoch</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">best_model</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">epoch</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">epochs</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
+                <span class="k">if</span> <span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span> <span class="ow">is</span> <span class="kc">None</span>
+                    <span class="ow">or</span> <span class="n">n_epochs_no_improvement</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span>
+                <span class="p">)</span> <span class="ow">and</span> <span class="p">(</span>
+                    <span class="n">epoch</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span>
+                    <span class="ow">or</span> <span class="n">epoch</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span>
+                    <span class="ow">and</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">total_loss</span><span class="p">)</span>  <span class="c1"># type: ignore # noqa: F821</span>
+                <span class="p">):</span>
+                    <span class="n">epoch_start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
 
-                <span class="k">if</span> <span class="n">train_sampler</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">train_sampler</span><span class="p">,</span> <span class="n">RandomSampler</span><span class="p">):</span>
-                    <span class="n">train_sampler</span><span class="o">.</span><span class="n">set_epoch</span><span class="p">(</span><span class="n">epoch</span><span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">_train_epoch</span><span class="p">(</span><span class="n">train_loader</span><span class="p">,</span> <span class="n">epoch</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">train_sampler</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">train_sampler</span><span class="p">,</span> <span class="n">RandomSampler</span><span class="p">):</span>
+                        <span class="n">train_sampler</span><span class="o">.</span><span class="n">set_epoch</span><span class="p">(</span><span class="n">epoch</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_train_epoch</span><span class="p">(</span><span class="n">train_loader</span><span class="p">,</span> <span class="n">epoch</span><span class="p">)</span>
 
-                <span class="k">if</span> <span class="n">valid_sampler</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">valid_sampler</span><span class="p">,</span> <span class="n">RandomSampler</span><span class="p">):</span>
-                    <span class="n">valid_sampler</span><span class="o">.</span><span class="n">set_epoch</span><span class="p">(</span><span class="n">epoch</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">valid_sampler</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">valid_sampler</span><span class="p">,</span> <span class="n">RandomSampler</span><span class="p">):</span>
+                        <span class="n">valid_sampler</span><span class="o">.</span><span class="n">set_epoch</span><span class="p">(</span><span class="n">epoch</span><span class="p">)</span>
 
-                <span class="n">total_loss</span><span class="p">,</span> <span class="n">total_losses</span><span class="p">,</span> <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_evaluate</span><span class="p">(</span><span class="n">valid_loader</span><span class="p">)</span>
-                <span class="n">elapsed</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">epoch_start_time</span>
+                    <span class="n">total_loss</span><span class="p">,</span> <span class="n">total_losses</span><span class="p">,</span> <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_evaluate</span><span class="p">(</span><span class="n">valid_loader</span><span class="p">)</span>
+                    <span class="n">elapsed</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">epoch_start_time</span>
 
-                <span class="bp">self</span><span class="o">.</span><span class="n">_log_epoch_results</span><span class="p">(</span>
-                    <span class="n">epoch</span><span class="p">,</span> <span class="n">elapsed</span><span class="p">,</span> <span class="n">total_loss</span><span class="p">,</span> <span class="n">total_losses</span><span class="p">,</span> <span class="n">output</span>
-                <span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_log_epoch_results</span><span class="p">(</span>
+                        <span class="n">epoch</span><span class="p">,</span> <span class="n">elapsed</span><span class="p">,</span> <span class="n">total_loss</span><span class="p">,</span> <span class="n">total_losses</span><span class="p">,</span> <span class="n">output</span>
+                    <span class="p">)</span>
 
-                <span class="k">if</span> <span class="n">total_loss</span> <span class="o">&lt;</span> <span class="n">best_val_loss</span><span class="p">:</span>
-                    <span class="n">best_val_loss</span> <span class="o">=</span> <span class="n">total_loss</span>
-                    <span class="n">best_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_copy_model</span><span class="p">()</span>
-                    <span class="n">n_epochs_no_improvement</span> <span class="o">=</span> <span class="mi">0</span>
+                    <span class="k">if</span> <span class="n">total_loss</span> <span class="o">&lt;</span> <span class="n">best_val_loss</span><span class="p">:</span>
+                        <span class="n">best_val_loss</span> <span class="o">=</span> <span class="n">total_loss</span>
+                        <span class="n">best_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_copy_model</span><span class="p">()</span>
+                        <span class="n">n_epochs_no_improvement</span> <span class="o">=</span> <span class="mi">0</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="n">n_epochs_no_improvement</span> <span class="o">+=</span> <span class="mi">1</span>
+
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_iter</span> <span class="o">==</span> <span class="s2">&quot;epoch&quot;</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
+
+                    <span class="k">if</span> <span class="n">epoch</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">iter_save</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">_save</span><span class="p">(</span><span class="n">epoch</span><span class="p">,</span> <span class="n">total_loss</span><span class="p">)</span>
+
+                    <span class="n">last_epoch</span> <span class="o">=</span> <span class="n">epoch</span>
+        <span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">log_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;=&quot;</span> <span class="o">*</span> <span class="mi">89</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">log_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;[WARNING] Training interrupted by user (Ctrl+C).&quot;</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
+                <span class="n">dist</span><span class="o">.</span><span class="n">barrier</span><span class="p">()</span>
+
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>  <span class="c1"># Only ask and export on the main process</span>
+                <span class="n">answer</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="n">answer</span> <span class="o">=</span> <span class="p">(</span>
+                        <span class="nb">input</span><span class="p">(</span>
+                            <span class="s2">&quot;Do you want to export the &#39;best&#39; and &#39;last&#39; models? (y/n): &quot;</span>
+                        <span class="p">)</span>
+                        <span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+                        <span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+                    <span class="p">)</span>
+                <span class="k">except</span> <span class="ne">EOFError</span><span class="p">:</span>  <span class="c1"># Handle non-interactive environments</span>
+                    <span class="n">answer</span> <span class="o">=</span> <span class="s2">&quot;n&quot;</span>
+
+                <span class="k">if</span> <span class="n">answer</span> <span class="o">==</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">log_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;[INFO] User opted to export models.&quot;</span><span class="p">)</span>
+
+                    <span class="c1"># Export last model (current state)</span>
+                    <span class="k">if</span> <span class="n">last_epoch</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">best_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">log_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span>
+                            <span class="sa">f</span><span class="s2">&quot;[INFO] Exporting &#39;last&#39; model from epoch </span><span class="si">{</span><span class="n">last_epoch</span><span class="si">}</span><span class="s2">...&quot;</span>
+                        <span class="p">)</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;last&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">)</span>
+
+                        <span class="c1"># Export best model if it exists</span>
+                        <span class="k">if</span> <span class="n">best_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">log_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span>
+                                <span class="s2">&quot;[INFO] Exporting &#39;best&#39; model (based on best val loss)...&quot;</span>
+                            <span class="p">)</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="n">best_model</span><span class="p">,</span> <span class="s2">&quot;best&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">)</span>
+                        <span class="k">else</span><span class="p">:</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">log_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span>
+                                <span class="s2">&quot;[WARNING] No &#39;best&#39; model was saved (no validation improvement yet).&quot;</span>
+                            <span class="p">)</span>
+
+                        <span class="bp">self</span><span class="o">.</span><span class="n">log_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;[INFO] Models exported.&quot;</span><span class="p">)</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">log_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span>
+                            <span class="s2">&quot;[INFO] Could not export model as no epoch ran.&quot;</span>
+                        <span class="p">)</span>
                 <span class="k">else</span><span class="p">:</span>
-                    <span class="n">n_epochs_no_improvement</span> <span class="o">+=</span> <span class="mi">1</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">log_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;[INFO] User opted *not* to export. Exiting.&quot;</span><span class="p">)</span>
 
-                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_iter</span> <span class="o">==</span> <span class="s2">&quot;epoch&quot;</span><span class="p">:</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
+            <span class="n">dist</span><span class="o">.</span><span class="n">barrier</span><span class="p">()</span>
 
-                <span class="k">if</span> <span class="n">epoch</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">iter_save</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">_save</span><span class="p">(</span><span class="n">epoch</span><span class="p">,</span> <span class="n">total_loss</span><span class="p">)</span>
+        <span class="c1"># Only rank 0 should perform the final export</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">if</span> <span class="p">(</span>
+                <span class="n">best_model</span> <span class="ow">is</span> <span class="kc">None</span>
+            <span class="p">):</span>  <span class="c1"># &lt;-- MODIFICATION: Handle case where no improvement was ever made</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">log_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span>
+                    <span class="s2">&quot;[INFO] No validation improvement during training. Saving last model as &#39;best&#39;.&quot;</span>
+                <span class="p">)</span>
+                <span class="n">best_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_copy_model</span><span class="p">()</span>
 
-                <span class="n">last_epoch</span> <span class="o">=</span> <span class="n">epoch</span>
-
-        <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;last&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="n">best_model</span><span class="p">,</span> <span class="s2">&quot;best&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">log_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;--- Training Complete ---&quot;</span><span class="p">)</span></div>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;last&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="n">best_model</span><span class="p">,</span> <span class="s2">&quot;best&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">log_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;--- Training Complete ---&quot;</span><span class="p">)</span></div>
 
 
     <span class="nd">@beartype</span>
@@ -1145,7 +1212,8 @@
 <span class="sd">              target column.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">losses</span> <span class="o">=</span> <span class="p">{}</span>
-        <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">target_column_type</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">targets</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="n">target_column_type</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span>
             <span class="k">if</span> <span class="n">target_column_type</span> <span class="o">==</span> <span class="s2">&quot;categorical&quot;</span><span class="p">:</span>
                 <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
                     <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span>
@@ -1157,7 +1225,7 @@
                 <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">],</span> <span class="n">targets</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
             <span class="p">)</span>
         <span class="n">loss</span> <span class="o">=</span> <span class="kc">None</span>
-        <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">targets</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
             <span class="n">losses</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">losses</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">loss_weights</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span>
                 <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">loss_weights</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
@@ -1778,7 +1846,10 @@
                 <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Dropout</span><span class="p">):</span>
                     <span class="n">module</span><span class="o">.</span><span class="n">train</span><span class="p">()</span>
 
-        <span class="n">model</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="n">model</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">):</span>
+            <span class="n">model</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="n">model</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">model</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="n">model</span></div>
 
@@ -1899,7 +1970,7 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=efc41013"></script>
+</div><script src="../../_static/documentation_options.js?v=6361650c"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>

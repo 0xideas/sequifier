@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/api.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>Preprocessing Config - sequifier v0.8.1.0 documentation</title>
+        <title>Preprocessing Config - sequifier v0.9.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="index.html"><div class="brand">sequifier v0.8.1.0 documentation</div></a>
+      <a href="index.html"><div class="brand">sequifier v0.9.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
   
-  <span class="sidebar-brand-text">sequifier v0.8.1.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v0.9.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -2315,13 +2315,13 @@ into one large table first.</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="sequifier.preprocess.create_file_paths_for_multiple_files1">
-<span class="sig-prename descclassname"><span class="pre">sequifier.preprocess.</span></span><span class="sig-name descname"><span class="pre">create_file_paths_for_multiple_files1</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">project_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_dir</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_splits</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_batches</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">process_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">file_index</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dataset_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_format</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/preprocess.html#create_file_paths_for_multiple_files1"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.preprocess.create_file_paths_for_multiple_files1" title="Link to this definition">¶</a></dt>
+<span class="sig-prename descclassname"><span class="pre">sequifier.preprocess.</span></span><span class="sig-name descname"><span class="pre">create_file_paths_for_multiple_files1</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">project_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_dir</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_splits</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_batches</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">process_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">file_index_str</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dataset_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_format</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/preprocess.html#create_file_paths_for_multiple_files1"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.preprocess.create_file_paths_for_multiple_files1" title="Link to this definition">¶</a></dt>
 <dd><p>Creates a dictionary of temporary file paths for a specific data file.</p>
 <p>This is used in the multi-file, <cite>combine_into_single_file=True</cite>
 workflow. It generates file path names for intermediate batches
 <em>before</em> they are combined.</p>
 <p>The naming pattern is:
-<cite>{dataset_name}-{process_id}-{file_index}-split{split}-{batch_id}.{write_format}</cite></p>
+<cite>{dataset_name}-{process_id}-{file_index_str}-split{split}-{batch_id}.{write_format}</cite></p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
@@ -2330,7 +2330,7 @@ workflow. It generates file path names for intermediate batches
 <li><p><strong>n_splits</strong> – The number of data splits.</p></li>
 <li><p><strong>n_batches</strong> – The number of batches created by the process.</p></li>
 <li><p><strong>process_id</strong> – The ID of the multiprocessing worker.</p></li>
-<li><p><strong>file_index</strong> – The index of the file being processed by this worker.</p></li>
+<li><p><strong>file_index_str</strong> – The index of the file being processed by this worker.</p></li>
 <li><p><strong>dataset_name</strong> – The root name of the dataset.</p></li>
 <li><p><strong>write_format</strong> – The file extension.</p></li>
 </ul>
@@ -4805,7 +4805,7 @@ shuffling order for each epoch.</p>
       
     </aside>
   </div>
-</div><script src="_static/documentation_options.js?v=efc41013"></script>
+</div><script src="_static/documentation_options.js?v=6361650c"></script>
     <script src="_static/doctools.js?v=9bcbadda"></script>
     <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>
