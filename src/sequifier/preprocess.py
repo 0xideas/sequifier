@@ -1521,7 +1521,7 @@ def extract_sequences(
     if data.is_empty():
         return pl.DataFrame(schema=schema)
 
-    print(f"{data.shape = }")
+    print(f"[INFO] {data.shape = }")
 
     raw_sequences = data.group_by("sequenceId", maintain_order=True).agg(
         [pl.col(c) for c in columns]
@@ -1549,9 +1549,7 @@ def extract_sequences(
                 ] + subseqs[subsequence_id]
                 assert len(row) == (seq_length + 5), f"{row = }"
                 rows.append(row)
-    print(f"{len(rows) = }")
-    print(f"{[len(r) for r in rows] = }")
-    print(schema)
+    print(f"[INFO] {len(rows) = }")
 
     sequences = pl.DataFrame(
         rows,
@@ -1589,17 +1587,13 @@ def get_subsequence_starts(
         last_available_start = in_seq_length - (seq_length + 1)
         starts = np.arange(0, last_available_start + seq_step_size, seq_step_size)
         starts[-1] = last_available_start
-        print(f"{starts = }")
-
         if len(starts) > 2:
             while True:
                 starts_delta = starts[1:] - starts[:-1]
                 if np.max(starts_delta) - np.min(starts_delta) > 1:
                     starts[np.argmin(starts_delta) + 1] -= 1
                 else:
-                    print(f"{starts = }")
                     return starts
-        print(f"{starts = }")
         return starts
 
     if subsequence_start_mode == "exact":
@@ -1659,7 +1653,6 @@ def extract_subsequences(
     assert np.all(
         subsequence_starts_diff <= seq_step_size
     ), f"Diff of {subsequence_starts = }, {subsequence_starts_diff = } larger than {seq_step_size = }"
-    print(f"{subsequence_starts = }")
 
     return {
         col: [list(in_seq[col][i : i + seq_length + 1]) for i in subsequence_starts]
