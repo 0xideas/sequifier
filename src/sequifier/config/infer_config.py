@@ -183,6 +183,10 @@ class InfererModel(BaseModel):
     def validate_autoregression(cls, v: bool, values):
         if v and values["model_type"] == "embedding":
             raise ValueError("Autoregression is not possible for embedding models")
+        if v and values["inference_size"] > 1:
+            raise ValueError(
+                "Autoregressive inference is not possible for models with inference_size > 1"
+            )
         if v and not np.all(
             np.array(sorted(values["selected_columns"]))
             == np.array(sorted(values["target_columns"]))

@@ -329,16 +329,32 @@ def infer_generative(
                 data = subset_to_selected_columns(data, config.selected_columns)
             n_input_cols = data.get_column("inputCol").n_unique()
             if not config.autoregression:
-                # For the non-autoregressive case, the old logic is still needed here
-                # Apply the mask to the sequenceId column
+                # For the non-autoregressive case, apply inference size logic
                 probs, preds = get_probs_preds(config, inferer, data, column_types)
 
                 mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
-                sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
-                item_positions_for_preds = (
+
+                # Get base IDs and positions (shape: batch_size)
+                sequence_ids_for_preds_base = data.get_column("sequenceId").filter(mask)
+                item_positions_for_preds_base = (
                     data.get_column("startItemPosition").filter(mask).to_numpy()
                     + config.seq_length
                 )
+
+                inference_size = inferer.inference_size
+
+                # Expand IDs and positions to match model output shape (batch_size * inference_size)
+                sequence_ids_for_preds = np.repeat(
+                    sequence_ids_for_preds_base, inference_size
+                )
+
+                item_positions_repeated = np.repeat(
+                    item_positions_for_preds_base, inference_size
+                )
+                position_offsets = np.tile(
+                    np.arange(inference_size), len(item_positions_for_preds_base)
+                )
+                item_positions_for_preds = item_positions_repeated + position_offsets
 
             else:
                 assert (
@@ -366,20 +382,46 @@ def infer_generative(
                 if config.autoregression_extra_steps is None
                 else config.autoregression_extra_steps
             )
+
+            # Pass inference_size to get_probs_preds_pt
             probs, preds = get_probs_preds_pt(
-                config, inferer, sequences_dict, extra_steps
+                config, inferer, sequences_dict, extra_steps, inferer.inference_size
             )
-            sequence_ids_for_preds = np.repeat(
-                sequence_ids_tensor.numpy(), extra_steps + 1
-            )
-            item_position_boundaries = zip(
-                list(start_positions_tensor + config.seq_length),
-                list(start_positions_tensor + config.seq_length + extra_steps + 1),
-            )
-            item_positions_for_preds = np.concatenate(
-                [np.arange(start, end) for start, end in item_position_boundaries],
-                axis=0,
-            )
+
+            inference_size = inferer.inference_size  # Get inference_size
+
+            if extra_steps == 0:
+                # Non-autoregressive path: Apply inference_size logic
+                sequence_ids_for_preds_base = sequence_ids_tensor.numpy()
+                item_positions_for_preds_base = (
+                    start_positions_tensor.numpy() + config.seq_length
+                )
+
+                sequence_ids_for_preds = np.repeat(
+                    sequence_ids_for_preds_base, inference_size
+                )
+
+                item_positions_repeated = np.repeat(
+                    item_positions_for_preds_base, inference_size
+                )
+                position_offsets = np.tile(
+                    np.arange(inference_size), len(item_positions_for_preds_base)
+                )
+                item_positions_for_preds = item_positions_repeated + position_offsets
+
+            else:
+                sequence_ids_for_preds = np.repeat(
+                    sequence_ids_tensor.numpy(), extra_steps + 1
+                )
+                item_position_boundaries = zip(
+                    list(start_positions_tensor + config.seq_length),
+                    list(start_positions_tensor + config.seq_length + extra_steps + 1),
+                )
+                item_positions_for_preds = np.concatenate(
+                    [np.arange(start, end) for start, end in item_position_boundaries],
+                    axis=0,
+                )
+            # --- END OF MODIFICATION ---
         else:
             raise Exception("impossible")
 
