@@ -191,7 +191,7 @@ class Preprocessor:
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
-            schema = self._create_schema(col_types, seq_length)
+            schema = self._create_schema(col_types, seq_length + 1)
 
             self._process_batches_multiple_files(
                 files_to_process,
@@ -1550,6 +1550,8 @@ def extract_sequences(
                 assert len(row) == (seq_length + 5), f"{row = }"
                 rows.append(row)
     print(f"{len(rows) = }")
+    print(f"{[len(r) for r in rows] = }")
+    print(schema)
 
     sequences = pl.DataFrame(
         rows,
@@ -1584,13 +1586,22 @@ def get_subsequence_starts(
         "exact",
     ], f"{subsequence_start_mode = } not in ['distribute', 'exact']"
     if subsequence_start_mode == "distribute":
-        nseq_adjusted = math.ceil((in_seq_length - (seq_length + 1)) / seq_step_size)
-        seq_step_size_adjusted = math.floor(
-            (in_seq_length - (seq_length + 1)) / max(1, nseq_adjusted)
-        )
-        increments = [0] + [max(1, seq_step_size_adjusted)] * nseq_adjusted
-        while np.sum(increments) < (in_seq_length - (seq_length + 1)):
-            increments[np.argmin(increments[1:]) + 1] += 1
+        last_available_start = in_seq_length - (seq_length + 1)
+        starts = np.arange(0, last_available_start + seq_step_size, seq_step_size)
+        starts[-1] = last_available_start
+        print(f"{starts = }")
+
+        if len(starts) > 2:
+            while True:
+                starts_delta = starts[1:] - starts[:-1]
+                if np.max(starts_delta) - np.min(starts_delta) > 1:
+                    starts[np.argmin(starts_delta) + 1] -= 1
+                else:
+                    print(f"{starts = }")
+                    return starts
+        print(f"{starts = }")
+        return starts
+
     if subsequence_start_mode == "exact":
         assert (
             (in_seq_length - 1) % seq_length == 0
@@ -1632,14 +1643,19 @@ def extract_subsequences(
         return {col: [] for col in columns}
 
     in_seq_len = len(in_seq[columns[0]])
-    if in_seq_len < seq_length:
-        pad_len = seq_length - in_seq_len
+    if in_seq_len < (seq_length + 1):
+        pad_len = (seq_length + 1) - in_seq_len
         in_seq = {col: ([0] * pad_len) + in_seq[col] for col in columns}
     in_seq_length = len(in_seq[columns[0]])
 
     subsequence_starts = get_subsequence_starts(
         in_seq_length, seq_length, seq_step_size, subsequence_start_mode
     )
+    subsequence_starts_diff = subsequence_starts[1:] - subsequence_starts[:-1]
+    assert np.all(
+        subsequence_starts_diff <= seq_step_size
+    ), f"Diff of {subsequence_starts = }, {subsequence_starts_diff = } larger than {seq_step_size = }"
+    print(f"{subsequence_starts = }")
 
     return {
         col: [list(in_seq[col][i : i + seq_length + 1]) for i in subsequence_starts]
