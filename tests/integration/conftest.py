@@ -122,6 +122,10 @@ def remove_project_path_contents(project_path):
         shutil.rmtree(project_path)
     os.makedirs(project_path)
 
+    log_file_path = os.path.join("tests", "integration-test-log.txt")
+    if os.path.exists(log_file_path):
+        os.remove(log_file_path)
+
     time.sleep(1)
 
 
