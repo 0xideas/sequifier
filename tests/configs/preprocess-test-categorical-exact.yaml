@@ -1,0 +1,14 @@
+project_path: tests/project_folder
+data_path: tests/resources/source_data/test-data-categorical-3-equal.csv
+combine_into_single_file: true
+read_format: csv
+write_format: parquet
+selected_columns: null
+
+group_proportions:
+- 1.0
+seq_length: 5
+seq_step_sizes:
+- 5
+max_rows: null
+subsequence_start_mode: exact

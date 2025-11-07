@@ -23,7 +23,7 @@ SELECTED_COLUMNS = {
 
 def write_and_log(command: str) -> None:
     os.system(command)
-    with open(os.path.join("tests", "project_folder", "log.txt"), "a+") as f:
+    with open(os.path.join("tests", "integration-test-log.txt"), "a+") as f:
         f.write(f"{command}\n")
 
 
@@ -52,6 +52,16 @@ def preprocessing_config_path_cat_multitarget():
 @pytest.fixture(scope="session")
 def preprocessing_config_path_multi_file():
     return os.path.join("tests", "configs", "preprocess-test-multi-file.yaml")
+
+
+@pytest.fixture(scope="session")
+def preprocessing_config_path_exact():
+    return os.path.join("tests", "configs", "preprocess-test-categorical-exact.yaml")
+
+
+@pytest.fixture(scope="session")
+def preprocessing_config_path_exact_pt():
+    return os.path.join("tests", "configs", "preprocess-test-categorical-exact-pt.yaml")
 
 
 @pytest.fixture(scope="session")
@@ -198,6 +208,8 @@ def run_preprocessing(
     preprocessing_config_path_cat_multitarget,
     preprocessing_config_path_real,
     preprocessing_config_path_multi_file,
+    preprocessing_config_path_exact,
+    preprocessing_config_path_exact_pt,
     format_configs_locally,
     remove_project_path_contents,
 ):
@@ -225,6 +237,14 @@ def run_preprocessing(
 
     write_and_log(
         f"sequifier preprocess --config-path={preprocessing_config_path_multi_file}"
+    )
+
+    write_and_log(
+        f"sequifier preprocess --config-path={preprocessing_config_path_exact}"
+    )
+
+    write_and_log(
+        f"sequifier preprocess --config-path={preprocessing_config_path_exact_pt}"
     )
 
     source_path = os.path.join(

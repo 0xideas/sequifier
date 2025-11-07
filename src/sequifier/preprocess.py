@@ -1605,7 +1605,7 @@ def get_subsequence_starts(
     if subsequence_start_mode == "exact":
         assert (
             (in_seq_length - 1) % seq_length == 0
-        ), "'exact' can only be used if: (in_seq_length - 1) % seq_length == 0"
+        ), f"'exact' can only be used if: (in_seq_length - 1) % seq_length == 0, {(in_seq_length -1) = }, {seq_length = }"
         last_possible_start = in_seq_length - seq_length - 1
         return np.arange(0, last_possible_start + 1, seq_step_size)
     return np.array([])
