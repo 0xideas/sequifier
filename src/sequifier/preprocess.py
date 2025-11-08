@@ -890,6 +890,7 @@ def _check_file_has_been_processed(
     if combine_into_single_file:
         # Case 1: Combining into a single file. Check for the intermediate
         # combined file in the target_dir.
+        expected_file_path = ""
         for split_index in range(len(group_proportions)):
             expected_file_path = create_split_file_path(
                 project_path,
@@ -904,6 +905,9 @@ def _check_file_has_been_processed(
             if not os.path.exists(expected_file_path):
                 # If any split's intermediate file is missing, we must re-process
                 return False
+        print(
+            f"[INFO] Files: {expected_file_path.split('split')[0] + 'splitX'} found, skipping"
+        )
         return True
     else:
         temp_dir_path = os.path.join(project_path, "data", target_dir)
@@ -911,8 +915,11 @@ def _check_file_has_been_processed(
         if not os.path.isdir(temp_dir_path):
             return False
 
-        for f in os.listdir(temp_dir_path):
-            if f.startswith(file_prefix_str) and f.endswith(f".{write_format}"):
+        for file_name in os.listdir(temp_dir_path):
+            if file_name.startswith(file_prefix_str) and file_name.endswith(
+                f".{write_format}"
+            ):
+                print(f"[INFO] Found {file_name}, skipping corresponding input file...")
                 return True
 
         return False
