@@ -52,7 +52,6 @@ class PreprocessorModel(BaseModel):
     """
 
     project_path: str
-    continue_preprocessing: bool = False
     data_path: str
     read_format: str = "csv"
     write_format: str = "parquet"
@@ -67,6 +66,7 @@ class PreprocessorModel(BaseModel):
     n_cores: Optional[int]
     batches_per_file: int = 1024
     process_by_file: bool = True
+    continue_preprocessing: bool = False
     subsequence_start_mode: str = "distribute"
 
     @validator("data_path", always=True)
@@ -124,6 +124,14 @@ class PreprocessorModel(BaseModel):
     def validate_batches_per_file(cls, v: int) -> int:
         if v < 1:
             raise ValueError("batches_per_file must be a positive integer")
+        return v
+
+    @validator("continue_preprocessing")
+    def validate_continue_preprocessing(cls, v: bool, values: dict) -> bool:
+        if v and values["data_path"].split(".") in ["csv", "parquet"]:
+            raise ValueError(
+                "'continue_preprocessing' can only be set to true for folder inputs, not single files "
+            )
         return v
 
     @validator("subsequence_start_mode")

@@ -875,7 +875,7 @@ def _load_and_preprocess_data(
     return data
 
 
-def _check_file_process_status(
+def _check_file_has_been_processed(
     project_path: str,
     data_name_root: str,
     process_id: int,
@@ -888,6 +888,8 @@ def _check_file_process_status(
     file_prefix_str = f"{data_name_root}-{process_id}-{file_index_str}"
 
     if combine_into_single_file:
+        # Case 1: Combining into a single file. Check for the intermediate
+        # combined file in the target_dir.
         for split_index in range(len(group_proportions)):
             expected_file_path = create_split_file_path(
                 project_path,
@@ -900,27 +902,20 @@ def _check_file_process_status(
                 post_split_str=None,
             )
             if not os.path.exists(expected_file_path):
+                # If any split's intermediate file is missing, we must re-process
                 return False
-    else:
-        # Case 2: write_format is 'pt'. Check *all* final split folders
-        # for *at least one* file with the correct prefix.
-        for split_index in range(len(group_proportions)):
-            output_folder_path = os.path.join(
-                project_path, "data", f"{data_name_root}-split{split_index}"
-            )
-
-            if not os.path.isdir(output_folder_path):
-                return False
-
-            found_file_for_this_split = False
-            for f in os.listdir(output_folder_path):
-                if f.startswith(file_prefix_str) and f.endswith(f".{write_format}"):
-                    return True
-
-            if not found_file_for_this_split:
-                return False
-
         return True
+    else:
+        temp_dir_path = os.path.join(project_path, "data", target_dir)
+
+        if not os.path.isdir(temp_dir_path):
+            return False
+
+        for f in os.listdir(temp_dir_path):
+            if f.startswith(file_prefix_str) and f.endswith(f".{write_format}"):
+                return True
+
+        return False
 
 
 @beartype
@@ -992,7 +987,7 @@ def _process_batches_multiple_files_inner(
                 for path in split_paths
             ]
             if continue_preprocessing:
-                file_has_been_processed = _check_file_process_status(
+                file_has_been_processed = _check_file_has_been_processed(
                     project_path,
                     data_name_root,
                     process_id,
