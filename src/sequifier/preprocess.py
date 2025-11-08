@@ -62,6 +62,7 @@ class Preprocessor:
     def __init__(
         self,
         project_path: str,
+        continue_preprocessing: bool,
         data_path: str,
         read_format: str,
         write_format: str,
@@ -109,6 +110,7 @@ class Preprocessor:
         self.seed = seed
         np.random.seed(seed)
         self.n_cores = n_cores or multiprocessing.cpu_count()
+        self.continue_preprocessing = continue_preprocessing
         self._setup_directories()
 
         if selected_columns is not None:
@@ -176,7 +178,6 @@ class Preprocessor:
                     in_target_dir=False,
                 )
                 delete_files(input_files)
-
         else:
             (
                 files_to_process,
@@ -376,11 +377,17 @@ class Preprocessor:
         `self.target_dir`) for storing intermediate batch files, removing it
         first if it already exists to ensure a clean run.
         """
-        os.makedirs(os.path.join(self.project_path, "data"), exist_ok=True)
+
         temp_path = os.path.join(self.project_path, "data", self.target_dir)
-        if os.path.exists(temp_path):
-            shutil.rmtree(temp_path)
-        os.makedirs(temp_path)
+
+        if self.continue_preprocessing:
+            if not os.path.exists(temp_path):
+                raise Exception(f"temp folder at '{temp_path}' does not exist")
+        else:
+            os.makedirs(os.path.join(self.project_path, "data"), exist_ok=True)
+            if os.path.exists(temp_path):
+                shutil.rmtree(temp_path)
+            os.makedirs(temp_path)
 
     @beartype
     def _setup_split_paths(self, write_format: str, n_splits: int) -> None:
@@ -470,6 +477,7 @@ class Preprocessor:
                 target_dir=self.target_dir,
                 batches_per_file=self.batches_per_file,
                 combine_into_single_file=self.combine_into_single_file,
+                continue_preprocessing=self.continue_preprocessing,
                 subsequence_start_mode=subsequence_start_mode,
             )
             input_files = create_file_paths_for_multiple_files2(
@@ -513,6 +521,7 @@ class Preprocessor:
                 "target_dir": self.target_dir,
                 "batches_per_file": self.batches_per_file,
                 "combine_into_single_file": self.combine_into_single_file,
+                "continue_preprocessing": self.continue_preprocessing,
                 "subsequence_start_mode": subsequence_start_mode,
             }
 
@@ -581,8 +590,10 @@ class Preprocessor:
                 assert folder_path in split_path
                 os.makedirs(folder_path, exist_ok=True)
 
-                pattern = re.compile(rf".+split{i}-\d+-\d+\.\w+")
-
+                # pattern = re.compile(rf".+split{i}-\d+-\d+\.\w+")
+                pattern = re.compile(
+                    rf"^{re.escape(self.data_name_root)}-.+split{i}-\d+-\d+\.\w+"
+                )
                 for file_path in directory.iterdir():
                     if file_path.is_file() and pattern.match(file_path.name):
                         destination = Path(folder_path) / file_path.name
@@ -866,6 +877,54 @@ def _load_and_preprocess_data(
     return data
 
 
+def _check_file_process_status(
+    project_path: str,
+    data_name_root: str,
+    process_id: int,
+    group_proportions: list[float],
+    write_format: str,
+    target_dir: str,
+    combine_into_single_file: bool,
+    file_index_str: str,
+):
+    file_prefix_str = f"{data_name_root}-{process_id}-{file_index_str}"
+
+    if combine_into_single_file:
+        for split_index in range(len(group_proportions)):
+            expected_file_path = create_split_file_path(
+                project_path,
+                data_name_root,
+                split_index,
+                write_format,
+                in_target_dir=True,  # Intermediate files are in target_dir
+                target_dir=target_dir,
+                pre_split_str=file_prefix_str,  # This file's unique ID
+                post_split_str=None,
+            )
+            if not os.path.exists(expected_file_path):
+                return False
+    else:
+        # Case 2: write_format is 'pt'. Check *all* final split folders
+        # for *at least one* file with the correct prefix.
+        for split_index in range(len(group_proportions)):
+            output_folder_path = os.path.join(
+                project_path, "data", f"{data_name_root}-split{split_index}"
+            )
+
+            if not os.path.isdir(output_folder_path):
+                return False
+
+            found_file_for_this_split = False
+            for f in os.listdir(output_folder_path):
+                if f.startswith(file_prefix_str) and f.endswith(f".{write_format}"):
+                    return True
+
+            if not found_file_for_this_split:
+                return False
+
+        return True
+
+
 @beartype
 def _process_batches_multiple_files_inner(
     project_path: str,
@@ -890,6 +949,7 @@ def _process_batches_multiple_files_inner(
     target_dir: str,
     batches_per_file: int,
     combine_into_single_file: bool,
+    continue_preprocessing: bool,
     subsequence_start_mode: str,
 ):
     """Inner function for processing batches of data from multiple files.
@@ -926,6 +986,37 @@ def _process_batches_multiple_files_inner(
         max_rows_inner = None if max_rows is None else max_rows - n_rows_running_count
         if max_rows_inner is None or max_rows_inner > 0:
             file_index_str = str(file_index).zfill(pad_width)
+
+            adjusted_split_paths = [
+                path.replace(
+                    data_name_root, f"{data_name_root}-{process_id}-{file_index_str}"
+                )
+                for path in split_paths
+            ]
+            if continue_preprocessing:
+                file_has_been_processed = _check_file_process_status(
+                    project_path,
+                    data_name_root,
+                    process_id,
+                    group_proportions,
+                    write_format,
+                    target_dir,
+                    combine_into_single_file,
+                    file_index_str,
+                )
+
+                if file_has_been_processed:
+                    print(f"[INFO] Skipping already processed file: {path}")
+                    if max_rows is not None:
+                        data = _load_and_preprocess_data(
+                            path, read_format, selected_columns, max_rows_inner
+                        )
+                        n_rows_running_count += data.shape[0]
+                    continue
+
+            data = _load_and_preprocess_data(
+                path, read_format, selected_columns, max_rows_inner
+            )
             data = _load_and_preprocess_data(
                 path, read_format, selected_columns, max_rows_inner
             )
@@ -937,13 +1028,6 @@ def _process_batches_multiple_files_inner(
                 n_classes,
                 col_types,
             )
-
-            adjusted_split_paths = [
-                path.replace(
-                    data_name_root, f"{data_name_root}-{process_id}-{file_index_str}"
-                )
-                for path in split_paths
-            ]
 
             data_name_root_inner = f"{data_name_root}-{process_id}-{file_index_str}"
 
@@ -1895,26 +1979,53 @@ def combine_multiprocessing_outputs(
             after the "-split{i}" part.
     """
     for split in range(n_splits):
-        if pre_split_str is None and post_split_str is None:
-            file_name = f"{dataset_name}-split{split}.{write_format}"
-        elif pre_split_str is not None and post_split_str is None:
-            file_name = f"{dataset_name}-{pre_split_str}-split{split}.{write_format}"
-        elif post_split_str is not None and pre_split_str is None:
-            file_name = f"{dataset_name}-split{split}-{post_split_str}.{write_format}"
-        else:
-            file_name = f"{dataset_name}-{pre_split_str}-split{split}-{post_split_str}.{write_format}"
+        split_file_path = create_split_file_path(
+            project_path,
+            dataset_name,
+            split,
+            write_format,
+            in_target_dir,
+            target_dir,
+            pre_split_str,
+            post_split_str,
+        )
 
-        out_path = os.path.join(project_path, "data", file_name)
-        if in_target_dir:
-            out_path = insert_top_folder(out_path, target_dir)
-
-        print(f"[INFO] writing to: {out_path}")
+        print(f"[INFO] writing to: {split_file_path}")
         if write_format == "csv":
-            command = " ".join(["csvstack"] + input_files[split] + [f"> {out_path}"])
+            command = " ".join(
+                ["csvstack"] + input_files[split] + [f"> {split_file_path}"]
+            )
             result = os.system(command)
             assert result == 0, f"command '{command}' failes: {result = }"
         elif write_format == "parquet":
-            combine_parquet_files(input_files[split], out_path)
+            combine_parquet_files(input_files[split], split_file_path)
+
+
+@beartype
+def create_split_file_path(
+    project_path: str,
+    dataset_name: str,
+    split: int,
+    write_format: str,
+    in_target_dir: bool,
+    target_dir: str,
+    pre_split_str: Optional[str],
+    post_split_str: Optional[str],
+) -> str:
+    if pre_split_str is None and post_split_str is None:
+        file_name = f"{dataset_name}-split{split}.{write_format}"
+    elif pre_split_str is not None and post_split_str is None:
+        file_name = f"{dataset_name}-{pre_split_str}-split{split}.{write_format}"
+    elif post_split_str is not None and pre_split_str is None:
+        file_name = f"{dataset_name}-split{split}-{post_split_str}.{write_format}"
+    else:
+        file_name = f"{dataset_name}-{pre_split_str}-split{split}-{post_split_str}.{write_format}"
+
+    out_path = os.path.join(project_path, "data", file_name)
+    if in_target_dir:
+        out_path = insert_top_folder(out_path, target_dir)
+
+    return out_path
 
 
 @beartype

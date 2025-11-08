@@ -52,6 +52,7 @@ class PreprocessorModel(BaseModel):
     """
 
     project_path: str
+    continue_preprocessing: bool = False
     data_path: str
     read_format: str = "csv"
     write_format: str = "parquet"
