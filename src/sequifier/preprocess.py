@@ -590,10 +590,8 @@ class Preprocessor:
                 assert folder_path in split_path
                 os.makedirs(folder_path, exist_ok=True)
 
-                # pattern = re.compile(rf".+split{i}-\d+-\d+\.\w+")
-                pattern = re.compile(
-                    rf"^{re.escape(self.data_name_root)}-.+split{i}-\d+-\d+\.\w+"
-                )
+                pattern = re.compile(rf".+split{i}-\d+-\d+\.\w+")
+
                 for file_path in directory.iterdir():
                     if file_path.is_file() and pattern.match(file_path.name):
                         destination = Path(folder_path) / file_path.name
