@@ -426,7 +426,7 @@ def infer_generative(
 
             # Pass inference_size to get_probs_preds_pt
             probs, preds = get_probs_preds_pt(
-                config, inferer, sequences_dict, extra_steps, inferer.inference_size
+                config, inferer, sequences_dict, extra_steps
             )
 
             inference_size = inferer.inference_size  # Get inference_size
@@ -526,6 +526,7 @@ def infer_generative(
                     )
 
         n_input_cols = len(config.selected_columns)
+
         predictions = pl.DataFrame(
             {
                 "sequenceId": sequence_ids_for_preds,
@@ -673,7 +674,6 @@ def get_probs_preds_pt(
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
     extra_steps: int = 0,
-    inference_size: int = 1,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """Generates predictions from PyTorch tensor data, supporting autoregression.
 
@@ -698,7 +698,6 @@ def get_probs_preds_pt(
         extra_steps: The number of additional autoregressive steps to
             perform. A value of 0 means simple, non-autoregressive
             inference.
-        inference_size: The number of parallel predictions the model returns.
 
     Returns:
         A tuple `(probs, preds)`:
@@ -708,6 +707,7 @@ def get_probs_preds_pt(
             - `preds`: A dictionary mapping target columns to NumPy arrays
               of final predictions, ordered by sample index then step.
     """
+
     target_cols = inferer.target_columns
 
     # 2. Initialize input and containers for storing results from all steps
@@ -1472,7 +1472,7 @@ class Inferer:
                 self.inference_model,
                 x_adjusted,
                 self.device,
-                size,
+                size * self.inference_size,
                 self.target_columns,
             )
         else:

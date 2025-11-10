@@ -55,6 +55,10 @@ def test_model_files_exists(run_training, project_path):
                 "sequifier-model-categorical-1-inf-size-best-3.pt",
                 "sequifier-model-categorical-1-inf-size-last-3.onnx",
                 "sequifier-model-categorical-1-inf-size-last-3.pt",
+                "sequifier-model-categorical-1-inf-size-best-embedding-3.onnx",
+                "sequifier-model-categorical-1-inf-size-best-embedding-3.pt",
+                "sequifier-model-categorical-1-inf-size-last-embedding-3.onnx",
+                "sequifier-model-categorical-1-inf-size-last-embedding-3.pt",
             ]
         )
     )

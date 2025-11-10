@@ -18,6 +18,7 @@ def model_names_preds():
         "model-categorical-multitarget-5-best-3",
         "model-real-1-best-3-autoregression",
         "model-categorical-1-best-3-autoregression",
+        "model-categorical-1-inf-size-best-3",
     ]
 
     return model_names_preds
@@ -190,6 +191,31 @@ def test_predictions_cat(predictions):
                         for v in model_predictions["sup1"].to_numpy()
                     ]
                 ), model_predictions
+
+            if "inf" in model_name:
+                inference_size = 3
+                n_test_rows = model_predictions.height
+                baseline_preds = predictions["model-categorical-1-best-3"]
+                n_baseline_rows = baseline_preds.height
+
+                # 3. Assert the number of rows is scaled by inference_size
+                assert n_test_rows == n_baseline_rows * inference_size, (
+                    f"Expected {n_baseline_rows * inference_size} rows for inference_size={inference_size}, "
+                    f"but found {n_test_rows} rows."
+                )
+
+                # 4. Assert correct number of predictions per sequence
+                baseline_rows_per_seq = (
+                    baseline_preds.group_by("sequenceId").count().height
+                )
+                test_rows_per_seq_groups = model_predictions.group_by(
+                    "sequenceId"
+                ).count()
+
+                assert baseline_rows_per_seq == test_rows_per_seq_groups.height
+                assert (
+                    test_rows_per_seq_groups["count"] == inference_size
+                ).all(), f"Test should have {inference_size} predictions per sequence"
 
 
 def test_probabilities(probabilities):
