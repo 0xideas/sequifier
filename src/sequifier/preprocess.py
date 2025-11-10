@@ -1607,7 +1607,7 @@ def extract_sequences(
     if data.is_empty():
         return pl.DataFrame(schema=schema)
 
-    print(f"[INFO] {data.shape = }")
+    # print(f"[INFO] {data.shape = }")
 
     raw_sequences = data.group_by("sequenceId", maintain_order=True).agg(
         [pl.col(c) for c in columns]
@@ -1635,7 +1635,7 @@ def extract_sequences(
                 ] + subseqs[subsequence_id]
                 assert len(row) == (seq_length + 5), f"{row = }"
                 rows.append(row)
-    print(f"[INFO] {len(rows) = }")
+    # print(f"[INFO] {len(rows) = }")
 
     sequences = pl.DataFrame(
         rows,
@@ -1669,24 +1669,55 @@ def get_subsequence_starts(
         "distribute",
         "exact",
     ], f"{subsequence_start_mode = } not in ['distribute', 'exact']"
+
     if subsequence_start_mode == "distribute":
         last_available_start = in_seq_length - (seq_length + 1)
-        starts = np.arange(0, last_available_start + seq_step_size, seq_step_size)
-        starts[-1] = last_available_start
-        if len(starts) > 2:
-            i = 0
-            while True:
-                print(f"{starts = }")
-                starts_delta = starts[1:] - starts[:-1]
-                if i > len(starts) * 2:
-                    return starts
-                if np.max(starts_delta) - np.min(starts_delta) > 1:
-                    starts[np.argmin(starts_delta)] -= 1
-                    i += 1
-                else:
-                    return starts
 
-        return starts
+        # Handle edge case where sequence is too short for even one full subsequence
+        if last_available_start < 0:
+            # We must return at least one sequence (e.g., the padded one at start 0)
+            return np.array([0])
+
+        # 1. Get the initial set of start points, this determines *how many* sequences we generate
+        starts = np.arange(0, last_available_start + seq_step_size, seq_step_size)
+
+        # 2. This is the crucial part that ensures the first and last windows are *always* included
+        if len(starts) == 0 or starts[-1] < last_available_start:
+            # Add the last possible start if arange didn't reach it
+            starts = np.append(starts, last_available_start)
+        elif starts[-1] > last_available_start:
+            # This can happen if step_size is large, e.g., arange(0, 8+10, 10) -> [0, 10]
+            # In this case, we force the last element to be the correct last_available_start
+            starts[-1] = last_available_start
+
+        # 3. The number of *intervals* (steps) between start points
+        num_intervals = len(starts) - 1
+
+        # If there's 0 or 1 interval (e.g., starts=[0] or starts=[0, 8]), it's already optimal
+        if num_intervals <= 0:
+            return starts
+
+        # 4. Calculate the ideal, uniform step size (this can be a float)
+        optimal_step_size = last_available_start / num_intervals
+
+        osl_lb = math.floor(optimal_step_size)  # Step size lower bound (e.g., 4)
+        osl_ub = math.ceil(optimal_step_size)  # Step size upper bound (e.g., 5)
+
+        # 5. Determine how many steps should be the *larger* size (osl_ub)
+        # We use round() to handle potential floating point inaccuracies
+        osl_ub_count = round((optimal_step_size - osl_lb) * num_intervals)
+
+        # 6. Determine how many steps should be the *smaller* size
+        osl_lb_count = num_intervals - osl_ub_count
+
+        # 7. Create the list of actual step sizes (e.g., [5, 4])
+        new_diffs = [osl_ub] * osl_ub_count + [osl_lb] * osl_lb_count
+
+        # 8. Create the start points: [0, step1, step1+step2, ...]
+        # This fixes Flaw 3 by concatenating [0] with the cumsum
+        new_starts = np.concatenate([[0], np.cumsum(new_diffs)]).astype(int)
+        print(f"{starts = }, {new_starts = }")
+        return new_starts
 
     if subsequence_start_mode == "exact":
         assert (
