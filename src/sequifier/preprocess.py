@@ -1489,6 +1489,8 @@ def preprocess_batch(
                 for i, (lb, ub) in enumerate(group_bounds)
             }
 
+            print("[INFO] Accumulating sequences")
+
             for group, split_df in sequences.items():
                 if not split_df.is_empty():
                     sequences_by_split[group].append(split_df)
@@ -1508,6 +1510,7 @@ def preprocess_batch(
                     # Reset the accumulator and increment the file index
                     sequences_by_split[group] = []
                     file_indices[group] += 1
+                    print(f"{file_indices[group] = }")
 
         # After the loop, write any remaining sequences that didn't fill a full batch
         for group in range(len(split_paths)):
@@ -1671,12 +1674,18 @@ def get_subsequence_starts(
         starts = np.arange(0, last_available_start + seq_step_size, seq_step_size)
         starts[-1] = last_available_start
         if len(starts) > 2:
+            i = 0
             while True:
+                print(f"{starts = }")
                 starts_delta = starts[1:] - starts[:-1]
+                if i > len(starts) * 2:
+                    return starts
                 if np.max(starts_delta) - np.min(starts_delta) > 1:
-                    starts[np.argmin(starts_delta) + 1] -= 1
+                    starts[np.argmin(starts_delta)] -= 1
+                    i += 1
                 else:
                     return starts
+
         return starts
 
     if subsequence_start_mode == "exact":
