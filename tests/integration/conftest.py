@@ -100,6 +100,16 @@ def inference_config_path_real():
 
 
 @pytest.fixture(scope="session")
+def training_config_path_cat_inf_size():
+    return os.path.join("tests", "configs", "train-test-categorical-inf-size.yaml")
+
+
+@pytest.fixture(scope="session")
+def inference_config_path_cat_inf_size():
+    return os.path.join("tests", "configs", "infer-test-categorical-inf-size.yaml")
+
+
+@pytest.fixture(scope="session")
 def inference_config_path_real_autoregression():
     return os.path.join("tests", "configs", "infer-test-real-autoregression.yaml")
 
@@ -148,11 +158,13 @@ def format_configs_locally(
     training_config_path_cat,
     training_config_path_cat_multitarget,
     training_config_path_real,
+    training_config_path_cat_inf_size,
     inference_config_path_cat,
     inference_config_path_cat_multitarget,
     inference_config_path_real,
     inference_config_path_real_autoregression,
     inference_config_path_categorical_autoregression,
+    inference_config_path_cat_inf_size,
 ):
     from sys import platform
 
@@ -165,11 +177,13 @@ def format_configs_locally(
             training_config_path_cat,
             training_config_path_cat_multitarget,
             training_config_path_real,
+            training_config_path_cat_inf_size,
             inference_config_path_cat,
             inference_config_path_cat_multitarget,
             inference_config_path_real,
             inference_config_path_real_autoregression,
             inference_config_path_categorical_autoregression,
+            inference_config_path_cat_inf_size,
         ]
         for config_path in config_paths:
             with open(config_path, "r") as f:
@@ -271,6 +285,7 @@ def run_training(
     project_path,
     training_config_path_cat,
     training_config_path_real,
+    training_config_path_cat_inf_size,
     training_config_path_cat_multitarget,
 ):
     for model_number in [1, 3, 5, 50]:
@@ -290,7 +305,8 @@ def run_training(
             f"sequifier train --config-path={training_config_path_real} --ddconfig-path={ddconfig_path_real} --model-name={model_name_real} --selected-columns=None"
         )
 
-    model_name_cat = f"model-categorical-{model_number}"  # type: ignore
+    write_and_log(f"sequifier train --config-path={training_config_path_cat_inf_size}")
+
     write_and_log(
         f"sequifier train --config-path={training_config_path_cat_multitarget}"
     )
@@ -329,6 +345,7 @@ def run_inference(
     inference_config_path_real_autoregression,
     inference_config_path_categorical_autoregression,
     inference_config_path_embedding,
+    inference_config_path_cat_inf_size,
 ):
     for model_number in [1, 3, 5, 50]:
         model_path_cat = os.path.join(
@@ -364,6 +381,8 @@ def run_inference(
     write_and_log(
         f"sequifier infer --config-path={inference_config_path_real_autoregression} --selected-columns={SELECTED_COLUMNS['real'][1]}"
     )
+
+    write_and_log(f"sequifier infer --config-path={inference_config_path_cat_inf_size}")
 
     write_and_log(
         f"sequifier infer --config-path={inference_config_path_categorical_autoregression}  --selected-columns=itemId"
