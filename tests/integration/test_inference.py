@@ -214,15 +214,15 @@ def test_predictions_cat(predictions):
 
                 # 4. Assert correct number of predictions per sequence
                 baseline_rows_per_seq = (
-                    baseline_preds.group_by("sequenceId").count().height
+                    baseline_preds.group_by("sequenceId").len().height
                 )
                 test_rows_per_seq_groups = model_predictions.group_by(
                     "sequenceId"
-                ).count()
+                ).len()
 
                 assert baseline_rows_per_seq == test_rows_per_seq_groups.height
                 assert (
-                    test_rows_per_seq_groups["count"] == inference_size
+                    test_rows_per_seq_groups["len"] == inference_size
                 ).all(), f"Test should have {inference_size} predictions per sequence"
 
 
