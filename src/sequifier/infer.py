@@ -169,6 +169,7 @@ def infer_worker(
             config.target_column_types,
             config.sample_from_distribution_columns,
             config.infer_with_dropout,
+            config.inference_size,
             config.inference_batch_size,
             config.device,
             args_config=args_config,
@@ -193,6 +194,7 @@ def infer_worker(
     print("--- Inference Complete ---")
 
 
+@beartype
 def infer_embedding(
     config: "InfererModel",
     inferer: "Inferer",
@@ -206,8 +208,9 @@ def infer_embedding(
     of DataFrames or an iterator of tensors). For each data chunk, it
     calls the appropriate function (`get_embeddings` or `get_embeddings_pt`)
     to generate embeddings. It then formats these embeddings into a
-    Polars DataFrame, associating them with their `sequenceId` and
-    `subsequenceId`, and writes the resulting DataFrame to the configured output path.
+    Polars DataFrame, associating them with their `sequenceId`, `subsequenceId`,
+    and absolute `itemPosition`, and writes the resulting DataFrame to the
+    configured output path.
 
     Args:
         config: The `InfererModel` configuration object.
@@ -220,27 +223,71 @@ def infer_embedding(
             `torch.dtype`.
     """
     for data_id, data in enumerate(dataset):
-        # Step 1: Adapt Data Subsetting (now works on Polars DF)
+        inference_size = inferer.inference_size
+
+        # Step 1: Get embeddings and base position/ID data
         if config.read_format in ["parquet", "csv"]:
             if config.selected_columns is not None:
                 data = subset_to_selected_columns(data, config.selected_columns)
+
+            # Determine the number of input features
             n_input_cols = data.get_column("inputCol").n_unique()
+
+            # Create a mask to select only one row per sequence
             mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
+
             embeddings = get_embeddings(config, inferer, data, column_types)
+
             sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
-            subsequence_ids_for_preds = data.get("subsequenceId").filter(mask)
+            # --- ADDED THIS LINE ---
+            subsequence_ids_for_preds = data.get_column("subsequenceId").filter(mask)
+            item_positions_for_preds_base = (
+                data.get_column("startItemPosition").filter(mask).to_numpy()
+            )
+
         elif config.read_format == "pt":
-            sequences_dict, _, sequence_ids_tensor, subsequence_ids_tensor, _ = data
+            (
+                sequences_dict,
+                _,
+                sequence_ids_tensor,
+                subsequence_ids_tensor,
+                start_positions_tensor,
+            ) = data
             embeddings = get_embeddings_pt(config, inferer, sequences_dict)
+
             sequence_ids_for_preds = sequence_ids_tensor.numpy()
             subsequence_ids_for_preds = subsequence_ids_tensor.numpy()
+            item_positions_for_preds_base = start_positions_tensor.numpy()
+
         else:
             raise Exception("impossible")
 
-        embeddings = pl.DataFrame(
+        # Step 2: Calculate absolute positions and repeat IDs
+        # (e.g., for seq_len=50, inf_size=5, offsets are [45, 46, 47, 48, 49])
+        base_offsets = np.arange(config.seq_length - inference_size, config.seq_length)
+
+        # Tile these offsets for each sample in the batch
+        position_offsets_tiled = np.tile(
+            base_offsets, len(item_positions_for_preds_base)
+        )
+
+        # Repeat the base start position for each of the N embedding outputs
+        base_positions_repeated = np.repeat(
+            item_positions_for_preds_base, inference_size
+        )
+
+        # The final position is the start + the relative offset within the sequence
+        final_positions = base_positions_repeated + position_offsets_tiled
+
+        sequence_ids_repeated = np.repeat(sequence_ids_for_preds, inference_size)
+        subsequence_ids_repeated = np.repeat(subsequence_ids_for_preds, inference_size)
+
+        # Step 3: Build the final DataFrame
+        embeddings_df = pl.DataFrame(
             {
-                "sequenceId": sequence_ids_for_preds,
-                "subsequenceId": subsequence_ids_for_preds,
+                "sequenceId": sequence_ids_repeated,
+                "subsequenceId": subsequence_ids_repeated,  # <-- ADDED THIS COLUMN
+                "itemPosition": final_positions,
                 **dict(
                     zip(
                         [str(v) for v in range(embeddings.shape[1])],
@@ -250,6 +297,7 @@ def infer_embedding(
             }
         )
 
+        # Step 4: Save the output
         os.makedirs(
             os.path.join(config.project_path, "outputs", "embeddings"),
             exist_ok=True,
@@ -274,7 +322,7 @@ def infer_embedding(
         )
         print(f"[INFO] Writing predictions to '{embeddings_path}'")
         write_data(
-            embeddings,
+            embeddings_df,
             embeddings_path,
             config.write_format,
         )
@@ -321,17 +369,38 @@ def infer_generative(
                 data = subset_to_selected_columns(data, config.selected_columns)
             n_input_cols = data.get_column("inputCol").n_unique()
             if not config.autoregression:
-                # For the non-autoregressive case, the old logic is still needed here
-                # Apply the mask to the sequenceId column
+                # For the non-autoregressive case, apply inference size logic
+                probs, preds = get_probs_preds(config, inferer, data, column_types)
+
                 mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
-                sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
-                item_positions_for_preds = (
+
+                # Get base IDs and positions (shape: batch_size)
+                sequence_ids_for_preds_base = data.get_column("sequenceId").filter(mask)
+                item_positions_for_preds_base = (
                     data.get_column("startItemPosition").filter(mask).to_numpy()
                     + config.seq_length
                 )
-                probs, preds = get_probs_preds(config, inferer, data, column_types)
+
+                inference_size = inferer.inference_size
+
+                # Expand IDs and positions to match model output shape (batch_size * inference_size)
+                sequence_ids_for_preds = np.repeat(
+                    sequence_ids_for_preds_base, inference_size
+                )
+
+                item_positions_repeated = np.repeat(
+                    item_positions_for_preds_base, inference_size
+                )
+                position_offsets = np.tile(
+                    np.arange(-inference_size + 1, 1),
+                    len(item_positions_for_preds_base),
+                )
+                item_positions_for_preds = item_positions_repeated + position_offsets
 
             else:
+                assert (
+                    inferer.inference_size == 1
+                ), f"{inferer.inference_size = } != 1, is not allowed for autoregressive inference"
                 if config.autoregression_extra_steps is not None:
                     data = expand_data_by_autoregression(
                         data,
@@ -354,20 +423,47 @@ def infer_generative(
                 if config.autoregression_extra_steps is None
                 else config.autoregression_extra_steps
             )
+
+            # Pass inference_size to get_probs_preds_pt
             probs, preds = get_probs_preds_pt(
                 config, inferer, sequences_dict, extra_steps
             )
-            sequence_ids_for_preds = np.repeat(
-                sequence_ids_tensor.numpy(), extra_steps + 1
-            )
-            item_position_boundaries = zip(
-                list(start_positions_tensor + config.seq_length),
-                list(start_positions_tensor + config.seq_length + extra_steps + 1),
-            )
-            item_positions_for_preds = np.concatenate(
-                [np.arange(start, end) for start, end in item_position_boundaries],
-                axis=0,
-            )
+
+            inference_size = inferer.inference_size  # Get inference_size
+
+            if extra_steps == 0:
+                # Non-autoregressive path: Apply inference_size logic
+                sequence_ids_for_preds_base = sequence_ids_tensor.numpy()
+                item_positions_for_preds_base = (
+                    start_positions_tensor.numpy() + config.seq_length
+                )
+
+                sequence_ids_for_preds = np.repeat(
+                    sequence_ids_for_preds_base, inference_size
+                )
+
+                item_positions_repeated = np.repeat(
+                    item_positions_for_preds_base, inference_size
+                )
+                position_offsets = np.tile(
+                    np.arange(-inference_size + 1, 1),
+                    len(item_positions_for_preds_base),
+                )
+                item_positions_for_preds = item_positions_repeated + position_offsets
+
+            else:
+                sequence_ids_for_preds = np.repeat(
+                    sequence_ids_tensor.numpy(), extra_steps + 1
+                )
+                item_position_boundaries = zip(
+                    list(start_positions_tensor + config.seq_length),
+                    list(start_positions_tensor + config.seq_length + extra_steps + 1),
+                )
+                item_positions_for_preds = np.concatenate(
+                    [np.arange(start, end) for start, end in item_position_boundaries],
+                    axis=0,
+                )
+            # --- END OF MODIFICATION ---
         else:
             raise Exception("impossible")
 
@@ -430,6 +526,7 @@ def infer_generative(
                     )
 
         n_input_cols = len(config.selected_columns)
+
         predictions = pl.DataFrame(
             {
                 "sequenceId": sequence_ids_for_preds,
@@ -610,6 +707,7 @@ def get_probs_preds_pt(
             - `preds`: A dictionary mapping target columns to NumPy arrays
               of final predictions, ordered by sample index then step.
     """
+
     target_cols = inferer.target_columns
 
     # 2. Initialize input and containers for storing results from all steps
@@ -1093,6 +1191,7 @@ class Inferer:
         target_column_types: dict[str, str],
         sample_from_distribution_columns: Optional[list[str]],
         infer_with_dropout: bool,
+        inference_size: int,
         inference_batch_size: int,
         device: str,
         args_config: dict[str, Any],
@@ -1137,6 +1236,7 @@ class Inferer:
         self.target_column_types = target_column_types
         self.sample_from_distribution_columns = sample_from_distribution_columns
         self.infer_with_dropout = infer_with_dropout
+        self.inference_size = inference_size
         self.inference_batch_size = inference_batch_size
 
         self.inference_model_type = model_path.split(".")[-1]
@@ -1362,7 +1462,7 @@ class Inferer:
             outs = {
                 target_column: np.concatenate(
                     [out_sub[target_column] for out_sub in out_subs], axis=0
-                )[:size, :]
+                )[: size * self.inference_size, :]
                 for target_column in self.target_columns
             }
         elif self.inference_model_type == "pt":
@@ -1372,7 +1472,7 @@ class Inferer:
                 self.inference_model,
                 x_adjusted,
                 self.device,
-                size,
+                size * self.inference_size,
                 self.target_columns,
             )
         else:
@@ -1450,7 +1550,10 @@ class Inferer:
             )
         }
         ort_outs = self.ort_session.run(None, ort_inputs)
-        return ort_outs
+        return [
+            oo.transpose(1, 0, 2).reshape(oo.shape[0] * oo.shape[1], oo.shape[2])
+            for oo in ort_outs
+        ]
 
     @beartype
     def expand_to_batch_size(self, x: np.ndarray) -> np.ndarray:

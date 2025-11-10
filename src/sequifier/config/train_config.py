@@ -310,6 +310,7 @@ class ModelSpecModel(BaseModel):
     nhead: int
     d_hid: int
     nlayers: int
+    inference_size: int
 
     @validator("d_model_by_column")
     def validate_d_model_by_column(cls, v, values):

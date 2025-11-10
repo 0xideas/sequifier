@@ -350,6 +350,7 @@ class TransformerModel(nn.Module):
         self.transformer_encoder = TransformerEncoder(
             encoder_layers, hparams.model_spec.nlayers, enable_nested_tensor=False
         )
+        self.inference_size = hparams.model_spec.inference_size
 
         self.decoder = ModuleDict()
         self.softmax = ModuleDict()
@@ -609,7 +610,7 @@ class TransformerModel(nn.Module):
             The embedding tensor for the last token
             (batch_size, d_model).
         """
-        return self.forward_inner(src)[-1, :, :]
+        return self.forward_inner(src)[-self.inference_size :, :, :]
 
     @beartype
     def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -689,7 +690,9 @@ class TransformerModel(nn.Module):
         """
         output = self.forward_train(src)
         return {
-            target_column: self.apply_softmax(target_column, out[-1, :, :])
+            target_column: self.apply_softmax(
+                target_column, out[-self.inference_size :, :, :]
+            )
             for target_column, out in output.items()
         }
 
@@ -1583,7 +1586,11 @@ def infer_with_embedding_model(
                 col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()
             }
             output_gpu = model.forward(data_gpu)
-            outs0.append(output_gpu.cpu().detach())
+            output_cpu = output_gpu.cpu().detach().numpy()
+            output_cpu = output_cpu.transpose(1, 0, 2).reshape(
+                output_cpu.shape[0] * output_cpu.shape[1], output_cpu.shape[2]
+            )
+            outs0.append(output_cpu)
             if device == "cuda":
                 torch.cuda.empty_cache()
 
@@ -1626,7 +1633,16 @@ def infer_with_generative_model(
 
     outs = {
         target_column: np.concatenate(
-            [o[target_column].numpy() for o in outs0],
+            [
+                o[target_column]
+                .numpy()
+                .transpose(1, 0, 2)
+                .reshape(
+                    o[target_column].shape[0] * o[target_column].shape[1],
+                    o[target_column].shape[2],
+                )
+                for o in outs0
+            ],
             axis=0,
         )[:size, :]
         for target_column in target_columns

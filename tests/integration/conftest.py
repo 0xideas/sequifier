@@ -55,6 +55,13 @@ def preprocessing_config_path_multi_file():
 
 
 @pytest.fixture(scope="session")
+def preprocessing_config_path_interrupted():
+    return os.path.join(
+        "tests", "configs", "preprocess-test-categorical-interrupted.yaml"
+    )
+
+
+@pytest.fixture(scope="session")
 def preprocessing_config_path_exact():
     return os.path.join("tests", "configs", "preprocess-test-categorical-exact.yaml")
 
@@ -85,6 +92,16 @@ def training_config_path_real():
 
 
 @pytest.fixture(scope="session")
+def training_config_path_cat_inf_size_1():
+    return os.path.join("tests", "configs", "train-test-categorical-inf-size-1.yaml")
+
+
+@pytest.fixture(scope="session")
+def training_config_path_cat_inf_size_3():
+    return os.path.join("tests", "configs", "train-test-categorical-inf-size-3.yaml")
+
+
+@pytest.fixture(scope="session")
 def inference_config_path_cat():
     return os.path.join("tests", "configs", "infer-test-categorical.yaml")
 
@@ -97,6 +114,16 @@ def inference_config_path_cat_multitarget():
 @pytest.fixture(scope="session")
 def inference_config_path_real():
     return os.path.join("tests", "configs", "infer-test-real.yaml")
+
+
+@pytest.fixture(scope="session")
+def inference_config_path_cat_inf_size_1():
+    return os.path.join("tests", "configs", "infer-test-categorical-inf-size-1.yaml")
+
+
+@pytest.fixture(scope="session")
+def inference_config_path_cat_inf_size_3():
+    return os.path.join("tests", "configs", "infer-test-categorical-inf-size-3.yaml")
 
 
 @pytest.fixture(scope="session")
@@ -114,6 +141,13 @@ def inference_config_path_categorical_autoregression():
 @pytest.fixture(scope="session")
 def inference_config_path_embedding():
     return os.path.join("tests", "configs", "infer-test-categorical-embedding.yaml")
+
+
+@pytest.fixture(scope="session")
+def inference_config_path_cat_inf_size_3_embedding():
+    return os.path.join(
+        "tests", "configs", "infer-test-categorical-inf-size-3-embedding.yaml"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -145,14 +179,19 @@ def format_configs_locally(
     preprocessing_config_path_cat_multitarget,
     preprocessing_config_path_real,
     preprocessing_config_path_multi_file,
+    preprocessing_config_path_interrupted,
     training_config_path_cat,
     training_config_path_cat_multitarget,
     training_config_path_real,
+    training_config_path_cat_inf_size_1,
+    training_config_path_cat_inf_size_3,
     inference_config_path_cat,
     inference_config_path_cat_multitarget,
     inference_config_path_real,
     inference_config_path_real_autoregression,
     inference_config_path_categorical_autoregression,
+    inference_config_path_cat_inf_size_1,
+    inference_config_path_cat_inf_size_3,
 ):
     from sys import platform
 
@@ -162,14 +201,19 @@ def format_configs_locally(
             preprocessing_config_path_cat_multitarget,
             preprocessing_config_path_real,
             preprocessing_config_path_multi_file,
+            preprocessing_config_path_interrupted,
             training_config_path_cat,
             training_config_path_cat_multitarget,
             training_config_path_real,
+            training_config_path_cat_inf_size_1,
+            training_config_path_cat_inf_size_3,
             inference_config_path_cat,
             inference_config_path_cat_multitarget,
             inference_config_path_real,
             inference_config_path_real_autoregression,
             inference_config_path_categorical_autoregression,
+            inference_config_path_cat_inf_size_1,
+            inference_config_path_cat_inf_size_3,
         ]
         for config_path in config_paths:
             with open(config_path, "r") as f:
@@ -207,15 +251,31 @@ def format_configs_locally(
 
 
 @pytest.fixture(scope="session")
+def copy_interrupted_data():
+    os.makedirs(os.path.join("tests", "project_folder", "data"), exist_ok=True)
+
+    source_path = os.path.join(
+        "tests", "resources", "source_data", "test-data-categorical-1-interrupted-temp"
+    )
+    target_path = os.path.join(
+        "tests", "project_folder", "data", "test-data-categorical-1-interrupted-temp"
+    )
+
+    shutil.copytree(source_path, target_path)
+
+
+@pytest.fixture(scope="session")
 def run_preprocessing(
     preprocessing_config_path_cat,
     preprocessing_config_path_cat_multitarget,
     preprocessing_config_path_real,
     preprocessing_config_path_multi_file,
+    preprocessing_config_path_interrupted,
     preprocessing_config_path_exact,
     preprocessing_config_path_exact_pt,
     format_configs_locally,
     remove_project_path_contents,
+    copy_interrupted_data,
 ):
     for data_number in [1, 3, 5, 50]:
         data_path_cat = os.path.join(
@@ -241,6 +301,10 @@ def run_preprocessing(
 
     write_and_log(
         f"sequifier preprocess --config-path={preprocessing_config_path_multi_file}"
+    )
+
+    write_and_log(
+        f"sequifier preprocess --config-path={preprocessing_config_path_interrupted}"
     )
 
     write_and_log(
@@ -271,6 +335,8 @@ def run_training(
     project_path,
     training_config_path_cat,
     training_config_path_real,
+    training_config_path_cat_inf_size_1,
+    training_config_path_cat_inf_size_3,
     training_config_path_cat_multitarget,
 ):
     for model_number in [1, 3, 5, 50]:
@@ -290,7 +356,14 @@ def run_training(
             f"sequifier train --config-path={training_config_path_real} --ddconfig-path={ddconfig_path_real} --model-name={model_name_real} --selected-columns=None"
         )
 
-    model_name_cat = f"model-categorical-{model_number}"  # type: ignore
+    write_and_log(
+        f"sequifier train --config-path={training_config_path_cat_inf_size_1}"
+    )
+
+    write_and_log(
+        f"sequifier train --config-path={training_config_path_cat_inf_size_3}"
+    )
+
     write_and_log(
         f"sequifier train --config-path={training_config_path_cat_multitarget}"
     )
@@ -329,6 +402,9 @@ def run_inference(
     inference_config_path_real_autoregression,
     inference_config_path_categorical_autoregression,
     inference_config_path_embedding,
+    inference_config_path_cat_inf_size_1,
+    inference_config_path_cat_inf_size_3,
+    inference_config_path_cat_inf_size_3_embedding,
 ):
     for model_number in [1, 3, 5, 50]:
         model_path_cat = os.path.join(
@@ -366,9 +442,21 @@ def run_inference(
     )
 
     write_and_log(
+        f"sequifier infer --config-path={inference_config_path_cat_inf_size_1}"
+    )
+
+    write_and_log(
+        f"sequifier infer --config-path={inference_config_path_cat_inf_size_3}"
+    )
+
+    write_and_log(
         f"sequifier infer --config-path={inference_config_path_categorical_autoregression}  --selected-columns=itemId"
     )
 
     write_and_log(
         f"sequifier infer --config-path={inference_config_path_embedding}  --selected-columns=itemId"
+    )
+
+    write_and_log(
+        f"sequifier infer --config-path={inference_config_path_cat_inf_size_3_embedding}"
     )

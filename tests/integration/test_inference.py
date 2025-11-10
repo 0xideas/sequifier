@@ -18,6 +18,8 @@ def model_names_preds():
         "model-categorical-multitarget-5-best-3",
         "model-real-1-best-3-autoregression",
         "model-categorical-1-best-3-autoregression",
+        "model-categorical-1-inf-size-best-3",
+        "model-categorical-3-inf-size-best-3",
     ]
 
     return model_names_preds
@@ -32,12 +34,19 @@ def model_names_probs():
     model_names_probs += [
         f"model-categorical-multitarget-5-best-3-{col}" for col in ["itemId", "sup1"]
     ]
+    model_names_probs += [
+        f"model-categorical-3-inf-size-best-3-{col}"
+        for col in ["itemId", "sup1", "sup2"]
+    ]
     return model_names_probs
 
 
 @pytest.fixture()
 def model_names_embeddings():
-    model_names_embeddings = ["model-categorical-1-best-embedding-3"]
+    model_names_embeddings = [
+        "model-categorical-1-best-embedding-3",
+        "model-categorical-3-inf-size-best-embedding-3",
+    ]
     return model_names_embeddings
 
 
@@ -191,6 +200,31 @@ def test_predictions_cat(predictions):
                     ]
                 ), model_predictions
 
+            if "inf" in model_name:
+                inference_size = 3
+                n_test_rows = model_predictions.height
+                baseline_preds = predictions["model-categorical-1-best-3"]
+                n_baseline_rows = baseline_preds.height
+
+                # 3. Assert the number of rows is scaled by inference_size
+                assert n_test_rows == n_baseline_rows * inference_size, (
+                    f"Expected {n_baseline_rows * inference_size} rows for inference_size={inference_size}, "
+                    f"but found {n_test_rows} rows."
+                )
+
+                # 4. Assert correct number of predictions per sequence
+                baseline_rows_per_seq = (
+                    baseline_preds.group_by("sequenceId").len().height
+                )
+                test_rows_per_seq_groups = model_predictions.group_by(
+                    "sequenceId"
+                ).len()
+
+                assert baseline_rows_per_seq == test_rows_per_seq_groups.height
+                assert (
+                    test_rows_per_seq_groups["len"] == inference_size
+                ).all(), f"Test should have {inference_size} predictions per sequence"
+
 
 def test_probabilities(probabilities):
     for model_name, model_probabilities in probabilities.items():
@@ -221,9 +255,14 @@ def test_multi_pred(predictions):
 
 def test_embeddings(embeddings):
     for model_name, model_embeddings in embeddings.items():
-        assert model_embeddings.shape[0] == 10
-        assert model_embeddings.shape[1] == 202
-        assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.1
+        if "categorical-1" in model_name:
+            assert model_embeddings.shape[0] == 10
+            assert model_embeddings.shape[1] == 203
+            assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.1
+        if "categorical-3" in model_name:
+            assert model_embeddings.shape[0] == 30
+            assert model_embeddings.shape[1] == 203
+            assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.1
 
 
 def test_predictions_item_position(predictions):
@@ -263,12 +302,20 @@ def test_embeddings_subsequence_id(embeddings):
         # Ensure correct sorting
         embeds_df_sorted = embeds_df.sort("sequenceId", "subsequenceId")
 
+        shift_val = 0
+        if "categorical-1" in model_name:
+            shift_val = 1
+        if "categorical-3" in model_name:
+            shift_val = 3
+
         # Calculate differences and sequence changes
         embeds_with_diffs = embeds_df_sorted.with_columns(
-            (pl.col("subsequenceId") - pl.col("subsequenceId").shift(1)).alias(
+            (pl.col("subsequenceId") - pl.col("subsequenceId").shift(shift_val)).alias(
                 "subseq_diff"
             ),
-            (pl.col("sequenceId") == pl.col("sequenceId").shift(1)).alias("same_seq"),
+            (pl.col("sequenceId") == pl.col("sequenceId").shift(shift_val)).alias(
+                "same_seq"
+            ),
         )
 
         # 1. Check if subsequenceId starts at 0 for each new sequence

@@ -1,0 +1,25 @@
+project_path: tests/project_folder
+training_config_path: tests/configs/train-test-categorical-inf-size-3.yaml
+ddconfig_path: tests/project_folder/configs/ddconfigs/test-data-categorical-3.json
+model_type: embedding
+model_path: tests/project_folder/models/sequifier-model-categorical-3-inf-size-best-embedding-3.pt
+data_path: tests/project_folder/data/test-data-categorical-3-split2
+read_format: pt
+write_format: csv
+
+selected_columns: [itemId, sup1, sup2]
+target_columns: [itemId, sup1, sup2]
+target_column_types:
+  itemId: categorical
+  sup1: categorical
+  sup2: categorical
+
+output_probabilities: false
+map_to_id: true
+device: cpu
+seq_length: 8
+inference_batch_size: 10
+inference_size: 3
+
+sample_from_distribution_columns: null
+autoregression: false

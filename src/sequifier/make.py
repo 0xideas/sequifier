@@ -42,6 +42,7 @@ model_spec:
   nhead: 16
   d_hid: 128
   nlayers: 3
+  inference_size: 1
 training_spec:
   device: cuda
   epochs: 1000
