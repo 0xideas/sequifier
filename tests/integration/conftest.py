@@ -55,6 +55,13 @@ def preprocessing_config_path_multi_file():
 
 
 @pytest.fixture(scope="session")
+def preprocessing_config_path_interrupted():
+    return os.path.join(
+        "tests", "configs", "preprocess-test-categorical-interrupted.yaml"
+    )
+
+
+@pytest.fixture(scope="session")
 def preprocessing_config_path_exact():
     return os.path.join("tests", "configs", "preprocess-test-categorical-exact.yaml")
 
@@ -172,6 +179,7 @@ def format_configs_locally(
     preprocessing_config_path_cat_multitarget,
     preprocessing_config_path_real,
     preprocessing_config_path_multi_file,
+    preprocessing_config_path_interrupted,
     training_config_path_cat,
     training_config_path_cat_multitarget,
     training_config_path_real,
@@ -193,6 +201,7 @@ def format_configs_locally(
             preprocessing_config_path_cat_multitarget,
             preprocessing_config_path_real,
             preprocessing_config_path_multi_file,
+            preprocessing_config_path_interrupted,
             training_config_path_cat,
             training_config_path_cat_multitarget,
             training_config_path_real,
@@ -242,15 +251,31 @@ def format_configs_locally(
 
 
 @pytest.fixture(scope="session")
+def copy_interrupted_data():
+    os.makedirs(os.path.join("tests", "project_folder", "data"), exist_ok=True)
+
+    source_path = os.path.join(
+        "tests", "resources", "source_data", "test-data-categorical-1-interrupted-temp"
+    )
+    target_path = os.path.join(
+        "tests", "project_folder", "data", "test-data-categorical-1-interrupted-temp"
+    )
+
+    shutil.copytree(source_path, target_path)
+
+
+@pytest.fixture(scope="session")
 def run_preprocessing(
     preprocessing_config_path_cat,
     preprocessing_config_path_cat_multitarget,
     preprocessing_config_path_real,
     preprocessing_config_path_multi_file,
+    preprocessing_config_path_interrupted,
     preprocessing_config_path_exact,
     preprocessing_config_path_exact_pt,
     format_configs_locally,
     remove_project_path_contents,
+    copy_interrupted_data,
 ):
     for data_number in [1, 3, 5, 50]:
         data_path_cat = os.path.join(
@@ -276,6 +301,10 @@ def run_preprocessing(
 
     write_and_log(
         f"sequifier preprocess --config-path={preprocessing_config_path_multi_file}"
+    )
+
+    write_and_log(
+        f"sequifier preprocess --config-path={preprocessing_config_path_interrupted}"
     )
 
     write_and_log(

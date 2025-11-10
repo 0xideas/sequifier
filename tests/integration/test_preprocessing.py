@@ -257,3 +257,56 @@ def test_preprocessed_data_exact(run_preprocessing):
         parquet_output["subsequenceId"].to_numpy()
         == np.tile(np.repeat(np.arange(3), 3), 10)
     )
+
+
+def test_preprocessing_interrupted(run_preprocessing, dd_configs):
+    with open(
+        os.path.join(
+            "tests",
+            "project_folder",
+            "configs",
+            "ddconfigs",
+            "test-data-categorical-1-interrupted.json",
+        ),
+        "r",
+    ) as f:
+        interrupted_ddconfig = json.loads(f.read())
+    baseline_ddconfig = dd_configs["test-data-categorical-1.json"]
+
+    interrupted_ddconfig_adapted = interrupted_ddconfig
+    interrupted_ddconfig_adapted["split_paths"] = [
+        path.replace("categorical-1-interrupted", "categorical-1")
+        for path in interrupted_ddconfig_adapted["split_paths"]
+    ]
+
+    assert str(interrupted_ddconfig_adapted) == str(
+        baseline_ddconfig
+    ), f"{interrupted_ddconfig_adapted = } != {baseline_ddconfig = }"
+
+    baseline_output = {
+        split: load_pt_outputs(
+            os.path.join(
+                "tests",
+                "project_folder",
+                "data",
+                f"test-data-categorical-1-split{split}",
+            )
+        )
+        for split in range(3)
+    }
+    interrupted_output = {
+        split: load_pt_outputs(
+            os.path.join(
+                "tests",
+                "project_folder",
+                "data",
+                f"test-data-categorical-1-interrupted-split{split}",
+            )
+        )
+        for split in range(3)
+    }
+
+    for split in range(3):
+        assert np.all(
+            interrupted_output[split].to_numpy() == baseline_output[split].to_numpy()
+        ), f"interrupted output != baseline output for split {split}"
