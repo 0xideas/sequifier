@@ -19,6 +19,7 @@ def model_names_preds():
         "model-real-1-best-3-autoregression",
         "model-categorical-1-best-3-autoregression",
         "model-categorical-1-inf-size-best-3",
+        "model-categorical-3-inf-size-best-3",
     ]
 
     return model_names_preds

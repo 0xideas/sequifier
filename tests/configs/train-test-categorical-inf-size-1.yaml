@@ -14,7 +14,7 @@ inference_batch_size: 10
 export_generative_model: true
 export_embedding_model: true
 export_onnx: true
-export_pt: true
+export_pt: false
 
 model_spec:
   d_model: 200
