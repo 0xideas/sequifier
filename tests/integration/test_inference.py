@@ -34,6 +34,10 @@ def model_names_probs():
     model_names_probs += [
         f"model-categorical-multitarget-5-best-3-{col}" for col in ["itemId", "sup1"]
     ]
+    model_names_probs += [
+        f"model-categorical-3-inf-size-best-3-{col}"
+        for col in ["itemId", "sup1", "sup2"]
+    ]
     return model_names_probs
 
 
