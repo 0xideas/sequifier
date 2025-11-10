@@ -1462,7 +1462,7 @@ class Inferer:
             outs = {
                 target_column: np.concatenate(
                     [out_sub[target_column] for out_sub in out_subs], axis=0
-                )[:size, :]
+                )[: size * self.inference_size, :]
                 for target_column in self.target_columns
             }
         elif self.inference_model_type == "pt":
