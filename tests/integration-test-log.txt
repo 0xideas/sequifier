@@ -35,3 +35,4 @@ sequifier infer --config-path=tests/configs/infer-test-categorical-inf-size-1.ya
 sequifier infer --config-path=tests/configs/infer-test-categorical-inf-size-3.yaml
 sequifier infer --config-path=tests/configs/infer-test-categorical-autoregression.yaml  --selected-columns=itemId
 sequifier infer --config-path=tests/configs/infer-test-categorical-embedding.yaml  --selected-columns=itemId
+sequifier infer --config-path=tests/configs/infer-test-categorical-inf-size-3-embedding.yaml

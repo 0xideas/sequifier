@@ -14,7 +14,7 @@ target_column_types:
   sup1: categorical
   sup2: categorical
 
-output_probabilities: true
+output_probabilities: false
 map_to_id: true
 device: cpu
 seq_length: 8
