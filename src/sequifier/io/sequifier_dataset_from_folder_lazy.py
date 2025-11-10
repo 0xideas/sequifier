@@ -130,10 +130,6 @@ class SequifierDatasetFromFolderLazy(Dataset):
             # popitem(last=False) removes and returns the (key, value) pair that
             # was first inserted, effectively implementing the LRU policy.
             evicted_path, _ = self.cache.popitem(last=False)
-            print(
-                f"[INFO] RAM usage {psutil.virtual_memory().percent:.1f}% > {self.ram_threshold}%. "
-                f"Evicting {os.path.basename(evicted_path)} from cache."
-            )
 
     def __getitem__(
         self, idx: int
