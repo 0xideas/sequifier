@@ -192,6 +192,7 @@ class Preprocessor:
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
+
             schema = self._create_schema(col_types, seq_length + 1)
 
             self._process_batches_multiple_files(
@@ -247,12 +248,6 @@ class Preprocessor:
         if (np.unique(list(col_types.values())) == np.array(["Int64"]))[0]:
             sequence_position_type = pl.Int64
         else:
-            assert np.all(
-                [
-                    type_.startswith("Int") or type_.startswith("Float")
-                    for type_ in col_types.values()
-                ]
-            )
             sequence_position_type = pl.Float64
 
         schema.update(
@@ -750,13 +745,19 @@ def _apply_column_statistics(
 
     for col in data_columns:
         if col in id_maps:
-            data = data.with_columns(pl.col(col).replace(id_maps[col]))
+            data = data.with_columns(pl.col(col).replace(id_maps[col]).cast(pl.Int64))
         elif col in selected_columns_statistics:
             data = data.with_columns(
                 (
                     (pl.col(col) - selected_columns_statistics[col]["mean"])
                     / (selected_columns_statistics[col]["std"] + 1e-9)
-                ).alias(col)
+                )
+                .cast(pl.Float64)
+                .alias(col)
+            )
+        else:
+            raise Exception(
+                f"{col} not in id_maps and not in selected_columns_statistics"
             )
 
     return (data, n_classes, col_types)
@@ -805,7 +806,7 @@ def _get_column_statistics(
     """
     for data_col in data_columns:
         dtype = data.schema[data_col]
-        if isinstance(dtype, (pl.String, pl.Utf8)) or isinstance(
+        if isinstance(dtype, (pl.String, pl.Utf8, pl.Categorical)) or isinstance(
             dtype, (pl.Int8, pl.Int16, pl.Int32, pl.Int64)
         ):
             new_id_map = create_id_map(data, column=data_col)
@@ -1017,9 +1018,7 @@ def _process_batches_multiple_files_inner(
             data = _load_and_preprocess_data(
                 path, read_format, selected_columns, max_rows_inner
             )
-            data = _load_and_preprocess_data(
-                path, read_format, selected_columns, max_rows_inner
-            )
+
             data, _, _ = _apply_column_statistics(
                 data,
                 data_columns,
@@ -1363,7 +1362,7 @@ def process_and_write_data_pt(
     targets_dict = {}
 
     for col_name in all_feature_cols:
-        torch_dtype = PANDAS_TO_TORCH_TYPES[column_types[col_name]]
+        torch_dtype = PANDAS_TO_TORCH_TYPES.get(column_types[col_name], torch.int32)
 
         sequences_np = np.vstack(
             aggregated_data.get_column(f"seq_{col_name}").to_numpy(writable=True)
