@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/train.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.train - sequifier v0.9.0.4 documentation</title>
+        <title>sequifier.train - sequifier v0.9.1.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v0.9.0.4 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v0.9.1.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v0.9.0.4 documentation</span>
+  <span class="sidebar-brand-text">sequifier v0.9.1.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -628,6 +628,7 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">transformer_encoder</span> <span class="o">=</span> <span class="n">TransformerEncoder</span><span class="p">(</span>
             <span class="n">encoder_layers</span><span class="p">,</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">nlayers</span><span class="p">,</span> <span class="n">enable_nested_tensor</span><span class="o">=</span><span class="kc">False</span>
         <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">inference_size</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">inference_size</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span> <span class="o">=</span> <span class="n">ModuleDict</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">softmax</span> <span class="o">=</span> <span class="n">ModuleDict</span><span class="p">()</span>
@@ -893,7 +894,7 @@
 <span class="sd">            The embedding tensor for the last token</span>
 <span class="sd">            (batch_size, d_model).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">forward_inner</span><span class="p">(</span><span class="n">src</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:]</span></div>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">forward_inner</span><span class="p">(</span><span class="n">src</span><span class="p">)[</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">inference_size</span> <span class="p">:,</span> <span class="p">:,</span> <span class="p">:]</span></div>
 
 
 <div class="viewcode-block" id="TransformerModel.forward_train">
@@ -985,7 +986,9 @@
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">forward_train</span><span class="p">(</span><span class="n">src</span><span class="p">)</span>
         <span class="k">return</span> <span class="p">{</span>
-            <span class="n">target_column</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">apply_softmax</span><span class="p">(</span><span class="n">target_column</span><span class="p">,</span> <span class="n">out</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:])</span>
+            <span class="n">target_column</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">apply_softmax</span><span class="p">(</span>
+                <span class="n">target_column</span><span class="p">,</span> <span class="n">out</span><span class="p">[</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">inference_size</span> <span class="p">:,</span> <span class="p">:,</span> <span class="p">:]</span>
+            <span class="p">)</span>
             <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">out</span> <span class="ow">in</span> <span class="n">output</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
         <span class="p">}</span></div>
 
@@ -1889,7 +1892,11 @@
                 <span class="n">col</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">x_</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span> <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">x_</span> <span class="ow">in</span> <span class="n">x_sub</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
             <span class="p">}</span>
             <span class="n">output_gpu</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">forward</span><span class="p">(</span><span class="n">data_gpu</span><span class="p">)</span>
-            <span class="n">outs0</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">output_gpu</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">detach</span><span class="p">())</span>
+            <span class="n">output_cpu</span> <span class="o">=</span> <span class="n">output_gpu</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+            <span class="n">output_cpu</span> <span class="o">=</span> <span class="n">output_cpu</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+                <span class="n">output_cpu</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">output_cpu</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">output_cpu</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+            <span class="p">)</span>
+            <span class="n">outs0</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">output_cpu</span><span class="p">)</span>
             <span class="k">if</span> <span class="n">device</span> <span class="o">==</span> <span class="s2">&quot;cuda&quot;</span><span class="p">:</span>
                 <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">empty_cache</span><span class="p">()</span>
 
@@ -1935,7 +1942,16 @@
 
     <span class="n">outs</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">target_column</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span>
-            <span class="p">[</span><span class="n">o</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span> <span class="k">for</span> <span class="n">o</span> <span class="ow">in</span> <span class="n">outs0</span><span class="p">],</span>
+            <span class="p">[</span>
+                <span class="n">o</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span>
+                <span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+                <span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+                <span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
+                    <span class="n">o</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">o</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
+                    <span class="n">o</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span>
+                <span class="p">)</span>
+                <span class="k">for</span> <span class="n">o</span> <span class="ow">in</span> <span class="n">outs0</span>
+            <span class="p">],</span>
             <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
         <span class="p">)[:</span><span class="n">size</span><span class="p">,</span> <span class="p">:]</span>
         <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">target_columns</span>
@@ -1975,7 +1991,7 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=9f107fab"></script>
+</div><script src="../../_static/documentation_options.js?v=12b42f55"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
