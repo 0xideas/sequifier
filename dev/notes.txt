@@ -1,3 +1,4 @@
+fail on invalid yaml keys on loading
 add crosstabs in validation run for categorical variables optionally
 add "patches" functionality to preprocessing
 add joint embedding layer optionally
