@@ -1,4 +1,5 @@
 fail on invalid yaml keys on loading
+add split by sequence/split within sequence distinction
 add crosstabs in validation run for categorical variables optionally
 add "patches" functionality to preprocessing
 add joint embedding layer optionally
