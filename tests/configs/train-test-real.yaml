@@ -19,7 +19,7 @@ export_with_dropout: true
 
 model_spec:
   dim_model: 50
-  nhead: 2
+  n_head: 2
   dim_feedforward: 10
   num_layers: 2
   prediction_length: 1

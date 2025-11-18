@@ -295,18 +295,18 @@ class ModelSpecHyperparameterSampling(BaseModel):
     Attributes:
         dim_model: A list of possible numbers of expected features in the input.
         dim_model_by_column: A list of possible embedding dimensions for each input column.
-        nhead: A list of possible numbers of heads in the multi-head attention models.
+        n_head: A list of possible numbers of heads in the multi-head attention models.
         dim_feedforward: A list of possible dimensions of the feedforward network model.
         num_layers: A list of possible numbers of layers in the transformer model.
     """
 
     dim_model: list[int]
     dim_model_by_column: Optional[list[dict[str, int]]]
-    nhead: list[int]
+    n_head: list[int]
     dim_feedforward: list[int]
     num_layers: list[int]
 
-    @field_validator("nhead")
+    @field_validator("n_head")
     @classmethod
     def validate_model_spec(cls, v, values):
         if values["dim_model_by_column"] is not None:
@@ -316,7 +316,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
         assert (
             len(values["dim_model"]) == len(v)
-        ), "dim_model and nhead must have the same number of candidate values, that are paired"
+        ), "dim_model and n_head must have the same number of candidate values, that are paired"
         return v
 
     def random_sample(self):
@@ -324,7 +324,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
         This method selects a random combination of model hyperparameters from the
         defined lists of possibilities. It ensures that dim_model, dim_model_by_column,
-        and nhead are paired correctly.
+        and n_head are paired correctly.
 
         Returns:
             A ModelSpecModel instance populated with a randomly sampled set of
@@ -344,7 +344,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         return ModelSpecModel(
             dim_model=self.dim_model[dim_model_index],
             dim_model_by_column=dim_model_by_column,
-            nhead=self.nhead[dim_model_index],
+            n_head=self.n_head[dim_model_index],
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
         )
@@ -381,7 +381,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         return ModelSpecModel(
             dim_model=dim_model,
             dim_model_by_column=dim_model_by_column,
-            nhead=self.nhead[dim_model_index],
+            n_head=self.n_head[dim_model_index],
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
         )

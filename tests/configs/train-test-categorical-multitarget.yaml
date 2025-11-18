@@ -24,7 +24,7 @@ model_spec:
     sup2: 2
     sup3: 1
     sup4: 4
-  nhead: 2
+  n_head: 2
   dim_feedforward: 10
   num_layers: 2
   prediction_length: 1

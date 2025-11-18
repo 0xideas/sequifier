@@ -306,7 +306,7 @@ class ModelSpecModel(BaseModel):
     Attributes:
         dim_model: The number of expected features in the input.
         dim_model_by_column: The embedding dimensions for each input column. Must sum to dim_model.
-        nhead: The number of heads in the multi-head attention models.
+        n_head: The number of heads in the multi-head attention models.
         dim_feedforward: The dimension of the feedforward network model.
         num_layers: The number of layers in the transformer model.
     """
@@ -317,7 +317,7 @@ class ModelSpecModel(BaseModel):
 
     dim_model: int
     dim_model_by_column: Optional[dict[str, int]] = None
-    nhead: int
+    n_head: int
     dim_feedforward: int
     num_layers: int
     prediction_length: int
@@ -473,13 +473,13 @@ class TrainModel(BaseModel):
 
         # Constraint 2: Categorical Divisibility
         # If only categorical variables are included and auto-calculation is used,
-        # max(dim_model, nhead) must be divisible by the number of categorical variables.
+        # max(dim_model, n_head) must be divisible by the number of categorical variables.
         if n_categorical > 0 and n_real == 0 and v.dim_model_by_column is None:
-            embedding_size = max(v.dim_model, v.nhead)
+            embedding_size = max(v.dim_model, v.n_head)
             if embedding_size % n_categorical != 0:
                 raise ValueError(
                     f"If only categorical variables are included and dim_model_by_column is not set, "
-                    f"max(dim_model, nhead) ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical})."
+                    f"max(dim_model, n_head) ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical})."
                 )
 
         return v

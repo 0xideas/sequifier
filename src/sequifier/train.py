@@ -314,7 +314,7 @@ class TransformerModel(nn.Module):
         self.encoder = ModuleDict()
         self.pos_encoder = ModuleDict()
         self.embedding_size = max(
-            self.hparams.model_spec.dim_model, self.hparams.model_spec.nhead
+            self.hparams.model_spec.dim_model, self.hparams.model_spec.n_head
         )
         if hparams.model_spec.dim_model_by_column is not None:
             self.dim_model_by_column = hparams.model_spec.dim_model_by_column
@@ -346,7 +346,7 @@ class TransformerModel(nn.Module):
 
         encoder_layers = TransformerEncoderLayer(
             self.embedding_size,
-            hparams.model_spec.nhead,
+            hparams.model_spec.n_head,
             hparams.model_spec.dim_feedforward,
             hparams.training_spec.dropout,
         )

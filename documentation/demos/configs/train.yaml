@@ -27,7 +27,7 @@ read_format: csv
 #model specification
 model_spec:
   dim_model: 10 # dimensionality ofc the token embedding system
-  nhead: 2 # number of attention heads within each transformer layer
+  n_head: 2 # number of attention heads within each transformer layer
   dim_feedforward: 50 # dimensionality of feedforward network inside transformer layer
   num_layers: 2 # number of transformer layers
 

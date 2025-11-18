@@ -39,7 +39,7 @@ model_spec:
   dim_model: 128
   dim_model_by_column: # the size of the embedding of individual variables, must sum to dim_model
     EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical
-  nhead: 16
+  n_head: 16
   dim_feedforward: 128
   num_layers: 3
   prediction_length: 1

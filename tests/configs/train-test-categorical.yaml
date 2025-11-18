@@ -18,7 +18,7 @@ export_pt: true
 
 model_spec:
   dim_model: 200
-  nhead: 2
+  n_head: 2
   dim_feedforward: 12
   num_layers: 2
   prediction_length: 1
