@@ -40,7 +40,7 @@ class PreprocessorModel(BaseModel):
         data_path: The path to the input data file.
         read_format: The file type of the input data. Can be 'csv' or 'parquet'.
         write_format: The file type for the preprocessed output data.
-        combine_into_single_file: If True, combines all preprocessed data into a single file.
+        merge_output: If True, combines all preprocessed data into a single file.
         selected_columns: A list of columns to be included in the preprocessing. If None, all columns are used.
         split_ratios: A list of floats that define the relative sizes of data splits (e.g., for train, validation, test).
                            The sum of proportions must be 1.0.
@@ -63,7 +63,7 @@ class PreprocessorModel(BaseModel):
     data_path: str
     read_format: str = "csv"
     write_format: str = "parquet"
-    combine_into_single_file: bool = True
+    merge_output: bool = True
     selected_columns: Optional[list[str]] = None
 
     split_ratios: list[float]
@@ -94,7 +94,7 @@ class PreprocessorModel(BaseModel):
             )
         return v
 
-    @field_validator("combine_into_single_file")
+    @field_validator("merge_output")
     @classmethod
     def validate_format2(cls, v: bool, info: ValidationInfo):
         write_format = info.data.get("write_format")
@@ -102,13 +102,13 @@ class PreprocessorModel(BaseModel):
         # Existing check: 'pt' format cannot be combined
         if write_format == "pt" and v is True:
             raise ValueError(
-                "With write_format 'pt', combine_into_single_file must be set to False"
+                "With write_format 'pt', merge_output must be set to False"
             )
 
         # New constraint: 'parquet' or 'csv' formats cannot be uncombined (split)
         if write_format != "pt" and v is False:
             raise ValueError(
-                f"With write_format '{write_format}', combine_into_single_file must be set to True. "
+                f"With write_format '{write_format}', merge_output must be set to True. "
                 "Only 'pt' format supports uncombined (split) output."
             )
 

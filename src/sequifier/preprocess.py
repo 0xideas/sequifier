@@ -51,7 +51,7 @@ class Preprocessor:
         project_root (str): The path to the sequifier project directory.
         batches_per_file (int): The number of batches to process per file.
         data_name_root (str): The root name of the data file.
-        combine_into_single_file (bool): Whether to combine the output into a single file.
+        merge_output (bool): Whether to combine the output into a single file.
         target_dir (str): The target directory for temporary files.
         seed (int): The random seed for reproducibility.
         n_cores (int): The number of cores to use for parallel processing.
@@ -66,7 +66,7 @@ class Preprocessor:
         data_path: str,
         read_format: str,
         write_format: str,
-        combine_into_single_file: bool,
+        merge_output: bool,
         selected_columns: Optional[list[str]],
         split_ratios: list[float],
         seq_length: int,
@@ -85,7 +85,7 @@ class Preprocessor:
             data_path: The path to the input data file.
             read_format: The file type of the input data.
             write_format: The file type for the preprocessed output data.
-            combine_into_single_file: Whether to combine the output into a single file.
+            merge_output: Whether to combine the output into a single file.
             selected_columns: A list of columns to be included in the preprocessing.
             split_ratios: A list of floats that define the relative sizes of data splits.
             seq_length: The sequence length for the model inputs.
@@ -100,8 +100,8 @@ class Preprocessor:
         self.batches_per_file = batches_per_file
 
         self.data_name_root = os.path.splitext(os.path.basename(data_path))[0]
-        self.combine_into_single_file = combine_into_single_file
-        if self.combine_into_single_file:
+        self.merge_output = merge_output
+        if self.merge_output:
             self.target_dir = "temp"
         else:
             assert write_format == "pt"
@@ -159,7 +159,7 @@ class Preprocessor:
                 subsequence_start_mode,
             )
 
-            if self.combine_into_single_file:
+            if self.merge_output:
                 input_files = create_file_paths_for_single_file(
                     self.project_root,
                     self.target_dir,
@@ -477,7 +477,7 @@ class Preprocessor:
                 split_paths=self.split_paths,
                 target_dir=self.target_dir,
                 batches_per_file=self.batches_per_file,
-                combine_into_single_file=self.combine_into_single_file,
+                merge_output=self.merge_output,
                 continue_preprocessing=self.continue_preprocessing,
                 subsequence_start_mode=subsequence_start_mode,
             )
@@ -521,7 +521,7 @@ class Preprocessor:
                 "split_paths": self.split_paths,
                 "target_dir": self.target_dir,
                 "batches_per_file": self.batches_per_file,
-                "combine_into_single_file": self.combine_into_single_file,
+                "merge_output": self.merge_output,
                 "continue_preprocessing": self.continue_preprocessing,
                 "subsequence_start_mode": subsequence_start_mode,
             }
@@ -549,7 +549,7 @@ class Preprocessor:
                 self.data_name_root,
                 write_format,
             )
-        if self.combine_into_single_file:
+        if self.merge_output:
             combine_multiprocessing_outputs(
                 self.project_root,
                 self.target_dir,
@@ -565,7 +565,7 @@ class Preprocessor:
     def _cleanup(self, write_format: str) -> None:
         """Finalizes output files and removes temporary directories.
 
-        If `write_format` is 'pt' and `combine_into_single_file` is False,
+        If `write_format` is 'pt' and `merge_output` is False,
         this method moves the processed .pt batch files from the temporary
         `target_dir` into their final split-specific subfolders (e.g.,
         'data_name_root-split0/'). It also generates a 'metadata.json' file
@@ -573,7 +573,7 @@ class Preprocessor:
         `SequifierDatasetFromFolder`.
 
         Finally, it removes the temporary `target_dir` if it's empty or
-        if `target_dir` is "temp" (implying `combine_into_single_file` was True).
+        if `target_dir` is "temp" (implying `merge_output` was True).
 
         Args:
             write_format: The file format of the output files (e.g., "pt").
@@ -658,7 +658,7 @@ class Preprocessor:
         """Scans a directory for .pt files, counts samples, and writes metadata.json.
 
                 This method is used when `write_format` is 'pt' and
-                `combine_into_single_file` is False. It iterates over all .pt files
+                `merge_output` is False. It iterates over all .pt files
                 in the given `folder_path`, loads each one to count the number of
                 samples (sequences), and writes a `metadata.json` file in that
                 same folder. This JSON file contains the total sample count and a
@@ -887,12 +887,12 @@ def _check_file_has_been_processed(
     split_ratios: list[float],
     write_format: str,
     target_dir: str,
-    combine_into_single_file: bool,
+    merge_output: bool,
     file_index_str: str,
 ):
     file_prefix_str = f"{data_name_root}-{process_id}-{file_index_str}"
 
-    if combine_into_single_file:
+    if merge_output:
         # Case 1: Combining into a single file. Check for the intermediate
         # combined file in the target_dir.
         expected_file_path = ""
@@ -953,7 +953,7 @@ def _process_batches_multiple_files_inner(
     split_paths: list[str],
     target_dir: str,
     batches_per_file: int,
-    combine_into_single_file: bool,
+    merge_output: bool,
     continue_preprocessing: bool,
     subsequence_start_mode: str,
 ):
@@ -981,7 +981,7 @@ def _process_batches_multiple_files_inner(
         split_paths: The paths to the output split files.
         target_dir: The target directory for temporary files.
         batches_per_file: The number of batches to process per file.
-        combine_into_single_file: Whether to combine the output into a single file.
+        merge_output: Whether to combine the output into a single file.
         continue_preprocessing: Continue preprocessing job that was interrupted while writing to temp folder.
         subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
     """
@@ -1008,7 +1008,7 @@ def _process_batches_multiple_files_inner(
                     split_ratios,
                     write_format,
                     target_dir,
-                    combine_into_single_file,
+                    merge_output,
                     file_index_str,
                 )
 
@@ -1056,7 +1056,7 @@ def _process_batches_multiple_files_inner(
                 subsequence_start_mode,
             )
 
-            if combine_into_single_file:
+            if merge_output:
                 input_files = create_file_paths_for_multiple_files1(
                     project_root,
                     target_dir,
@@ -1820,7 +1820,7 @@ def create_file_paths_for_multiple_files1(
 ) -> dict[int, list[str]]:
     """Creates a dictionary of temporary file paths for a specific data file.
 
-    This is used in the multi-file, `combine_into_single_file=True`
+    This is used in the multi-file, `merge_output=True`
     workflow. It generates file path names for intermediate batches
     *before* they are combined.
 
@@ -1867,7 +1867,7 @@ def create_file_paths_for_single_file(
 ) -> dict[int, list[str]]:
     """Creates a dictionary of temporary file paths for a single-file run.
 
-    This is used in the single-file, `combine_into_single_file=True`
+    This is used in the single-file, `merge_output=True`
     workflow. It generates file path names for intermediate batches
     created by different processes *before* they are combined.
 
@@ -1913,7 +1913,7 @@ def create_file_paths_for_multiple_files2(
 ) -> dict[int, list[str]]:
     """Creates a dictionary of intermediate file paths for a multi-file run.
 
-    This is used in the multi-file, `combine_into_single_file=True`
+    This is used in the multi-file, `merge_output=True`
     workflow. It generates the file paths for the *combined* files
     from each process, which are the *inputs* to the final combination step.
 

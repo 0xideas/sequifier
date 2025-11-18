@@ -1,6 +1,6 @@
 project_root: tests/project_folder
 data_path: tests/resources/source_data/test-data-real-5.csv
-combine_into_single_file: true
+merge_output: true
 read_format: csv
 write_format: parquet
 selected_columns: null
