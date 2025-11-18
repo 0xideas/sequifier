@@ -414,9 +414,12 @@ class TransformerModel(nn.Module):
         """
         criterion = {}
         for target_column in self.target_columns:
-            criterion_class = eval(
-                f"torch.nn.{hparams.training_spec.criterion[target_column]}"
-            )
+            criterion_name = hparams.training_spec.criterion[target_column]
+            if hasattr(torch.nn, criterion_name):
+                criterion_class = getattr(torch.nn, criterion_name)
+            else:
+                raise ValueError(f"Criterion {criterion_name} not found in torch.nn")
+
             criterion_kwargs = {}
             if (
                 hparams.training_spec.class_weights is not None
@@ -1360,9 +1363,13 @@ class TransformerModel(nn.Module):
         Returns:
             An initialized torch.optim.lr_scheduler._LRScheduler instance.
         """
-        scheduler_class = eval(
-            f"torch.optim.lr_scheduler.{self.hparams.training_spec.scheduler.name}"
-        )
+        scheduler_name = self.hparams.training_spec.scheduler.name
+        if hasattr(torch.optim.lr_scheduler, scheduler_name):
+            scheduler_class = getattr(torch.optim.lr_scheduler, scheduler_name)
+        else:
+            raise ValueError(
+                f"Scheduler {scheduler_name} not found in torch.optim.lr_scheduler"
+            )
         return scheduler_class(self.optimizer, **kwargs)
 
     @beartype
