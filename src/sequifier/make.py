@@ -19,7 +19,7 @@ max_rows: null
 """
 
 train_config_string = """project_root: .
-model_name: default
+model_name: PLEASE FILL
 read_format: parquet
 metadata_config_path: PLEASE FILL
 
