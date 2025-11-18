@@ -40,7 +40,7 @@ model_spec:
   d_model_by_column: # the size of the embedding of individual variables, must sum to d_model
     EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical
   nhead: 16
-  d_hid: 128
+  dim_feedforward: 128
   nlayers: 3
   inference_size: 1
 training_spec:

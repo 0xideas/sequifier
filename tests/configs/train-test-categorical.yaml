@@ -19,7 +19,7 @@ export_pt: true
 model_spec:
   d_model: 200
   nhead: 2
-  d_hid: 12
+  dim_feedforward: 12
   nlayers: 2
   inference_size: 1
 training_spec:

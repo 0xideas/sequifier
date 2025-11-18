@@ -287,14 +287,14 @@ class ModelSpecHyperparameterSampling(BaseModel):
         d_model: A list of possible numbers of expected features in the input.
         d_model_by_column: A list of possible embedding dimensions for each input column.
         nhead: A list of possible numbers of heads in the multi-head attention models.
-        d_hid: A list of possible dimensions of the feedforward network model.
+        dim_feedforward: A list of possible dimensions of the feedforward network model.
         nlayers: A list of possible numbers of layers in the transformer model.
     """
 
     d_model: list[int]
     d_model_by_column: Optional[list[dict[str, int]]]
     nhead: list[int]
-    d_hid: list[int]
+    dim_feedforward: list[int]
     nlayers: list[int]
 
     @validator("nhead")
@@ -327,15 +327,15 @@ class ModelSpecHyperparameterSampling(BaseModel):
             else self.d_model_by_column[d_model_index]
         )
         d_model = self.d_model[d_model_index]
-        d_hid = np.random.choice(self.d_hid)
+        dim_feedforward = np.random.choice(self.dim_feedforward)
         nlayers = np.random.choice(self.nlayers)
-        print(f"{d_model = } - {d_hid = } - {nlayers = }")
+        print(f"{d_model = } - {dim_feedforward = } - {nlayers = }")
 
         return ModelSpecModel(
             d_model=self.d_model[d_model_index],
             d_model_by_column=d_model_by_column,
             nhead=self.nhead[d_model_index],
-            d_hid=d_hid,
+            dim_feedforward=dim_feedforward,
             nlayers=nlayers,
         )
 
@@ -353,12 +353,12 @@ class ModelSpecHyperparameterSampling(BaseModel):
             hyperparameters.
         """
         hyperparameter_combinations = list(
-            product(np.arange(len(self.d_model)), self.d_hid, self.nlayers)
+            product(np.arange(len(self.d_model)), self.dim_feedforward, self.nlayers)
         )
 
-        d_model_index, d_hid, nlayers = hyperparameter_combinations[i]
+        d_model_index, dim_feedforward, nlayers = hyperparameter_combinations[i]
         d_model = self.d_model[d_model_index]
-        print(f"{d_model = } - {d_hid = } - {nlayers = }")
+        print(f"{d_model = } - {dim_feedforward = } - {nlayers = }")
 
         d_model_by_column = (
             None
@@ -370,7 +370,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             d_model=d_model,
             d_model_by_column=d_model_by_column,
             nhead=self.nhead[d_model_index],
-            d_hid=d_hid,
+            dim_feedforward=dim_feedforward,
             nlayers=nlayers,
         )
 
@@ -383,7 +383,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         Returns:
             The total number of possible model hyperparameter combinations.
         """
-        return len(self.d_model) * len(self.d_hid) * len(self.nlayers)
+        return len(self.d_model) * len(self.dim_feedforward) * len(self.nlayers)
 
 
 class HyperparameterSearch(BaseModel):

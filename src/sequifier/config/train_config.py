@@ -299,14 +299,14 @@ class ModelSpecModel(BaseModel):
         d_model: The number of expected features in the input.
         d_model_by_column: The embedding dimensions for each input column. Must sum to d_model.
         nhead: The number of heads in the multi-head attention models.
-        d_hid: The dimension of the feedforward network model.
+        dim_feedforward: The dimension of the feedforward network model.
         nlayers: The number of layers in the transformer model.
     """
 
     d_model: int
     d_model_by_column: Optional[dict[str, int]]
     nhead: int
-    d_hid: int
+    dim_feedforward: int
     nlayers: int
     inference_size: int
 

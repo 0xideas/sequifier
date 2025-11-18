@@ -344,7 +344,7 @@ class TransformerModel(nn.Module):
         encoder_layers = TransformerEncoderLayer(
             self.embedding_size,
             hparams.model_spec.nhead,
-            hparams.model_spec.d_hid,
+            hparams.model_spec.dim_feedforward,
             hparams.training_spec.dropout,
         )
         self.transformer_encoder = TransformerEncoder(

@@ -26,7 +26,7 @@ model_spec:
     sup3: 1
     sup4: 4
   nhead: 2
-  d_hid: 10
+  dim_feedforward: 10
   nlayers: 2
   inference_size: 1
 training_spec:
