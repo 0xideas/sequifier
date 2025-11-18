@@ -7,7 +7,7 @@ import yaml
 from beartype import beartype
 from pydantic import BaseModel, Field, validator
 
-from sequifier.helpers import normalize_path
+from sequifier.helpers import normalize_path, try_catch_excess_keys
 
 
 @beartype
@@ -68,7 +68,7 @@ def load_inferer_config(
             config_values["project_path"],
         )
 
-    return InfererModel(**config_values)
+    return try_catch_excess_keys(config_path, InfererModel, config_values)
 
 
 class InfererModel(BaseModel):
@@ -104,6 +104,10 @@ class InfererModel(BaseModel):
         autoregression: If True, performs autoregressive inference.
         autoregression_extra_steps: The number of additional steps for autoregressive inference.
     """
+
+    class Config:
+        arbitrary_types_allowed = True
+        extra = "forbid"
 
     project_path: str
     metadata_config_path: str
@@ -244,9 +248,6 @@ class InfererModel(BaseModel):
                 "Distributed inference is only supported for preprocessed '.pt' files. Please set read_format to 'pt'."
             )
         return v
-
-    class Config:
-        arbitrary_types_allowed = True
 
     def __init__(self, **data):
         super().__init__(**data)

@@ -7,7 +7,7 @@ import yaml
 from beartype import beartype
 from pydantic import BaseModel, Field, validator
 
-from sequifier.helpers import normalize_path
+from sequifier.helpers import normalize_path, try_catch_excess_keys
 
 AnyType = str | int | float
 
@@ -167,7 +167,7 @@ def load_train_config(
 
         config_values["id_maps"] = metadata_config["id_maps"]
 
-    return TrainModel(**config_values)
+    return try_catch_excess_keys(config_path, TrainModel, config_values)
 
 
 class DotDict(dict):
@@ -209,6 +209,10 @@ class TrainingSpecModel(BaseModel):
         num_workers: The number of worker threads for data loading.
         backend: The distributed training backend (e.g., 'nccl').
     """
+
+    class Config:
+        arbitrary_types_allowed = True
+        extra = "forbid"
 
     device: str
     device_max_concat_length: int = 12
@@ -303,6 +307,10 @@ class ModelSpecModel(BaseModel):
         num_layers: The number of layers in the transformer model.
     """
 
+    class Config:
+        arbitrary_types_allowed = True
+        extra = "forbid"
+
     d_model: int
     d_model_by_column: Optional[dict[str, int]]
     nhead: int
@@ -348,6 +356,10 @@ class TrainModel(BaseModel):
         model_spec: The specification of the transformer model architecture.
         training_spec: The specification of the training run configuration.
     """
+
+    class Config:
+        arbitrary_types_allowed = True
+        extra = "forbid"
 
     project_path: str
     metadata_config_path: str

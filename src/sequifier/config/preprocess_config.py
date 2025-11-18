@@ -6,6 +6,8 @@ import yaml
 from beartype import beartype
 from pydantic import BaseModel, validator
 
+from sequifier.helpers import try_catch_excess_keys
+
 
 @beartype
 def load_preprocessor_config(
@@ -26,7 +28,7 @@ def load_preprocessor_config(
 
     config_values.update(args_config)
 
-    return PreprocessorModel(**config_values)
+    return try_catch_excess_keys(config_path, PreprocessorModel, config_values)
 
 
 class PreprocessorModel(BaseModel):
@@ -52,6 +54,10 @@ class PreprocessorModel(BaseModel):
         continue_preprocessing: Continue preprocessing job that was interrupted while writing to temp folder.
         subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
     """
+
+    class Config:
+        arbitrary_types_allowed = True
+        extra = "forbid"
 
     project_path: str
     data_path: str

@@ -1519,8 +1519,12 @@ def load_inference_model(
         The loaded and compiled torch.nn.Module (TransformerModel or
         TransformerEmbeddingModel) in evaluation mode.
     """
+    on_unprocessed = args_config.get("on_unprocessed", False)
+    args_config_subset = {
+        k: v for k, v in args_config.items() if k not in ["model_path", "data_path"]
+    }
     training_config = load_train_config(
-        training_config_path, args_config, args_config["on_unprocessed"]
+        training_config_path, args_config_subset, on_unprocessed
     )
 
     with torch.no_grad():

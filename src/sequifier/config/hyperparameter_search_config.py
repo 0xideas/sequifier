@@ -13,7 +13,7 @@ from sequifier.config.train_config import (
     TrainingSpecModel,
     TrainModel,
 )
-from sequifier.helpers import normalize_path
+from sequifier.helpers import normalize_path, try_catch_excess_keys
 
 
 @beartype
@@ -93,7 +93,7 @@ def load_hyperparameter_search_config(
 
         config_values["id_maps"] = metadata_config["id_maps"]
 
-    return HyperparameterSearch(**config_values)
+    return try_catch_excess_keys(config_path, HyperparameterSearch, config_values)
 
 
 class TrainingSpecHyperparameterSampling(BaseModel):

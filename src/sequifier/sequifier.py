@@ -22,8 +22,11 @@ def build_args_config(args: Any) -> dict[str, Any]:
     Returns:
         Dictionary containing configuration options.
     """
+
     args_config = {
-        k: v for k, v in vars(args).items() if v is not None and k != "randomize"
+        k: v
+        for k, v in vars(args).items()
+        if v is not None and k not in ["randomize", "command", "config_path"]
     }
     if args.command != "make":
         if args.randomize:

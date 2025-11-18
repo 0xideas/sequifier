@@ -49,7 +49,8 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         args.config_path if args.config_path is not None else "configs/infer.yaml"
     )
 
-    config = load_inferer_config(config_path, args_config, args.on_unprocessed)
+    on_unprocessed = args_config.get("on_unprocessed", False)
+    config = load_inferer_config(config_path, args_config, on_unprocessed)
 
     if config.map_to_id or (len(config.real_columns) > 0):
         assert config.metadata_config_path is not None, (

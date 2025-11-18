@@ -1,10 +1,11 @@
 import os
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import polars as pl
 import torch
 from beartype import beartype
+from pydantic import ValidationError
 from torch import Tensor
 
 PANDAS_TO_TORCH_TYPES = {
@@ -23,6 +24,28 @@ PANDAS_TO_TORCH_TYPES = {
     "Int8": torch.int8,
     "int8": torch.int8,
 }
+
+
+@beartype
+def try_catch_excess_keys(
+    config_path: str, PydanticClass: Any, config_values: dict[Any, Any]
+):
+    try:
+        return PydanticClass(
+            **{k: v for k, v in config_values.items() if k != "on_unprocessed"}
+        )
+    except ValidationError as e:
+        # Filter the errors to find only the "extra fields"
+        extra_fields = [
+            err["loc"][0] for err in e.errors() if err["type"] == "value_error.extra"
+        ]
+
+        if extra_fields:
+            raise ValueError(
+                f"Found {len(extra_fields)} unrecognized configuration keys: {extra_fields}"
+            ) from None
+
+        raise e
 
 
 @beartype

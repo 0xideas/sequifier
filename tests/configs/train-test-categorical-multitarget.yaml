@@ -9,7 +9,6 @@ target_column_types:
   itemId: categorical
   sup1: categorical
   sup3: real
-class_share_log_columns:
 
 seq_length: 8
 inference_batch_size: 10
