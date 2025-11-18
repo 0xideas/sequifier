@@ -36,7 +36,7 @@ class PreprocessorModel(BaseModel):
     Pydantic model for preprocessor configuration.
 
     Attributes:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         data_path: The path to the input data file.
         read_format: The file type of the input data. Can be 'csv' or 'parquet'.
         write_format: The file type for the preprocessed output data.
@@ -59,7 +59,7 @@ class PreprocessorModel(BaseModel):
         arbitrary_types_allowed = True
         extra = "forbid"
 
-    project_path: str
+    project_root: str
     data_path: str
     read_format: str = "csv"
     write_format: str = "parquet"

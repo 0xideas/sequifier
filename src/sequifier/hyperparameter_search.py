@@ -64,7 +64,7 @@ class HyperparameterSearcher:
         self.config = hyperparameter_search_config
         self.normalized_config_path = normalize_path(
             self.config.model_config_write_path,
-            self.config.project_path,
+            self.config.project_root,
         )
         self.start_run = self._get_start_run()
         self._initialize_log_file()
@@ -106,10 +106,10 @@ class HyperparameterSearcher:
         Returns:
             None
         """
-        os.makedirs(os.path.join(self.config.project_path, "logs"), exist_ok=True)
+        os.makedirs(os.path.join(self.config.project_root, "logs"), exist_ok=True)
         self.log_file = LogFile(
             os.path.join(
-                self.config.project_path,
+                self.config.project_root,
                 "logs",
                 f"sequifier-{self.config.hp_search_name}-[NUMBER].txt",
             )

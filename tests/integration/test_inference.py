@@ -107,13 +107,13 @@ def read_multi_file_preds(path, target_type, file_suffix=None):
 
 
 @pytest.fixture()
-def predictions(run_inference, model_names_preds, project_path):
+def predictions(run_inference, model_names_preds, project_root):
     preds = {}
     for model_name in model_names_preds:
         target_type = "categorical" if "categorical" in model_name else "real"
 
         prediction_path = os.path.join(
-            project_path,
+            project_root,
             "outputs",
             "predictions",
             f"sequifier-{model_name}-predictions",
@@ -125,11 +125,11 @@ def predictions(run_inference, model_names_preds, project_path):
 
 
 @pytest.fixture()
-def probabilities(run_inference, model_names_probs, project_path):
+def probabilities(run_inference, model_names_probs, project_root):
     probs = {}
     for model_name in model_names_probs:
         probabilities_path = os.path.join(
-            project_path,
+            project_root,
             "outputs",
             "probabilities",
             f"sequifier-{model_name}-probabilities",
@@ -142,11 +142,11 @@ def probabilities(run_inference, model_names_probs, project_path):
 
 
 @pytest.fixture()
-def embeddings(run_inference, model_names_embeddings, project_path):
+def embeddings(run_inference, model_names_embeddings, project_root):
     embeds = {}
     for model_name in model_names_embeddings:
         embeddings_path = os.path.join(
-            project_path,
+            project_root,
             "outputs",
             "embeddings",
             f"sequifier-{model_name}-embeddings",

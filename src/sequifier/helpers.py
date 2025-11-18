@@ -344,13 +344,13 @@ class LogFile:
 
 
 @beartype
-def normalize_path(path: str, project_path: str) -> str:
+def normalize_path(path: str, project_root: str) -> str:
     """Normalizes a path to be relative to a project path, then joins them.
 
     This function ensures that a given `path` is correctly expressed as
-    an absolute path rooted at `project_path`. It does this by first
-    removing the `project_path` prefix from `path` (if it exists)
-    and then joining the result back to `project_path`.
+    an absolute path rooted at `project_root`. It does this by first
+    removing the `project_root` prefix from `path` (if it exists)
+    and then joining the result back to `project_root`.
 
     This is useful for handling paths that might be provided as either
     relative (e.g., "data/file.txt") or absolute
@@ -358,11 +358,11 @@ def normalize_path(path: str, project_path: str) -> str:
 
     Args:
         path: The path to normalize.
-        project_path: The absolute path to the project's root directory.
+        project_root: The absolute path to the project's root directory.
 
     Returns:
         A normalized, absolute path.
     """
-    project_path_normalized = (project_path + os.sep).replace(os.sep + os.sep, os.sep)
-    path2 = os.path.join(project_path, path.replace(project_path_normalized, ""))
+    project_root_normalized = (project_root + os.sep).replace(os.sep + os.sep, os.sep)
+    path2 = os.path.join(project_root, path.replace(project_root_normalized, ""))
     return path2

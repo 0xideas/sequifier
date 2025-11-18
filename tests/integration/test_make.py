@@ -44,7 +44,7 @@ def adapt_configs(config_strings):
 
         preprocess_config_string = (
             preprocess_config_string.replace(
-                "project_path: .", f"project_path: {test_project_name}"
+                "project_root: .", f"project_root: {test_project_name}"
             )
             .replace(
                 "data_path: PLEASE FILL",
@@ -67,7 +67,7 @@ def adapt_configs(config_strings):
 
         train_config_string = (
             train_config_string.replace(
-                "project_path: .", f"project_path: {test_project_name}"
+                "project_root: .", f"project_root: {test_project_name}"
             )
             .replace(
                 "metadata_config_path: PLEASE FILL",
@@ -98,7 +98,7 @@ def adapt_configs(config_strings):
 
         infer_config_string = (
             infer_config_string.replace(
-                "project_path: .", f"project_path: {test_project_name}"
+                "project_root: .", f"project_root: {test_project_name}"
             )
             .replace("model_type: PLEASE_FILL", "model_type: generative")
             .replace(

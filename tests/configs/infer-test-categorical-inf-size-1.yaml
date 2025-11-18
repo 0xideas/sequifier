@@ -1,4 +1,4 @@
-project_path: tests/project_folder
+project_root: tests/project_folder
 metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-categorical-1.json
 model_type: generative
 model_path: tests/project_folder/models/sequifier-model-categorical-1-inf-size-best-3.onnx

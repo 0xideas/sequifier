@@ -33,7 +33,7 @@ def load_inferer_config(
         metadata_config_path = config_values.get("metadata_config_path")
 
         with open(
-            normalize_path(metadata_config_path, config_values["project_path"]), "r"
+            normalize_path(metadata_config_path, config_values["project_root"]), "r"
         ) as f:
             metadata_config = json.load(f)
 
@@ -65,7 +65,7 @@ def load_inferer_config(
                     min(2, len(metadata_config["split_paths"]) - 1)
                 ],
             ),
-            config_values["project_path"],
+            config_values["project_root"],
         )
 
     return try_catch_excess_keys(config_path, InfererModel, config_values)
@@ -75,7 +75,7 @@ class InfererModel(BaseModel):
     """Pydantic model for inference configuration.
 
     Attributes:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         metadata_config_path: The path to the data-driven configuration file.
         model_path: The path to the trained model file(s).
         model_type: The type of model, either 'embedding' or 'generative'.
@@ -109,7 +109,7 @@ class InfererModel(BaseModel):
         arbitrary_types_allowed = True
         extra = "forbid"
 
-    project_path: str
+    project_root: str
     metadata_config_path: str
     model_path: Union[str, list[str]]
     model_type: str
@@ -209,12 +209,12 @@ class InfererModel(BaseModel):
     @classmethod
     def validate_data_path(cls, v: str, info: ValidationInfo) -> str:
         if isinstance(v, str):
-            v2 = normalize_path(v, info.data.get("project_path"))
+            v2 = normalize_path(v, info.data.get("project_root"))
             if not os.path.exists(v2):
                 raise ValueError(f"{v2} does not exist")
         if isinstance(v, list):
             for vv in v:
-                v2 = normalize_path(v, info.data.get("project_path"))
+                v2 = normalize_path(v, info.data.get("project_root"))
                 if not os.path.exists(v2):
                     raise ValueError(f"{v2} does not exist")
         return v

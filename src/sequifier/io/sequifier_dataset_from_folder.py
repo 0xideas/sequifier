@@ -24,7 +24,7 @@ class SequifierDatasetFromFolder(Dataset):
         into memory. Each .pt file is expected to contain a tuple:
         (sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor).
         """
-        self.data_dir = normalize_path(data_path, config.project_path)
+        self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
         metadata_path = os.path.join(self.data_dir, "metadata.json")
 

@@ -48,7 +48,7 @@ class Preprocessor:
     processing them in batches.
 
     Attributes:
-        project_path (str): The path to the sequifier project directory.
+        project_root (str): The path to the sequifier project directory.
         batches_per_file (int): The number of batches to process per file.
         data_name_root (str): The root name of the data file.
         combine_into_single_file (bool): Whether to combine the output into a single file.
@@ -61,7 +61,7 @@ class Preprocessor:
     @beartype
     def __init__(
         self,
-        project_path: str,
+        project_root: str,
         continue_preprocessing: bool,
         data_path: str,
         read_format: str,
@@ -81,7 +81,7 @@ class Preprocessor:
         """Initializes the Preprocessor with the given parameters.
 
         Args:
-            project_path: The path to the sequifier project directory.
+            project_root: The path to the sequifier project directory.
             data_path: The path to the input data file.
             read_format: The file type of the input data.
             write_format: The file type for the preprocessed output data.
@@ -96,7 +96,7 @@ class Preprocessor:
             batches_per_file: The number of batches to process per file.
             process_by_file: A flag to indicate if processing should be done file by file.
         """
-        self.project_path = project_path
+        self.project_root = project_root
         self.batches_per_file = batches_per_file
 
         self.data_name_root = os.path.splitext(os.path.basename(data_path))[0]
@@ -142,7 +142,7 @@ class Preprocessor:
 
             data = data.sort(["sequenceId", "itemPosition"])
             n_batches = _process_batches_single_file(
-                self.project_path,
+                self.project_root,
                 self.data_name_root,
                 data,
                 schema,
@@ -161,7 +161,7 @@ class Preprocessor:
 
             if self.combine_into_single_file:
                 input_files = create_file_paths_for_single_file(
-                    self.project_path,
+                    self.project_root,
                     self.target_dir,
                     len(split_ratios),
                     n_batches,
@@ -169,7 +169,7 @@ class Preprocessor:
                     write_format,
                 )
                 combine_multiprocessing_outputs(
-                    self.project_path,
+                    self.project_root,
                     self.target_dir,
                     len(split_ratios),
                     input_files,
@@ -372,19 +372,19 @@ class Preprocessor:
     def _setup_directories(self) -> None:
         """Sets up the output directories for preprocessed data.
 
-        This method creates the base `data/` directory within the `project_path`
+        This method creates the base `data/` directory within the `project_root`
         if it doesn't exist. It also creates a temporary directory (defined by
         `self.target_dir`) for storing intermediate batch files, removing it
         first if it already exists to ensure a clean run.
         """
 
-        temp_path = os.path.join(self.project_path, "data", self.target_dir)
+        temp_path = os.path.join(self.project_root, "data", self.target_dir)
 
         if self.continue_preprocessing:
             if not os.path.exists(temp_path):
                 raise Exception(f"temp folder at '{temp_path}' does not exist")
         else:
-            os.makedirs(os.path.join(self.project_path, "data"), exist_ok=True)
+            os.makedirs(os.path.join(self.project_root, "data"), exist_ok=True)
             if os.path.exists(temp_path):
                 shutil.rmtree(temp_path)
             os.makedirs(temp_path)
@@ -403,7 +403,7 @@ class Preprocessor:
         """
         split_paths = [
             os.path.join(
-                self.project_path,
+                self.project_root,
                 "data",
                 f"{self.data_name_root}-split{i}.{write_format}",
             )
@@ -456,7 +456,7 @@ class Preprocessor:
         """
         if process_by_file:
             _process_batches_multiple_files_inner(
-                project_path=self.project_path,
+                project_root=self.project_root,
                 data_name_root=self.data_name_root,
                 process_id=0,
                 file_paths=file_paths,
@@ -482,7 +482,7 @@ class Preprocessor:
                 subsequence_start_mode=subsequence_start_mode,
             )
             input_files = create_file_paths_for_multiple_files2(
-                self.project_path,
+                self.project_root,
                 self.target_dir,
                 len(split_ratios),
                 1,
@@ -500,7 +500,7 @@ class Preprocessor:
             ]
 
             kwargs_1 = {
-                "project_path": self.project_path,
+                "project_root": self.project_root,
                 "data_name_root": self.data_name_root,
             }
             kwargs_2 = {
@@ -541,7 +541,7 @@ class Preprocessor:
                 pool.starmap(_process_batches_multiple_files_inner, job_params)
 
             input_files = create_file_paths_for_multiple_files2(
-                self.project_path,
+                self.project_root,
                 self.target_dir,
                 len(split_ratios),
                 len(job_params),
@@ -551,7 +551,7 @@ class Preprocessor:
             )
         if self.combine_into_single_file:
             combine_multiprocessing_outputs(
-                self.project_path,
+                self.project_root,
                 self.target_dir,
                 len(split_ratios),
                 input_files,
@@ -578,7 +578,7 @@ class Preprocessor:
         Args:
             write_format: The file format of the output files (e.g., "pt").
         """
-        temp_output_path = os.path.join(self.project_path, "data", self.target_dir)
+        temp_output_path = os.path.join(self.project_root, "data", self.target_dir)
         directory = Path(temp_output_path)
 
         if not self.target_dir == "temp":
@@ -586,7 +586,7 @@ class Preprocessor:
             for i, split_path in enumerate(self.split_paths):
                 split = f"split{i}"
                 folder_path = os.path.join(
-                    self.project_path, "data", f"{self.data_name_root}-{split}"
+                    self.project_root, "data", f"{self.data_name_root}-{split}"
                 )
                 assert folder_path in split_path
                 os.makedirs(folder_path, exist_ok=True)
@@ -638,13 +638,13 @@ class Preprocessor:
             "selected_columns_statistics": selected_columns_statistics,
         }
         os.makedirs(
-            os.path.join(self.project_path, "configs", "metadata_configs"),
+            os.path.join(self.project_root, "configs", "metadata_configs"),
             exist_ok=True,
         )
 
         with open(
             os.path.join(
-                self.project_path,
+                self.project_root,
                 "configs",
                 "metadata_configs",
                 f"{self.data_name_root}.json",
@@ -881,7 +881,7 @@ def _load_and_preprocess_data(
 
 
 def _check_file_has_been_processed(
-    project_path: str,
+    project_root: str,
     data_name_root: str,
     process_id: int,
     split_ratios: list[float],
@@ -898,7 +898,7 @@ def _check_file_has_been_processed(
         expected_file_path = ""
         for split_index in range(len(split_ratios)):
             expected_file_path = create_split_file_path(
-                project_path,
+                project_root,
                 data_name_root,
                 split_index,
                 write_format,
@@ -915,7 +915,7 @@ def _check_file_has_been_processed(
         )
         return True
     else:
-        temp_dir_path = os.path.join(project_path, "data", target_dir)
+        temp_dir_path = os.path.join(project_root, "data", target_dir)
 
         if not os.path.isdir(temp_dir_path):
             return False
@@ -932,7 +932,7 @@ def _check_file_has_been_processed(
 
 @beartype
 def _process_batches_multiple_files_inner(
-    project_path: str,
+    project_root: str,
     data_name_root: str,
     process_id: int,
     file_paths: list[str],
@@ -960,7 +960,7 @@ def _process_batches_multiple_files_inner(
     """Inner function for processing batches of data from multiple files.
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         data_name_root: The root name of the data file.
         process_id: The id of the process.
         file_paths: A list of file paths to process.
@@ -1002,7 +1002,7 @@ def _process_batches_multiple_files_inner(
             ]
             if continue_preprocessing:
                 file_has_been_processed = _check_file_has_been_processed(
-                    project_path,
+                    project_root,
                     data_name_root,
                     process_id,
                     split_ratios,
@@ -1039,7 +1039,7 @@ def _process_batches_multiple_files_inner(
             data_name_root_inner = f"{data_name_root}-{process_id}-{file_index_str}"
 
             n_batches = _process_batches_single_file(
-                project_path,
+                project_root,
                 data_name_root_inner,
                 data,
                 schema,
@@ -1058,7 +1058,7 @@ def _process_batches_multiple_files_inner(
 
             if combine_into_single_file:
                 input_files = create_file_paths_for_multiple_files1(
-                    project_path,
+                    project_root,
                     target_dir,
                     len(split_ratios),
                     n_batches,
@@ -1068,7 +1068,7 @@ def _process_batches_multiple_files_inner(
                     write_format,
                 )
                 combine_multiprocessing_outputs(
-                    project_path,
+                    project_root,
                     target_dir,
                     len(split_ratios),
                     input_files,
@@ -1085,7 +1085,7 @@ def _process_batches_multiple_files_inner(
 
 @beartype
 def _process_batches_single_file(
-    project_path: str,
+    project_root: str,
     data_name_root: str,
     data: pl.DataFrame,
     schema: Any,
@@ -1104,7 +1104,7 @@ def _process_batches_single_file(
     """Processes batches of data from a single file.
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         data_name_root: The root name of the data file.
         data: The data to process.
         schema: The schema for the preprocessed data.
@@ -1127,7 +1127,7 @@ def _process_batches_single_file(
     batch_limits = get_batch_limits(data, n_cores)
     batches = [
         (
-            project_path,
+            project_root,
             data_name_root,
             process_id,
             data.slice(start, end - start),
@@ -1439,7 +1439,7 @@ def _write_accumulated_sequences(
 
 @beartype
 def preprocess_batch(
-    project_path: str,
+    project_root: str,
     data_name_root: str,
     process_id: int,
     batch: pl.DataFrame,
@@ -1458,7 +1458,7 @@ def preprocess_batch(
     """Processes a batch of data.
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         data_name_root: The root name of the data file.
         process_id: The id of the process.
         batch: The batch of data to process.
@@ -1568,7 +1568,7 @@ def preprocess_batch(
                 written_files[group].append(split_path_batch_seq)
 
         combine_multiprocessing_outputs(
-            project_path,
+            project_root,
             target_dir,
             len(split_paths),
             written_files,
@@ -1809,7 +1809,7 @@ def delete_files(files: Union[list[str], dict[int, list[str]]]) -> None:
 
 @beartype
 def create_file_paths_for_multiple_files1(
-    project_path: str,
+    project_root: str,
     target_dir: str,
     n_splits: int,
     n_batches: int,
@@ -1828,7 +1828,7 @@ def create_file_paths_for_multiple_files1(
     `{dataset_name}-{process_id}-{file_index_str}-split{split}-{batch_id}.{write_format}`
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         target_dir: The temporary directory to place files in.
         n_splits: The number of data splits.
         n_batches: The number of batches created by the process.
@@ -1845,7 +1845,7 @@ def create_file_paths_for_multiple_files1(
     for split in range(n_splits):
         files_for_split = [
             os.path.join(
-                project_path,
+                project_root,
                 "data",
                 target_dir,
                 f"{dataset_name}-{process_id}-{file_index_str}-split{split}-{batch_id}.{write_format}",
@@ -1858,7 +1858,7 @@ def create_file_paths_for_multiple_files1(
 
 @beartype
 def create_file_paths_for_single_file(
-    project_path: str,
+    project_root: str,
     target_dir: str,
     n_splits: int,
     n_batches: int,
@@ -1875,7 +1875,7 @@ def create_file_paths_for_single_file(
     `{dataset_name}-split{split}-{core_id}.{write_format}`
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         target_dir: The temporary directory to place files in.
         n_splits: The number of data splits.
         n_batches: The number of processes (batches) running in parallel.
@@ -1890,7 +1890,7 @@ def create_file_paths_for_single_file(
     for split in range(n_splits):
         files_for_split = [
             os.path.join(
-                project_path,
+                project_root,
                 "data",
                 target_dir,
                 f"{dataset_name}-split{split}-{core_id}.{write_format}",
@@ -1903,7 +1903,7 @@ def create_file_paths_for_single_file(
 
 @beartype
 def create_file_paths_for_multiple_files2(
-    project_path: str,
+    project_root: str,
     target_dir: str,
     n_splits: int,
     n_processes: int,
@@ -1921,7 +1921,7 @@ def create_file_paths_for_multiple_files2(
     `{dataset_name}-{process_id}-{file_index}-split{split}.{write_format}`
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         target_dir: The temporary directory where files are located.
         n_splits: The number of data splits.
         n_processes: The total number of multiprocessing workers.
@@ -1940,7 +1940,7 @@ def create_file_paths_for_multiple_files2(
     for split in range(n_splits):
         files_for_split = [
             os.path.join(
-                project_path,
+                project_root,
                 "data",
                 target_dir,
                 f"{dataset_name}-{process_id}-{str(file_index).zfill(pad_width)}-split{split}.{write_format}",
@@ -1955,7 +1955,7 @@ def create_file_paths_for_multiple_files2(
 
 @beartype
 def combine_multiprocessing_outputs(
-    project_path: str,
+    project_root: str,
     target_dir: str,
     n_splits: int,
     input_files: dict[int, list[str]],
@@ -1976,7 +1976,7 @@ def combine_multiprocessing_outputs(
       to concatenate the files efficiently.
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         target_dir: The temporary directory containing intermediate files.
         n_splits: The number of data splits.
         input_files: A dictionary mapping split index (int) to a list
@@ -1992,7 +1992,7 @@ def combine_multiprocessing_outputs(
     """
     for split in range(n_splits):
         split_file_path = create_split_file_path(
-            project_path,
+            project_root,
             dataset_name,
             split,
             write_format,
@@ -2015,7 +2015,7 @@ def combine_multiprocessing_outputs(
 
 @beartype
 def create_split_file_path(
-    project_path: str,
+    project_root: str,
     dataset_name: str,
     split: int,
     write_format: str,
@@ -2033,7 +2033,7 @@ def create_split_file_path(
     else:
         file_name = f"{dataset_name}-{pre_split_str}-split{split}-{post_split_str}.{write_format}"
 
-    out_path = os.path.join(project_path, "data", file_name)
+    out_path = os.path.join(project_root, "data", file_name)
     if in_target_dir:
         out_path = insert_top_folder(out_path, target_dir)
 

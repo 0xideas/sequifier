@@ -43,7 +43,7 @@ def load_hyperparameter_search_config(
         metadata_config_path = config_values.get("metadata_config_path")
 
         with open(
-            normalize_path(metadata_config_path, config_values["project_path"]), "r"
+            normalize_path(metadata_config_path, config_values["project_root"]), "r"
         ) as f:
             metadata_config = json.loads(f.read())
 
@@ -79,7 +79,7 @@ def load_hyperparameter_search_config(
         )
         config_values["training_data_path"] = normalize_path(
             config_values.get("training_data_path", metadata_config["split_paths"][0]),
-            config_values["project_path"],
+            config_values["project_root"],
         )
         config_values["validation_data_path"] = normalize_path(
             config_values.get(
@@ -88,7 +88,7 @@ def load_hyperparameter_search_config(
                     min(1, len(metadata_config["split_paths"]) - 1)
                 ],
             ),
-            config_values["project_path"],
+            config_values["project_root"],
         )
 
         config_values["id_maps"] = metadata_config["id_maps"]
@@ -402,7 +402,7 @@ class HyperparameterSearch(BaseModel):
     """Pydantic model for hyperparameter search configuration.
 
     Attributes:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         metadata_config_path: The path to the data-driven configuration file.
         hp_search_name: The name for the hyperparameter search.
         search_strategy: The search strategy, either "sample" or "grid".
@@ -428,7 +428,7 @@ class HyperparameterSearch(BaseModel):
         training_hyperparameter_sampling: The sampling configuration for training hyperparameters.
     """
 
-    project_path: str
+    project_root: str
     metadata_config_path: str
     hp_search_name: str
     search_strategy: str = "sample"  # "sample" or "grid"
@@ -485,7 +485,7 @@ class HyperparameterSearch(BaseModel):
         seq_length = np.random.choice(self.seq_length)
         print(f"{input_columns_index = } - {seq_length = }")
         return TrainModel(
-            project_path=self.project_path,
+            project_root=self.project_root,
             metadata_config_path=self.metadata_config_path,
             model_name=self.hp_search_name + f"-run-{i}",
             training_data_path=self.training_data_path,
@@ -541,7 +541,7 @@ class HyperparameterSearch(BaseModel):
         input_columns_index, seq_length = hyperparameter_combinations[i_outer]
 
         return TrainModel(
-            project_path=self.project_path,
+            project_root=self.project_root,
             metadata_config_path=self.metadata_config_path,
             model_name=self.hp_search_name + f"-run-{i}",
             training_data_path=self.training_data_path,

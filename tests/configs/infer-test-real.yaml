@@ -1,4 +1,4 @@
-project_path: tests/project_folder
+project_root: tests/project_folder
 training_config_path: tests/configs/train-test-real.yaml
 metadata_config_path: configs/metadata_configs/test-data-real-5.json
 model_type: generative

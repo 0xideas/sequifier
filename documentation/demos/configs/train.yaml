@@ -1,4 +1,4 @@
-project_path: .
+project_root: .
 #metadata
 training_data_path: "train_data.csv" # absolute path to training data
 validation_data_path: "test_data.csv" # absolute path to validation data

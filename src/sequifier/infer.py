@@ -58,7 +58,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
             "\nIf you have real columns in the data, you need to provide a json that contains: {{'selected_columns_statistics':{COL_NAME:{'std':..., 'mean':...}}}}"
         )
         with open(
-            normalize_path(config.metadata_config_path, config.project_path), "r"
+            normalize_path(config.metadata_config_path, config.project_root), "r"
         ) as f:
             metadata_config = json.loads(f.read())
             id_maps = metadata_config["id_maps"]
@@ -161,7 +161,7 @@ def infer_worker(
         inferer = Inferer(
             config.model_type,
             model_path,
-            config.project_path,
+            config.project_root,
             id_maps,
             selected_columns_statistics,
             config.map_to_id,
@@ -306,7 +306,7 @@ def infer_embedding(
 
         # Step 4: Save the output
         os.makedirs(
-            os.path.join(config.project_path, "outputs", "embeddings"),
+            os.path.join(config.project_root, "outputs", "embeddings"),
             exist_ok=True,
         )
 
@@ -320,12 +320,12 @@ def infer_embedding(
             )
 
             dir_path = os.path.join(
-                config.project_path, "outputs", "embeddings", dirname
+                config.project_root, "outputs", "embeddings", dirname
             )
             os.makedirs(dir_path, exist_ok=True)
 
         embeddings_path = os.path.join(
-            config.project_path, "outputs", "embeddings", file_name
+            config.project_root, "outputs", "embeddings", file_name
         )
         print(f"[INFO] Writing predictions to '{embeddings_path}'")
         write_data(
@@ -488,14 +488,14 @@ def infer_generative(
                 )
 
         os.makedirs(
-            os.path.join(config.project_path, "outputs", "predictions"),
+            os.path.join(config.project_root, "outputs", "predictions"),
             exist_ok=True,
         )
 
         if config.output_probabilities:
             assert probs is not None
             os.makedirs(
-                os.path.join(config.project_path, "outputs", "probabilities"),
+                os.path.join(config.project_root, "outputs", "probabilities"),
                 exist_ok=True,
             )
 
@@ -510,13 +510,13 @@ def infer_generative(
                     )
 
                     dir_path = os.path.join(
-                        config.project_path, "outputs", "probabilities", dirname
+                        config.project_root, "outputs", "probabilities", dirname
                     )
                     os.makedirs(dir_path, exist_ok=True)
 
                 if inferer.target_column_types[target_column] == "categorical":
                     probabilities_path = os.path.join(
-                        config.project_path, "outputs", "probabilities", file_name
+                        config.project_root, "outputs", "probabilities", file_name
                     )
                     print(f"[INFO] Writing probabilities to '{probabilities_path}'")
                     # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
@@ -553,12 +553,12 @@ def infer_generative(
                 dirname, f"{model_id}-{data_id}-predictions.{config.write_format}"
             )
             dir_path = os.path.join(
-                config.project_path, "outputs", "predictions", dirname
+                config.project_root, "outputs", "predictions", dirname
             )
             os.makedirs(dir_path, exist_ok=True)
 
         predictions_path = os.path.join(
-            config.project_path, "outputs", "predictions", file_name
+            config.project_root, "outputs", "predictions", file_name
         )
         print(f"[INFO] Writing predictions to '{predictions_path}'")
         write_data(
@@ -1187,7 +1187,7 @@ class Inferer:
         self,
         model_type: str,
         model_path: str,
-        project_path: str,
+        project_root: str,
         id_maps: Optional[dict[str, dict[Union[str, int], int]]],
         selected_columns_statistics: dict[str, dict[str, float]],
         map_to_id: bool,
@@ -1209,7 +1209,7 @@ class Inferer:
         Args:
             model_type: The type of model to use for inference.
             model_path: The path to the trained model.
-            project_path: The path to the sequifier project directory.
+            project_root: The path to the sequifier project directory.
             id_maps: A dictionary of id maps for categorical columns.
             selected_columns_statistics: A dictionary of statistics for numerical columns.
             map_to_id: Whether to map the output to the original ids.
@@ -1263,14 +1263,14 @@ class Inferer:
                 )
 
             self.ort_session = onnxruntime.InferenceSession(
-                normalize_path(model_path, project_path),
+                normalize_path(model_path, project_root),
                 providers=execution_providers,
                 **kwargs,
             )
         if self.inference_model_type == "pt":
             self.inference_model = load_inference_model(
                 self.model_type,
-                normalize_path(model_path, project_path),
+                normalize_path(model_path, project_root),
                 self.training_config_path,
                 self.args_config,
                 self.device,

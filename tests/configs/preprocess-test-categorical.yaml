@@ -1,4 +1,4 @@
-project_path: tests/project_folder
+project_root: tests/project_folder
 data_path: tests/resources/source_data/test-data-categorical-5.csv
 combine_into_single_file: false
 read_format: csv

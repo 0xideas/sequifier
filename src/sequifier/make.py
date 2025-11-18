@@ -1,6 +1,6 @@
 import os
 
-preprocess_config_string = """project_path: .
+preprocess_config_string = """project_root: .
 data_path: PLEASE FILL
 read_format: csv
 write_format: parquet
@@ -18,7 +18,7 @@ stride_by_split:
 max_rows: null
 """
 
-train_config_string = """project_path: .
+train_config_string = """project_root: .
 model_name: default
 read_format: parquet
 metadata_config_path: PLEASE FILL
@@ -63,7 +63,7 @@ training_spec:
   continue_training: true
 """
 
-infer_config_string = """project_path: .
+infer_config_string = """project_root: .
 metadata_config_path: PLEASE FILL
 model_type: PLEASE_FILL # generative or embedding
 model_path: PLEASE FILL

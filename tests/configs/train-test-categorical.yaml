@@ -1,4 +1,4 @@
-project_path: tests/project_folder
+project_root: tests/project_folder
 model_name: default
 read_format: pt
 metadata_config_path: configs/metadata_configs/test-data-categorical-5.json

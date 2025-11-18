@@ -272,7 +272,7 @@ class TransformerModel(nn.Module):
             rank: The rank of the current process (for distributed training).
         """
         super().__init__()
-        self.project_path = hparams.project_path
+        self.project_root = hparams.project_root
         self.model_type = "Transformer"
         self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
 
@@ -1218,7 +1218,7 @@ class TransformerModel(nn.Module):
 
         self.eval()
 
-        os.makedirs(os.path.join(self.project_path, "models"), exist_ok=True)
+        os.makedirs(os.path.join(self.project_root, "models"), exist_ok=True)
 
         if self.export_generative_model:
             self._export_model(model, suffix, epoch)
@@ -1263,7 +1263,7 @@ class TransformerModel(nn.Module):
 
             # Export the model
             export_path = os.path.join(
-                self.project_path,
+                self.project_root,
                 "models",
                 f"sequifier-{self.model_name}-{suffix}-{epoch}.onnx",
             )
@@ -1290,7 +1290,7 @@ class TransformerModel(nn.Module):
             )
         if self.export_pt:
             export_path = os.path.join(
-                self.project_path,
+                self.project_root,
                 "models",
                 f"sequifier-{self.model_name}-{suffix}-{epoch}.pt",
             )
@@ -1315,10 +1315,10 @@ class TransformerModel(nn.Module):
         """
         if self.rank != 0:
             return
-        os.makedirs(os.path.join(self.project_path, "checkpoints"), exist_ok=True)
+        os.makedirs(os.path.join(self.project_root, "checkpoints"), exist_ok=True)
 
         output_path = os.path.join(
-            self.project_path,
+            self.project_root,
             "checkpoints",
             f"{self.model_name}-epoch-{epoch}.pt",
         )
@@ -1378,9 +1378,9 @@ class TransformerModel(nn.Module):
     @beartype
     def _initialize_log_file(self):
         """Initializes the log file."""
-        os.makedirs(os.path.join(self.project_path, "logs"), exist_ok=True)
+        os.makedirs(os.path.join(self.project_root, "logs"), exist_ok=True)
         path = os.path.join(
-            self.project_path, "logs", f"sequifier-{self.model_name}-[NUMBER].txt"
+            self.project_root, "logs", f"sequifier-{self.model_name}-[NUMBER].txt"
         )
         if self.rank is not None:
             path = path.replace("[NUMBER]", f"rank{self.rank}-[NUMBER]")
@@ -1435,7 +1435,7 @@ class TransformerModel(nn.Module):
             The file path (str) to the latest checkpoint, or None if no
             checkpoint is found.
         """
-        checkpoint_path = os.path.join(self.project_path, "checkpoints", "*")
+        checkpoint_path = os.path.join(self.project_root, "checkpoints", "*")
 
         files = glob.glob(checkpoint_path)
         files = [

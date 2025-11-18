@@ -123,7 +123,7 @@ def load_train_config(
         metadata_config_path = config_values.get("metadata_config_path")
 
         with open(
-            normalize_path(metadata_config_path, config_values["project_path"]), "r"
+            normalize_path(metadata_config_path, config_values["project_root"]), "r"
         ) as f:
             metadata_config = json.loads(f.read())
 
@@ -155,14 +155,14 @@ def load_train_config(
         )
         config_values["training_data_path"] = normalize_path(
             config_values.get("training_data_path", split_paths[0]),
-            config_values["project_path"],
+            config_values["project_root"],
         )
         config_values["validation_data_path"] = normalize_path(
             config_values.get(
                 "validation_data_path",
                 split_paths[min(1, len(split_paths) - 1)],
             ),
-            config_values["project_path"],
+            config_values["project_root"],
         )
 
         config_values["id_maps"] = metadata_config["id_maps"]
@@ -336,7 +336,7 @@ class TrainModel(BaseModel):
     """Pydantic model for training configuration.
 
     Attributes:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         metadata_config_path: The path to the data-driven configuration file.
         model_name: The name of the model being trained.
         training_data_path: The path to the training data.
@@ -366,7 +366,7 @@ class TrainModel(BaseModel):
         arbitrary_types_allowed = True
         extra = "forbid"
 
-    project_path: str
+    project_root: str
     metadata_config_path: str
     model_name: str
     training_data_path: str

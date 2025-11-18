@@ -8,13 +8,13 @@ import torch
 
 
 @pytest.fixture()
-def metadata_configs(run_preprocessing, project_path):
+def metadata_configs(run_preprocessing, project_root):
     metadata_configs = {}
     for data_number in [1, 3, 5, 50]:
         for variant in ["categorical", "real"]:
             file_name = f"test-data-{variant}-{data_number}.json"
             with open(
-                os.path.join(project_path, "configs", "metadata_configs", file_name),
+                os.path.join(project_root, "configs", "metadata_configs", file_name),
                 "r",
             ) as f:
                 dd_conf = json.loads(f.read())
@@ -138,11 +138,11 @@ def read_preprocessing_outputs(path, variant):
 
 
 @pytest.fixture()
-def data_splits(project_path, split_groups):
+def data_splits(project_root, split_groups):
     data_split_values = {
         f"{j}-{variant}": [
             read_preprocessing_outputs(
-                os.path.join(project_path, "data", f"test-data-{variant}-{j}-split{i}"),
+                os.path.join(project_root, "data", f"test-data-{variant}-{j}-split{i}"),
                 variant,
             )
             for i in range(split_groups[variant])

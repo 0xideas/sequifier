@@ -40,7 +40,7 @@ class SequifierDatasetFromFolderLazy(Dataset):
             ram_threshold (float): The system RAM usage percentage (0-100)
                                    at which to trigger cache eviction.
         """
-        self.data_dir = normalize_path(data_path, config.project_path)
+        self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
         self.ram_threshold = ram_threshold
         metadata_path = os.path.join(self.data_dir, "metadata.json")
