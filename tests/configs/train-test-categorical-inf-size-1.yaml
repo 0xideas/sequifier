@@ -42,5 +42,5 @@ training_spec:
     name: StepLR
     step_size: 1.0
     gamma: 0.99
-  scheduler_step_iter: epoch
+  scheduler_interval: epoch
   continue_training: false
