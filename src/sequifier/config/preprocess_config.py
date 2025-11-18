@@ -88,10 +88,21 @@ class PreprocessorModel(BaseModel):
 
     @validator("combine_into_single_file", always=True)
     def validate_format2(cls, v: bool, values: dict):
-        if values["write_format"] == "pt" and v is True:
+        write_format = values.get("write_format")
+
+        # Existing check: 'pt' format cannot be combined
+        if write_format == "pt" and v is True:
             raise ValueError(
                 "With write_format 'pt', combine_into_single_file must be set to False"
             )
+
+        # New constraint: 'parquet' or 'csv' formats cannot be uncombined (split)
+        if write_format != "pt" and v is False:
+            raise ValueError(
+                f"With write_format '{write_format}', combine_into_single_file must be set to True. "
+                "Only 'pt' format supports uncombined (split) output."
+            )
+
         return v
 
     @validator("split_ratios")

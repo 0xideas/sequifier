@@ -424,12 +424,39 @@ class TrainModel(BaseModel):
 
     @validator("model_spec")
     def validate_model_spec(cls, v, values):
+        # Original validation: consistent columns
         assert (
-            values["input_columns"] is None
+            values.get("input_columns") is None
             or (v.d_model_by_column is None)
             or np.all(
                 np.array(list(v.d_model_by_column.keys()))
-                == np.array(list(values["input_columns"]))
+                == np.array(list(values.get("input_columns")))
             )
         )
+
+        # Additional validation based on constraints in src/sequifier/train.py
+        categorical_columns = values.get("categorical_columns", [])
+        real_columns = values.get("real_columns", [])
+        n_categorical = len(categorical_columns)
+        n_real = len(real_columns)
+
+        # Constraint 1: Mixed Data Types
+        # If both real and categorical variables are present, d_model_by_column must be set.
+        if n_categorical > 0 and n_real > 0:
+            if v.d_model_by_column is None:
+                raise ValueError(
+                    "If both real and categorical variables are present, 'd_model_by_column' in 'model_spec' must be set explicitly."
+                )
+
+        # Constraint 2: Categorical Divisibility
+        # If only categorical variables are included and auto-calculation is used,
+        # max(d_model, nhead) must be divisible by the number of categorical variables.
+        if n_categorical > 0 and n_real == 0 and v.d_model_by_column is None:
+            embedding_size = max(v.d_model, v.nhead)
+            if embedding_size % n_categorical != 0:
+                raise ValueError(
+                    f"If only categorical variables are included and d_model_by_column is not set, "
+                    f"max(d_model, nhead) ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical})."
+                )
+
         return v
