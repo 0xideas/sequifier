@@ -3,7 +3,7 @@ model_name: default
 read_format: parquet
 ddconfig_path: configs/ddconfigs/test-data-real-1.json
 
-selected_columns: null
+input_columns: null
 target_columns: [itemValue]
 target_column_types:
   itemValue: real

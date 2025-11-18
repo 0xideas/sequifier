@@ -43,7 +43,7 @@ class SequifierDatasetFromFolder(Dataset):
         print(f"[INFO] Loading training dataset into memory from '{self.data_dir}'...")
 
         all_sequences: Dict[str, List[torch.Tensor]] = {
-            col: [] for col in config.selected_columns
+            col: [] for col in config.input_columns
         }
         all_targets: Dict[str, List[torch.Tensor]] = {
             col: [] for col in config.target_columns

@@ -133,20 +133,18 @@ def load_train_config(
             "column_types", dd_config["column_types"]
         )
 
-        if config_values["selected_columns"] is None:
-            config_values["selected_columns"] = list(
-                config_values["column_types"].keys()
-            )
+        if config_values["input_columns"] is None:
+            config_values["input_columns"] = list(config_values["column_types"].keys())
 
         config_values["categorical_columns"] = [
             col
             for col, type_ in dd_config["column_types"].items()
-            if "int" in type_.lower() and col in config_values["selected_columns"]
+            if "int" in type_.lower() and col in config_values["input_columns"]
         ]
         config_values["real_columns"] = [
             col
             for col, type_ in dd_config["column_types"].items()
-            if "float" in type_.lower() and col in config_values["selected_columns"]
+            if "float" in type_.lower() and col in config_values["input_columns"]
         ]
         assert (
             len(config_values["real_columns"] + config_values["categorical_columns"])
@@ -331,7 +329,7 @@ class TrainModel(BaseModel):
         training_data_path: The path to the training data.
         validation_data_path: The path to the validation data.
         read_format: The file format of the input data (e.g., 'csv', 'parquet').
-        selected_columns: The list of input columns to be used for training.
+        input_columns: The list of input columns to be used for training.
         column_types: A dictionary mapping each column to its numeric type ('int64' or 'float64').
         categorical_columns: A list of columns that are categorical.
         real_columns: A list of columns that are real-valued.
@@ -358,7 +356,7 @@ class TrainModel(BaseModel):
     validation_data_path: str
     read_format: str = "parquet"
 
-    selected_columns: list[str]
+    input_columns: list[str]
     column_types: dict[str, str]
     categorical_columns: list[str]
     real_columns: list[str]
@@ -427,11 +425,11 @@ class TrainModel(BaseModel):
     @validator("model_spec")
     def validate_model_spec(cls, v, values):
         assert (
-            values["selected_columns"] is None
+            values["input_columns"] is None
             or (v.d_model_by_column is None)
             or np.all(
                 np.array(list(v.d_model_by_column.keys()))
-                == np.array(list(values["selected_columns"]))
+                == np.array(list(values["input_columns"]))
             )
         )
         return v

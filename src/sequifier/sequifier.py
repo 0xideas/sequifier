@@ -42,6 +42,14 @@ def build_args_config(args: Any) -> dict[str, Any]:
                 args_config["selected_columns"].replace(" ", "").split(",")
             )
 
+    if "input_columns" in args_config:
+        if args_config["input_columns"] == "None":
+            args_config["input_columns"] = None
+        else:
+            args_config["input_columns"] = (
+                args_config["input_columns"].replace(" ", "").split(",")
+            )
+
     return args_config
 
 
@@ -82,13 +90,14 @@ def setup_parser() -> ArgumentParser:
 
         if subparser != parser_hyperparameter_search:
             subparser.add_argument("-r", "--randomize", action="store_true")
-            subparser.add_argument("-sc", "--selected-columns", type=str)
             subparser.add_argument("-dp", "--data-path", type=str)
 
     for subparser in [parser_train, parser_infer, parser_hyperparameter_search]:
+        subparser.add_argument("-ic", "--input-columns", type=str)
         subparser.add_argument("-ddcp", "--ddconfig-path", type=str)
         subparser.add_argument("-op", "--on-unprocessed", action="store_true")
 
+    parser_preprocess.add_argument("-sc", "--selected-columns", type=str)
     parser_train.add_argument("-mn", "--model-name", type=str)
     parser_train.add_argument("-s", "--seed", type=int)
 

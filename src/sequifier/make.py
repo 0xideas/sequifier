@@ -23,7 +23,7 @@ model_name: default
 read_format: parquet
 ddconfig_path: PLEASE FILL
 
-selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
+input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
 target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
 target_column_types: # 'criterion' in training_spec must also be adapted
   EXAMPLE_TARGET_COLUMN_NAME: real
@@ -69,7 +69,7 @@ model_type: PLEASE_FILL # generative or embedding
 model_path: PLEASE FILL
 data_path: PLEASE FILL
 
-selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
+input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
 target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
 target_column_types:
   EXAMPLE_TARGET_COLUMN_NAME: real

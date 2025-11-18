@@ -7,7 +7,7 @@ data_path: tests/project_folder/data/test-data-categorical-1-split2
 read_format: pt
 write_format: csv
 
-selected_columns: itemId
+input_columns: itemId
 target_columns: [itemId]
 target_column_types:
   itemId: categorical

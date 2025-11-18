@@ -17,7 +17,7 @@ from sequifier.helpers import (
     construct_index_maps,
     normalize_path,
     numpy_to_pytorch,
-    subset_to_selected_columns,
+    subset_to_input_columns,
     write_data,
 )
 from sequifier.train import (
@@ -164,7 +164,7 @@ def infer_worker(
             config.map_to_id,
             config.categorical_columns,
             config.real_columns,
-            config.selected_columns,
+            config.input_columns,
             config.target_columns,
             config.target_column_types,
             config.sample_from_distribution_columns,
@@ -227,8 +227,8 @@ def infer_embedding(
 
         # Step 1: Get embeddings and base position/ID data
         if config.read_format in ["parquet", "csv"]:
-            if config.selected_columns is not None:
-                data = subset_to_selected_columns(data, config.selected_columns)
+            if config.input_columns is not None:
+                data = subset_to_input_columns(data, config.input_columns)
 
             # Determine the number of input features
             n_input_cols = data.get_column("inputCol").n_unique()
@@ -365,8 +365,8 @@ def infer_generative(
     for data_id, data in enumerate(dataset):
         # Step 1: Adapt Data Subsetting (now works on Polars DF)
         if config.read_format in ["parquet", "csv"]:
-            if config.selected_columns is not None:
-                data = subset_to_selected_columns(data, config.selected_columns)
+            if config.input_columns is not None:
+                data = subset_to_input_columns(data, config.input_columns)
             n_input_cols = data.get_column("inputCol").n_unique()
             if not config.autoregression:
                 # For the non-autoregressive case, apply inference size logic
@@ -525,7 +525,7 @@ def infer_generative(
                         config.write_format,
                     )
 
-        n_input_cols = len(config.selected_columns)
+        n_input_cols = len(config.input_columns)
 
         predictions = pl.DataFrame(
             {
@@ -691,7 +691,7 @@ def get_probs_preds_pt(
 
     Args:
         config: The `InfererModel` configuration object, used to check
-            `output_probabilities` and `selected_columns`.
+            `output_probabilities` and `input_columns`.
         inferer: The initialized `Inferer` instance.
         data: A dictionary mapping column/feature names to `torch.Tensor`s
               (the sequences part loaded from the .pt file).
@@ -714,7 +714,7 @@ def get_probs_preds_pt(
     X = {
         key: tensor.numpy()
         for key, tensor in data.items()
-        if key in config.selected_columns
+        if key in config.input_columns
     }
     all_probs_list = {col: [] for col in target_cols}
     all_preds_list = {col: [] for col in target_cols}
@@ -787,7 +787,7 @@ def get_embeddings(
     Returns:
         A NumPy array containing the computed embeddings for the batch.
     """
-    all_columns = sorted(list(set(config.selected_columns + config.target_columns)))
+    all_columns = sorted(list(set(config.input_columns + config.target_columns)))
     X = numpy_to_pytorch(data, column_types, all_columns, config.seq_length)
     X = {col: X_col.numpy() for col, X_col in X.items()}
     del data
@@ -826,7 +826,7 @@ def get_probs_preds(
             - `preds`: A dictionary mapping target columns to NumPy arrays
               of final predictions.
     """
-    all_columns = sorted(list(set(config.selected_columns + config.target_columns)))
+    all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
     X = numpy_to_pytorch(data, column_types, all_columns, config.seq_length)
     X = {col: X_col.numpy() for col, X_col in X.items()}
@@ -1186,7 +1186,7 @@ class Inferer:
         map_to_id: bool,
         categorical_columns: list[str],
         real_columns: list[str],
-        selected_columns: Optional[list[str]],
+        input_columns: Optional[list[str]],
         target_columns: list[str],
         target_column_types: dict[str, str],
         sample_from_distribution_columns: Optional[list[str]],
@@ -1231,7 +1231,7 @@ class Inferer:
         self.device = device
         self.categorical_columns = categorical_columns
         self.real_columns = real_columns
-        self.selected_columns = selected_columns
+        self.input_columns = input_columns
         self.target_columns = target_columns
         self.target_column_types = target_column_types
         self.sample_from_distribution_columns = sample_from_distribution_columns

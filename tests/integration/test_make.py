@@ -49,6 +49,7 @@ def adapt_configs(config_strings):
             .replace(
                 "selected_columns: [EXAMPLE_INPUT_COLUMN_NAME]", "selected_columns: "
             )
+            .replace("input_columns: [EXAMPLE_INPUT_COLUMN_NAME]", "input_columns: ")
             .replace("seq_length: 48", "seq_length: 10")
             .replace("max_rows: null", "max_rows: null\nn_cores: 1")
         )

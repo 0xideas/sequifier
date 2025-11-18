@@ -51,8 +51,8 @@ def load_hyperparameter_search_config(
             "column_types", [dd_config["column_types"]]
         )
 
-        if config_values["selected_columns"] is None:
-            config_values["selected_columns"] = [
+        if config_values["input_columns"] is None:
+            config_values["input_columns"] = [
                 list(config_values["column_types"].keys())
             ]
 
@@ -60,18 +60,18 @@ def load_hyperparameter_search_config(
             [
                 col
                 for col, type_ in dd_config["column_types"].items()
-                if type_ == "Int64" and col in selected_columns
+                if type_ == "Int64" and col in input_columns
             ]
-            for selected_columns in config_values["selected_columns"]
+            for input_columns in config_values["input_columns"]
         ]
 
         config_values["real_columns"] = [
             [
                 col
                 for col, type_ in dd_config["column_types"].items()
-                if type_ == "Float64" and col in selected_columns
+                if type_ == "Float64" and col in input_columns
             ]
-            for selected_columns in config_values["selected_columns"]
+            for input_columns in config_values["input_columns"]
         ]
 
         config_values["n_classes"] = config_values.get(
@@ -397,7 +397,7 @@ class HyperparameterSearch(BaseModel):
         training_data_path: The path to the training data.
         validation_data_path: The path to the validation data.
         read_format: The file format of the input data.
-        selected_columns: A list of lists of columns to be used for training.
+        input_columns: A list of lists of columns to be used for training.
         column_types: A list of dictionaries mapping columns to their types.
         categorical_columns: A list of lists of categorical columns.
         real_columns: A list of lists of real-valued columns.
@@ -424,7 +424,7 @@ class HyperparameterSearch(BaseModel):
     validation_data_path: str
     read_format: str = "parquet"
 
-    selected_columns: list[list[str]]
+    input_columns: list[list[str]]
     column_types: list[dict[str, str]]
     categorical_columns: list[list[str]]
     real_columns: list[list[str]]
@@ -447,8 +447,8 @@ class HyperparameterSearch(BaseModel):
     def validate_model_spec(cls, v, values):
         if v is not None:
             assert (
-                len(values["selected_columns"]) == len(v)
-            ), "selected_columns and column_types must have the same number of candidate values, that are paired"
+                len(values["input_columns"]) == len(v)
+            ), "input_columns and column_types must have the same number of candidate values, that are paired"
         return v
 
     def random_sample(self, i):
@@ -466,9 +466,9 @@ class HyperparameterSearch(BaseModel):
         """
         model_spec = self.model_hyperparameter_sampling.random_sample()
         training_spec = self.training_hyperparameter_sampling.random_sample()
-        selected_columns_index = np.random.randint(len(self.selected_columns))
+        input_columns_index = np.random.randint(len(self.input_columns))
         seq_length = np.random.choice(self.seq_length)
-        print(f"{selected_columns_index = } - {seq_length = }")
+        print(f"{input_columns_index = } - {seq_length = }")
         return TrainModel(
             project_path=self.project_path,
             ddconfig_path=self.ddconfig_path,
@@ -476,10 +476,10 @@ class HyperparameterSearch(BaseModel):
             training_data_path=self.training_data_path,
             validation_data_path=self.validation_data_path,
             read_format=self.read_format,
-            selected_columns=self.selected_columns[selected_columns_index],
-            column_types=self.column_types[selected_columns_index],
-            categorical_columns=self.categorical_columns[selected_columns_index],
-            real_columns=self.real_columns[selected_columns_index],
+            input_columns=self.input_columns[input_columns_index],
+            column_types=self.column_types[input_columns_index],
+            categorical_columns=self.categorical_columns[input_columns_index],
+            real_columns=self.real_columns[input_columns_index],
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
@@ -520,10 +520,10 @@ class HyperparameterSearch(BaseModel):
         training_spec = self.training_hyperparameter_sampling.grid_sample(i_training)
 
         hyperparameter_combinations = list(
-            product(np.arange(len(self.selected_columns)), self.seq_length)
+            product(np.arange(len(self.input_columns)), self.seq_length)
         )
 
-        selected_columns_index, seq_length = hyperparameter_combinations[i_outer]
+        input_columns_index, seq_length = hyperparameter_combinations[i_outer]
 
         return TrainModel(
             project_path=self.project_path,
@@ -532,10 +532,10 @@ class HyperparameterSearch(BaseModel):
             training_data_path=self.training_data_path,
             validation_data_path=self.validation_data_path,
             read_format=self.read_format,
-            selected_columns=self.selected_columns[selected_columns_index],
-            column_types=self.column_types[selected_columns_index],
-            categorical_columns=self.categorical_columns[selected_columns_index],
-            real_columns=self.real_columns[selected_columns_index],
+            input_columns=self.input_columns[input_columns_index],
+            column_types=self.column_types[input_columns_index],
+            categorical_columns=self.categorical_columns[input_columns_index],
+            real_columns=self.real_columns[input_columns_index],
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
@@ -582,7 +582,7 @@ class HyperparameterSearch(BaseModel):
             The total number of possible hyperparameter configurations.
         """
         return (
-            len(self.selected_columns)
+            len(self.input_columns)
             * len(self.seq_length)
             * self.model_hyperparameter_sampling.n_combinations()
             * self.training_hyperparameter_sampling.n_combinations()

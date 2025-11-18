@@ -3,7 +3,7 @@ model_name: model-categorical-multitarget-5
 read_format: pt
 ddconfig_path: configs/ddconfigs/test-data-categorical-multitarget-5.json
 
-selected_columns: null
+input_columns: null
 target_columns: [itemId, sup1, sup3]
 target_column_types:
   itemId: categorical

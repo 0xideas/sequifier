@@ -3,7 +3,7 @@ model_name: default
 read_format: pt
 ddconfig_path: configs/ddconfigs/test-data-categorical-5.json
 
-selected_columns: null
+input_columns: null
 target_columns: [itemId]
 target_column_types:
   itemId: categorical

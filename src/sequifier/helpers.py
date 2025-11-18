@@ -151,10 +151,10 @@ def write_data(data: pl.DataFrame, path: str, write_format: str, **kwargs) -> No
 
 
 @beartype
-def subset_to_selected_columns(
-    data: Union[pl.DataFrame, pl.LazyFrame], selected_columns: list[str]
+def subset_to_input_columns(
+    data: Union[pl.DataFrame, pl.LazyFrame], input_columns: list[str]
 ) -> Union[pl.DataFrame, pl.LazyFrame]:
-    """Filters a DataFrame to rows where 'inputCol' is in a selected list.
+    """Filters a DataFrame to rows where 'inputCol' is in a list of column_names.
 
     This function supports both Polars (DataFrame, LazyFrame) and Pandas
     DataFrames, dispatching to the appropriate filtering method.
@@ -169,17 +169,17 @@ def subset_to_selected_columns(
     Args:
         data: The Polars (DataFrame, LazyFrame) or Pandas DataFrame to
             filter. It must contain a column named "inputCol".
-        selected_columns: A list of values. Rows will be kept if their
+        input_columns: A list of values. Rows will be kept if their
             value in "inputCol" is present in this list.
 
     Returns:
         A filtered DataFrame or LazyFrame of the same type as the input.
     """
     if isinstance(data, (pl.DataFrame, pl.LazyFrame)):
-        return data.filter(pl.col("inputCol").is_in(selected_columns))
+        return data.filter(pl.col("inputCol").is_in(input_columns))
 
     column_filters = [
-        (data["inputCol"].values == input_col) for input_col in selected_columns
+        (data["inputCol"].values == input_col) for input_col in input_columns
     ]
     filter_ = np.logical_or.reduce(column_filters)
     return data.loc[filter_, :]

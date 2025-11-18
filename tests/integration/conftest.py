@@ -345,7 +345,7 @@ def run_training(
         )
         model_name_cat = f"model-categorical-{model_number}"
         write_and_log(
-            f"sequifier train --config-path={training_config_path_cat} --ddconfig-path={ddconfig_path_cat} --model-name={model_name_cat} --selected-columns={SELECTED_COLUMNS['categorical'][model_number]}"
+            f"sequifier train --config-path={training_config_path_cat} --ddconfig-path={ddconfig_path_cat} --model-name={model_name_cat} --input-columns={SELECTED_COLUMNS['categorical'][model_number]}"
         )
 
         ddconfig_path_real = os.path.join(
@@ -353,7 +353,7 @@ def run_training(
         )
         model_name_real = f"model-real-{model_number}"
         write_and_log(
-            f"sequifier train --config-path={training_config_path_real} --ddconfig-path={ddconfig_path_real} --model-name={model_name_real} --selected-columns=None"
+            f"sequifier train --config-path={training_config_path_real} --ddconfig-path={ddconfig_path_real} --model-name={model_name_real} --input-columns=None"
         )
 
     write_and_log(
@@ -417,7 +417,7 @@ def run_inference(
             "configs", "ddconfigs", f"test-data-categorical-{model_number}.json"
         )
         write_and_log(
-            f"sequifier infer --config-path={inference_config_path_cat} --ddconfig-path={ddconfig_path_cat} --model-path={model_path_cat} --data-path={data_path_cat} --selected-columns={SELECTED_COLUMNS['categorical'][model_number]}"
+            f"sequifier infer --config-path={inference_config_path_cat} --ddconfig-path={ddconfig_path_cat} --model-path={model_path_cat} --data-path={data_path_cat} --input-columns={SELECTED_COLUMNS['categorical'][model_number]}"
         )
 
         model_path_real = os.path.join(
@@ -430,7 +430,7 @@ def run_inference(
             "configs", "ddconfigs", f"test-data-real-{model_number}.json"
         )
         write_and_log(
-            f"sequifier infer --config-path={inference_config_path_real} --ddconfig-path={ddconfig_path_real} --model-path={model_path_real} --data-path={data_path_real} --selected-columns=None"
+            f"sequifier infer --config-path={inference_config_path_real} --ddconfig-path={ddconfig_path_real} --model-path={model_path_real} --data-path={data_path_real} --input-columns=None"
         )
 
     write_and_log(
@@ -438,7 +438,7 @@ def run_inference(
     )
 
     write_and_log(
-        f"sequifier infer --config-path={inference_config_path_real_autoregression} --selected-columns={SELECTED_COLUMNS['real'][1]}"
+        f"sequifier infer --config-path={inference_config_path_real_autoregression} --input-columns={SELECTED_COLUMNS['real'][1]}"
     )
 
     write_and_log(
@@ -450,11 +450,11 @@ def run_inference(
     )
 
     write_and_log(
-        f"sequifier infer --config-path={inference_config_path_categorical_autoregression}  --selected-columns=itemId"
+        f"sequifier infer --config-path={inference_config_path_categorical_autoregression}  --input-columns=itemId"
     )
 
     write_and_log(
-        f"sequifier infer --config-path={inference_config_path_embedding}  --selected-columns=itemId"
+        f"sequifier infer --config-path={inference_config_path_embedding}  --input-columns=itemId"
     )
 
     write_and_log(

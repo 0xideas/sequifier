@@ -3,7 +3,7 @@ model_name: model-categorical-3-inf-size
 read_format: pt
 ddconfig_path: configs/ddconfigs/test-data-categorical-3.json
 
-selected_columns: [itemId, sup1, sup2]
+input_columns: [itemId, sup1, sup2]
 target_columns: [itemId, sup1, sup2]
 target_column_types:
   itemId: categorical

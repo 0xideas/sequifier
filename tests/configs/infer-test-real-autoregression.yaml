@@ -7,7 +7,7 @@ data_path: tests/project_folder/data/test-data-real-1-split1-autoregression.csv
 read_format: csv
 write_format: csv
 
-selected_columns: null
+input_columns: null
 target_columns: [itemValue]
 target_column_types:
  itemValue: real

@@ -277,16 +277,16 @@ class TransformerModel(nn.Module):
 
         self.rank = rank
 
-        self.selected_columns = hparams.selected_columns
+        self.input_columns = hparams.input_columns
         self.categorical_columns = [
             col
             for col in hparams.categorical_columns
-            if self.selected_columns is None or col in self.selected_columns
+            if self.input_columns is None or col in self.input_columns
         ]
         self.real_columns = [
             col
             for col in hparams.real_columns
-            if self.selected_columns is None or col in self.selected_columns
+            if self.input_columns is None or col in self.input_columns
         ]
         print(f"[INFO] {self.categorical_columns = }")
         print(f"[INFO] {self.real_columns = }")
@@ -859,7 +859,7 @@ class TransformerModel(nn.Module):
             data = {
                 k: v.to(self.device, non_blocking=True)
                 for k, v in data.items()
-                if k in self.selected_columns
+                if k in self.input_columns
             }
             targets = {
                 k: v.to(self.device, non_blocking=True)
@@ -1026,7 +1026,7 @@ class TransformerModel(nn.Module):
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
-                    if k in self.selected_columns
+                    if k in self.input_columns
                 }
                 targets = {
                     k: v.to(self.device, non_blocking=True)
@@ -1085,7 +1085,7 @@ class TransformerModel(nn.Module):
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
-                    if k in self.selected_columns
+                    if k in self.input_columns
                 }
                 targets = {
                     k: v.to(self.device, non_blocking=True)

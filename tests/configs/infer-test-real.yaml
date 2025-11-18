@@ -5,7 +5,7 @@ model_type: generative
 model_path: models/sequifier-model-real-5-best-3.pt
 data_path: data/test-data-real5-split2.csv
 
-selected_columns: null
+input_columns: null
 target_columns: [itemValue]
 target_column_types:
   itemValue: real

@@ -41,20 +41,18 @@ def load_inferer_config(
             "column_types", dd_config["column_types"]
         )
 
-        if config_values["selected_columns"] is None:
-            config_values["selected_columns"] = list(
-                config_values["column_types"].keys()
-            )
+        if config_values["input_columns"] is None:
+            config_values["input_columns"] = list(config_values["column_types"].keys())
 
         config_values["categorical_columns"] = [
             col
             for col, type_ in dd_config["column_types"].items()
-            if "int64" in type_.lower() and col in config_values["selected_columns"]
+            if "int64" in type_.lower() and col in config_values["input_columns"]
         ]
         config_values["real_columns"] = [
             col
             for col, type_ in dd_config["column_types"].items()
-            if "float64" in type_.lower() and col in config_values["selected_columns"]
+            if "float64" in type_.lower() and col in config_values["input_columns"]
         ]
         assert (
             len(config_values["real_columns"] + config_values["categorical_columns"])
@@ -83,7 +81,7 @@ class InfererModel(BaseModel):
         training_config_path: The path to the training configuration file.
         read_format: The file format of the input data (e.g., 'csv', 'parquet').
         write_format: The file format for the inference output.
-        selected_columns: The list of input columns used for inference.
+        input_columns: The list of input columns used for inference.
         categorical_columns: A list of columns that are categorical.
         real_columns: A list of columns that are real-valued.
         target_columns: The list of target columns for inference.
@@ -114,7 +112,7 @@ class InfererModel(BaseModel):
     read_format: str = Field(default="parquet")
     write_format: str = Field(default="csv")
 
-    selected_columns: list[str]
+    input_columns: list[str]
     categorical_columns: list[str]
     real_columns: list[str]
     target_columns: list[str]
@@ -170,11 +168,11 @@ class InfererModel(BaseModel):
                 )
 
             if not np.all(
-                np.array(sorted(values["selected_columns"]))
+                np.array(sorted(values["input_columns"]))
                 == np.array(sorted(values["target_columns"]))
             ):
                 raise ValueError(
-                    "'autoregression_extra_steps' can only be larger than 0 if 'selected_columns' and 'target_columns' are identical"
+                    "'autoregression_extra_steps' can only be larger than 0 if 'input_columns' and 'target_columns' are identical"
                 )
 
         return v
@@ -188,11 +186,11 @@ class InfererModel(BaseModel):
                 "Autoregressive inference is not possible for models with inference_size > 1"
             )
         if v and not np.all(
-            np.array(sorted(values["selected_columns"]))
+            np.array(sorted(values["input_columns"]))
             == np.array(sorted(values["target_columns"]))
         ):
             raise ValueError(
-                "Autoregressive inference with non-identical 'selected_columns' and 'target_columns' is possible but should not be performed"
+                "Autoregressive inference with non-identical 'input_columns' and 'target_columns' is possible but should not be performed"
             )
         return v
 
