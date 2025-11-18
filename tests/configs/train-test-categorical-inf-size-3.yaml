@@ -31,7 +31,7 @@ model_spec:
 training_spec:
   device: cpu
   epochs: 3
-  iter_save: 1
+  checkpoint_frequency: 1
   batch_size: 5
   log_interval: 200
   class_share_log_columns: ["itemId"]

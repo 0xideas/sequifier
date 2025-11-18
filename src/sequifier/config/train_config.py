@@ -191,7 +191,7 @@ class TrainingSpecModel(BaseModel):
         log_interval: The interval in batches for logging.
         class_share_log_columns: A list of column names for which to log the class share of predictions.
         early_stopping_epochs: Number of epochs to wait for validation loss improvement before stopping.
-        iter_save: The interval in epochs for checkpointing the model.
+        checkpoint_frequency: The interval in epochs for checkpointing the model.
         batch_size: The training batch size.
         lr: The learning rate.
         criterion: A dictionary mapping each target column to a loss function.
@@ -216,7 +216,7 @@ class TrainingSpecModel(BaseModel):
     log_interval: int = 10
     class_share_log_columns: list[str] = Field(default_factory=list)
     early_stopping_epochs: Optional[int] = None
-    iter_save: int
+    checkpoint_frequency: int
     batch_size: int
     lr: float
     criterion: dict[str, str]

@@ -103,7 +103,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         log_interval: The interval in batches for logging.
         class_share_log_columns: Columns for which to log class share.
         early_stopping_epochs: Number of epochs for early stopping.
-        iter_save: Interval in epochs for saving model checkpoints.
+        checkpoint_frequency: Interval in epochs for saving model checkpoints.
         batch_size: A list of possible batch sizes.
         lr: A list of possible learning rates.
         criterion: A dictionary mapping target columns to loss functions.
@@ -121,7 +121,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     log_interval: int = 10
     class_share_log_columns: list[str] = Field(default_factory=list)
     early_stopping_epochs: Optional[int] = None
-    iter_save: int
+    checkpoint_frequency: int
     batch_size: list[int]
     lr: list[float]
     criterion: dict[str, str]
@@ -200,7 +200,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             log_interval=self.log_interval,
             class_share_log_columns=self.class_share_log_columns,
             early_stopping_epochs=self.early_stopping_epochs,
-            iter_save=self.iter_save,
+            checkpoint_frequency=self.checkpoint_frequency,
             batch_size=batch_size,
             lr=lr,
             criterion=self.criterion,
@@ -248,7 +248,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             log_interval=self.log_interval,
             class_share_log_columns=self.class_share_log_columns,
             early_stopping_epochs=self.early_stopping_epochs,
-            iter_save=self.iter_save,
+            checkpoint_frequency=self.checkpoint_frequency,
             batch_size=batch_size,
             lr=lr,
             criterion=self.criterion,

@@ -35,16 +35,15 @@ model_spec:
 training_spec:
   device: "cpu" # device for model training
   epochs: 100 # number of epochs
-  iter_save: 50 # frequency of checkpointing
+  checkpoint_frequency: 50 # frequency of checkpointing
   batch_size: 50 # batch size for training
   lr: 0.01  # learning rate
   dropout: 0.1 # dropout rate during training
   criterion: "CrossEntropyLoss" # loss function, can be any in torch.nn
-  optimizer: 
+  optimizer:
     name: "Adam" # optimizer, can be any on torch.optim
   scheduler:
     name: "StepLR" # learning rate scheduler, can be any in torch.optim.lr_scheduler
     step_size: 1.0
     gamma: 0.99
   continue_training: true
-
