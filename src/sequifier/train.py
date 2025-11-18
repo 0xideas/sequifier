@@ -348,7 +348,7 @@ class TransformerModel(nn.Module):
             hparams.training_spec.dropout,
         )
         self.transformer_encoder = TransformerEncoder(
-            encoder_layers, hparams.model_spec.nlayers, enable_nested_tensor=False
+            encoder_layers, hparams.model_spec.num_layers, enable_nested_tensor=False
         )
         self.prediction_length = hparams.model_spec.prediction_length
 

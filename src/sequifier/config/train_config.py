@@ -300,14 +300,14 @@ class ModelSpecModel(BaseModel):
         d_model_by_column: The embedding dimensions for each input column. Must sum to d_model.
         nhead: The number of heads in the multi-head attention models.
         dim_feedforward: The dimension of the feedforward network model.
-        nlayers: The number of layers in the transformer model.
+        num_layers: The number of layers in the transformer model.
     """
 
     d_model: int
     d_model_by_column: Optional[dict[str, int]]
     nhead: int
     dim_feedforward: int
-    nlayers: int
+    num_layers: int
     prediction_length: int
 
     @validator("d_model_by_column")

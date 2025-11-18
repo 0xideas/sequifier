@@ -27,7 +27,7 @@ model_spec:
     sup4: 4
   nhead: 2
   dim_feedforward: 10
-  nlayers: 2
+  num_layers: 2
   prediction_length: 1
 training_spec:
   device: cpu

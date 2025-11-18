@@ -41,7 +41,7 @@ model_spec:
     EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical
   nhead: 16
   dim_feedforward: 128
-  nlayers: 3
+  num_layers: 3
   prediction_length: 1
 training_spec:
   device: cuda
