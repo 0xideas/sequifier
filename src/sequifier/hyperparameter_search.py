@@ -91,9 +91,9 @@ class HyperparameterSearcher:
 
         if len(files) > 0:
             last_iter = int(files[-1].split(".")[0].replace(file_root, ""))
-            return last_iter + 1
+            return last_iter
         else:
-            return 1
+            return 0
 
     @beartype
     def _initialize_log_file(self) -> None:
@@ -243,7 +243,7 @@ class HyperparameterSearcher:
         Returns:
             None
         """
-        for i in range(self.start_run, self.n_samples + 1):
+        for i in range(self.start_run, self.n_samples):
             seed = int(datetime.now().timestamp() * 1e6) % (2**32)
             np.random.seed(seed)
             self._create_config_and_run(i, seed=seed)

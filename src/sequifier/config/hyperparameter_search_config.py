@@ -53,7 +53,8 @@ def load_hyperparameter_search_config(
 
         if config_values["input_columns"] is None:
             config_values["input_columns"] = [
-                list(config_values["column_types"].keys())
+                list(config_vals.keys())
+                for config_vals in config_values["column_types"]
             ]
 
         config_values["categorical_columns"] = [
@@ -143,7 +144,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             DotDict({"name": "StepLR", "step_size": 1, "gamma": 0.99})
         ]
     )
-    continue_training: bool = True
+    continue_training: bool
 
     def __init__(self, **kwargs):
         """Initialize the TrainingSpecHyperparameterSampling instance.
@@ -164,20 +165,20 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         self.optimizer = [
             DotDict(optimizer_config) for optimizer_config in kwargs["optimizer"]
         ]
+        assert len(self.learning_rate) == len(
+            kwargs["scheduler"]
+        ), f"{len(self.learning_rate) = } != {len(kwargs['scheduler']) = }"
         self.scheduler = [
             DotDict(scheduler_config) for scheduler_config in kwargs["scheduler"]
         ]
 
-    @field_validator("scheduler")
+    @field_validator("learning_rate")
     @classmethod
-    def validate_model_spec(cls, v, values):
+    def validate_model_spec(cls, v, info):
         assert (
-            len(values["learning_rate"]) == len(v)
-        ), "learning_rate and scheduler must have the same number of candidate values, that are paired"
+            len(info.data.get("epochs")) == len(v)
+        ), "learning_rate and epochs must have the same number of candidate values, that are paired"
 
-        assert (
-            len(values["epochs"]) == len(v)
-        ), "epochs and scheduler must have the same number of candidate values, that are paired"
         return v
 
     def random_sample(self):
@@ -217,6 +218,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             loss_weights=self.loss_weights,
             optimizer=optimizer,
             scheduler=self.scheduler[learning_rate_and_scheduler_index],
+            continue_training=self.continue_training,
         )
 
     def grid_sample(self, i):
@@ -269,6 +271,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             loss_weights=self.loss_weights,
             optimizer=optimizer,
             scheduler=self.scheduler[learning_rate_and_scheduler_index],
+            continue_training=self.continue_training,
         )
 
     def n_combinations(self):
@@ -305,17 +308,19 @@ class ModelSpecHyperparameterSampling(BaseModel):
     n_head: list[int]
     dim_feedforward: list[int]
     num_layers: list[int]
+    prediction_length: int
 
     @field_validator("n_head")
     @classmethod
-    def validate_model_spec(cls, v, values):
-        if values["feature_embedding_dims"] is not None:
+    def validate_model_spec(cls, v, info):
+        if info.data.get("feature_embedding_dims") is not None:
             assert (
-                len(values["dim_model"]) == len(values["feature_embedding_dims"])
+                len(info.data.get("dim_model"))
+                == len(info.data.get("feature_embedding_dims"))
             ), "dim_model and feature_embedding_dims must have the same number of candidate values, that are paired"
 
         assert (
-            len(values["dim_model"]) == len(v)
+            len(info.data.get("dim_model")) == len(v)
         ), "dim_model and n_head must have the same number of candidate values, that are paired"
         return v
 
@@ -347,6 +352,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             n_head=self.n_head[dim_model_index],
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
+            prediction_length=self.prediction_length,
         )
 
     def grid_sample(self, i):
@@ -384,6 +390,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             n_head=self.n_head[dim_model_index],
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
+            prediction_length=self.prediction_length,
         )
 
     def n_combinations(self):
@@ -459,10 +466,10 @@ class HyperparameterSearch(BaseModel):
 
     @field_validator("column_types")
     @classmethod
-    def validate_model_spec(cls, v, values):
+    def validate_model_spec(cls, v, info):
         if v is not None:
             assert (
-                len(values["input_columns"]) == len(v)
+                len(info.data.get("input_columns")) == len(v)
             ), "input_columns and column_types must have the same number of candidate values, that are paired"
         return v
 
@@ -502,6 +509,8 @@ class HyperparameterSearch(BaseModel):
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=101,
+            export_embedding_model=False,
+            export_generative_model=True,
             export_onnx=self.export_onnx,
             export_pt=self.export_pt,
             export_with_dropout=self.export_with_dropout,
@@ -538,6 +547,7 @@ class HyperparameterSearch(BaseModel):
             product(np.arange(len(self.input_columns)), self.seq_length)
         )
 
+        # import code; code.interact(local=locals())
         input_columns_index, seq_length = hyperparameter_combinations[i_outer]
 
         return TrainModel(
@@ -558,6 +568,8 @@ class HyperparameterSearch(BaseModel):
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=101,
+            export_embedding_model=False,
+            export_generative_model=True,
             export_onnx=self.export_onnx,
             export_pt=self.export_pt,
             export_with_dropout=self.export_with_dropout,
