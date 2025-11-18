@@ -304,8 +304,8 @@ class ModelSpecModel(BaseModel):
     """Pydantic model for model specifications.
 
     Attributes:
-        d_model: The number of expected features in the input.
-        d_model_by_column: The embedding dimensions for each input column. Must sum to d_model.
+        dim_model: The number of expected features in the input.
+        dim_model_by_column: The embedding dimensions for each input column. Must sum to dim_model.
         nhead: The number of heads in the multi-head attention models.
         dim_feedforward: The dimension of the feedforward network model.
         num_layers: The number of layers in the transformer model.
@@ -315,19 +315,19 @@ class ModelSpecModel(BaseModel):
         arbitrary_types_allowed = True
         extra = "forbid"
 
-    d_model: int
-    d_model_by_column: Optional[dict[str, int]] = None
+    dim_model: int
+    dim_model_by_column: Optional[dict[str, int]] = None
     nhead: int
     dim_feedforward: int
     num_layers: int
     prediction_length: int
 
-    @field_validator("d_model_by_column")
+    @field_validator("dim_model_by_column")
     @classmethod
-    def validate_d_model_by_column(cls, v, info):
-        assert v is None or np.sum(list(v.values())) == info.data.get(
-            "d_model"
-        ), f'{info.data.get("d_model")} is not the sum of the d_model_by_column values'
+    def validate_dim_model_by_column(cls, v, info):
+        assert (
+            v is None or np.sum(list(v.values())) == info.data.get("dim_model")
+        ), f'{info.data.get("dim_model")} is not the sum of the dim_model_by_column values'
 
         return v
 
@@ -450,9 +450,9 @@ class TrainModel(BaseModel):
         # Original validation: consistent columns
         assert (
             info.data.get("input_columns") is None
-            or (v.d_model_by_column is None)
+            or (v.dim_model_by_column is None)
             or np.all(
-                np.array(list(v.d_model_by_column.keys()))
+                np.array(list(v.dim_model_by_column.keys()))
                 == np.array(list(info.data.get("input_columns")))
             )
         )
@@ -464,22 +464,22 @@ class TrainModel(BaseModel):
         n_real = len(real_columns)
 
         # Constraint 1: Mixed Data Types
-        # If both real and categorical variables are present, d_model_by_column must be set.
+        # If both real and categorical variables are present, dim_model_by_column must be set.
         if n_categorical > 0 and n_real > 0:
-            if v.d_model_by_column is None:
+            if v.dim_model_by_column is None:
                 raise ValueError(
-                    "If both real and categorical variables are present, 'd_model_by_column' in 'model_spec' must be set explicitly."
+                    "If both real and categorical variables are present, 'dim_model_by_column' in 'model_spec' must be set explicitly."
                 )
 
         # Constraint 2: Categorical Divisibility
         # If only categorical variables are included and auto-calculation is used,
-        # max(d_model, nhead) must be divisible by the number of categorical variables.
-        if n_categorical > 0 and n_real == 0 and v.d_model_by_column is None:
-            embedding_size = max(v.d_model, v.nhead)
+        # max(dim_model, nhead) must be divisible by the number of categorical variables.
+        if n_categorical > 0 and n_real == 0 and v.dim_model_by_column is None:
+            embedding_size = max(v.dim_model, v.nhead)
             if embedding_size % n_categorical != 0:
                 raise ValueError(
-                    f"If only categorical variables are included and d_model_by_column is not set, "
-                    f"max(d_model, nhead) ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical})."
+                    f"If only categorical variables are included and dim_model_by_column is not set, "
+                    f"max(dim_model, nhead) ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical})."
                 )
 
         return v

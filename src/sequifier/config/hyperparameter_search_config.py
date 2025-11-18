@@ -293,15 +293,15 @@ class ModelSpecHyperparameterSampling(BaseModel):
     """Pydantic model for model specification hyperparameter sampling.
 
     Attributes:
-        d_model: A list of possible numbers of expected features in the input.
-        d_model_by_column: A list of possible embedding dimensions for each input column.
+        dim_model: A list of possible numbers of expected features in the input.
+        dim_model_by_column: A list of possible embedding dimensions for each input column.
         nhead: A list of possible numbers of heads in the multi-head attention models.
         dim_feedforward: A list of possible dimensions of the feedforward network model.
         num_layers: A list of possible numbers of layers in the transformer model.
     """
 
-    d_model: list[int]
-    d_model_by_column: Optional[list[dict[str, int]]]
+    dim_model: list[int]
+    dim_model_by_column: Optional[list[dict[str, int]]]
     nhead: list[int]
     dim_feedforward: list[int]
     num_layers: list[int]
@@ -309,42 +309,42 @@ class ModelSpecHyperparameterSampling(BaseModel):
     @field_validator("nhead")
     @classmethod
     def validate_model_spec(cls, v, values):
-        if values["d_model_by_column"] is not None:
+        if values["dim_model_by_column"] is not None:
             assert (
-                len(values["d_model"]) == len(values["d_model_by_column"])
-            ), "d_model and d_model_by_column must have the same number of candidate values, that are paired"
+                len(values["dim_model"]) == len(values["dim_model_by_column"])
+            ), "dim_model and dim_model_by_column must have the same number of candidate values, that are paired"
 
         assert (
-            len(values["d_model"]) == len(v)
-        ), "d_model and nhead must have the same number of candidate values, that are paired"
+            len(values["dim_model"]) == len(v)
+        ), "dim_model and nhead must have the same number of candidate values, that are paired"
         return v
 
     def random_sample(self):
         """Randomly sample a set of model hyperparameters.
 
         This method selects a random combination of model hyperparameters from the
-        defined lists of possibilities. It ensures that d_model, d_model_by_column,
+        defined lists of possibilities. It ensures that dim_model, dim_model_by_column,
         and nhead are paired correctly.
 
         Returns:
             A ModelSpecModel instance populated with a randomly sampled set of
             hyperparameters.
         """
-        d_model_index = np.random.randint(len(self.d_model))
-        d_model_by_column = (
+        dim_model_index = np.random.randint(len(self.dim_model))
+        dim_model_by_column = (
             None
-            if self.d_model_by_column is None
-            else self.d_model_by_column[d_model_index]
+            if self.dim_model_by_column is None
+            else self.dim_model_by_column[dim_model_index]
         )
-        d_model = self.d_model[d_model_index]
+        dim_model = self.dim_model[dim_model_index]
         dim_feedforward = np.random.choice(self.dim_feedforward)
         num_layers = np.random.choice(self.num_layers)
-        print(f"{d_model = } - {dim_feedforward = } - {num_layers = }")
+        print(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
 
         return ModelSpecModel(
-            d_model=self.d_model[d_model_index],
-            d_model_by_column=d_model_by_column,
-            nhead=self.nhead[d_model_index],
+            dim_model=self.dim_model[dim_model_index],
+            dim_model_by_column=dim_model_by_column,
+            nhead=self.nhead[dim_model_index],
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
         )
@@ -363,23 +363,25 @@ class ModelSpecHyperparameterSampling(BaseModel):
             hyperparameters.
         """
         hyperparameter_combinations = list(
-            product(np.arange(len(self.d_model)), self.dim_feedforward, self.num_layers)
+            product(
+                np.arange(len(self.dim_model)), self.dim_feedforward, self.num_layers
+            )
         )
 
-        d_model_index, dim_feedforward, num_layers = hyperparameter_combinations[i]
-        d_model = self.d_model[d_model_index]
-        print(f"{d_model = } - {dim_feedforward = } - {num_layers = }")
+        dim_model_index, dim_feedforward, num_layers = hyperparameter_combinations[i]
+        dim_model = self.dim_model[dim_model_index]
+        print(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
 
-        d_model_by_column = (
+        dim_model_by_column = (
             None
-            if self.d_model_by_column is None
-            else self.d_model_by_column[d_model_index]
+            if self.dim_model_by_column is None
+            else self.dim_model_by_column[dim_model_index]
         )
 
         return ModelSpecModel(
-            d_model=d_model,
-            d_model_by_column=d_model_by_column,
-            nhead=self.nhead[d_model_index],
+            dim_model=dim_model,
+            dim_model_by_column=dim_model_by_column,
+            nhead=self.nhead[dim_model_index],
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
         )
@@ -393,7 +395,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         Returns:
             The total number of possible model hyperparameter combinations.
         """
-        return len(self.d_model) * len(self.dim_feedforward) * len(self.num_layers)
+        return len(self.dim_model) * len(self.dim_feedforward) * len(self.num_layers)
 
 
 class HyperparameterSearch(BaseModel):

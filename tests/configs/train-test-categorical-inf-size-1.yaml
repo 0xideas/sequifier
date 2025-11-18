@@ -17,7 +17,7 @@ export_onnx: true
 export_pt: false
 
 model_spec:
-  d_model: 200
+  dim_model: 200
   nhead: 2
   dim_feedforward: 12
   num_layers: 2

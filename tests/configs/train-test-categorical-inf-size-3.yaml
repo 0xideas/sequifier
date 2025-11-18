@@ -19,8 +19,8 @@ export_onnx: false
 export_pt: true
 
 model_spec:
-  d_model: 200
-  d_model_by_column:
+  dim_model: 200
+  dim_model_by_column:
     itemId: 100
     sup1: 50
     sup2: 50

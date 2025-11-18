@@ -314,32 +314,34 @@ class TransformerModel(nn.Module):
         self.encoder = ModuleDict()
         self.pos_encoder = ModuleDict()
         self.embedding_size = max(
-            self.hparams.model_spec.d_model, self.hparams.model_spec.nhead
+            self.hparams.model_spec.dim_model, self.hparams.model_spec.nhead
         )
-        if hparams.model_spec.d_model_by_column is not None:
-            self.d_model_by_column = hparams.model_spec.d_model_by_column
+        if hparams.model_spec.dim_model_by_column is not None:
+            self.dim_model_by_column = hparams.model_spec.dim_model_by_column
         else:
-            self.d_model_by_column = self._get_d_model_by_column(
+            self.dim_model_by_column = self._get_dim_model_by_column(
                 self.embedding_size, self.categorical_columns, self.real_columns
             )
 
         self.real_columns_with_embedding = []
         self.real_columns_direct = []
         for col in self.real_columns:
-            if self.d_model_by_column[col] > 1:
-                self.encoder[col] = nn.Linear(1, self.d_model_by_column[col])
+            if self.dim_model_by_column[col] > 1:
+                self.encoder[col] = nn.Linear(1, self.dim_model_by_column[col])
                 self.real_columns_with_embedding.append(col)
             else:
-                assert self.d_model_by_column[col] == 1
+                assert self.dim_model_by_column[col] == 1
                 self.real_columns_direct.append(col)
             self.pos_encoder[col] = nn.Embedding(
-                self.seq_length, self.d_model_by_column[col]
+                self.seq_length, self.dim_model_by_column[col]
             )
         for col, n_classes in self.n_classes.items():
             if col in self.categorical_columns:
-                self.encoder[col] = nn.Embedding(n_classes, self.d_model_by_column[col])
+                self.encoder[col] = nn.Embedding(
+                    n_classes, self.dim_model_by_column[col]
+                )
                 self.pos_encoder[col] = nn.Embedding(
-                    self.seq_length, self.d_model_by_column[col]
+                    self.seq_length, self.dim_model_by_column[col]
                 )
 
         encoder_layers = TransformerEncoderLayer(
@@ -433,7 +435,7 @@ class TransformerModel(nn.Module):
         return criterion
 
     @beartype
-    def _get_d_model_by_column(
+    def _get_dim_model_by_column(
         self,
         embedding_size: int,
         categorical_columns: list[str],
@@ -445,7 +447,7 @@ class TransformerModel(nn.Module):
         input columns.
 
         Args:
-            embedding_size: The total embedding dimension (d_model).
+            embedding_size: The total embedding dimension (dim_model).
             categorical_columns: List of categorical column names.
             real_columns: List of real-valued column names.
 
@@ -454,25 +456,25 @@ class TransformerModel(nn.Module):
         """
         assert (len(categorical_columns) + len(real_columns)) > 0, "No columns found"
         if len(categorical_columns) == 0 and len(real_columns) > 0:
-            d_model_by_column = {col: 1 for col in real_columns}
+            dim_model_by_column = {col: 1 for col in real_columns}
             column_index = dict(enumerate(real_columns))
             for i in range(embedding_size):
-                if sum(d_model_by_column.values()) % embedding_size != 0:
+                if sum(dim_model_by_column.values()) % embedding_size != 0:
                     j = i % len(real_columns)
-                    d_model_by_column[column_index[j]] += 1
-            assert sum(d_model_by_column.values()) % embedding_size == 0
+                    dim_model_by_column[column_index[j]] += 1
+            assert sum(dim_model_by_column.values()) % embedding_size == 0
         elif len(real_columns) == 0 and len(categorical_columns) > 0:
             assert (
                 (embedding_size % len(categorical_columns)) == 0
-            ), f"If only categorical variables are included, d_model must be a multiple of the number of categorical variables ({embedding_size = } % {len(categorical_columns) = }) != 0"
-            d_model_comp = embedding_size // len(categorical_columns)
-            d_model_by_column = {col: d_model_comp for col in categorical_columns}
+            ), f"If only categorical variables are included, dim_model must be a multiple of the number of categorical variables ({embedding_size = } % {len(categorical_columns) = }) != 0"
+            dim_model_comp = embedding_size // len(categorical_columns)
+            dim_model_by_column = {col: dim_model_comp for col in categorical_columns}
         else:
             raise UserWarning(
-                "If both real and categorical variables are present, d_model_by_column config value must be set"
+                "If both real and categorical variables are present, dim_model_by_column config value must be set"
             )
 
-        return d_model_by_column
+        return dim_model_by_column
 
     @staticmethod
     def _generate_square_subsequent_mask(sz: int) -> Tensor:
@@ -554,7 +556,7 @@ class TransformerModel(nn.Module):
 
         Returns:
             The raw output tensor from the TransformerEncoder
-            (seq_length, batch_size, d_model).
+            (seq_length, batch_size, dim_model).
         """
         srcs = []
         for col in self.categorical_columns:
@@ -611,7 +613,7 @@ class TransformerModel(nn.Module):
 
         Returns:
             The embedding tensor for the last token
-            (batch_size, d_model).
+            (batch_size, dim_model).
         """
         return self.forward_inner(src)[-self.prediction_length :, :, :]
 
@@ -647,7 +649,7 @@ class TransformerModel(nn.Module):
         Args:
             target_column: The name of the target column to decode.
             output: The raw output tensor from the TransformerEncoder
-                    (seq_length, batch_size, d_model).
+                    (seq_length, batch_size, dim_model).
 
         Returns:
             The decoded output (logits or real value) for the target column
