@@ -1615,8 +1615,6 @@ def extract_sequences(
     if data.is_empty():
         return pl.DataFrame(schema=schema)
 
-    print(f"[INFO] {data.shape = }")
-
     raw_sequences = data.group_by("sequenceId", maintain_order=True).agg(
         [pl.col(c) for c in columns]
     )
@@ -1643,7 +1641,6 @@ def extract_sequences(
                 ] + subseqs[subsequence_id]
                 assert len(row) == (seq_length + 5), f"{row = }"
                 rows.append(row)
-    print(f"[INFO] {len(rows) = }")
 
     sequences = pl.DataFrame(
         rows,
