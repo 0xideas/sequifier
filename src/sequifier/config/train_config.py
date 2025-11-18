@@ -308,7 +308,7 @@ class ModelSpecModel(BaseModel):
     nhead: int
     dim_feedforward: int
     nlayers: int
-    inference_size: int
+    prediction_length: int
 
     @validator("d_model_by_column")
     def validate_d_model_by_column(cls, v, values):

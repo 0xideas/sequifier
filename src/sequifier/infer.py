@@ -171,7 +171,7 @@ def infer_worker(
             config.target_column_types,
             config.sample_from_distribution_columns,
             config.infer_with_dropout,
-            config.inference_size,
+            config.prediction_length,
             config.inference_batch_size,
             config.device,
             args_config=args_config,
@@ -225,7 +225,7 @@ def infer_embedding(
             `torch.dtype`.
     """
     for data_id, data in enumerate(dataset):
-        inference_size = inferer.inference_size
+        prediction_length = inferer.prediction_length
 
         # Step 1: Get embeddings and base position/ID data
         if config.read_format in ["parquet", "csv"]:
@@ -266,7 +266,9 @@ def infer_embedding(
 
         # Step 2: Calculate absolute positions and repeat IDs
         # (e.g., for seq_len=50, inf_size=5, offsets are [45, 46, 47, 48, 49])
-        base_offsets = np.arange(config.seq_length - inference_size, config.seq_length)
+        base_offsets = np.arange(
+            config.seq_length - prediction_length, config.seq_length
+        )
 
         # Tile these offsets for each sample in the batch
         position_offsets_tiled = np.tile(
@@ -275,14 +277,16 @@ def infer_embedding(
 
         # Repeat the base start position for each of the N embedding outputs
         base_positions_repeated = np.repeat(
-            item_positions_for_preds_base, inference_size
+            item_positions_for_preds_base, prediction_length
         )
 
         # The final position is the start + the relative offset within the sequence
         final_positions = base_positions_repeated + position_offsets_tiled
 
-        sequence_ids_repeated = np.repeat(sequence_ids_for_preds, inference_size)
-        subsequence_ids_repeated = np.repeat(subsequence_ids_for_preds, inference_size)
+        sequence_ids_repeated = np.repeat(sequence_ids_for_preds, prediction_length)
+        subsequence_ids_repeated = np.repeat(
+            subsequence_ids_for_preds, prediction_length
+        )
 
         # Step 3: Build the final DataFrame
         embeddings_df = pl.DataFrame(
@@ -383,26 +387,26 @@ def infer_generative(
                     + config.seq_length
                 )
 
-                inference_size = inferer.inference_size
+                prediction_length = inferer.prediction_length
 
-                # Expand IDs and positions to match model output shape (batch_size * inference_size)
+                # Expand IDs and positions to match model output shape (batch_size * prediction_length)
                 sequence_ids_for_preds = np.repeat(
-                    sequence_ids_for_preds_base, inference_size
+                    sequence_ids_for_preds_base, prediction_length
                 )
 
                 item_positions_repeated = np.repeat(
-                    item_positions_for_preds_base, inference_size
+                    item_positions_for_preds_base, prediction_length
                 )
                 position_offsets = np.tile(
-                    np.arange(-inference_size + 1, 1),
+                    np.arange(-prediction_length + 1, 1),
                     len(item_positions_for_preds_base),
                 )
                 item_positions_for_preds = item_positions_repeated + position_offsets
 
             else:
                 assert (
-                    inferer.inference_size == 1
-                ), f"{inferer.inference_size = } != 1, is not allowed for autoregressive inference"
+                    inferer.prediction_length == 1
+                ), f"{inferer.prediction_length = } != 1, is not allowed for autoregressive inference"
                 if config.autoregression_extra_steps is not None:
                     data = expand_data_by_autoregression(
                         data,
@@ -426,29 +430,29 @@ def infer_generative(
                 else config.autoregression_extra_steps
             )
 
-            # Pass inference_size to get_probs_preds_pt
+            # Pass prediction_length to get_probs_preds_pt
             probs, preds = get_probs_preds_pt(
                 config, inferer, sequences_dict, extra_steps
             )
 
-            inference_size = inferer.inference_size  # Get inference_size
+            prediction_length = inferer.prediction_length  # Get prediction_length
 
             if extra_steps == 0:
-                # Non-autoregressive path: Apply inference_size logic
+                # Non-autoregressive path: Apply prediction_length logic
                 sequence_ids_for_preds_base = sequence_ids_tensor.numpy()
                 item_positions_for_preds_base = (
                     start_positions_tensor.numpy() + config.seq_length
                 )
 
                 sequence_ids_for_preds = np.repeat(
-                    sequence_ids_for_preds_base, inference_size
+                    sequence_ids_for_preds_base, prediction_length
                 )
 
                 item_positions_repeated = np.repeat(
-                    item_positions_for_preds_base, inference_size
+                    item_positions_for_preds_base, prediction_length
                 )
                 position_offsets = np.tile(
-                    np.arange(-inference_size + 1, 1),
+                    np.arange(-prediction_length + 1, 1),
                     len(item_positions_for_preds_base),
                 )
                 item_positions_for_preds = item_positions_repeated + position_offsets
@@ -1193,7 +1197,7 @@ class Inferer:
         target_column_types: dict[str, str],
         sample_from_distribution_columns: Optional[list[str]],
         infer_with_dropout: bool,
-        inference_size: int,
+        prediction_length: int,
         inference_batch_size: int,
         device: str,
         args_config: dict[str, Any],
@@ -1238,7 +1242,7 @@ class Inferer:
         self.target_column_types = target_column_types
         self.sample_from_distribution_columns = sample_from_distribution_columns
         self.infer_with_dropout = infer_with_dropout
-        self.inference_size = inference_size
+        self.prediction_length = prediction_length
         self.inference_batch_size = inference_batch_size
 
         self.inference_model_type = model_path.split(".")[-1]
@@ -1464,7 +1468,7 @@ class Inferer:
             outs = {
                 target_column: np.concatenate(
                     [out_sub[target_column] for out_sub in out_subs], axis=0
-                )[: size * self.inference_size, :]
+                )[: size * self.prediction_length, :]
                 for target_column in self.target_columns
             }
         elif self.inference_model_type == "pt":
@@ -1474,7 +1478,7 @@ class Inferer:
                 self.inference_model,
                 x_adjusted,
                 self.device,
-                size * self.inference_size,
+                size * self.prediction_length,
                 self.target_columns,
             )
         else:

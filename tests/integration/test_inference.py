@@ -201,14 +201,14 @@ def test_predictions_cat(predictions):
                 ), model_predictions
 
             if "inf" in model_name:
-                inference_size = 3
+                prediction_length = 3
                 n_test_rows = model_predictions.height
                 baseline_preds = predictions["model-categorical-1-best-3"]
                 n_baseline_rows = baseline_preds.height
 
-                # 3. Assert the number of rows is scaled by inference_size
-                assert n_test_rows == n_baseline_rows * inference_size, (
-                    f"Expected {n_baseline_rows * inference_size} rows for inference_size={inference_size}, "
+                # 3. Assert the number of rows is scaled by prediction_length
+                assert n_test_rows == n_baseline_rows * prediction_length, (
+                    f"Expected {n_baseline_rows * prediction_length} rows for prediction_length={prediction_length}, "
                     f"but found {n_test_rows} rows."
                 )
 
@@ -222,8 +222,10 @@ def test_predictions_cat(predictions):
 
                 assert baseline_rows_per_seq == test_rows_per_seq_groups.height
                 assert (
-                    test_rows_per_seq_groups["len"] == inference_size
-                ).all(), f"Test should have {inference_size} predictions per sequence"
+                    test_rows_per_seq_groups["len"] == prediction_length
+                ).all(), (
+                    f"Test should have {prediction_length} predictions per sequence"
+                )
 
 
 def test_probabilities(probabilities):

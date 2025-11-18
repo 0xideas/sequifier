@@ -126,7 +126,7 @@ class InfererModel(BaseModel):
     seed: int
     device: str
     seq_length: int
-    inference_size: int = 1
+    prediction_length: int = 1
     inference_batch_size: int
 
     distributed: bool = False
@@ -183,9 +183,9 @@ class InfererModel(BaseModel):
     def validate_autoregression(cls, v: bool, values):
         if v and values["model_type"] == "embedding":
             raise ValueError("Autoregression is not possible for embedding models")
-        if v and values["inference_size"] > 1:
+        if v and values["prediction_length"] > 1:
             raise ValueError(
-                "Autoregressive inference is not possible for models with inference_size > 1"
+                "Autoregressive inference is not possible for models with prediction_length > 1"
             )
         if v and not np.all(
             np.array(sorted(values["input_columns"]))

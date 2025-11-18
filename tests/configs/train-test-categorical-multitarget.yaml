@@ -28,7 +28,7 @@ model_spec:
   nhead: 2
   dim_feedforward: 10
   nlayers: 2
-  inference_size: 1
+  prediction_length: 1
 training_spec:
   device: cpu
   epochs: 3

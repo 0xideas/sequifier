@@ -42,7 +42,7 @@ model_spec:
   nhead: 16
   dim_feedforward: 128
   nlayers: 3
-  inference_size: 1
+  prediction_length: 1
 training_spec:
   device: cuda
   epochs: 1000

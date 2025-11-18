@@ -350,7 +350,7 @@ class TransformerModel(nn.Module):
         self.transformer_encoder = TransformerEncoder(
             encoder_layers, hparams.model_spec.nlayers, enable_nested_tensor=False
         )
-        self.inference_size = hparams.model_spec.inference_size
+        self.prediction_length = hparams.model_spec.prediction_length
 
         self.decoder = ModuleDict()
         self.softmax = ModuleDict()
@@ -610,7 +610,7 @@ class TransformerModel(nn.Module):
             The embedding tensor for the last token
             (batch_size, d_model).
         """
-        return self.forward_inner(src)[-self.inference_size :, :, :]
+        return self.forward_inner(src)[-self.prediction_length :, :, :]
 
     @beartype
     def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -691,7 +691,7 @@ class TransformerModel(nn.Module):
         output = self.forward_train(src)
         return {
             target_column: self.apply_softmax(
-                target_column, out[-self.inference_size :, :, :]
+                target_column, out[-self.prediction_length :, :, :]
             )
             for target_column, out in output.items()
         }
