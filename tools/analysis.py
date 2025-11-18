@@ -19,15 +19,17 @@ def invert_normalization(values, target_column, selected_columns_statistics):
     return (values * (std - 1e-9)) + mean
 
 
-def load_column_attributes(ddconfig_path="configs/ddconfigs/data.json"):
-    with open(ddconfig_path, "r") as f:
-        dd_config = json.loads(f.read())
-    id_maps = dd_config["id_maps"]
-    selected_columns_statistics = dd_config["selected_columns_statistics"]
+def load_column_attributes(metadata_config_path="configs/metadata_configs/data.json"):
+    with open(metadata_config_path, "r") as f:
+        metadata_config = json.loads(f.read())
+    id_maps = metadata_config["id_maps"]
+    selected_columns_statistics = metadata_config["selected_columns_statistics"]
     return (selected_columns_statistics, id_maps)
 
 
-def load_ground_truth(path, ddconfig_path="configs/ddconfigs/data.json", load_col="0"):
+def load_ground_truth(
+    path, metadata_config_path="configs/metadata_configs/data.json", load_col="0"
+):
     y = pl.read_parquet(path)
     n_cols = y["inputCol"].n_unique()
     y = y.with_columns(group_id=pl.int_range(0, pl.count() // n_cols).repeat_by(n_cols))
@@ -36,7 +38,7 @@ def load_ground_truth(path, ddconfig_path="configs/ddconfigs/data.json", load_co
 
     y2["sequenceId"] = y["sequenceId"].values[::n_cols]
 
-    selected_columns_statistics, id_maps = load_column_attributes(ddconfig_path)
+    selected_columns_statistics, id_maps = load_column_attributes(metadata_config_path)
 
     id_maps_reversed = {k: {vv: kk for kk, vv in v.items()} for k, v in id_maps.items()}
 

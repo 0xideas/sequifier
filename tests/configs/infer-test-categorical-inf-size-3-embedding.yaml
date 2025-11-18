@@ -1,6 +1,6 @@
 project_path: tests/project_folder
 training_config_path: tests/configs/train-test-categorical-inf-size-3.yaml
-ddconfig_path: tests/project_folder/configs/ddconfigs/test-data-categorical-3.json
+metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-categorical-3.json
 model_type: embedding
 model_path: tests/project_folder/models/sequifier-model-categorical-3-inf-size-best-embedding-3.pt
 data_path: tests/project_folder/data/test-data-categorical-3-split2

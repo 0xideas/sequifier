@@ -33,7 +33,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
 
     This function orchestrates the inference process. It loads the main
     inference configuration, retrieves necessary metadata like ID maps and
-    column statistics from a `ddconfig` file (if required for mapping or
+    column statistics from a `metadata_config` file (if required for mapping or
     normalization), and then delegates the core work to the `infer_worker`
     function.
 
@@ -52,14 +52,16 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     config = load_inferer_config(config_path, args_config, args.on_unprocessed)
 
     if config.map_to_id or (len(config.real_columns) > 0):
-        assert config.ddconfig_path is not None, (
-            "If you want to map to id, you need to provide a file path to a json that contains: {{'id_maps':{...}}} to ddconfig_path"
+        assert config.metadata_config_path is not None, (
+            "If you want to map to id, you need to provide a file path to a json that contains: {{'id_maps':{...}}} to metadata_config_path"
             "\nIf you have real columns in the data, you need to provide a json that contains: {{'selected_columns_statistics':{COL_NAME:{'std':..., 'mean':...}}}}"
         )
-        with open(normalize_path(config.ddconfig_path, config.project_path), "r") as f:
-            dd_config = json.loads(f.read())
-            id_maps = dd_config["id_maps"]
-            selected_columns_statistics = dd_config["selected_columns_statistics"]
+        with open(
+            normalize_path(config.metadata_config_path, config.project_path), "r"
+        ) as f:
+            metadata_config = json.loads(f.read())
+            id_maps = metadata_config["id_maps"]
+            selected_columns_statistics = metadata_config["selected_columns_statistics"]
     else:
         id_maps = None
         selected_columns_statistics = {}

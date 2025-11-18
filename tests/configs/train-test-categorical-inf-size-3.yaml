@@ -1,7 +1,7 @@
 project_path: tests/project_folder
 model_name: model-categorical-3-inf-size
 read_format: pt
-ddconfig_path: configs/ddconfigs/test-data-categorical-3.json
+metadata_config_path: configs/metadata_configs/test-data-categorical-3.json
 
 input_columns: [itemId, sup1, sup2]
 target_columns: [itemId, sup1, sup2]

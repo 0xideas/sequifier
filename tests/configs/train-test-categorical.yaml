@@ -1,7 +1,7 @@
 project_path: tests/project_folder
 model_name: default
 read_format: pt
-ddconfig_path: configs/ddconfigs/test-data-categorical-5.json
+metadata_config_path: configs/metadata_configs/test-data-categorical-5.json
 
 input_columns: null
 target_columns: [itemId]

@@ -21,7 +21,7 @@ max_rows: null
 train_config_string = """project_path: .
 model_name: default
 read_format: parquet
-ddconfig_path: PLEASE FILL
+metadata_config_path: PLEASE FILL
 
 input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
 target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
@@ -64,7 +64,7 @@ training_spec:
 """
 
 infer_config_string = """project_path: .
-ddconfig_path: PLEASE FILL
+metadata_config_path: PLEASE FILL
 model_type: PLEASE_FILL # generative or embedding
 model_path: PLEASE FILL
 data_path: PLEASE FILL

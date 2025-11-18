@@ -120,17 +120,17 @@ def load_train_config(
     config_values.update(args_config)
 
     if not on_unprocessed:
-        ddconfig_path = config_values.get("ddconfig_path")
+        metadata_config_path = config_values.get("metadata_config_path")
 
         with open(
-            normalize_path(ddconfig_path, config_values["project_path"]), "r"
+            normalize_path(metadata_config_path, config_values["project_path"]), "r"
         ) as f:
-            dd_config = json.loads(f.read())
+            metadata_config = json.loads(f.read())
 
-        split_paths = dd_config["split_paths"]
+        split_paths = metadata_config["split_paths"]
 
         config_values["column_types"] = config_values.get(
-            "column_types", dd_config["column_types"]
+            "column_types", metadata_config["column_types"]
         )
 
         if config_values["input_columns"] is None:
@@ -138,12 +138,12 @@ def load_train_config(
 
         config_values["categorical_columns"] = [
             col
-            for col, type_ in dd_config["column_types"].items()
+            for col, type_ in metadata_config["column_types"].items()
             if "int" in type_.lower() and col in config_values["input_columns"]
         ]
         config_values["real_columns"] = [
             col
-            for col, type_ in dd_config["column_types"].items()
+            for col, type_ in metadata_config["column_types"].items()
             if "float" in type_.lower() and col in config_values["input_columns"]
         ]
         assert (
@@ -151,7 +151,7 @@ def load_train_config(
             > 0
         )
         config_values["n_classes"] = config_values.get(
-            "n_classes", dd_config["n_classes"]
+            "n_classes", metadata_config["n_classes"]
         )
         config_values["training_data_path"] = normalize_path(
             config_values.get("training_data_path", split_paths[0]),
@@ -165,7 +165,7 @@ def load_train_config(
             config_values["project_path"],
         )
 
-        config_values["id_maps"] = dd_config["id_maps"]
+        config_values["id_maps"] = metadata_config["id_maps"]
 
     return TrainModel(**config_values)
 
@@ -324,7 +324,7 @@ class TrainModel(BaseModel):
 
     Attributes:
         project_path: The path to the sequifier project directory.
-        ddconfig_path: The path to the data-driven configuration file.
+        metadata_config_path: The path to the data-driven configuration file.
         model_name: The name of the model being trained.
         training_data_path: The path to the training data.
         validation_data_path: The path to the validation data.
@@ -350,7 +350,7 @@ class TrainModel(BaseModel):
     """
 
     project_path: str
-    ddconfig_path: str
+    metadata_config_path: str
     model_name: str
     training_data_path: str
     validation_data_path: str

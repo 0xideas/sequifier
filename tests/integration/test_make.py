@@ -66,8 +66,8 @@ def adapt_configs(config_strings):
                 "project_path: .", f"project_path: {test_project_name}"
             )
             .replace(
-                "ddconfig_path: PLEASE FILL",
-                f"ddconfig_path: {test_project_name}/configs/ddconfigs/test-data-categorical-1.json",
+                "metadata_config_path: PLEASE FILL",
+                f"metadata_config_path: {test_project_name}/configs/metadata_configs/test-data-categorical-1.json",
             )
             .replace(
                 "export_generative_model: PLEASE FILL", "export_generative_model: true"
@@ -98,8 +98,8 @@ def adapt_configs(config_strings):
             )
             .replace("model_type: PLEASE_FILL", "model_type: generative")
             .replace(
-                "ddconfig_path: PLEASE FILL",
-                f"ddconfig_path: {test_project_name}/configs/ddconfigs/test-data-categorical-1.json",
+                "metadata_config_path: PLEASE FILL",
+                f"metadata_config_path: {test_project_name}/configs/metadata_configs/test-data-categorical-1.json",
             )
             .replace(
                 "model_path: PLEASE FILL",

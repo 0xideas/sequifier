@@ -34,11 +34,11 @@ def reconstruct_data(contents, cols):
     return data
 
 
-def apply_ddconfig_to_raw_data(data, ddconfig):
-    for col, id_map in ddconfig["id_maps"].items():
+def apply_metadata_config_to_raw_data(data, metadata_config):
+    for col, id_map in metadata_config["id_maps"].items():
         data = data.with_columns(pl.col(col).replace(id_map))
 
-    for col, stats in ddconfig["selected_columns_statistics"].items():
+    for col, stats in metadata_config["selected_columns_statistics"].items():
         std, mean = stats["std"], stats["mean"]
         data = data.with_columns(((pl.col(col) - mean) / (std + 1e-9)).alias(col))
 

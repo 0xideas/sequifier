@@ -30,15 +30,15 @@ def load_inferer_config(
     config_values.update(args_config)
 
     if not on_unprocessed:
-        ddconfig_path = config_values.get("ddconfig_path")
+        metadata_config_path = config_values.get("metadata_config_path")
 
         with open(
-            normalize_path(ddconfig_path, config_values["project_path"]), "r"
+            normalize_path(metadata_config_path, config_values["project_path"]), "r"
         ) as f:
-            dd_config = json.load(f)
+            metadata_config = json.load(f)
 
         config_values["column_types"] = config_values.get(
-            "column_types", dd_config["column_types"]
+            "column_types", metadata_config["column_types"]
         )
 
         if config_values["input_columns"] is None:
@@ -46,12 +46,12 @@ def load_inferer_config(
 
         config_values["categorical_columns"] = [
             col
-            for col, type_ in dd_config["column_types"].items()
+            for col, type_ in metadata_config["column_types"].items()
             if "int64" in type_.lower() and col in config_values["input_columns"]
         ]
         config_values["real_columns"] = [
             col
-            for col, type_ in dd_config["column_types"].items()
+            for col, type_ in metadata_config["column_types"].items()
             if "float64" in type_.lower() and col in config_values["input_columns"]
         ]
         assert (
@@ -61,7 +61,9 @@ def load_inferer_config(
         config_values["data_path"] = normalize_path(
             config_values.get(
                 "data_path",
-                dd_config["split_paths"][min(2, len(dd_config["split_paths"]) - 1)],
+                metadata_config["split_paths"][
+                    min(2, len(metadata_config["split_paths"]) - 1)
+                ],
             ),
             config_values["project_path"],
         )
@@ -74,7 +76,7 @@ class InfererModel(BaseModel):
 
     Attributes:
         project_path: The path to the sequifier project directory.
-        ddconfig_path: The path to the data-driven configuration file.
+        metadata_config_path: The path to the data-driven configuration file.
         model_path: The path to the trained model file(s).
         model_type: The type of model, either 'embedding' or 'generative'.
         data_path: The path to the data to be used for inference.
@@ -104,7 +106,7 @@ class InfererModel(BaseModel):
     """
 
     project_path: str
-    ddconfig_path: str
+    metadata_config_path: str
     model_path: Union[str, list[str]]
     model_type: str
     data_path: str

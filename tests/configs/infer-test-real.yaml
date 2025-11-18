@@ -1,6 +1,6 @@
 project_path: tests/project_folder
 training_config_path: tests/configs/train-test-real.yaml
-ddconfig_path: configs/ddconfigs/test-data-real-5.json
+metadata_config_path: configs/metadata_configs/test-data-real-5.json
 model_type: generative
 model_path: models/sequifier-model-real-5-best-3.pt
 data_path: data/test-data-real5-split2.csv

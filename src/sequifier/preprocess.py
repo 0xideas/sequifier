@@ -615,7 +615,7 @@ class Preprocessor:
 
         Saves metadata such as class counts, ID mappings, split paths,
         column types, and numerical statistics to a JSON file. This file is
-        saved in the `configs/ddconfigs/` directory, named after the
+        saved in the `configs/metadata_configs/` directory, named after the
         `data_name_root`. This metadata is essential for initializing the
         model and data loaders during training.
 
@@ -638,12 +638,16 @@ class Preprocessor:
             "selected_columns_statistics": selected_columns_statistics,
         }
         os.makedirs(
-            os.path.join(self.project_path, "configs", "ddconfigs"), exist_ok=True
+            os.path.join(self.project_path, "configs", "metadata_configs"),
+            exist_ok=True,
         )
 
         with open(
             os.path.join(
-                self.project_path, "configs", "ddconfigs", f"{self.data_name_root}.json"
+                self.project_path,
+                "configs",
+                "metadata_configs",
+                f"{self.data_name_root}.json",
             ),
             "w",
         ) as f:

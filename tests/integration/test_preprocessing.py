@@ -8,24 +8,25 @@ import torch
 
 
 @pytest.fixture()
-def dd_configs(run_preprocessing, project_path):
-    dd_configs = {}
+def metadata_configs(run_preprocessing, project_path):
+    metadata_configs = {}
     for data_number in [1, 3, 5, 50]:
         for variant in ["categorical", "real"]:
             file_name = f"test-data-{variant}-{data_number}.json"
             with open(
-                os.path.join(project_path, "configs", "ddconfigs", file_name), "r"
+                os.path.join(project_path, "configs", "metadata_configs", file_name),
+                "r",
             ) as f:
                 dd_conf = json.loads(f.read())
-            dd_configs[file_name] = dd_conf
-    return dd_configs
+            metadata_configs[file_name] = dd_conf
+    return metadata_configs
 
 
-def test_dd_config(dd_configs):
-    for file_name, dd_config in dd_configs.items():
-        print(f"Verifying dd_config for: {file_name}")
+def test_metadata_config(metadata_configs):
+    for file_name, metadata_config in metadata_configs.items():
+        print(f"Verifying metadata_config for: {file_name}")
         assert np.all(
-            np.array(list(dd_config.keys()))
+            np.array(list(metadata_config.keys()))
             == np.array(
                 [
                     "n_classes",
@@ -35,30 +36,34 @@ def test_dd_config(dd_configs):
                     "selected_columns_statistics",
                 ]
             )
-        ), list(dd_config.keys())
+        ), list(metadata_config.keys())
 
-        assert dd_config["split_paths"][0].endswith("split0.parquet") or dd_config[
-            "split_paths"
-        ][0].endswith("split0")
+        assert metadata_config["split_paths"][0].endswith(
+            "split0.parquet"
+        ) or metadata_config["split_paths"][0].endswith("split0")
 
-        if "itemId" in dd_config["n_classes"]:
-            assert len(dd_config["id_maps"]["itemId"]) == 30
-            assert dd_config["n_classes"]["itemId"] == 31
+        if "itemId" in metadata_config["n_classes"]:
+            assert len(metadata_config["id_maps"]["itemId"]) == 30
+            assert metadata_config["n_classes"]["itemId"] == 31
 
-            id_map_keys = np.array(sorted(list(dd_config["id_maps"]["itemId"].keys())))
+            id_map_keys = np.array(
+                sorted(list(metadata_config["id_maps"]["itemId"].keys()))
+            )
             # assert False, np.array([str(x) for x in range(100, 130)])
             assert np.all(id_map_keys == np.array([str(x) for x in range(100, 130)]))
 
-        for col in dd_config["id_maps"].keys():
-            id_map_values = np.array(sorted(list(dd_config["id_maps"][col].values())))
+        for col in metadata_config["id_maps"].keys():
+            id_map_values = np.array(
+                sorted(list(metadata_config["id_maps"][col].values()))
+            )
             # assert False, id_map_values
             assert np.all(
                 id_map_values == np.arange(1, len(id_map_values) + 1)
             ), id_map_values
 
-        if "itemValue" in dd_config["selected_columns_statistics"]:
-            assert "std" in dd_config["selected_columns_statistics"]["itemValue"]
-            assert "mean" in dd_config["selected_columns_statistics"]["itemValue"]
+        if "itemValue" in metadata_config["selected_columns_statistics"]:
+            assert "std" in metadata_config["selected_columns_statistics"]["itemValue"]
+            assert "mean" in metadata_config["selected_columns_statistics"]["itemValue"]
 
 
 def load_pt_outputs(path):
@@ -259,29 +264,29 @@ def test_preprocessed_data_exact(run_preprocessing):
     )
 
 
-def test_preprocessing_interrupted(run_preprocessing, dd_configs):
+def test_preprocessing_interrupted(run_preprocessing, metadata_configs):
     with open(
         os.path.join(
             "tests",
             "project_folder",
             "configs",
-            "ddconfigs",
+            "metadata_configs",
             "test-data-categorical-1-interrupted.json",
         ),
         "r",
     ) as f:
-        interrupted_ddconfig = json.loads(f.read())
-    baseline_ddconfig = dd_configs["test-data-categorical-1.json"]
+        interrupted_metadata_config = json.loads(f.read())
+    baseline_metadata_config = metadata_configs["test-data-categorical-1.json"]
 
-    interrupted_ddconfig_adapted = interrupted_ddconfig
-    interrupted_ddconfig_adapted["split_paths"] = [
+    interrupted_metadata_config_adapted = interrupted_metadata_config
+    interrupted_metadata_config_adapted["split_paths"] = [
         path.replace("categorical-1-interrupted", "categorical-1")
-        for path in interrupted_ddconfig_adapted["split_paths"]
+        for path in interrupted_metadata_config_adapted["split_paths"]
     ]
 
-    assert str(interrupted_ddconfig_adapted) == str(
-        baseline_ddconfig
-    ), f"{interrupted_ddconfig_adapted = } != {baseline_ddconfig = }"
+    assert str(interrupted_metadata_config_adapted) == str(
+        baseline_metadata_config
+    ), f"{interrupted_metadata_config_adapted = } != {baseline_metadata_config = }"
 
     baseline_output = {
         split: load_pt_outputs(
