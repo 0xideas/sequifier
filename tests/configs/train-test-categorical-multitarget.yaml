@@ -56,5 +56,5 @@ training_spec:
     anneal_strategy: cos
     total_steps: 100
     three_phase: false
-  scheduler_interval: 'batch'
+  scheduler_step_on: 'batch'
   continue_training: false
