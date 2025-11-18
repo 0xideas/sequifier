@@ -76,7 +76,7 @@ def setup_parser() -> ArgumentParser:
     parser_infer = subparsers.add_parser("infer", help="Run the inference step")
 
     parser_hyperparameter_search = subparsers.add_parser(
-        "hyperparametersearch", help="Run hyperparamter search"
+        "hyperparameter-search", help="Run hyperparamter search"
     )
 
     for subparser in [
@@ -117,7 +117,7 @@ def main() -> None:
     parser = setup_parser()
     args = parser.parse_args()
 
-    if args.command != "hyperparametersearch":
+    if args.command != "hyperparameter-search":
         args_config = build_args_config(args)
 
         if args.command == "make":
@@ -128,7 +128,7 @@ def main() -> None:
             train(args, args_config)
         elif args.command == "infer":
             infer(args, args_config)
-    elif args.command == "hyperparametersearch":
+    elif args.command == "hyperparameter-search":
         hyperparameter_search(args.config_path, args.on_unprocessed)
 
 

@@ -29,7 +29,7 @@ training_spec:
   batch_size: 5
   log_interval: 200
   class_share_log_columns: ["itemId"]
-  lr: 0.003
+  learning_rate: 0.003
   accumulation_steps: 2
   dropout: 0.3
   criterion:

@@ -193,7 +193,7 @@ class TrainingSpecModel(BaseModel):
         early_stopping_epochs: Number of epochs to wait for validation loss improvement before stopping.
         save_interval_epochs: The interval in epochs for checkpointing the model.
         batch_size: The training batch size.
-        lr: The learning rate.
+        learning_rate: The learning rate.
         criterion: A dictionary mapping each target column to a loss function.
         class_weights: A dictionary mapping categorical target columns to a list of class weights.
         accumulation_steps: The number of gradient accumulation steps.
@@ -222,7 +222,7 @@ class TrainingSpecModel(BaseModel):
     early_stopping_epochs: Optional[int] = None
     save_interval_epochs: int
     batch_size: int
-    lr: float
+    learning_rate: float
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
     accumulation_steps: Optional[int] = None

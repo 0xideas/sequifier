@@ -887,10 +887,10 @@ class TransformerModel(nn.Module):
 
             total_loss += loss.item()
             if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
-                lr = self.scheduler.get_last_lr()[0]
+                learning_rate = self.scheduler.get_last_lr()[0]
                 s_per_batch = (time.time() - start_time) / self.log_interval
                 self.log_file.write(
-                    f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(total_loss)} | LR: {format_number(lr)} | S/Batch {format_number(s_per_batch)}"
+                    f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(total_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
                 )
                 total_loss = 0.0
                 start_time = time.time()
@@ -1348,7 +1348,7 @@ class TransformerModel(nn.Module):
         """
         optimizer_class = get_optimizer_class(self.hparams.training_spec.optimizer.name)
         return optimizer_class(
-            self.parameters(), lr=self.hparams.training_spec.lr, **kwargs
+            self.parameters(), lr=self.hparams.training_spec.learning_rate, **kwargs
         )
 
     @beartype
@@ -1468,11 +1468,11 @@ class TransformerModel(nn.Module):
                     used for class share logging.
         """
         if self.rank == 0:
-            lr = self.optimizer.state_dict()["param_groups"][0]["lr"]
+            learning_rate = self.optimizer.state_dict()["param_groups"][0]["lr"]
 
             self.log_file.write("-" * 89)
             self.log_file.write(
-                f"[INFO] Validation | Epoch: {epoch:3d} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(lr)}"
+                f"[INFO] Validation | Epoch: {epoch:3d} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(learning_rate)}"
             )
 
             if len(total_losses) > 1:

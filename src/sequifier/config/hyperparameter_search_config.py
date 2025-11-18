@@ -107,7 +107,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         early_stopping_epochs: Number of epochs for early stopping.
         save_interval_epochs: Interval in epochs for saving model checkpoints.
         batch_size: A list of possible batch sizes.
-        lr: A list of possible learning rates.
+        learning_rate: A list of possible learning rates.
         criterion: A dictionary mapping target columns to loss functions.
         class_weights: Optional dictionary mapping columns to class weights.
         accumulation_steps: A list of possible gradient accumulation steps.
@@ -129,7 +129,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     early_stopping_epochs: Optional[int] = None
     save_interval_epochs: int
     batch_size: list[int]
-    lr: list[float]
+    learning_rate: list[float]
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
     accumulation_steps: list[int]
@@ -172,8 +172,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     @classmethod
     def validate_model_spec(cls, v, values):
         assert (
-            len(values["lr"]) == len(v)
-        ), "lr and scheduler must have the same number of candidate values, that are paired"
+            len(values["learning_rate"]) == len(v)
+        ), "learning_rate and scheduler must have the same number of candidate values, that are paired"
 
         assert (
             len(values["epochs"]) == len(v)
@@ -191,32 +191,32 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             A TrainingSpecModel instance populated with a randomly sampled set of
             hyperparameters.
         """
-        lr_and_scheduler_index = np.random.randint(len(self.lr))
+        learning_rate_and_scheduler_index = np.random.randint(len(self.learning_rate))
         optimizer_index = np.random.randint(len(self.optimizer))
         batch_size = np.random.choice(self.batch_size)
         dropout = np.random.choice(self.dropout)
         accumulation_steps = np.random.choice(self.accumulation_steps)
         optimizer = self.optimizer[optimizer_index]
-        lr = self.lr[lr_and_scheduler_index]
+        learning_rate = self.learning_rate[learning_rate_and_scheduler_index]
 
-        print(f"{lr = } - {batch_size = } - {dropout = } - {optimizer = }")
+        print(f"{learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }")
 
         return TrainingSpecModel(
             device=self.device,
-            epochs=self.epochs[lr_and_scheduler_index],
+            epochs=self.epochs[learning_rate_and_scheduler_index],
             log_interval=self.log_interval,
             class_share_log_columns=self.class_share_log_columns,
             early_stopping_epochs=self.early_stopping_epochs,
             save_interval_epochs=self.save_interval_epochs,
             batch_size=batch_size,
-            lr=lr,
+            learning_rate=learning_rate,
             criterion=self.criterion,
             class_weights=self.class_weights,
             accumulation_steps=accumulation_steps,
             dropout=dropout,
             loss_weights=self.loss_weights,
             optimizer=optimizer,
-            scheduler=self.scheduler[lr_and_scheduler_index],
+            scheduler=self.scheduler[learning_rate_and_scheduler_index],
         )
 
     def grid_sample(self, i):
@@ -234,37 +234,41 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         """
         hyperparameter_combinations = list(
             product(
-                np.arange(len(self.lr)),
+                np.arange(len(self.learning_rate)),
                 self.batch_size,
                 self.dropout,
                 self.optimizer,
                 self.accumulation_steps,
             )
         )
-        lr_and_scheduler_index, batch_size, dropout, optimizer, accumulation_steps = (
-            hyperparameter_combinations[i]
-        )
+        (
+            learning_rate_and_scheduler_index,
+            batch_size,
+            dropout,
+            optimizer,
+            accumulation_steps,
+        ) = hyperparameter_combinations[i]
 
-        lr = self.lr[lr_and_scheduler_index]
+        learning_rate = self.learning_rate[learning_rate_and_scheduler_index]
 
-        print(f"{lr = } - {batch_size = } - {dropout = } - {optimizer = }")
+        print(f"{learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }")
 
         return TrainingSpecModel(
             device=self.device,
-            epochs=self.epochs[lr_and_scheduler_index],
+            epochs=self.epochs[learning_rate_and_scheduler_index],
             log_interval=self.log_interval,
             class_share_log_columns=self.class_share_log_columns,
             early_stopping_epochs=self.early_stopping_epochs,
             save_interval_epochs=self.save_interval_epochs,
             batch_size=batch_size,
-            lr=lr,
+            learning_rate=learning_rate,
             criterion=self.criterion,
             class_weights=self.class_weights,
             accumulation_steps=accumulation_steps,
             dropout=dropout,
             loss_weights=self.loss_weights,
             optimizer=optimizer,
-            scheduler=self.scheduler[lr_and_scheduler_index],
+            scheduler=self.scheduler[learning_rate_and_scheduler_index],
         )
 
     def n_combinations(self):
@@ -277,7 +281,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             The total number of possible hyperparameter combinations.
         """
         return (
-            len(self.lr)
+            len(self.learning_rate)
             * len(self.batch_size)
             * len(self.dropout)
             * len(self.optimizer)

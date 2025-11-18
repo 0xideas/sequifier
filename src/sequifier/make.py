@@ -49,7 +49,7 @@ training_spec:
   save_interval_epochs: 10
   batch_size: 100
   log_interval: 10
-  lr: 0.0001
+  learning_rate: 0.0001
   accumulation_steps: 1
   dropout: 0.2
   criterion:

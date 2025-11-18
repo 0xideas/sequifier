@@ -37,7 +37,7 @@ training_spec:
   epochs: 100 # number of epochs
   save_interval_epochs: 50 # frequency of checkpointing
   batch_size: 50 # batch size for training
-  lr: 0.01  # learning rate
+  learning_rate: 0.01  # learning rate
   dropout: 0.1 # dropout rate during training
   criterion: "CrossEntropyLoss" # loss function, can be any in torch.nn
   optimizer:
