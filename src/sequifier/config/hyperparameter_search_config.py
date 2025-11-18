@@ -464,6 +464,8 @@ class HyperparameterSearch(BaseModel):
     model_hyperparameter_sampling: ModelSpecHyperparameterSampling
     training_hyperparameter_sampling: TrainingSpecHyperparameterSampling
 
+    override_input: bool = False
+
     @field_validator("column_types")
     @classmethod
     def validate_model_spec(cls, v, info):

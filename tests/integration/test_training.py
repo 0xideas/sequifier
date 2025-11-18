@@ -3,7 +3,9 @@ import os
 import numpy as np
 
 
-def test_checkpoint_files_exists(run_training, project_root):
+def test_checkpoint_files_exists(
+    run_training, run_hp_search_sample, run_hp_search_grid, project_root
+):
     found_items = np.array(
         sorted(list(os.listdir(os.path.join(project_root, "checkpoints"))))
     )

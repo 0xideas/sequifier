@@ -11,6 +11,8 @@ sequifier preprocess --config-path=tests/configs/preprocess-test-multi-file.yaml
 sequifier preprocess --config-path=tests/configs/preprocess-test-categorical-interrupted.yaml
 sequifier preprocess --config-path=tests/configs/preprocess-test-categorical-exact.yaml
 sequifier preprocess --config-path=tests/configs/preprocess-test-categorical-exact-pt.yaml
+sequifier hyperparameter-search --config-path=tests/configs/hyperparameter-search-grid.yaml
+sequifier hyperparameter-search --config-path=tests/configs/hyperparameter-search-sample.yaml
 sequifier train --config-path=tests/configs/train-test-categorical.yaml --metadata-config-path=configs/metadata_configs/test-data-categorical-1.json --model-name=model-categorical-1 --input-columns=itemId
 sequifier train --config-path=tests/configs/train-test-real.yaml --metadata-config-path=configs/metadata_configs/test-data-real-1.json --model-name=model-real-1 --input-columns=None
 sequifier train --config-path=tests/configs/train-test-categorical.yaml --metadata-config-path=configs/metadata_configs/test-data-categorical-3.json --model-name=model-categorical-3 --input-columns=itemId,sup1

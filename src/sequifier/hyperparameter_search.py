@@ -68,7 +68,9 @@ class HyperparameterSearcher:
         )
         self.start_run = self._get_start_run()
         self._initialize_log_file()
-        self.n_samples = self._calculate_n_samples()
+        self.n_samples = self._calculate_n_samples(
+            hyperparameter_search_config.override_input
+        )
 
     @beartype
     def _get_start_run(self) -> int:
@@ -116,7 +118,7 @@ class HyperparameterSearcher:
         )
 
     @beartype
-    def _calculate_n_samples(self) -> int:
+    def _calculate_n_samples(self, override_input: bool) -> int:
         """Calculates the total number of hyperparameter combinations to sample.
 
         Based on the `search_strategy` ('grid' or 'sample'), it either
@@ -139,19 +141,21 @@ class HyperparameterSearcher:
             n_samples = self.config.n_samples
             assert n_samples is not None
             if n_samples > self.config.n_combinations():
-                input(
-                    f"{n_samples} is above the number of combinations of hyperparameters. Press any key to continue with grid search or abort to reconfigure"
-                )
+                if not override_input:
+                    input(
+                        f"{n_samples} is above the number of combinations of hyperparameters. Press any key to continue with grid search or abort to reconfigure"
+                    )
                 n_samples = self.config.n_combinations()
                 self.config.search_strategy = "grid"
         elif self.config.search_strategy == "grid":
             n_samples = self.config.n_combinations()
-            input(
-                f"Found {n_samples} hyperparameter combinations. Please enter any key to confirm, or change search strategy to 'sample'"
-            )
+            if not override_input:
+                input(
+                    f"Found {n_samples} hyperparameter combinations. Please enter any key to confirm, or change search strategy to 'sample'"
+                )
         else:
             raise Exception(
-                f"search strategy {self.config.search_strategy} is not valid. Allowed values are 'grid' and 'sample'"
+                f"search strategy '{self.config.search_strategy}' is not valid. Allowed values are 'grid' and 'sample'"
             )
 
         assert n_samples is not None

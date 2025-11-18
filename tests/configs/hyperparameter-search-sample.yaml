@@ -1,6 +1,6 @@
 project_root: tests/project_folder
 metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-categorical-5.json
-hp_search_name: test-hp-search-sample3
+hp_search_name: test-hp-search-sample
 model_config_write_path: configs
 
 read_format: pt
@@ -33,10 +33,10 @@ model_hyperparameter_sampling:
 # Training Hyperparameter Search Space
 training_hyperparameter_sampling:
   device: cpu
-  epochs: [2, 3, 4]
+  epochs: [1,2]
   save_interval_epochs: 1
   batch_size: [5, 10]
-  learning_rate: [0.001, 0.01, 0.1]
+  learning_rate: [0.001, 0.01]
   criterion:
     itemId: CrossEntropyLoss
   accumulation_steps: [1]
@@ -50,8 +50,7 @@ training_hyperparameter_sampling:
     - name: StepLR
       step_size: 1
       gamma: 0.99
-    - name: StepLR
-      step_size: 1
-      gamma: 0.99
   log_interval: 5
   continue_training: false
+
+override_input: true

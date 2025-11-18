@@ -163,6 +163,14 @@ def remove_project_root_contents(project_root):
     time.sleep(1)
 
 
+@pytest.fixture(scope="session")
+def hp_search_configs():
+    return {
+        "grid": os.path.join("tests", "configs", "hyperparameter-search-grid.yaml"),
+        "sample": os.path.join("tests", "configs", "hyperparameter-search-sample.yaml"),
+    }
+
+
 def reformat_parameter(attr, param, type):
     if attr.endswith("_path"):
         if type == "linux->local":
@@ -192,6 +200,7 @@ def format_configs_locally(
     inference_config_path_categorical_autoregression,
     inference_config_path_cat_inf_size_1,
     inference_config_path_cat_inf_size_3,
+    hp_search_configs,
 ):
     from sys import platform
 
@@ -214,6 +223,8 @@ def format_configs_locally(
             inference_config_path_categorical_autoregression,
             inference_config_path_cat_inf_size_1,
             inference_config_path_cat_inf_size_3,
+            hp_search_configs["grid"],
+            hp_search_configs["sample"],
         ]
         for config_path in config_paths:
             with open(config_path, "r") as f:
@@ -376,6 +387,19 @@ def run_training(
     )
 
     shutil.copy(source_path, target_path)
+
+
+@pytest.fixture(scope="module")
+def run_hp_search(
+    project_root, hp_search_configs, format_configs_locally, run_preprocessing
+):
+    write_and_log(
+        f"sequifier hyperparameter-search --config-path={hp_search_configs['grid']}"
+    )
+
+    write_and_log(
+        f"sequifier hyperparameter-search --config-path={hp_search_configs['sample']}"
+    )
 
 
 @pytest.fixture(scope="session")
