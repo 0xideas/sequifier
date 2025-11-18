@@ -4,7 +4,7 @@ from typing import Optional
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, ValidationInfo, field_validator
 
 from sequifier.helpers import try_catch_excess_keys
 
@@ -64,26 +64,28 @@ class PreprocessorModel(BaseModel):
     read_format: str = "csv"
     write_format: str = "parquet"
     combine_into_single_file: bool = True
-    selected_columns: Optional[list[str]]
+    selected_columns: Optional[list[str]] = None
 
     split_ratios: list[float]
     seq_length: int
-    stride_by_split: Optional[list[int]]
-    max_rows: Optional[int]
+    stride_by_split: Optional[list[int]] = None
+    max_rows: Optional[int] = None
     seed: int
-    n_cores: Optional[int]
+    n_cores: Optional[int] = None
     batches_per_file: int = 1024
     process_by_file: bool = True
     continue_preprocessing: bool = False
     subsequence_start_mode: str = "distribute"
 
-    @validator("data_path", always=True)
+    @field_validator("data_path")
+    @classmethod
     def validate_data_path(cls, v: str) -> str:
         if not os.path.exists(v):
             raise ValueError(f"{v} does not exist")
         return v
 
-    @validator("read_format", "write_format", always=True)
+    @field_validator("read_format", "write_format")
+    @classmethod
     def validate_format(cls, v: str) -> str:
         supported_formats = ["csv", "parquet", "pt"]
         if v not in supported_formats:
@@ -92,9 +94,10 @@ class PreprocessorModel(BaseModel):
             )
         return v
 
-    @validator("combine_into_single_file", always=True)
-    def validate_format2(cls, v: bool, values: dict):
-        write_format = values.get("write_format")
+    @field_validator("combine_into_single_file")
+    @classmethod
+    def validate_format2(cls, v: bool, info: ValidationInfo):
+        write_format = info.data.get("write_format")
 
         # Existing check: 'pt' format cannot be combined
         if write_format == "pt" and v is True:
@@ -111,7 +114,8 @@ class PreprocessorModel(BaseModel):
 
         return v
 
-    @validator("split_ratios")
+    @field_validator("split_ratios")
+    @classmethod
     def validate_proportions_sum(cls, v: list[float]) -> list[float]:
         if not np.isclose(np.sum(v), 1.0):
             raise ValueError(f"split_ratios must sum to 1.0, but sums to {np.sum(v)}")
@@ -119,9 +123,12 @@ class PreprocessorModel(BaseModel):
             raise ValueError(f"All split_ratios must be positive: {v}")
         return v
 
-    @validator("stride_by_split", always=True)
-    def validate_step_sizes(cls, v: Optional[list[int]], values: dict) -> list[int]:
-        split_ratios = values.get("split_ratios")
+    @field_validator("stride_by_split")
+    @classmethod
+    def validate_step_sizes(
+        cls, v: Optional[list[int]], info: ValidationInfo
+    ) -> list[int]:
+        split_ratios = info.data.get("split_ratios")
         assert (
             split_ratios is not None
         ), "split_ratios must be set to validate stride_by_split"
@@ -137,21 +144,24 @@ class PreprocessorModel(BaseModel):
             raise ValueError(f"All stride_by_split must be positive integers: {v}")
         return v
 
-    @validator("batches_per_file")
+    @field_validator("batches_per_file")
+    @classmethod
     def validate_batches_per_file(cls, v: int) -> int:
         if v < 1:
             raise ValueError("batches_per_file must be a positive integer")
         return v
 
-    @validator("continue_preprocessing")
-    def validate_continue_preprocessing(cls, v: bool, values: dict) -> bool:
-        if v and values["data_path"].split(".") in ["csv", "parquet"]:
+    @field_validator("continue_preprocessing")
+    @classmethod
+    def validate_continue_preprocessing(cls, v: bool, info: ValidationInfo) -> bool:
+        if v and info.data.get("data_path").split(".") in ["csv", "parquet"]:
             raise ValueError(
                 "'continue_preprocessing' can only be set to true for folder inputs, not single files "
             )
         return v
 
-    @validator("subsequence_start_mode")
+    @field_validator("subsequence_start_mode")
+    @classmethod
     def validate_subsequence_start_mode(cls, v: str) -> str:
         if v not in ["distribute", "exact"]:
             raise ValueError(

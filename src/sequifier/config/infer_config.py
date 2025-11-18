@@ -5,7 +5,7 @@ from typing import Optional, Union
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from sequifier.helpers import normalize_path, try_catch_excess_keys
 
@@ -143,7 +143,8 @@ class InfererModel(BaseModel):
     autoregression: bool = Field(default=False)
     autoregression_extra_steps: Optional[int] = Field(default=None)
 
-    @validator("model_type")
+    @field_validator("model_type")
+    @classmethod
     def validate_model_type(cls, v: str) -> str:
         assert v in [
             "embedding",
@@ -151,31 +152,34 @@ class InfererModel(BaseModel):
         ], f"model_type must be one of 'embedding' and 'generative, {v} isn't"
         return v
 
-    @validator("output_probabilities")
-    def validate_output_probabilities(cls, v: str, values) -> str:
-        if v and values["model_type"] == "embedding":
+    @field_validator("output_probabilities")
+    @classmethod
+    def validate_output_probabilities(cls, v: str, info: ValidationInfo) -> str:
+        if v and info.data.get("model_type") == "embedding":
             raise ValueError(
                 "For embedding models, 'output_probabilities' must be set to false"
             )
         return v
 
-    @validator("training_config_path")
+    @field_validator("training_config_path")
+    @classmethod
     def validate_training_config_path(cls, v: str) -> str:
         if not (v is None or os.path.exists(v)):
             raise ValueError(f"{v} does not exist")
         return v
 
-    @validator("autoregression_extra_steps")
-    def validate_autoregression_extra_steps(cls, v: bool, values) -> bool:
+    @field_validator("autoregression_extra_steps")
+    @classmethod
+    def validate_autoregression_extra_steps(cls, v: bool, info: ValidationInfo) -> bool:
         if v is not None and v > 0:
-            if not values["autoregression"]:
+            if not info.data.get("autoregression"):
                 raise ValueError(
-                    f"'autoregression_extra_steps' can only be larger than 0 if 'autoregression' is true: {values['autoregression']}"
+                    f"'autoregression_extra_steps' can only be larger than 0 if 'autoregression' is true: {info.data.get('autoregression')}"
                 )
 
             if not np.all(
-                np.array(sorted(values["input_columns"]))
-                == np.array(sorted(values["target_columns"]))
+                np.array(sorted(info.data.get("input_columns")))
+                == np.array(sorted(info.data.get("target_columns")))
             ):
                 raise ValueError(
                     "'autoregression_extra_steps' can only be larger than 0 if 'input_columns' and 'target_columns' are identical"
@@ -183,67 +187,74 @@ class InfererModel(BaseModel):
 
         return v
 
-    @validator("autoregression")
-    def validate_autoregression(cls, v: bool, values):
-        if v and values["model_type"] == "embedding":
+    @field_validator("autoregression")
+    @classmethod
+    def validate_autoregression(cls, v: bool, info: ValidationInfo):
+        if v and info.data.get("model_type") == "embedding":
             raise ValueError("Autoregression is not possible for embedding models")
-        if v and values["prediction_length"] > 1:
+        if v and info.data.get("prediction_length") > 1:
             raise ValueError(
                 "Autoregressive inference is not possible for models with prediction_length > 1"
             )
         if v and not np.all(
-            np.array(sorted(values["input_columns"]))
-            == np.array(sorted(values["target_columns"]))
+            np.array(sorted(info.data.get("input_columns")))
+            == np.array(sorted(info.data.get("target_columns")))
         ):
             raise ValueError(
                 "Autoregressive inference with non-identical 'input_columns' and 'target_columns' is possible but should not be performed"
             )
         return v
 
-    @validator("data_path")
-    def validate_data_path(cls, v: str, values: dict) -> str:
+    @field_validator("data_path")
+    @classmethod
+    def validate_data_path(cls, v: str, info: ValidationInfo) -> str:
         if isinstance(v, str):
-            v2 = normalize_path(v, values["project_path"])
+            v2 = normalize_path(v, info.data.get("project_path"))
             if not os.path.exists(v2):
                 raise ValueError(f"{v2} does not exist")
         if isinstance(v, list):
             for vv in v:
-                v2 = normalize_path(v, values["project_path"])
+                v2 = normalize_path(v, info.data.get("project_path"))
                 if not os.path.exists(v2):
                     raise ValueError(f"{v2} does not exist")
         return v
 
-    @validator("read_format", "write_format")
+    @field_validator("read_format", "write_format")
+    @classmethod
     def validate_format(cls, v: str) -> str:
         if v not in ["csv", "parquet", "pt"]:
             raise ValueError("Currently only 'csv', 'parquet' and 'pt' are supported")
         return v
 
-    @validator("target_column_types")
-    def validate_target_column_types(cls, v: dict, values: dict) -> dict:
+    @field_validator("target_column_types")
+    @classmethod
+    def validate_target_column_types(cls, v: dict, info: ValidationInfo) -> dict:
         if not all(vv in ["categorical", "real"] for vv in v.values()):
             raise ValueError(
                 "Target column types must be either 'categorical' or 'real'"
             )
-        if list(v.keys()) != values.get("target_columns", []):
+        if list(v.keys()) != info.data.get("target_columns", []):
             raise ValueError(
                 "target_columns and target_column_types must contain the same keys in the same order"
             )
         return v
 
-    @validator("map_to_id")
-    def validate_map_to_id(cls, v: bool, values: dict) -> bool:
+    @field_validator("map_to_id")
+    @classmethod
+    def validate_map_to_id(cls, v: bool, info: ValidationInfo) -> bool:
         if v and not any(
-            vv == "categorical" for vv in values.get("target_column_types", {}).values()
+            vv == "categorical"
+            for vv in info.data.get("target_column_types", {}).values()
         ):
             raise ValueError(
                 "map_to_id can only be True if at least one target variable is categorical"
             )
         return v
 
-    @validator("distributed")
-    def validate_distributed_inference(cls, v: bool, values: dict) -> bool:
-        if v and values.get("read_format") != "pt":
+    @field_validator("distributed")
+    @classmethod
+    def validate_distributed_inference(cls, v: bool, info: ValidationInfo) -> bool:
+        if v and info.data.get("read_format") != "pt":
             raise ValueError(
                 "Distributed inference is only supported for preprocessed '.pt' files. Please set read_format to 'pt'."
             )

@@ -5,7 +5,7 @@ from typing import Any, Optional
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 from sequifier.helpers import normalize_path, try_catch_excess_keys
 
@@ -252,7 +252,8 @@ class TrainingSpecModel(BaseModel):
         self.validate_scheduler_config(kwargs["scheduler"], kwargs)
         self.scheduler = DotDict(kwargs["scheduler"])
 
-    @validator("criterion")
+    @field_validator("criterion")
+    @classmethod
     def validate_criterion(cls, v):
         for vv in v.values():
             if vv not in VALID_LOSS_FUNCTIONS:
@@ -261,7 +262,8 @@ class TrainingSpecModel(BaseModel):
                 )
         return v
 
-    @validator("optimizer")
+    @field_validator("optimizer")
+    @classmethod
     def validate_optimizer_config(cls, v):
         if "name" not in v:
             raise ValueError("optimizer dict must specify 'name' field")
@@ -269,25 +271,27 @@ class TrainingSpecModel(BaseModel):
             raise ValueError(f"optimizer not valid as not found in {VALID_OPTIMIZERS}")
         return v
 
-    @validator("scheduler")
-    def validate_scheduler_config(cls, v, values):
+    @field_validator("scheduler")
+    @classmethod
+    def validate_scheduler_config(cls, v, info_dict):
         if "name" not in v:
             raise ValueError("scheduler dict must specify 'name' field")
         if v["name"] not in VALID_SCHEDULERS:
             raise ValueError(f"scheduler not valid as not found in {VALID_SCHEDULERS}")
         if "total_steps" in v:
-            if values["scheduler_interval"] == "epoch":
-                if not v["total_steps"] == values["epochs"]:
+            if info_dict.get("scheduler_interval") == "epoch":
+                if not v["total_steps"] == info_dict.get("epochs"):
                     raise ValueError(
-                        f"scheduler total steps: {v['total_steps']} != {values['epochs']}: total epochs"
+                        f"scheduler total steps: {v['total_steps']} != {info_dict.get('epochs')}: total epochs"
                     )
             else:
                 print(
-                    f"[WARNING] {v['total_steps']} scheduler steps at {values['epochs']} epochs implies {v['total_steps']/values['epochs']:.2f} batches. Does this seem correct?"
+                    f"[WARNING] {v['total_steps']} scheduler steps at {info_dict.get('epochs')} epochs implies {v['total_steps']/info_dict.get('epochs'):.2f} batches. Does this seem correct?"
                 )
         return v
 
-    @validator("scheduler_interval")
+    @field_validator("scheduler_interval")
+    @classmethod
     def validate_scheduler_interval(cls, v):
         if v not in ["epoch", "batch"]:
             raise ValueError(
@@ -312,17 +316,18 @@ class ModelSpecModel(BaseModel):
         extra = "forbid"
 
     d_model: int
-    d_model_by_column: Optional[dict[str, int]]
+    d_model_by_column: Optional[dict[str, int]] = None
     nhead: int
     dim_feedforward: int
     num_layers: int
     prediction_length: int
 
-    @validator("d_model_by_column")
-    def validate_d_model_by_column(cls, v, values):
-        assert (
-            v is None or np.sum(list(v.values())) == values["d_model"]
-        ), f'{values["d_model"]} is not the sum of the d_model_by_column values'
+    @field_validator("d_model_by_column")
+    @classmethod
+    def validate_d_model_by_column(cls, v, info):
+        assert v is None or np.sum(list(v.values())) == info.data.get(
+            "d_model"
+        ), f'{info.data.get("d_model")} is not the sum of the d_model_by_column values'
 
         return v
 
@@ -390,20 +395,23 @@ class TrainModel(BaseModel):
     model_spec: ModelSpecModel
     training_spec: TrainingSpecModel
 
-    @validator("model_name")
+    @field_validator("model_name")
+    @classmethod
     def validate_model_name(cls, v):
         assert "embedding" not in v, "model_name cannot contain 'embedding'"
         return v
 
-    @validator("target_column_types")
-    def validate_target_column_types(cls, v, values):
+    @field_validator("target_column_types")
+    @classmethod
+    def validate_target_column_types(cls, v, info):
         assert all(vv in ["categorical", "real"] for vv in v.values())
         assert (
-            list(v.keys()) == values["target_columns"]
+            list(v.keys()) == info.data.get("target_columns")
         ), "target_columns and target_column_types must contain the same values/keys in the same order"
         return v
 
-    @validator("read_format")
+    @field_validator("read_format")
+    @classmethod
     def validate_read_format(cls, v):
         assert v in [
             "csv",
@@ -412,21 +420,23 @@ class TrainModel(BaseModel):
         ], "Currently only 'csv', 'parquet' and 'pt' are supported"
         return v
 
-    @validator("training_spec")
-    def validate_training_spec(cls, v, values):
-        assert set(values["target_columns"]) == set(
+    @field_validator("training_spec")
+    @classmethod
+    def validate_training_spec(cls, v, info):
+        assert set(info.data.get("target_columns")) == set(
             v.criterion.keys()
         ), "target_columns and criterion must contain the same values/keys"
 
         if v.distributed:
             assert (
-                values["read_format"] == "pt"
+                info.data.get("read_format") == "pt"
             ), "If distributed is set to 'true', the format has to be 'pt'"
         return v
 
-    @validator("column_types")
-    def validate_column_types(cls, v, values):
-        target_columns = values.get("target_columns", [])
+    @field_validator("column_types")
+    @classmethod
+    def validate_column_types(cls, v, info):
+        target_columns = info.data.get("target_columns", [])
         column_ordered = list(v.keys())
         columns_ordered_filtered = [c for c in column_ordered if c in target_columns]
         assert (
@@ -434,21 +444,22 @@ class TrainModel(BaseModel):
         ), f"{columns_ordered_filtered = } != {target_columns = }"
         return v
 
-    @validator("model_spec")
-    def validate_model_spec(cls, v, values):
+    @field_validator("model_spec")
+    @classmethod
+    def validate_model_spec(cls, v, info):
         # Original validation: consistent columns
         assert (
-            values.get("input_columns") is None
+            info.data.get("input_columns") is None
             or (v.d_model_by_column is None)
             or np.all(
                 np.array(list(v.d_model_by_column.keys()))
-                == np.array(list(values.get("input_columns")))
+                == np.array(list(info.data.get("input_columns")))
             )
         )
 
         # Additional validation based on constraints in src/sequifier/train.py
-        categorical_columns = values.get("categorical_columns", [])
-        real_columns = values.get("real_columns", [])
+        categorical_columns = info.data.get("categorical_columns", [])
+        real_columns = info.data.get("real_columns", [])
         n_categorical = len(categorical_columns)
         n_real = len(real_columns)
 

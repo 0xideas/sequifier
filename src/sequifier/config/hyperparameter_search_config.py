@@ -5,7 +5,7 @@ from typing import Optional
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 from sequifier.config.train_config import (
     DotDict,
@@ -118,6 +118,10 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         continue_training: Flag to continue training from a checkpoint.
     """
 
+    class Config:
+        arbitrary_types_allowed = True
+        extra = "forbid"
+
     device: str
     epochs: list[int]
     log_interval: int = 10
@@ -164,7 +168,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             DotDict(scheduler_config) for scheduler_config in kwargs["scheduler"]
         ]
 
-    @validator("scheduler")
+    @field_validator("scheduler")
+    @classmethod
     def validate_model_spec(cls, v, values):
         assert (
             len(values["lr"]) == len(v)
@@ -297,7 +302,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
     dim_feedforward: list[int]
     num_layers: list[int]
 
-    @validator("nhead")
+    @field_validator("nhead")
+    @classmethod
     def validate_model_spec(cls, v, values):
         if values["d_model_by_column"] is not None:
             assert (
@@ -445,7 +451,8 @@ class HyperparameterSearch(BaseModel):
     model_hyperparameter_sampling: ModelSpecHyperparameterSampling
     training_hyperparameter_sampling: TrainingSpecHyperparameterSampling
 
-    @validator("column_types")
+    @field_validator("column_types")
+    @classmethod
     def validate_model_spec(cls, v, values):
         if v is not None:
             assert (
