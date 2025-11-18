@@ -452,6 +452,7 @@ class Preprocessor:
             group_proportions: A list of floats that define the relative sizes of data splits.
             write_format: The file format for the output files.
             process_by_file: A flag to indicate if processing should be done file by file.
+            subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
         """
         if process_by_file:
             _process_batches_multiple_files_inner(
@@ -977,6 +978,8 @@ def _process_batches_multiple_files_inner(
         target_dir: The target directory for temporary files.
         batches_per_file: The number of batches to process per file.
         combine_into_single_file: Whether to combine the output into a single file.
+        continue_preprocessing: Continue preprocessing job that was interrupted while writing to temp folder.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
     """
     n_files = len(file_paths)
     assert n_files > 0
@@ -1111,6 +1114,7 @@ def _process_batches_single_file(
         split_paths: The paths to the output split files.
         target_dir: The target directory for temporary files.
         batches_per_file: The number of batches to process per file.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
 
     Returns:
         The number of batches processed.
@@ -1464,6 +1468,7 @@ def preprocess_batch(
         target_dir: The target directory for temporary files.
         write_format: The file format for the output files.
         batches_per_file: The number of batches to process per file.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
     """
     sequence_ids = sorted(batch.get_column("sequenceId").unique().to_list())
 
@@ -1595,6 +1600,7 @@ def extract_sequences(
         seq_step_size: The step size to use when sliding the window
             to create subsequences.
         columns: A list of the data column names (features) to extract.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
 
     Returns:
         A new, long-format Polars DataFrame containing the extracted
@@ -1659,6 +1665,7 @@ def get_subsequence_starts(
         in_seq_length: The length of the original input sequence.
         seq_length: The length of the subsequences to extract.
         seq_step_size: The *desired* step size between subsequences.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
 
     Returns:
         A numpy array of integer start indices for each subsequence.
@@ -1716,6 +1723,7 @@ def extract_subsequences(
         seq_length: The length of the subsequences to extract.
         seq_step_size: The desired step size between subsequences.
         columns: A list of the column names (keys in `in_seq`) to process.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
 
     Returns:
         A dictionary mapping column names to a *list of lists*, where

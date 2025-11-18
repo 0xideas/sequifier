@@ -842,7 +842,7 @@ class TransformerModel(nn.Module):
 
         Iterates through the training DataLoader, computes loss, performs
         backpropagation, and updates model parameters. The DataLoader is expected
-        to yield tuples of (data_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
+        to yield tuples of (sequences_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
         The IDs and positions are currently unused in this training loop.
 
         Args:
@@ -1002,7 +1002,7 @@ class TransformerModel(nn.Module):
         and aggregates results across all processes if in distributed mode.
         Also calculates a one-time baseline loss on the first call.
         The DataLoader is expected to yield tuples of
-        (data_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
+        (sequences_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
         The IDs and positions are currently unused during evaluation.
 
         Args:

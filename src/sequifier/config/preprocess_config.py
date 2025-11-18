@@ -49,6 +49,8 @@ class PreprocessorModel(BaseModel):
         n_cores: The number of CPU cores to use for parallel processing. If None, it uses the available CPU cores.
         batches_per_file: The number of batches to process per file.
         process_by_file: A flag to indicate if processing should be done file by file.
+        continue_preprocessing: Continue preprocessing job that was interrupted while writing to temp folder.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
     """
 
     project_path: str
