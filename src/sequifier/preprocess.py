@@ -1580,7 +1580,7 @@ def extract_sequences(
     data: pl.DataFrame,
     schema: Any,
     seq_length: int,
-    seq_step_size: int,
+    stride_for_split: int,
     columns: list[str],
     subsequence_start_mode: str,
 ) -> pl.DataFrame:
@@ -1589,7 +1589,7 @@ def extract_sequences(
     This function takes a DataFrame where each row contains all items
     for a single `sequenceId`. It iterates through each `sequenceId`,
     extracts all possible subsequences of `seq_length` using the
-    specified `seq_step_size`, calculates the starting position of each
+    specified `stride_for_split`, calculates the starting position of each
     subsequence within the original sequence, and formats them into a new,
     long-format DataFrame that conforms to the provided `schema`.
 
@@ -1597,7 +1597,7 @@ def extract_sequences(
         data: The input Polars DataFrame, grouped by "sequenceId".
         schema: The schema for the output long-format DataFrame.
         seq_length: The length of the subsequences to extract.
-        seq_step_size: The step size to use when sliding the window
+        stride_for_split: The step size to use when sliding the window
             to create subsequences.
         columns: A list of the data column names (features) to extract.
         subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
@@ -1624,7 +1624,7 @@ def extract_sequences(
         subsequences = extract_subsequences(
             in_seq_lists_only,
             seq_length,
-            seq_step_size,
+            stride_for_split,
             columns,
             subsequence_start_mode,
         )
@@ -1634,7 +1634,7 @@ def extract_sequences(
                 row = [
                     in_row["sequenceId"],
                     subsequence_id,
-                    subsequence_id * seq_step_size,
+                    subsequence_id * stride_for_split,
                     col,
                 ] + subseqs[subsequence_id]
                 assert len(row) == (seq_length + 5), f"{row = }"
@@ -1651,20 +1651,23 @@ def extract_sequences(
 
 @beartype
 def get_subsequence_starts(
-    in_seq_length: int, seq_length: int, seq_step_size: int, subsequence_start_mode: str
+    in_seq_length: int,
+    seq_length: int,
+    stride_for_split: int,
+    subsequence_start_mode: str,
 ) -> np.ndarray:
     """Calculates the start indices for extracting subsequences.
 
     This function determines the starting indices for sliding a window of
     `seq_length` over an input sequence of `in_seq_length`. It aims to
-    use `seq_step_size`, but adjusts the step size slightly to ensure
+    use `stride_for_split`, but adjusts the step size slightly to ensure
     that the windows are distributed as evenly as possible and cover the
     full sequence from the beginning to the end.
 
     Args:
         in_seq_length: The length of the original input sequence.
         seq_length: The length of the subsequences to extract.
-        seq_step_size: The *desired* step size between subsequences.
+        stride_for_split: The *desired* step size between subsequences.
         subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
 
     Returns:
@@ -1676,7 +1679,7 @@ def get_subsequence_starts(
     ], f"{subsequence_start_mode = } not in ['distribute', 'exact']"
     if subsequence_start_mode == "distribute":
         last_available_start = in_seq_length - (seq_length + 1)
-        starts = np.arange(0, last_available_start + seq_step_size, seq_step_size)
+        starts = np.arange(0, last_available_start + stride_for_split, stride_for_split)
         starts[-1] = last_available_start
         if len(starts) > 2:
             while True:
@@ -1689,13 +1692,13 @@ def get_subsequence_starts(
 
     if subsequence_start_mode == "exact":
         assert (
-            ((in_seq_length - 1) - seq_length) % seq_step_size == 0
-        ), f"'exact' can only be used if: ((in_seq_length - 1) - seq_length) % seq_step_size == 0, {(in_seq_length -1) = }, {seq_length = }, {seq_step_size = }"
+            ((in_seq_length - 1) - seq_length) % stride_for_split == 0
+        ), f"'exact' can only be used if: ((in_seq_length - 1) - seq_length) % stride_for_split == 0, {(in_seq_length -1) = }, {seq_length = }, {stride_for_split = }"
         last_possible_start = (
             in_seq_length - (seq_length - 1) - 1
         )  # the latter '-1' is to translate to index
         return np.arange(
-            0, last_possible_start + 1, seq_step_size
+            0, last_possible_start + 1, stride_for_split
         )  # the '+1' is to make it inclusive
     return np.array([])
 
@@ -1704,7 +1707,7 @@ def get_subsequence_starts(
 def extract_subsequences(
     in_seq: dict[str, list],
     seq_length: int,
-    seq_step_size: int,
+    stride_for_split: int,
     columns: list[str],
     subsequence_start_mode: str,
 ) -> dict[str, list[list[Union[float, int]]]]:
@@ -1721,7 +1724,7 @@ def extract_subsequences(
         in_seq: A dictionary mapping column names to lists of items
             (e.g., `{'col_A': [1, 2, 3, 4, 5], 'col_B': [6, 7, 8, 9, 10]}`).
         seq_length: The length of the subsequences to extract.
-        seq_step_size: The desired step size between subsequences.
+        stride_for_split: The desired step size between subsequences.
         columns: A list of the column names (keys in `in_seq`) to process.
         subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
 
@@ -1739,12 +1742,12 @@ def extract_subsequences(
     in_seq_length = len(in_seq[columns[0]])
 
     subsequence_starts = get_subsequence_starts(
-        in_seq_length, seq_length, seq_step_size, subsequence_start_mode
+        in_seq_length, seq_length, stride_for_split, subsequence_start_mode
     )
     subsequence_starts_diff = subsequence_starts[1:] - subsequence_starts[:-1]
     assert np.all(
-        subsequence_starts_diff <= seq_step_size
-    ), f"Diff of {subsequence_starts = }, {subsequence_starts_diff = } larger than {seq_step_size = }"
+        subsequence_starts_diff <= stride_for_split
+    ), f"Diff of {subsequence_starts = }, {subsequence_starts_diff = } larger than {stride_for_split = }"
 
     return {
         col: [list(in_seq[col][i : i + seq_length + 1]) for i in subsequence_starts]

@@ -145,8 +145,10 @@ class PreprocessorModel(BaseModel):
         return v
 
     def __init__(self, **kwargs):
-        default_seq_step_size = [kwargs["seq_length"]] * len(
+        default_stride_for_split = [kwargs["seq_length"]] * len(
             kwargs["group_proportions"]
         )
-        kwargs["stride_by_split"] = kwargs.get("stride_by_split", default_seq_step_size)
+        kwargs["stride_by_split"] = kwargs.get(
+            "stride_by_split", default_stride_for_split
+        )
         super().__init__(**kwargs)
