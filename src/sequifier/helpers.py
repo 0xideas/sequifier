@@ -1,10 +1,11 @@
 import os
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import polars as pl
 import torch
 from beartype import beartype
+from pydantic import ValidationError
 from torch import Tensor
 
 PANDAS_TO_TORCH_TYPES = {
@@ -23,6 +24,28 @@ PANDAS_TO_TORCH_TYPES = {
     "Int8": torch.int8,
     "int8": torch.int8,
 }
+
+
+@beartype
+def try_catch_excess_keys(
+    config_path: str, PydanticClass: Any, config_values: dict[Any, Any]
+):
+    try:
+        return PydanticClass(
+            **{k: v for k, v in config_values.items() if k != "skip_metadata"}
+        )
+    except ValidationError as e:
+        # Filter the errors to find only the "extra fields"
+        extra_fields = [
+            err["loc"][0] for err in e.errors() if err["type"] == "value_error.extra"
+        ]
+
+        if extra_fields:
+            raise ValueError(
+                f"Found {len(extra_fields)} unrecognized configuration keys: {extra_fields}"
+            ) from None
+
+        raise e
 
 
 @beartype
@@ -151,10 +174,10 @@ def write_data(data: pl.DataFrame, path: str, write_format: str, **kwargs) -> No
 
 
 @beartype
-def subset_to_selected_columns(
-    data: Union[pl.DataFrame, pl.LazyFrame], selected_columns: list[str]
+def subset_to_input_columns(
+    data: Union[pl.DataFrame, pl.LazyFrame], input_columns: list[str]
 ) -> Union[pl.DataFrame, pl.LazyFrame]:
-    """Filters a DataFrame to rows where 'inputCol' is in a selected list.
+    """Filters a DataFrame to rows where 'inputCol' is in a list of column_names.
 
     This function supports both Polars (DataFrame, LazyFrame) and Pandas
     DataFrames, dispatching to the appropriate filtering method.
@@ -169,17 +192,17 @@ def subset_to_selected_columns(
     Args:
         data: The Polars (DataFrame, LazyFrame) or Pandas DataFrame to
             filter. It must contain a column named "inputCol".
-        selected_columns: A list of values. Rows will be kept if their
+        input_columns: A list of values. Rows will be kept if their
             value in "inputCol" is present in this list.
 
     Returns:
         A filtered DataFrame or LazyFrame of the same type as the input.
     """
     if isinstance(data, (pl.DataFrame, pl.LazyFrame)):
-        return data.filter(pl.col("inputCol").is_in(selected_columns))
+        return data.filter(pl.col("inputCol").is_in(input_columns))
 
     column_filters = [
-        (data["inputCol"].values == input_col) for input_col in selected_columns
+        (data["inputCol"].values == input_col) for input_col in input_columns
     ]
     filter_ = np.logical_or.reduce(column_filters)
     return data.loc[filter_, :]
@@ -321,13 +344,13 @@ class LogFile:
 
 
 @beartype
-def normalize_path(path: str, project_path: str) -> str:
+def normalize_path(path: str, project_root: str) -> str:
     """Normalizes a path to be relative to a project path, then joins them.
 
     This function ensures that a given `path` is correctly expressed as
-    an absolute path rooted at `project_path`. It does this by first
-    removing the `project_path` prefix from `path` (if it exists)
-    and then joining the result back to `project_path`.
+    an absolute path rooted at `project_root`. It does this by first
+    removing the `project_root` prefix from `path` (if it exists)
+    and then joining the result back to `project_root`.
 
     This is useful for handling paths that might be provided as either
     relative (e.g., "data/file.txt") or absolute
@@ -335,11 +358,11 @@ def normalize_path(path: str, project_path: str) -> str:
 
     Args:
         path: The path to normalize.
-        project_path: The absolute path to the project's root directory.
+        project_root: The absolute path to the project's root directory.
 
     Returns:
         A normalized, absolute path.
     """
-    project_path_normalized = (project_path + os.sep).replace(os.sep + os.sep, os.sep)
-    path2 = os.path.join(project_path, path.replace(project_path_normalized, ""))
+    project_root_normalized = (project_root + os.sep).replace(os.sep + os.sep, os.sep)
+    path2 = os.path.join(project_root, path.replace(project_root_normalized, ""))
     return path2

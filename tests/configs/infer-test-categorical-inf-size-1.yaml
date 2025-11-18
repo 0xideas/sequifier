@@ -1,12 +1,12 @@
-project_path: tests/project_folder
-ddconfig_path: tests/project_folder/configs/ddconfigs/test-data-categorical-1.json
+project_root: tests/project_folder
+metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-categorical-1.json
 model_type: generative
 model_path: tests/project_folder/models/sequifier-model-categorical-1-inf-size-best-3.onnx
 data_path: tests/project_folder/data/test-data-categorical-1-split2
 read_format: pt
 write_format: csv
 
-selected_columns: [itemId]
+input_columns: [itemId]
 target_columns: [itemId]
 target_column_types:
   itemId: categorical
@@ -16,7 +16,7 @@ map_to_id: true
 device: cpu
 seq_length: 8
 inference_batch_size: 10
-inference_size: 3
+prediction_length: 3
 
 sample_from_distribution_columns: null
 autoregression: false

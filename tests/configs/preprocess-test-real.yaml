@@ -1,15 +1,15 @@
-project_path: tests/project_folder
+project_root: tests/project_folder
 data_path: tests/resources/source_data/test-data-real-5.csv
-combine_into_single_file: true
+merge_output: true
 read_format: csv
 write_format: parquet
 selected_columns: null
 
-group_proportions:
+split_ratios:
 - 0.5
 - 0.5
 seq_length: 8
-seq_step_sizes:
+stride_by_split:
 - 1
 - 1
 max_rows: null

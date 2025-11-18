@@ -17,7 +17,7 @@ from sequifier.helpers import (
     construct_index_maps,
     normalize_path,
     numpy_to_pytorch,
-    subset_to_selected_columns,
+    subset_to_input_columns,
     write_data,
 )
 from sequifier.train import (
@@ -33,13 +33,13 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
 
     This function orchestrates the inference process. It loads the main
     inference configuration, retrieves necessary metadata like ID maps and
-    column statistics from a `ddconfig` file (if required for mapping or
+    column statistics from a `metadata_config` file (if required for mapping or
     normalization), and then delegates the core work to the `infer_worker`
     function.
 
     Args:
         args: Command-line arguments, typically from `argparse`. Expected
-            to have attributes like `config_path` and `on_unprocessed`.
+            to have attributes like `config_path` and `skip_metadata`.
         args_config: A dictionary of configuration overrides, often
             passed from the command line, that will be merged into the
             loaded configuration file.
@@ -49,17 +49,20 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         args.config_path if args.config_path is not None else "configs/infer.yaml"
     )
 
-    config = load_inferer_config(config_path, args_config, args.on_unprocessed)
+    skip_metadata = args_config.get("skip_metadata", False)
+    config = load_inferer_config(config_path, args_config, skip_metadata)
 
     if config.map_to_id or (len(config.real_columns) > 0):
-        assert config.ddconfig_path is not None, (
-            "If you want to map to id, you need to provide a file path to a json that contains: {{'id_maps':{...}}} to ddconfig_path"
+        assert config.metadata_config_path is not None, (
+            "If you want to map to id, you need to provide a file path to a json that contains: {{'id_maps':{...}}} to metadata_config_path"
             "\nIf you have real columns in the data, you need to provide a json that contains: {{'selected_columns_statistics':{COL_NAME:{'std':..., 'mean':...}}}}"
         )
-        with open(normalize_path(config.ddconfig_path, config.project_path), "r") as f:
-            dd_config = json.loads(f.read())
-            id_maps = dd_config["id_maps"]
-            selected_columns_statistics = dd_config["selected_columns_statistics"]
+        with open(
+            normalize_path(config.metadata_config_path, config.project_root), "r"
+        ) as f:
+            metadata_config = json.loads(f.read())
+            id_maps = metadata_config["id_maps"]
+            selected_columns_statistics = metadata_config["selected_columns_statistics"]
     else:
         id_maps = None
         selected_columns_statistics = {}
@@ -158,18 +161,18 @@ def infer_worker(
         inferer = Inferer(
             config.model_type,
             model_path,
-            config.project_path,
+            config.project_root,
             id_maps,
             selected_columns_statistics,
             config.map_to_id,
             config.categorical_columns,
             config.real_columns,
-            config.selected_columns,
+            config.input_columns,
             config.target_columns,
             config.target_column_types,
             config.sample_from_distribution_columns,
             config.infer_with_dropout,
-            config.inference_size,
+            config.prediction_length,
             config.inference_batch_size,
             config.device,
             args_config=args_config,
@@ -223,12 +226,12 @@ def infer_embedding(
             `torch.dtype`.
     """
     for data_id, data in enumerate(dataset):
-        inference_size = inferer.inference_size
+        prediction_length = inferer.prediction_length
 
         # Step 1: Get embeddings and base position/ID data
         if config.read_format in ["parquet", "csv"]:
-            if config.selected_columns is not None:
-                data = subset_to_selected_columns(data, config.selected_columns)
+            if config.input_columns is not None:
+                data = subset_to_input_columns(data, config.input_columns)
 
             # Determine the number of input features
             n_input_cols = data.get_column("inputCol").n_unique()
@@ -264,7 +267,9 @@ def infer_embedding(
 
         # Step 2: Calculate absolute positions and repeat IDs
         # (e.g., for seq_len=50, inf_size=5, offsets are [45, 46, 47, 48, 49])
-        base_offsets = np.arange(config.seq_length - inference_size, config.seq_length)
+        base_offsets = np.arange(
+            config.seq_length - prediction_length, config.seq_length
+        )
 
         # Tile these offsets for each sample in the batch
         position_offsets_tiled = np.tile(
@@ -273,14 +278,16 @@ def infer_embedding(
 
         # Repeat the base start position for each of the N embedding outputs
         base_positions_repeated = np.repeat(
-            item_positions_for_preds_base, inference_size
+            item_positions_for_preds_base, prediction_length
         )
 
         # The final position is the start + the relative offset within the sequence
         final_positions = base_positions_repeated + position_offsets_tiled
 
-        sequence_ids_repeated = np.repeat(sequence_ids_for_preds, inference_size)
-        subsequence_ids_repeated = np.repeat(subsequence_ids_for_preds, inference_size)
+        sequence_ids_repeated = np.repeat(sequence_ids_for_preds, prediction_length)
+        subsequence_ids_repeated = np.repeat(
+            subsequence_ids_for_preds, prediction_length
+        )
 
         # Step 3: Build the final DataFrame
         embeddings_df = pl.DataFrame(
@@ -299,7 +306,7 @@ def infer_embedding(
 
         # Step 4: Save the output
         os.makedirs(
-            os.path.join(config.project_path, "outputs", "embeddings"),
+            os.path.join(config.project_root, "outputs", "embeddings"),
             exist_ok=True,
         )
 
@@ -313,12 +320,12 @@ def infer_embedding(
             )
 
             dir_path = os.path.join(
-                config.project_path, "outputs", "embeddings", dirname
+                config.project_root, "outputs", "embeddings", dirname
             )
             os.makedirs(dir_path, exist_ok=True)
 
         embeddings_path = os.path.join(
-            config.project_path, "outputs", "embeddings", file_name
+            config.project_root, "outputs", "embeddings", file_name
         )
         print(f"[INFO] Writing predictions to '{embeddings_path}'")
         write_data(
@@ -365,8 +372,8 @@ def infer_generative(
     for data_id, data in enumerate(dataset):
         # Step 1: Adapt Data Subsetting (now works on Polars DF)
         if config.read_format in ["parquet", "csv"]:
-            if config.selected_columns is not None:
-                data = subset_to_selected_columns(data, config.selected_columns)
+            if config.input_columns is not None:
+                data = subset_to_input_columns(data, config.input_columns)
             n_input_cols = data.get_column("inputCol").n_unique()
             if not config.autoregression:
                 # For the non-autoregressive case, apply inference size logic
@@ -381,26 +388,26 @@ def infer_generative(
                     + config.seq_length
                 )
 
-                inference_size = inferer.inference_size
+                prediction_length = inferer.prediction_length
 
-                # Expand IDs and positions to match model output shape (batch_size * inference_size)
+                # Expand IDs and positions to match model output shape (batch_size * prediction_length)
                 sequence_ids_for_preds = np.repeat(
-                    sequence_ids_for_preds_base, inference_size
+                    sequence_ids_for_preds_base, prediction_length
                 )
 
                 item_positions_repeated = np.repeat(
-                    item_positions_for_preds_base, inference_size
+                    item_positions_for_preds_base, prediction_length
                 )
                 position_offsets = np.tile(
-                    np.arange(-inference_size + 1, 1),
+                    np.arange(-prediction_length + 1, 1),
                     len(item_positions_for_preds_base),
                 )
                 item_positions_for_preds = item_positions_repeated + position_offsets
 
             else:
                 assert (
-                    inferer.inference_size == 1
-                ), f"{inferer.inference_size = } != 1, is not allowed for autoregressive inference"
+                    inferer.prediction_length == 1
+                ), f"{inferer.prediction_length = } != 1, is not allowed for autoregressive inference"
                 if config.autoregression_extra_steps is not None:
                     data = expand_data_by_autoregression(
                         data,
@@ -424,29 +431,29 @@ def infer_generative(
                 else config.autoregression_extra_steps
             )
 
-            # Pass inference_size to get_probs_preds_pt
+            # Pass prediction_length to get_probs_preds_pt
             probs, preds = get_probs_preds_pt(
                 config, inferer, sequences_dict, extra_steps
             )
 
-            inference_size = inferer.inference_size  # Get inference_size
+            prediction_length = inferer.prediction_length  # Get prediction_length
 
             if extra_steps == 0:
-                # Non-autoregressive path: Apply inference_size logic
+                # Non-autoregressive path: Apply prediction_length logic
                 sequence_ids_for_preds_base = sequence_ids_tensor.numpy()
                 item_positions_for_preds_base = (
                     start_positions_tensor.numpy() + config.seq_length
                 )
 
                 sequence_ids_for_preds = np.repeat(
-                    sequence_ids_for_preds_base, inference_size
+                    sequence_ids_for_preds_base, prediction_length
                 )
 
                 item_positions_repeated = np.repeat(
-                    item_positions_for_preds_base, inference_size
+                    item_positions_for_preds_base, prediction_length
                 )
                 position_offsets = np.tile(
-                    np.arange(-inference_size + 1, 1),
+                    np.arange(-prediction_length + 1, 1),
                     len(item_positions_for_preds_base),
                 )
                 item_positions_for_preds = item_positions_repeated + position_offsets
@@ -481,14 +488,14 @@ def infer_generative(
                 )
 
         os.makedirs(
-            os.path.join(config.project_path, "outputs", "predictions"),
+            os.path.join(config.project_root, "outputs", "predictions"),
             exist_ok=True,
         )
 
         if config.output_probabilities:
             assert probs is not None
             os.makedirs(
-                os.path.join(config.project_path, "outputs", "probabilities"),
+                os.path.join(config.project_root, "outputs", "probabilities"),
                 exist_ok=True,
             )
 
@@ -503,13 +510,13 @@ def infer_generative(
                     )
 
                     dir_path = os.path.join(
-                        config.project_path, "outputs", "probabilities", dirname
+                        config.project_root, "outputs", "probabilities", dirname
                     )
                     os.makedirs(dir_path, exist_ok=True)
 
                 if inferer.target_column_types[target_column] == "categorical":
                     probabilities_path = os.path.join(
-                        config.project_path, "outputs", "probabilities", file_name
+                        config.project_root, "outputs", "probabilities", file_name
                     )
                     print(f"[INFO] Writing probabilities to '{probabilities_path}'")
                     # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
@@ -525,7 +532,7 @@ def infer_generative(
                         config.write_format,
                     )
 
-        n_input_cols = len(config.selected_columns)
+        n_input_cols = len(config.input_columns)
 
         predictions = pl.DataFrame(
             {
@@ -546,12 +553,12 @@ def infer_generative(
                 dirname, f"{model_id}-{data_id}-predictions.{config.write_format}"
             )
             dir_path = os.path.join(
-                config.project_path, "outputs", "predictions", dirname
+                config.project_root, "outputs", "predictions", dirname
             )
             os.makedirs(dir_path, exist_ok=True)
 
         predictions_path = os.path.join(
-            config.project_path, "outputs", "predictions", file_name
+            config.project_root, "outputs", "predictions", file_name
         )
         print(f"[INFO] Writing predictions to '{predictions_path}'")
         write_data(
@@ -691,7 +698,7 @@ def get_probs_preds_pt(
 
     Args:
         config: The `InfererModel` configuration object, used to check
-            `output_probabilities` and `selected_columns`.
+            `output_probabilities` and `input_columns`.
         inferer: The initialized `Inferer` instance.
         data: A dictionary mapping column/feature names to `torch.Tensor`s
               (the sequences part loaded from the .pt file).
@@ -714,7 +721,7 @@ def get_probs_preds_pt(
     X = {
         key: tensor.numpy()
         for key, tensor in data.items()
-        if key in config.selected_columns
+        if key in config.input_columns
     }
     all_probs_list = {col: [] for col in target_cols}
     all_preds_list = {col: [] for col in target_cols}
@@ -787,7 +794,7 @@ def get_embeddings(
     Returns:
         A NumPy array containing the computed embeddings for the batch.
     """
-    all_columns = sorted(list(set(config.selected_columns + config.target_columns)))
+    all_columns = sorted(list(set(config.input_columns + config.target_columns)))
     X = numpy_to_pytorch(data, column_types, all_columns, config.seq_length)
     X = {col: X_col.numpy() for col, X_col in X.items()}
     del data
@@ -826,7 +833,7 @@ def get_probs_preds(
             - `preds`: A dictionary mapping target columns to NumPy arrays
               of final predictions.
     """
-    all_columns = sorted(list(set(config.selected_columns + config.target_columns)))
+    all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
     X = numpy_to_pytorch(data, column_types, all_columns, config.seq_length)
     X = {col: X_col.numpy() for col, X_col in X.items()}
@@ -1180,18 +1187,18 @@ class Inferer:
         self,
         model_type: str,
         model_path: str,
-        project_path: str,
+        project_root: str,
         id_maps: Optional[dict[str, dict[Union[str, int], int]]],
         selected_columns_statistics: dict[str, dict[str, float]],
         map_to_id: bool,
         categorical_columns: list[str],
         real_columns: list[str],
-        selected_columns: Optional[list[str]],
+        input_columns: Optional[list[str]],
         target_columns: list[str],
         target_column_types: dict[str, str],
         sample_from_distribution_columns: Optional[list[str]],
         infer_with_dropout: bool,
-        inference_size: int,
+        prediction_length: int,
         inference_batch_size: int,
         device: str,
         args_config: dict[str, Any],
@@ -1202,7 +1209,7 @@ class Inferer:
         Args:
             model_type: The type of model to use for inference.
             model_path: The path to the trained model.
-            project_path: The path to the sequifier project directory.
+            project_root: The path to the sequifier project directory.
             id_maps: A dictionary of id maps for categorical columns.
             selected_columns_statistics: A dictionary of statistics for numerical columns.
             map_to_id: Whether to map the output to the original ids.
@@ -1231,12 +1238,12 @@ class Inferer:
         self.device = device
         self.categorical_columns = categorical_columns
         self.real_columns = real_columns
-        self.selected_columns = selected_columns
+        self.input_columns = input_columns
         self.target_columns = target_columns
         self.target_column_types = target_column_types
         self.sample_from_distribution_columns = sample_from_distribution_columns
         self.infer_with_dropout = infer_with_dropout
-        self.inference_size = inference_size
+        self.prediction_length = prediction_length
         self.inference_batch_size = inference_batch_size
 
         self.inference_model_type = model_path.split(".")[-1]
@@ -1256,14 +1263,14 @@ class Inferer:
                 )
 
             self.ort_session = onnxruntime.InferenceSession(
-                normalize_path(model_path, project_path),
+                normalize_path(model_path, project_root),
                 providers=execution_providers,
                 **kwargs,
             )
         if self.inference_model_type == "pt":
             self.inference_model = load_inference_model(
                 self.model_type,
-                normalize_path(model_path, project_path),
+                normalize_path(model_path, project_root),
                 self.training_config_path,
                 self.args_config,
                 self.device,
@@ -1462,7 +1469,7 @@ class Inferer:
             outs = {
                 target_column: np.concatenate(
                     [out_sub[target_column] for out_sub in out_subs], axis=0
-                )[: size * self.inference_size, :]
+                )[: size * self.prediction_length, :]
                 for target_column in self.target_columns
             }
         elif self.inference_model_type == "pt":
@@ -1472,7 +1479,7 @@ class Inferer:
                 self.inference_model,
                 x_adjusted,
                 self.device,
-                size * self.inference_size,
+                size * self.prediction_length,
                 self.target_columns,
             )
         else:

@@ -48,10 +48,10 @@ class Preprocessor:
     processing them in batches.
 
     Attributes:
-        project_path (str): The path to the sequifier project directory.
+        project_root (str): The path to the sequifier project directory.
         batches_per_file (int): The number of batches to process per file.
         data_name_root (str): The root name of the data file.
-        combine_into_single_file (bool): Whether to combine the output into a single file.
+        merge_output (bool): Whether to combine the output into a single file.
         target_dir (str): The target directory for temporary files.
         seed (int): The random seed for reproducibility.
         n_cores (int): The number of cores to use for parallel processing.
@@ -61,16 +61,16 @@ class Preprocessor:
     @beartype
     def __init__(
         self,
-        project_path: str,
+        project_root: str,
         continue_preprocessing: bool,
         data_path: str,
         read_format: str,
         write_format: str,
-        combine_into_single_file: bool,
+        merge_output: bool,
         selected_columns: Optional[list[str]],
-        group_proportions: list[float],
+        split_ratios: list[float],
         seq_length: int,
-        seq_step_sizes: list[int],
+        stride_by_split: list[int],
         max_rows: Optional[int],
         seed: int,
         n_cores: Optional[int],
@@ -81,27 +81,27 @@ class Preprocessor:
         """Initializes the Preprocessor with the given parameters.
 
         Args:
-            project_path: The path to the sequifier project directory.
+            project_root: The path to the sequifier project directory.
             data_path: The path to the input data file.
             read_format: The file type of the input data.
             write_format: The file type for the preprocessed output data.
-            combine_into_single_file: Whether to combine the output into a single file.
+            merge_output: Whether to combine the output into a single file.
             selected_columns: A list of columns to be included in the preprocessing.
-            group_proportions: A list of floats that define the relative sizes of data splits.
+            split_ratios: A list of floats that define the relative sizes of data splits.
             seq_length: The sequence length for the model inputs.
-            seq_step_sizes: A list of step sizes for creating subsequences.
+            stride_by_split: A list of step sizes for creating subsequences.
             max_rows: The maximum number of input rows to process.
             seed: A random seed for reproducibility.
             n_cores: The number of CPU cores to use for parallel processing.
             batches_per_file: The number of batches to process per file.
             process_by_file: A flag to indicate if processing should be done file by file.
         """
-        self.project_path = project_path
+        self.project_root = project_root
         self.batches_per_file = batches_per_file
 
         self.data_name_root = os.path.splitext(os.path.basename(data_path))[0]
-        self.combine_into_single_file = combine_into_single_file
-        if self.combine_into_single_file:
+        self.merge_output = merge_output
+        if self.merge_output:
             self.target_dir = "temp"
         else:
             assert write_format == "pt"
@@ -116,7 +116,7 @@ class Preprocessor:
         if selected_columns is not None:
             selected_columns = ["sequenceId", "itemPosition"] + selected_columns
 
-        self._setup_split_paths(write_format, len(group_proportions))
+        self._setup_split_paths(write_format, len(split_ratios))
 
         if os.path.isfile(data_path):
             data = _load_and_preprocess_data(
@@ -142,16 +142,16 @@ class Preprocessor:
 
             data = data.sort(["sequenceId", "itemPosition"])
             n_batches = _process_batches_single_file(
-                self.project_path,
+                self.project_root,
                 self.data_name_root,
                 data,
                 schema,
                 self.n_cores,
                 seq_length,
-                seq_step_sizes,
+                stride_by_split,
                 data_columns,
                 col_types,
-                group_proportions,
+                split_ratios,
                 write_format,
                 self.split_paths,
                 self.target_dir,
@@ -159,19 +159,19 @@ class Preprocessor:
                 subsequence_start_mode,
             )
 
-            if self.combine_into_single_file:
+            if self.merge_output:
                 input_files = create_file_paths_for_single_file(
-                    self.project_path,
+                    self.project_root,
                     self.target_dir,
-                    len(group_proportions),
+                    len(split_ratios),
                     n_batches,
                     self.data_name_root,
                     write_format,
                 )
                 combine_multiprocessing_outputs(
-                    self.project_path,
+                    self.project_root,
                     self.target_dir,
-                    len(group_proportions),
+                    len(split_ratios),
                     input_files,
                     self.data_name_root,
                     write_format,
@@ -202,13 +202,13 @@ class Preprocessor:
                 schema,
                 self.n_cores,
                 seq_length,
-                seq_step_sizes,
+                stride_by_split,
                 data_columns,
                 n_classes,
                 id_maps,
                 selected_columns_statistics,
                 col_types,
-                group_proportions,
+                split_ratios,
                 write_format,
                 process_by_file,
                 subsequence_start_mode,
@@ -372,19 +372,19 @@ class Preprocessor:
     def _setup_directories(self) -> None:
         """Sets up the output directories for preprocessed data.
 
-        This method creates the base `data/` directory within the `project_path`
+        This method creates the base `data/` directory within the `project_root`
         if it doesn't exist. It also creates a temporary directory (defined by
         `self.target_dir`) for storing intermediate batch files, removing it
         first if it already exists to ensure a clean run.
         """
 
-        temp_path = os.path.join(self.project_path, "data", self.target_dir)
+        temp_path = os.path.join(self.project_root, "data", self.target_dir)
 
         if self.continue_preprocessing:
             if not os.path.exists(temp_path):
                 raise Exception(f"temp folder at '{temp_path}' does not exist")
         else:
-            os.makedirs(os.path.join(self.project_path, "data"), exist_ok=True)
+            os.makedirs(os.path.join(self.project_root, "data"), exist_ok=True)
             if os.path.exists(temp_path):
                 shutil.rmtree(temp_path)
             os.makedirs(temp_path)
@@ -403,7 +403,7 @@ class Preprocessor:
         """
         split_paths = [
             os.path.join(
-                self.project_path,
+                self.project_root,
                 "data",
                 f"{self.data_name_root}-split{i}.{write_format}",
             )
@@ -422,13 +422,13 @@ class Preprocessor:
         schema: Any,
         n_cores: int,
         seq_length: int,
-        seq_step_sizes: list[int],
+        stride_by_split: list[int],
         data_columns: list[str],
         n_classes: dict[str, int],
         id_maps: dict[str, dict[Union[int, str], int]],
         selected_columns_statistics: dict[str, dict[str, float]],
         col_types: dict[str, str],
-        group_proportions: list[float],
+        split_ratios: list[float],
         write_format: str,
         process_by_file: bool = True,
         subsequence_start_mode: str = "distribute",
@@ -443,19 +443,20 @@ class Preprocessor:
             schema: The schema for the preprocessed data.
             n_cores: The number of cores to use for parallel processing.
             seq_length: The sequence length for the model inputs.
-            seq_step_sizes: A list of step sizes for creating subsequences.
+            stride_by_split: A list of step sizes for creating subsequences.
             data_columns: A list of data columns.
             n_classes: A dictionary containing the number of classes for each categorical column.
             id_maps: A dictionary containing the id maps for each categorical column.
             selected_columns_statistics: A dictionary containing the statistics for each numerical column.
             col_types: A dictionary containing the column types.
-            group_proportions: A list of floats that define the relative sizes of data splits.
+            split_ratios: A list of floats that define the relative sizes of data splits.
             write_format: The file format for the output files.
             process_by_file: A flag to indicate if processing should be done file by file.
+            subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
         """
         if process_by_file:
             _process_batches_multiple_files_inner(
-                project_path=self.project_path,
+                project_root=self.project_root,
                 data_name_root=self.data_name_root,
                 process_id=0,
                 file_paths=file_paths,
@@ -465,25 +466,25 @@ class Preprocessor:
                 schema=schema,
                 n_cores=n_cores,
                 seq_length=seq_length,
-                seq_step_sizes=seq_step_sizes,
+                stride_by_split=stride_by_split,
                 data_columns=data_columns,
                 n_classes=n_classes,
                 id_maps=id_maps,
                 selected_columns_statistics=selected_columns_statistics,
                 col_types=col_types,
-                group_proportions=group_proportions,
+                split_ratios=split_ratios,
                 write_format=write_format,
                 split_paths=self.split_paths,
                 target_dir=self.target_dir,
                 batches_per_file=self.batches_per_file,
-                combine_into_single_file=self.combine_into_single_file,
+                merge_output=self.merge_output,
                 continue_preprocessing=self.continue_preprocessing,
                 subsequence_start_mode=subsequence_start_mode,
             )
             input_files = create_file_paths_for_multiple_files2(
-                self.project_path,
+                self.project_root,
                 self.target_dir,
-                len(group_proportions),
+                len(split_ratios),
                 1,
                 {0: len(file_paths)},
                 self.data_name_root,
@@ -499,7 +500,7 @@ class Preprocessor:
             ]
 
             kwargs_1 = {
-                "project_path": self.project_path,
+                "project_root": self.project_root,
                 "data_name_root": self.data_name_root,
             }
             kwargs_2 = {
@@ -509,18 +510,18 @@ class Preprocessor:
                 "schema": schema,
                 "n_cores": 1,
                 "seq_length": seq_length,
-                "seq_step_sizes": seq_step_sizes,
+                "stride_by_split": stride_by_split,
                 "data_columns": data_columns,
                 "n_classes": n_classes,
                 "id_maps": id_maps,
                 "selected_columns_statistics": selected_columns_statistics,
                 "col_types": col_types,
-                "group_proportions": group_proportions,
+                "split_ratios": split_ratios,
                 "write_format": write_format,
                 "split_paths": self.split_paths,
                 "target_dir": self.target_dir,
                 "batches_per_file": self.batches_per_file,
-                "combine_into_single_file": self.combine_into_single_file,
+                "merge_output": self.merge_output,
                 "continue_preprocessing": self.continue_preprocessing,
                 "subsequence_start_mode": subsequence_start_mode,
             }
@@ -540,19 +541,19 @@ class Preprocessor:
                 pool.starmap(_process_batches_multiple_files_inner, job_params)
 
             input_files = create_file_paths_for_multiple_files2(
-                self.project_path,
+                self.project_root,
                 self.target_dir,
-                len(group_proportions),
+                len(split_ratios),
                 len(job_params),
                 {i: len(file_sets[i]) for i in range(len(file_sets))},
                 self.data_name_root,
                 write_format,
             )
-        if self.combine_into_single_file:
+        if self.merge_output:
             combine_multiprocessing_outputs(
-                self.project_path,
+                self.project_root,
                 self.target_dir,
-                len(group_proportions),
+                len(split_ratios),
                 input_files,
                 self.data_name_root,
                 write_format,
@@ -564,7 +565,7 @@ class Preprocessor:
     def _cleanup(self, write_format: str) -> None:
         """Finalizes output files and removes temporary directories.
 
-        If `write_format` is 'pt' and `combine_into_single_file` is False,
+        If `write_format` is 'pt' and `merge_output` is False,
         this method moves the processed .pt batch files from the temporary
         `target_dir` into their final split-specific subfolders (e.g.,
         'data_name_root-split0/'). It also generates a 'metadata.json' file
@@ -572,12 +573,12 @@ class Preprocessor:
         `SequifierDatasetFromFolder`.
 
         Finally, it removes the temporary `target_dir` if it's empty or
-        if `target_dir` is "temp" (implying `combine_into_single_file` was True).
+        if `target_dir` is "temp" (implying `merge_output` was True).
 
         Args:
             write_format: The file format of the output files (e.g., "pt").
         """
-        temp_output_path = os.path.join(self.project_path, "data", self.target_dir)
+        temp_output_path = os.path.join(self.project_root, "data", self.target_dir)
         directory = Path(temp_output_path)
 
         if not self.target_dir == "temp":
@@ -585,7 +586,7 @@ class Preprocessor:
             for i, split_path in enumerate(self.split_paths):
                 split = f"split{i}"
                 folder_path = os.path.join(
-                    self.project_path, "data", f"{self.data_name_root}-{split}"
+                    self.project_root, "data", f"{self.data_name_root}-{split}"
                 )
                 assert folder_path in split_path
                 os.makedirs(folder_path, exist_ok=True)
@@ -614,7 +615,7 @@ class Preprocessor:
 
         Saves metadata such as class counts, ID mappings, split paths,
         column types, and numerical statistics to a JSON file. This file is
-        saved in the `configs/ddconfigs/` directory, named after the
+        saved in the `configs/metadata_configs/` directory, named after the
         `data_name_root`. This metadata is essential for initializing the
         model and data loaders during training.
 
@@ -637,12 +638,16 @@ class Preprocessor:
             "selected_columns_statistics": selected_columns_statistics,
         }
         os.makedirs(
-            os.path.join(self.project_path, "configs", "ddconfigs"), exist_ok=True
+            os.path.join(self.project_root, "configs", "metadata_configs"),
+            exist_ok=True,
         )
 
         with open(
             os.path.join(
-                self.project_path, "configs", "ddconfigs", f"{self.data_name_root}.json"
+                self.project_root,
+                "configs",
+                "metadata_configs",
+                f"{self.data_name_root}.json",
             ),
             "w",
         ) as f:
@@ -653,7 +658,7 @@ class Preprocessor:
         """Scans a directory for .pt files, counts samples, and writes metadata.json.
 
                 This method is used when `write_format` is 'pt' and
-                `combine_into_single_file` is False. It iterates over all .pt files
+                `merge_output` is False. It iterates over all .pt files
                 in the given `folder_path`, loads each one to count the number of
                 samples (sequences), and writes a `metadata.json` file in that
                 same folder. This JSON file contains the total sample count and a
@@ -876,24 +881,24 @@ def _load_and_preprocess_data(
 
 
 def _check_file_has_been_processed(
-    project_path: str,
+    project_root: str,
     data_name_root: str,
     process_id: int,
-    group_proportions: list[float],
+    split_ratios: list[float],
     write_format: str,
     target_dir: str,
-    combine_into_single_file: bool,
+    merge_output: bool,
     file_index_str: str,
 ):
     file_prefix_str = f"{data_name_root}-{process_id}-{file_index_str}"
 
-    if combine_into_single_file:
+    if merge_output:
         # Case 1: Combining into a single file. Check for the intermediate
         # combined file in the target_dir.
         expected_file_path = ""
-        for split_index in range(len(group_proportions)):
+        for split_index in range(len(split_ratios)):
             expected_file_path = create_split_file_path(
-                project_path,
+                project_root,
                 data_name_root,
                 split_index,
                 write_format,
@@ -910,7 +915,7 @@ def _check_file_has_been_processed(
         )
         return True
     else:
-        temp_dir_path = os.path.join(project_path, "data", target_dir)
+        temp_dir_path = os.path.join(project_root, "data", target_dir)
 
         if not os.path.isdir(temp_dir_path):
             return False
@@ -927,7 +932,7 @@ def _check_file_has_been_processed(
 
 @beartype
 def _process_batches_multiple_files_inner(
-    project_path: str,
+    project_root: str,
     data_name_root: str,
     process_id: int,
     file_paths: list[str],
@@ -937,25 +942,25 @@ def _process_batches_multiple_files_inner(
     schema: Any,
     n_cores: int,
     seq_length: int,
-    seq_step_sizes: list[int],
+    stride_by_split: list[int],
     data_columns: list[str],
     n_classes: dict[str, int],
     id_maps: dict[str, dict[Union[int, str], int]],
     selected_columns_statistics: dict[str, dict[str, float]],
     col_types: dict[str, str],
-    group_proportions: list[float],
+    split_ratios: list[float],
     write_format: str,
     split_paths: list[str],
     target_dir: str,
     batches_per_file: int,
-    combine_into_single_file: bool,
+    merge_output: bool,
     continue_preprocessing: bool,
     subsequence_start_mode: str,
 ):
     """Inner function for processing batches of data from multiple files.
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         data_name_root: The root name of the data file.
         process_id: The id of the process.
         file_paths: A list of file paths to process.
@@ -965,18 +970,20 @@ def _process_batches_multiple_files_inner(
         schema: The schema for the preprocessed data.
         n_cores: The number of cores to use for parallel processing.
         seq_length: The sequence length for the model inputs.
-        seq_step_sizes: A list of step sizes for creating subsequences.
+        stride_by_split: A list of step sizes for creating subsequences.
         data_columns: A list of data columns.
         n_classes: A dictionary containing the number of classes for each categorical column.
         id_maps: A dictionary containing the id maps for each categorical column.
         selected_columns_statistics: A dictionary containing the statistics for each numerical column.
         col_types: A dictionary containing the column types.
-        group_proportions: A list of floats that define the relative sizes of data splits.
+        split_ratios: A list of floats that define the relative sizes of data splits.
         write_format: The file format for the output files.
         split_paths: The paths to the output split files.
         target_dir: The target directory for temporary files.
         batches_per_file: The number of batches to process per file.
-        combine_into_single_file: Whether to combine the output into a single file.
+        merge_output: Whether to combine the output into a single file.
+        continue_preprocessing: Continue preprocessing job that was interrupted while writing to temp folder.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
     """
     n_files = len(file_paths)
     assert n_files > 0
@@ -995,13 +1002,13 @@ def _process_batches_multiple_files_inner(
             ]
             if continue_preprocessing:
                 file_has_been_processed = _check_file_has_been_processed(
-                    project_path,
+                    project_root,
                     data_name_root,
                     process_id,
-                    group_proportions,
+                    split_ratios,
                     write_format,
                     target_dir,
-                    combine_into_single_file,
+                    merge_output,
                     file_index_str,
                 )
 
@@ -1032,16 +1039,16 @@ def _process_batches_multiple_files_inner(
             data_name_root_inner = f"{data_name_root}-{process_id}-{file_index_str}"
 
             n_batches = _process_batches_single_file(
-                project_path,
+                project_root,
                 data_name_root_inner,
                 data,
                 schema,
                 n_cores,
                 seq_length,
-                seq_step_sizes,
+                stride_by_split,
                 data_columns,
                 col_types,
-                group_proportions,
+                split_ratios,
                 write_format,
                 adjusted_split_paths,
                 target_dir,
@@ -1049,11 +1056,11 @@ def _process_batches_multiple_files_inner(
                 subsequence_start_mode,
             )
 
-            if combine_into_single_file:
+            if merge_output:
                 input_files = create_file_paths_for_multiple_files1(
-                    project_path,
+                    project_root,
                     target_dir,
-                    len(group_proportions),
+                    len(split_ratios),
                     n_batches,
                     process_id,
                     file_index_str,
@@ -1061,9 +1068,9 @@ def _process_batches_multiple_files_inner(
                     write_format,
                 )
                 combine_multiprocessing_outputs(
-                    project_path,
+                    project_root,
                     target_dir,
-                    len(group_proportions),
+                    len(split_ratios),
                     input_files,
                     data_name_root,
                     write_format,
@@ -1078,16 +1085,16 @@ def _process_batches_multiple_files_inner(
 
 @beartype
 def _process_batches_single_file(
-    project_path: str,
+    project_root: str,
     data_name_root: str,
     data: pl.DataFrame,
     schema: Any,
     n_cores: Optional[int],
     seq_length: int,
-    seq_step_sizes: list[int],
+    stride_by_split: list[int],
     data_columns: list[str],
     col_types: dict[str, str],
-    group_proportions: list[float],
+    split_ratios: list[float],
     write_format: str,
     split_paths: list[str],
     target_dir: str,
@@ -1097,20 +1104,21 @@ def _process_batches_single_file(
     """Processes batches of data from a single file.
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         data_name_root: The root name of the data file.
         data: The data to process.
         schema: The schema for the preprocessed data.
         n_cores: The number of cores to use for parallel processing.
         seq_length: The sequence length for the model inputs.
-        seq_step_sizes: A list of step sizes for creating subsequences.
+        stride_by_split: A list of step sizes for creating subsequences.
         data_columns: A list of data columns.
         col_types: A dictionary containing the column types.
-        group_proportions: A list of floats that define the relative sizes of data splits.
+        split_ratios: A list of floats that define the relative sizes of data splits.
         write_format: The file format for the output files.
         split_paths: The paths to the output split files.
         target_dir: The target directory for temporary files.
         batches_per_file: The number of batches to process per file.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
 
     Returns:
         The number of batches processed.
@@ -1119,17 +1127,17 @@ def _process_batches_single_file(
     batch_limits = get_batch_limits(data, n_cores)
     batches = [
         (
-            project_path,
+            project_root,
             data_name_root,
             process_id,
             data.slice(start, end - start),
             schema,
             split_paths,
             seq_length,
-            seq_step_sizes,
+            stride_by_split,
             data_columns,
             col_types,
-            group_proportions,
+            split_ratios,
             target_dir,
             write_format,
             batches_per_file,
@@ -1276,17 +1284,17 @@ def combine_maps(
 
 
 @beartype
-def get_group_bounds(data_subset: pl.DataFrame, group_proportions: list[float]):
+def get_group_bounds(data_subset: pl.DataFrame, split_ratios: list[float]):
     """Calculates row indices for splitting a sequence into groups.
 
     This function takes a DataFrame `data_subset` (which typically
     contains all items for a single `sequenceId`) and calculates the
     row indices to split it into multiple groups (e.g., train, val, test)
-    based on the provided `group_proportions`.
+    based on the provided `split_ratios`.
 
     Args:
         data_subset: The DataFrame (for a single sequence) to split.
-        group_proportions: A list of floats (e.g., [0.8, 0.1, 0.1]) that
+        split_ratios: A list of floats (e.g., [0.8, 0.1, 0.1]) that
             sum to 1.0, defining the relative sizes of the splits.
 
     Returns:
@@ -1294,7 +1302,7 @@ def get_group_bounds(data_subset: pl.DataFrame, group_proportions: list[float]):
         proportion, defining the row slices for each group.
     """
     n = data_subset.shape[0]
-    upper_bounds = list((np.cumsum(group_proportions) * n).astype(int))
+    upper_bounds = list((np.cumsum(split_ratios) * n).astype(int))
     lower_bounds = [0] + list(upper_bounds[:-1])
     group_bounds = list(zip(lower_bounds, upper_bounds))
     return group_bounds
@@ -1431,17 +1439,17 @@ def _write_accumulated_sequences(
 
 @beartype
 def preprocess_batch(
-    project_path: str,
+    project_root: str,
     data_name_root: str,
     process_id: int,
     batch: pl.DataFrame,
     schema: Any,
     split_paths: list[str],
     seq_length: int,
-    seq_step_sizes: list[int],
+    stride_by_split: list[int],
     data_columns: list[str],
     col_types: dict[str, str],
-    group_proportions: list[float],
+    split_ratios: list[float],
     target_dir: str,
     write_format: str,
     batches_per_file: int,
@@ -1450,20 +1458,21 @@ def preprocess_batch(
     """Processes a batch of data.
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         data_name_root: The root name of the data file.
         process_id: The id of the process.
         batch: The batch of data to process.
         schema: The schema for the preprocessed data.
         split_paths: The paths to the output split files.
         seq_length: The sequence length for the model inputs.
-        seq_step_sizes: A list of step sizes for creating subsequences.
+        stride_by_split: A list of step sizes for creating subsequences.
         data_columns: A list of data columns.
         col_types: A dictionary containing the column types.
-        group_proportions: A list of floats that define the relative sizes of data splits.
+        split_ratios: A list of floats that define the relative sizes of data splits.
         target_dir: The target directory for temporary files.
         write_format: The file format for the output files.
         batches_per_file: The number of batches to process per file.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
     """
     sequence_ids = sorted(batch.get_column("sequenceId").unique().to_list())
 
@@ -1475,14 +1484,14 @@ def preprocess_batch(
         pad_width = len(str(math.ceil(len(sequence_ids) / batches_per_file) + 1))
         for i, sequence_id in enumerate(sequence_ids):
             data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
-            group_bounds = get_group_bounds(data_subset, group_proportions)
+            group_bounds = get_group_bounds(data_subset, split_ratios)
             sequences = {
                 i: cast_columns_to_string(
                     extract_sequences(
                         data_subset.slice(lb, ub - lb),
                         schema,
                         seq_length,
-                        seq_step_sizes[i],
+                        stride_by_split[i],
                         data_columns,
                         subsequence_start_mode,
                     )
@@ -1527,14 +1536,14 @@ def preprocess_batch(
         written_files: dict[int, list[str]] = {i: [] for i in range(len(split_paths))}
         for i, sequence_id in enumerate(sequence_ids):
             data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
-            group_bounds = get_group_bounds(data_subset, group_proportions)
+            group_bounds = get_group_bounds(data_subset, split_ratios)
             sequences = {
                 j: cast_columns_to_string(
                     extract_sequences(
                         data_subset.slice(lb, ub - lb),
                         schema,
                         seq_length,
-                        seq_step_sizes[j],
+                        stride_by_split[j],
                         data_columns,
                         subsequence_start_mode,
                     )
@@ -1559,7 +1568,7 @@ def preprocess_batch(
                 written_files[group].append(split_path_batch_seq)
 
         combine_multiprocessing_outputs(
-            project_path,
+            project_root,
             target_dir,
             len(split_paths),
             written_files,
@@ -1575,7 +1584,7 @@ def extract_sequences(
     data: pl.DataFrame,
     schema: Any,
     seq_length: int,
-    seq_step_size: int,
+    stride_for_split: int,
     columns: list[str],
     subsequence_start_mode: str,
 ) -> pl.DataFrame:
@@ -1584,7 +1593,7 @@ def extract_sequences(
     This function takes a DataFrame where each row contains all items
     for a single `sequenceId`. It iterates through each `sequenceId`,
     extracts all possible subsequences of `seq_length` using the
-    specified `seq_step_size`, calculates the starting position of each
+    specified `stride_for_split`, calculates the starting position of each
     subsequence within the original sequence, and formats them into a new,
     long-format DataFrame that conforms to the provided `schema`.
 
@@ -1592,9 +1601,10 @@ def extract_sequences(
         data: The input Polars DataFrame, grouped by "sequenceId".
         schema: The schema for the output long-format DataFrame.
         seq_length: The length of the subsequences to extract.
-        seq_step_size: The step size to use when sliding the window
+        stride_for_split: The step size to use when sliding the window
             to create subsequences.
         columns: A list of the data column names (features) to extract.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
 
     Returns:
         A new, long-format Polars DataFrame containing the extracted
@@ -1604,8 +1614,6 @@ def extract_sequences(
     """
     if data.is_empty():
         return pl.DataFrame(schema=schema)
-
-    print(f"[INFO] {data.shape = }")
 
     raw_sequences = data.group_by("sequenceId", maintain_order=True).agg(
         [pl.col(c) for c in columns]
@@ -1618,7 +1626,7 @@ def extract_sequences(
         subsequences = extract_subsequences(
             in_seq_lists_only,
             seq_length,
-            seq_step_size,
+            stride_for_split,
             columns,
             subsequence_start_mode,
         )
@@ -1628,12 +1636,11 @@ def extract_sequences(
                 row = [
                     in_row["sequenceId"],
                     subsequence_id,
-                    subsequence_id * seq_step_size,
+                    subsequence_id * stride_for_split,
                     col,
                 ] + subseqs[subsequence_id]
                 assert len(row) == (seq_length + 5), f"{row = }"
                 rows.append(row)
-    print(f"[INFO] {len(rows) = }")
 
     sequences = pl.DataFrame(
         rows,
@@ -1645,20 +1652,24 @@ def extract_sequences(
 
 @beartype
 def get_subsequence_starts(
-    in_seq_length: int, seq_length: int, seq_step_size: int, subsequence_start_mode: str
+    in_seq_length: int,
+    seq_length: int,
+    stride_for_split: int,
+    subsequence_start_mode: str,
 ) -> np.ndarray:
     """Calculates the start indices for extracting subsequences.
 
     This function determines the starting indices for sliding a window of
     `seq_length` over an input sequence of `in_seq_length`. It aims to
-    use `seq_step_size`, but adjusts the step size slightly to ensure
+    use `stride_for_split`, but adjusts the step size slightly to ensure
     that the windows are distributed as evenly as possible and cover the
     full sequence from the beginning to the end.
 
     Args:
         in_seq_length: The length of the original input sequence.
         seq_length: The length of the subsequences to extract.
-        seq_step_size: The *desired* step size between subsequences.
+        stride_for_split: The *desired* step size between subsequences.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
 
     Returns:
         A numpy array of integer start indices for each subsequence.
@@ -1669,7 +1680,7 @@ def get_subsequence_starts(
     ], f"{subsequence_start_mode = } not in ['distribute', 'exact']"
     if subsequence_start_mode == "distribute":
         last_available_start = in_seq_length - (seq_length + 1)
-        starts = np.arange(0, last_available_start + seq_step_size, seq_step_size)
+        starts = np.arange(0, last_available_start + stride_for_split, stride_for_split)
         starts[-1] = last_available_start
         if len(starts) > 2:
             while True:
@@ -1682,13 +1693,13 @@ def get_subsequence_starts(
 
     if subsequence_start_mode == "exact":
         assert (
-            ((in_seq_length - 1) - seq_length) % seq_step_size == 0
-        ), f"'exact' can only be used if: ((in_seq_length - 1) - seq_length) % seq_step_size == 0, {(in_seq_length -1) = }, {seq_length = }, {seq_step_size = }"
+            ((in_seq_length - 1) - seq_length) % stride_for_split == 0
+        ), f"'exact' can only be used if: ((in_seq_length - 1) - seq_length) % stride_for_split == 0, {(in_seq_length -1) = }, {seq_length = }, {stride_for_split = }"
         last_possible_start = (
             in_seq_length - (seq_length - 1) - 1
         )  # the latter '-1' is to translate to index
         return np.arange(
-            0, last_possible_start + 1, seq_step_size
+            0, last_possible_start + 1, stride_for_split
         )  # the '+1' is to make it inclusive
     return np.array([])
 
@@ -1697,7 +1708,7 @@ def get_subsequence_starts(
 def extract_subsequences(
     in_seq: dict[str, list],
     seq_length: int,
-    seq_step_size: int,
+    stride_for_split: int,
     columns: list[str],
     subsequence_start_mode: str,
 ) -> dict[str, list[list[Union[float, int]]]]:
@@ -1714,8 +1725,9 @@ def extract_subsequences(
         in_seq: A dictionary mapping column names to lists of items
             (e.g., `{'col_A': [1, 2, 3, 4, 5], 'col_B': [6, 7, 8, 9, 10]}`).
         seq_length: The length of the subsequences to extract.
-        seq_step_size: The desired step size between subsequences.
+        stride_for_split: The desired step size between subsequences.
         columns: A list of the column names (keys in `in_seq`) to process.
+        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
 
     Returns:
         A dictionary mapping column names to a *list of lists*, where
@@ -1731,12 +1743,12 @@ def extract_subsequences(
     in_seq_length = len(in_seq[columns[0]])
 
     subsequence_starts = get_subsequence_starts(
-        in_seq_length, seq_length, seq_step_size, subsequence_start_mode
+        in_seq_length, seq_length, stride_for_split, subsequence_start_mode
     )
     subsequence_starts_diff = subsequence_starts[1:] - subsequence_starts[:-1]
     assert np.all(
-        subsequence_starts_diff <= seq_step_size
-    ), f"Diff of {subsequence_starts = }, {subsequence_starts_diff = } larger than {seq_step_size = }"
+        subsequence_starts_diff <= stride_for_split
+    ), f"Diff of {subsequence_starts = }, {subsequence_starts_diff = } larger than {stride_for_split = }"
 
     return {
         col: [list(in_seq[col][i : i + seq_length + 1]) for i in subsequence_starts]
@@ -1797,7 +1809,7 @@ def delete_files(files: Union[list[str], dict[int, list[str]]]) -> None:
 
 @beartype
 def create_file_paths_for_multiple_files1(
-    project_path: str,
+    project_root: str,
     target_dir: str,
     n_splits: int,
     n_batches: int,
@@ -1808,7 +1820,7 @@ def create_file_paths_for_multiple_files1(
 ) -> dict[int, list[str]]:
     """Creates a dictionary of temporary file paths for a specific data file.
 
-    This is used in the multi-file, `combine_into_single_file=True`
+    This is used in the multi-file, `merge_output=True`
     workflow. It generates file path names for intermediate batches
     *before* they are combined.
 
@@ -1816,7 +1828,7 @@ def create_file_paths_for_multiple_files1(
     `{dataset_name}-{process_id}-{file_index_str}-split{split}-{batch_id}.{write_format}`
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         target_dir: The temporary directory to place files in.
         n_splits: The number of data splits.
         n_batches: The number of batches created by the process.
@@ -1833,7 +1845,7 @@ def create_file_paths_for_multiple_files1(
     for split in range(n_splits):
         files_for_split = [
             os.path.join(
-                project_path,
+                project_root,
                 "data",
                 target_dir,
                 f"{dataset_name}-{process_id}-{file_index_str}-split{split}-{batch_id}.{write_format}",
@@ -1846,7 +1858,7 @@ def create_file_paths_for_multiple_files1(
 
 @beartype
 def create_file_paths_for_single_file(
-    project_path: str,
+    project_root: str,
     target_dir: str,
     n_splits: int,
     n_batches: int,
@@ -1855,7 +1867,7 @@ def create_file_paths_for_single_file(
 ) -> dict[int, list[str]]:
     """Creates a dictionary of temporary file paths for a single-file run.
 
-    This is used in the single-file, `combine_into_single_file=True`
+    This is used in the single-file, `merge_output=True`
     workflow. It generates file path names for intermediate batches
     created by different processes *before* they are combined.
 
@@ -1863,7 +1875,7 @@ def create_file_paths_for_single_file(
     `{dataset_name}-split{split}-{core_id}.{write_format}`
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         target_dir: The temporary directory to place files in.
         n_splits: The number of data splits.
         n_batches: The number of processes (batches) running in parallel.
@@ -1878,7 +1890,7 @@ def create_file_paths_for_single_file(
     for split in range(n_splits):
         files_for_split = [
             os.path.join(
-                project_path,
+                project_root,
                 "data",
                 target_dir,
                 f"{dataset_name}-split{split}-{core_id}.{write_format}",
@@ -1891,7 +1903,7 @@ def create_file_paths_for_single_file(
 
 @beartype
 def create_file_paths_for_multiple_files2(
-    project_path: str,
+    project_root: str,
     target_dir: str,
     n_splits: int,
     n_processes: int,
@@ -1901,7 +1913,7 @@ def create_file_paths_for_multiple_files2(
 ) -> dict[int, list[str]]:
     """Creates a dictionary of intermediate file paths for a multi-file run.
 
-    This is used in the multi-file, `combine_into_single_file=True`
+    This is used in the multi-file, `merge_output=True`
     workflow. It generates the file paths for the *combined* files
     from each process, which are the *inputs* to the final combination step.
 
@@ -1909,7 +1921,7 @@ def create_file_paths_for_multiple_files2(
     `{dataset_name}-{process_id}-{file_index}-split{split}.{write_format}`
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         target_dir: The temporary directory where files are located.
         n_splits: The number of data splits.
         n_processes: The total number of multiprocessing workers.
@@ -1928,7 +1940,7 @@ def create_file_paths_for_multiple_files2(
     for split in range(n_splits):
         files_for_split = [
             os.path.join(
-                project_path,
+                project_root,
                 "data",
                 target_dir,
                 f"{dataset_name}-{process_id}-{str(file_index).zfill(pad_width)}-split{split}.{write_format}",
@@ -1943,7 +1955,7 @@ def create_file_paths_for_multiple_files2(
 
 @beartype
 def combine_multiprocessing_outputs(
-    project_path: str,
+    project_root: str,
     target_dir: str,
     n_splits: int,
     input_files: dict[int, list[str]],
@@ -1964,7 +1976,7 @@ def combine_multiprocessing_outputs(
       to concatenate the files efficiently.
 
     Args:
-        project_path: The path to the sequifier project directory.
+        project_root: The path to the sequifier project directory.
         target_dir: The temporary directory containing intermediate files.
         n_splits: The number of data splits.
         input_files: A dictionary mapping split index (int) to a list
@@ -1980,7 +1992,7 @@ def combine_multiprocessing_outputs(
     """
     for split in range(n_splits):
         split_file_path = create_split_file_path(
-            project_path,
+            project_root,
             dataset_name,
             split,
             write_format,
@@ -2003,7 +2015,7 @@ def combine_multiprocessing_outputs(
 
 @beartype
 def create_split_file_path(
-    project_path: str,
+    project_root: str,
     dataset_name: str,
     split: int,
     write_format: str,
@@ -2021,7 +2033,7 @@ def create_split_file_path(
     else:
         file_name = f"{dataset_name}-{pre_split_str}-split{split}-{post_split_str}.{write_format}"
 
-    out_path = os.path.join(project_path, "data", file_name)
+    out_path = os.path.join(project_root, "data", file_name)
     if in_target_dir:
         out_path = insert_top_folder(out_path, target_dir)
 

@@ -2,7 +2,7 @@ models/
 data/
 checkpoints/
 logs/
-ddconfigs/
+metadata_configs/
 outputs/
 project_folder/
 

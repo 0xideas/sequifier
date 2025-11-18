@@ -5,7 +5,7 @@ from typing import Optional
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 from sequifier.config.train_config import (
     DotDict,
@@ -13,12 +13,12 @@ from sequifier.config.train_config import (
     TrainingSpecModel,
     TrainModel,
 )
-from sequifier.helpers import normalize_path
+from sequifier.helpers import normalize_path, try_catch_excess_keys
 
 
 @beartype
 def load_hyperparameter_search_config(
-    config_path: str, on_unprocessed: bool
+    config_path: str, skip_metadata: bool
 ) -> "HyperparameterSearch":
     """Load a hyperparameter search configuration from a YAML file.
 
@@ -28,7 +28,7 @@ def load_hyperparameter_search_config(
 
     Args:
         config_path: The path to the hyperparameter search configuration file.
-        on_unprocessed: A boolean flag indicating whether the configuration is
+        skip_metadata: A boolean flag indicating whether the configuration is
             for unprocessed data. If False, it will load and integrate
             data-driven configurations.
 
@@ -39,59 +39,61 @@ def load_hyperparameter_search_config(
     with open(config_path, "r") as f:
         config_values = yaml.safe_load(f)
 
-    if not on_unprocessed:
-        ddconfig_path = config_values.get("ddconfig_path")
+    if not skip_metadata:
+        metadata_config_path = config_values.get("metadata_config_path")
 
         with open(
-            normalize_path(ddconfig_path, config_values["project_path"]), "r"
+            normalize_path(metadata_config_path, config_values["project_root"]), "r"
         ) as f:
-            dd_config = json.loads(f.read())
+            metadata_config = json.loads(f.read())
 
         config_values["column_types"] = config_values.get(
-            "column_types", [dd_config["column_types"]]
+            "column_types", [metadata_config["column_types"]]
         )
 
-        if config_values["selected_columns"] is None:
-            config_values["selected_columns"] = [
+        if config_values["input_columns"] is None:
+            config_values["input_columns"] = [
                 list(config_values["column_types"].keys())
             ]
 
         config_values["categorical_columns"] = [
             [
                 col
-                for col, type_ in dd_config["column_types"].items()
-                if type_ == "Int64" and col in selected_columns
+                for col, type_ in metadata_config["column_types"].items()
+                if type_ == "Int64" and col in input_columns
             ]
-            for selected_columns in config_values["selected_columns"]
+            for input_columns in config_values["input_columns"]
         ]
 
         config_values["real_columns"] = [
             [
                 col
-                for col, type_ in dd_config["column_types"].items()
-                if type_ == "Float64" and col in selected_columns
+                for col, type_ in metadata_config["column_types"].items()
+                if type_ == "Float64" and col in input_columns
             ]
-            for selected_columns in config_values["selected_columns"]
+            for input_columns in config_values["input_columns"]
         ]
 
         config_values["n_classes"] = config_values.get(
-            "n_classes", dd_config["n_classes"]
+            "n_classes", metadata_config["n_classes"]
         )
         config_values["training_data_path"] = normalize_path(
-            config_values.get("training_data_path", dd_config["split_paths"][0]),
-            config_values["project_path"],
+            config_values.get("training_data_path", metadata_config["split_paths"][0]),
+            config_values["project_root"],
         )
         config_values["validation_data_path"] = normalize_path(
             config_values.get(
                 "validation_data_path",
-                dd_config["split_paths"][min(1, len(dd_config["split_paths"]) - 1)],
+                metadata_config["split_paths"][
+                    min(1, len(metadata_config["split_paths"]) - 1)
+                ],
             ),
-            config_values["project_path"],
+            config_values["project_root"],
         )
 
-        config_values["id_maps"] = dd_config["id_maps"]
+        config_values["id_maps"] = metadata_config["id_maps"]
 
-    return HyperparameterSearch(**config_values)
+    return try_catch_excess_keys(config_path, HyperparameterSearch, config_values)
 
 
 class TrainingSpecHyperparameterSampling(BaseModel):
@@ -103,9 +105,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         log_interval: The interval in batches for logging.
         class_share_log_columns: Columns for which to log class share.
         early_stopping_epochs: Number of epochs for early stopping.
-        iter_save: Interval in epochs for saving model checkpoints.
+        save_interval_epochs: Interval in epochs for saving model checkpoints.
         batch_size: A list of possible batch sizes.
-        lr: A list of possible learning rates.
+        learning_rate: A list of possible learning rates.
         criterion: A dictionary mapping target columns to loss functions.
         class_weights: Optional dictionary mapping columns to class weights.
         accumulation_steps: A list of possible gradient accumulation steps.
@@ -116,14 +118,18 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         continue_training: Flag to continue training from a checkpoint.
     """
 
+    class Config:
+        arbitrary_types_allowed = True
+        extra = "forbid"
+
     device: str
     epochs: list[int]
     log_interval: int = 10
     class_share_log_columns: list[str] = Field(default_factory=list)
     early_stopping_epochs: Optional[int] = None
-    iter_save: int
+    save_interval_epochs: int
     batch_size: list[int]
-    lr: list[float]
+    learning_rate: list[float]
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
     accumulation_steps: list[int]
@@ -162,11 +168,12 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             DotDict(scheduler_config) for scheduler_config in kwargs["scheduler"]
         ]
 
-    @validator("scheduler")
+    @field_validator("scheduler")
+    @classmethod
     def validate_model_spec(cls, v, values):
         assert (
-            len(values["lr"]) == len(v)
-        ), "lr and scheduler must have the same number of candidate values, that are paired"
+            len(values["learning_rate"]) == len(v)
+        ), "learning_rate and scheduler must have the same number of candidate values, that are paired"
 
         assert (
             len(values["epochs"]) == len(v)
@@ -184,32 +191,32 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             A TrainingSpecModel instance populated with a randomly sampled set of
             hyperparameters.
         """
-        lr_and_scheduler_index = np.random.randint(len(self.lr))
+        learning_rate_and_scheduler_index = np.random.randint(len(self.learning_rate))
         optimizer_index = np.random.randint(len(self.optimizer))
         batch_size = np.random.choice(self.batch_size)
         dropout = np.random.choice(self.dropout)
         accumulation_steps = np.random.choice(self.accumulation_steps)
         optimizer = self.optimizer[optimizer_index]
-        lr = self.lr[lr_and_scheduler_index]
+        learning_rate = self.learning_rate[learning_rate_and_scheduler_index]
 
-        print(f"{lr = } - {batch_size = } - {dropout = } - {optimizer = }")
+        print(f"{learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }")
 
         return TrainingSpecModel(
             device=self.device,
-            epochs=self.epochs[lr_and_scheduler_index],
+            epochs=self.epochs[learning_rate_and_scheduler_index],
             log_interval=self.log_interval,
             class_share_log_columns=self.class_share_log_columns,
             early_stopping_epochs=self.early_stopping_epochs,
-            iter_save=self.iter_save,
+            save_interval_epochs=self.save_interval_epochs,
             batch_size=batch_size,
-            lr=lr,
+            learning_rate=learning_rate,
             criterion=self.criterion,
             class_weights=self.class_weights,
             accumulation_steps=accumulation_steps,
             dropout=dropout,
             loss_weights=self.loss_weights,
             optimizer=optimizer,
-            scheduler=self.scheduler[lr_and_scheduler_index],
+            scheduler=self.scheduler[learning_rate_and_scheduler_index],
         )
 
     def grid_sample(self, i):
@@ -227,37 +234,41 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         """
         hyperparameter_combinations = list(
             product(
-                np.arange(len(self.lr)),
+                np.arange(len(self.learning_rate)),
                 self.batch_size,
                 self.dropout,
                 self.optimizer,
                 self.accumulation_steps,
             )
         )
-        lr_and_scheduler_index, batch_size, dropout, optimizer, accumulation_steps = (
-            hyperparameter_combinations[i]
-        )
+        (
+            learning_rate_and_scheduler_index,
+            batch_size,
+            dropout,
+            optimizer,
+            accumulation_steps,
+        ) = hyperparameter_combinations[i]
 
-        lr = self.lr[lr_and_scheduler_index]
+        learning_rate = self.learning_rate[learning_rate_and_scheduler_index]
 
-        print(f"{lr = } - {batch_size = } - {dropout = } - {optimizer = }")
+        print(f"{learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }")
 
         return TrainingSpecModel(
             device=self.device,
-            epochs=self.epochs[lr_and_scheduler_index],
+            epochs=self.epochs[learning_rate_and_scheduler_index],
             log_interval=self.log_interval,
             class_share_log_columns=self.class_share_log_columns,
             early_stopping_epochs=self.early_stopping_epochs,
-            iter_save=self.iter_save,
+            save_interval_epochs=self.save_interval_epochs,
             batch_size=batch_size,
-            lr=lr,
+            learning_rate=learning_rate,
             criterion=self.criterion,
             class_weights=self.class_weights,
             accumulation_steps=accumulation_steps,
             dropout=dropout,
             loss_weights=self.loss_weights,
             optimizer=optimizer,
-            scheduler=self.scheduler[lr_and_scheduler_index],
+            scheduler=self.scheduler[learning_rate_and_scheduler_index],
         )
 
     def n_combinations(self):
@@ -270,7 +281,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             The total number of possible hyperparameter combinations.
         """
         return (
-            len(self.lr)
+            len(self.learning_rate)
             * len(self.batch_size)
             * len(self.dropout)
             * len(self.optimizer)
@@ -282,59 +293,60 @@ class ModelSpecHyperparameterSampling(BaseModel):
     """Pydantic model for model specification hyperparameter sampling.
 
     Attributes:
-        d_model: A list of possible numbers of expected features in the input.
-        d_model_by_column: A list of possible embedding dimensions for each input column.
-        nhead: A list of possible numbers of heads in the multi-head attention models.
-        d_hid: A list of possible dimensions of the feedforward network model.
-        nlayers: A list of possible numbers of layers in the transformer model.
+        dim_model: A list of possible numbers of expected features in the input.
+        feature_embedding_dims: A list of possible embedding dimensions for each input column.
+        n_head: A list of possible numbers of heads in the multi-head attention models.
+        dim_feedforward: A list of possible dimensions of the feedforward network model.
+        num_layers: A list of possible numbers of layers in the transformer model.
     """
 
-    d_model: list[int]
-    d_model_by_column: Optional[list[dict[str, int]]]
-    nhead: list[int]
-    d_hid: list[int]
-    nlayers: list[int]
+    dim_model: list[int]
+    feature_embedding_dims: Optional[list[dict[str, int]]]
+    n_head: list[int]
+    dim_feedforward: list[int]
+    num_layers: list[int]
 
-    @validator("nhead")
+    @field_validator("n_head")
+    @classmethod
     def validate_model_spec(cls, v, values):
-        if values["d_model_by_column"] is not None:
+        if values["feature_embedding_dims"] is not None:
             assert (
-                len(values["d_model"]) == len(values["d_model_by_column"])
-            ), "d_model and d_model_by_column must have the same number of candidate values, that are paired"
+                len(values["dim_model"]) == len(values["feature_embedding_dims"])
+            ), "dim_model and feature_embedding_dims must have the same number of candidate values, that are paired"
 
         assert (
-            len(values["d_model"]) == len(v)
-        ), "d_model and nhead must have the same number of candidate values, that are paired"
+            len(values["dim_model"]) == len(v)
+        ), "dim_model and n_head must have the same number of candidate values, that are paired"
         return v
 
     def random_sample(self):
         """Randomly sample a set of model hyperparameters.
 
         This method selects a random combination of model hyperparameters from the
-        defined lists of possibilities. It ensures that d_model, d_model_by_column,
-        and nhead are paired correctly.
+        defined lists of possibilities. It ensures that dim_model, feature_embedding_dims,
+        and n_head are paired correctly.
 
         Returns:
             A ModelSpecModel instance populated with a randomly sampled set of
             hyperparameters.
         """
-        d_model_index = np.random.randint(len(self.d_model))
-        d_model_by_column = (
+        dim_model_index = np.random.randint(len(self.dim_model))
+        feature_embedding_dims = (
             None
-            if self.d_model_by_column is None
-            else self.d_model_by_column[d_model_index]
+            if self.feature_embedding_dims is None
+            else self.feature_embedding_dims[dim_model_index]
         )
-        d_model = self.d_model[d_model_index]
-        d_hid = np.random.choice(self.d_hid)
-        nlayers = np.random.choice(self.nlayers)
-        print(f"{d_model = } - {d_hid = } - {nlayers = }")
+        dim_model = self.dim_model[dim_model_index]
+        dim_feedforward = np.random.choice(self.dim_feedforward)
+        num_layers = np.random.choice(self.num_layers)
+        print(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
 
         return ModelSpecModel(
-            d_model=self.d_model[d_model_index],
-            d_model_by_column=d_model_by_column,
-            nhead=self.nhead[d_model_index],
-            d_hid=d_hid,
-            nlayers=nlayers,
+            dim_model=self.dim_model[dim_model_index],
+            feature_embedding_dims=feature_embedding_dims,
+            n_head=self.n_head[dim_model_index],
+            dim_feedforward=dim_feedforward,
+            num_layers=num_layers,
         )
 
     def grid_sample(self, i):
@@ -351,25 +363,27 @@ class ModelSpecHyperparameterSampling(BaseModel):
             hyperparameters.
         """
         hyperparameter_combinations = list(
-            product(np.arange(len(self.d_model)), self.d_hid, self.nlayers)
+            product(
+                np.arange(len(self.dim_model)), self.dim_feedforward, self.num_layers
+            )
         )
 
-        d_model_index, d_hid, nlayers = hyperparameter_combinations[i]
-        d_model = self.d_model[d_model_index]
-        print(f"{d_model = } - {d_hid = } - {nlayers = }")
+        dim_model_index, dim_feedforward, num_layers = hyperparameter_combinations[i]
+        dim_model = self.dim_model[dim_model_index]
+        print(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
 
-        d_model_by_column = (
+        feature_embedding_dims = (
             None
-            if self.d_model_by_column is None
-            else self.d_model_by_column[d_model_index]
+            if self.feature_embedding_dims is None
+            else self.feature_embedding_dims[dim_model_index]
         )
 
         return ModelSpecModel(
-            d_model=d_model,
-            d_model_by_column=d_model_by_column,
-            nhead=self.nhead[d_model_index],
-            d_hid=d_hid,
-            nlayers=nlayers,
+            dim_model=dim_model,
+            feature_embedding_dims=feature_embedding_dims,
+            n_head=self.n_head[dim_model_index],
+            dim_feedforward=dim_feedforward,
+            num_layers=num_layers,
         )
 
     def n_combinations(self):
@@ -381,15 +395,15 @@ class ModelSpecHyperparameterSampling(BaseModel):
         Returns:
             The total number of possible model hyperparameter combinations.
         """
-        return len(self.d_model) * len(self.d_hid) * len(self.nlayers)
+        return len(self.dim_model) * len(self.dim_feedforward) * len(self.num_layers)
 
 
 class HyperparameterSearch(BaseModel):
     """Pydantic model for hyperparameter search configuration.
 
     Attributes:
-        project_path: The path to the sequifier project directory.
-        ddconfig_path: The path to the data-driven configuration file.
+        project_root: The path to the sequifier project directory.
+        metadata_config_path: The path to the data-driven configuration file.
         hp_search_name: The name for the hyperparameter search.
         search_strategy: The search strategy, either "sample" or "grid".
         n_samples: The number of samples to draw for the search.
@@ -397,7 +411,7 @@ class HyperparameterSearch(BaseModel):
         training_data_path: The path to the training data.
         validation_data_path: The path to the validation data.
         read_format: The file format of the input data.
-        selected_columns: A list of lists of columns to be used for training.
+        input_columns: A list of lists of columns to be used for training.
         column_types: A list of dictionaries mapping columns to their types.
         categorical_columns: A list of lists of categorical columns.
         real_columns: A list of lists of real-valued columns.
@@ -414,8 +428,8 @@ class HyperparameterSearch(BaseModel):
         training_hyperparameter_sampling: The sampling configuration for training hyperparameters.
     """
 
-    project_path: str
-    ddconfig_path: str
+    project_root: str
+    metadata_config_path: str
     hp_search_name: str
     search_strategy: str = "sample"  # "sample" or "grid"
     n_samples: Optional[int]
@@ -424,7 +438,7 @@ class HyperparameterSearch(BaseModel):
     validation_data_path: str
     read_format: str = "parquet"
 
-    selected_columns: list[list[str]]
+    input_columns: list[list[str]]
     column_types: list[dict[str, str]]
     categorical_columns: list[list[str]]
     real_columns: list[list[str]]
@@ -443,12 +457,13 @@ class HyperparameterSearch(BaseModel):
     model_hyperparameter_sampling: ModelSpecHyperparameterSampling
     training_hyperparameter_sampling: TrainingSpecHyperparameterSampling
 
-    @validator("column_types")
+    @field_validator("column_types")
+    @classmethod
     def validate_model_spec(cls, v, values):
         if v is not None:
             assert (
-                len(values["selected_columns"]) == len(v)
-            ), "selected_columns and column_types must have the same number of candidate values, that are paired"
+                len(values["input_columns"]) == len(v)
+            ), "input_columns and column_types must have the same number of candidate values, that are paired"
         return v
 
     def random_sample(self, i):
@@ -466,20 +481,20 @@ class HyperparameterSearch(BaseModel):
         """
         model_spec = self.model_hyperparameter_sampling.random_sample()
         training_spec = self.training_hyperparameter_sampling.random_sample()
-        selected_columns_index = np.random.randint(len(self.selected_columns))
+        input_columns_index = np.random.randint(len(self.input_columns))
         seq_length = np.random.choice(self.seq_length)
-        print(f"{selected_columns_index = } - {seq_length = }")
+        print(f"{input_columns_index = } - {seq_length = }")
         return TrainModel(
-            project_path=self.project_path,
-            ddconfig_path=self.ddconfig_path,
+            project_root=self.project_root,
+            metadata_config_path=self.metadata_config_path,
             model_name=self.hp_search_name + f"-run-{i}",
             training_data_path=self.training_data_path,
             validation_data_path=self.validation_data_path,
             read_format=self.read_format,
-            selected_columns=self.selected_columns[selected_columns_index],
-            column_types=self.column_types[selected_columns_index],
-            categorical_columns=self.categorical_columns[selected_columns_index],
-            real_columns=self.real_columns[selected_columns_index],
+            input_columns=self.input_columns[input_columns_index],
+            column_types=self.column_types[input_columns_index],
+            categorical_columns=self.categorical_columns[input_columns_index],
+            real_columns=self.real_columns[input_columns_index],
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
@@ -520,22 +535,22 @@ class HyperparameterSearch(BaseModel):
         training_spec = self.training_hyperparameter_sampling.grid_sample(i_training)
 
         hyperparameter_combinations = list(
-            product(np.arange(len(self.selected_columns)), self.seq_length)
+            product(np.arange(len(self.input_columns)), self.seq_length)
         )
 
-        selected_columns_index, seq_length = hyperparameter_combinations[i_outer]
+        input_columns_index, seq_length = hyperparameter_combinations[i_outer]
 
         return TrainModel(
-            project_path=self.project_path,
-            ddconfig_path=self.ddconfig_path,
+            project_root=self.project_root,
+            metadata_config_path=self.metadata_config_path,
             model_name=self.hp_search_name + f"-run-{i}",
             training_data_path=self.training_data_path,
             validation_data_path=self.validation_data_path,
             read_format=self.read_format,
-            selected_columns=self.selected_columns[selected_columns_index],
-            column_types=self.column_types[selected_columns_index],
-            categorical_columns=self.categorical_columns[selected_columns_index],
-            real_columns=self.real_columns[selected_columns_index],
+            input_columns=self.input_columns[input_columns_index],
+            column_types=self.column_types[input_columns_index],
+            categorical_columns=self.categorical_columns[input_columns_index],
+            real_columns=self.real_columns[input_columns_index],
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
@@ -582,7 +597,7 @@ class HyperparameterSearch(BaseModel):
             The total number of possible hyperparameter configurations.
         """
         return (
-            len(self.selected_columns)
+            len(self.input_columns)
             * len(self.seq_length)
             * self.model_hyperparameter_sampling.n_combinations()
             * self.training_hyperparameter_sampling.n_combinations()

@@ -1,11 +1,11 @@
 #data driven config path
-project_path: .
+project_root: .
 data_path: "test_data.csv" # path to validation data (within project folder)
 model_path: "models/sequifier-default-best-300.onnx" # path to model (within project folder)
 device: "cpu" # device used for inference
 seq_length: 10 # sequence length for prediction (must be identical to training)
 output_probabilities: True # write out class probablities for further processing
-map_to_id: False # map predictions from indices to labels (requires ddconfig_path)
+map_to_id: False # map predictions from indices to labels (requires metadata_config_path)
 
 inference_batch_size: 10
 log_interval: 100

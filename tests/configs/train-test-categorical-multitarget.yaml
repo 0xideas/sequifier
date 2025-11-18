@@ -1,15 +1,14 @@
-project_path: tests/project_folder
+project_root: tests/project_folder
 model_name: model-categorical-multitarget-5
 read_format: pt
-ddconfig_path: configs/ddconfigs/test-data-categorical-multitarget-5.json
+metadata_config_path: configs/metadata_configs/test-data-categorical-multitarget-5.json
 
-selected_columns: null
+input_columns: null
 target_columns: [itemId, sup1, sup3]
 target_column_types:
   itemId: categorical
   sup1: categorical
   sup3: real
-class_share_log_columns:
 
 seq_length: 8
 inference_batch_size: 10
@@ -18,23 +17,23 @@ export_generative_model: true
 export_embedding_model: true
 
 model_spec:
-  d_model: 16
-  d_model_by_column:
+  dim_model: 16
+  feature_embedding_dims:
     itemId: 5
     sup1: 4
     sup2: 2
     sup3: 1
     sup4: 4
-  nhead: 2
-  d_hid: 10
-  nlayers: 2
-  inference_size: 1
+  n_head: 2
+  dim_feedforward: 10
+  num_layers: 2
+  prediction_length: 1
 training_spec:
   device: cpu
   epochs: 3
-  iter_save: 1
+  save_interval_epochs: 1
   batch_size: 10
-  lr: 0.003
+  learning_rate: 0.003
   log_interval: 200
   accumulation_steps: 2
   dropout: 0.3
@@ -57,5 +56,5 @@ training_spec:
     anneal_strategy: cos
     total_steps: 100
     three_phase: false
-  scheduler_step_iter: 'batch'
+  scheduler_step_on: 'batch'
   continue_training: false

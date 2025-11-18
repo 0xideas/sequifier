@@ -1,4 +1,4 @@
-project_path: .
+project_root: .
 #metadata
 training_data_path: "train_data.csv" # absolute path to training data
 validation_data_path: "test_data.csv" # absolute path to validation data
@@ -26,25 +26,24 @@ read_format: csv
 
 #model specification
 model_spec:
-  d_model: 10 # dimensionality ofc the token embedding system
-  nhead: 2 # number of attention heads within each transformer layer
-  d_hid: 50 # dimensionality of feedforward network inside transformer layer
-  nlayers: 2 # number of transformer layers
+  dim_model: 10 # dimensionality ofc the token embedding system
+  n_head: 2 # number of attention heads within each transformer layer
+  dim_feedforward: 50 # dimensionality of feedforward network inside transformer layer
+  num_layers: 2 # number of transformer layers
 
 #training specification
 training_spec:
   device: "cpu" # device for model training
   epochs: 100 # number of epochs
-  iter_save: 50 # frequency of checkpointing
+  save_interval_epochs: 50 # frequency of checkpointing
   batch_size: 50 # batch size for training
-  lr: 0.01  # learning rate
+  learning_rate: 0.01  # learning rate
   dropout: 0.1 # dropout rate during training
   criterion: "CrossEntropyLoss" # loss function, can be any in torch.nn
-  optimizer: 
+  optimizer:
     name: "Adam" # optimizer, can be any on torch.optim
   scheduler:
     name: "StepLR" # learning rate scheduler, can be any in torch.optim.lr_scheduler
     step_size: 1.0
     gamma: 0.99
   continue_training: true
-

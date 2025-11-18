@@ -5,7 +5,7 @@ def split_file_up(
     data: pd.DataFrame,
     number_of_files: int,
     seq_length: int,
-    inference_size: int,
+    prediction_length: int,
     folder_path: str,
 ):
     rows_per_file, leading_rows = divmod(data.shape[0], number_of_files)
@@ -15,16 +15,18 @@ def split_file_up(
     i_offset = 0
     first_start = True
     for i in range(number_of_files):
-        if (i * rows_per_file) >= (seq_length - inference_size):
+        if (i * rows_per_file) >= (seq_length - prediction_length):
             if first_start:
                 start = 0
                 first_start = False
             else:
-                start = leading_rows + (i * rows_per_file) - seq_length + inference_size
+                start = (
+                    leading_rows + (i * rows_per_file) - seq_length + prediction_length
+                )
 
             end = leading_rows + ((i + 1) * rows_per_file) + 1
             print(
-                f"{start = }, {end = }, {(start + (seq_length - inference_size)) = }, {(end - (start + (seq_length - inference_size))) = })"
+                f"{start = }, {end = }, {(start + (seq_length - prediction_length)) = }, {(end - (start + (seq_length - prediction_length))) = })"
             )
             data_subset = data.iloc[start:end, :]
             data_subset.to_parquet(

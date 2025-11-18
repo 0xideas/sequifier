@@ -1,9 +1,9 @@
-project_path: tests/project_folder
+project_root: tests/project_folder
 model_name: default
 read_format: parquet
-ddconfig_path: configs/ddconfigs/test-data-real-1.json
+metadata_config_path: configs/metadata_configs/test-data-real-1.json
 
-selected_columns: null
+input_columns: null
 target_columns: [itemValue]
 target_column_types:
   itemValue: real
@@ -18,18 +18,18 @@ export_pt: true
 export_with_dropout: true
 
 model_spec:
-  d_model: 50
-  nhead: 2
-  d_hid: 10
-  nlayers: 2
-  inference_size: 1
+  dim_model: 50
+  n_head: 2
+  dim_feedforward: 10
+  num_layers: 2
+  prediction_length: 1
 training_spec:
   device: cpu
   epochs: 3
-  iter_save: 1
+  save_interval_epochs: 1
   batch_size: 20
   log_interval: 200
-  lr: 0.003
+  learning_rate: 0.003
   accumulation_steps: null
   dropout: 0.3
   criterion:

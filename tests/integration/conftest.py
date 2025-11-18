@@ -33,7 +33,7 @@ def split_groups():
 
 
 @pytest.fixture(scope="session")
-def project_path():
+def project_root():
     return os.path.join("tests", "project_folder")
 
 
@@ -151,10 +151,10 @@ def inference_config_path_cat_inf_size_3_embedding():
 
 
 @pytest.fixture(scope="session")
-def remove_project_path_contents(project_path):
-    if os.path.exists(project_path):
-        shutil.rmtree(project_path)
-    os.makedirs(project_path)
+def remove_project_root_contents(project_root):
+    if os.path.exists(project_root):
+        shutil.rmtree(project_root)
+    os.makedirs(project_root)
 
     log_file_path = os.path.join("tests", "integration-test-log.txt")
     if os.path.exists(log_file_path):
@@ -274,7 +274,7 @@ def run_preprocessing(
     preprocessing_config_path_exact,
     preprocessing_config_path_exact_pt,
     format_configs_locally,
-    remove_project_path_contents,
+    remove_project_root_contents,
     copy_interrupted_data,
 ):
     for data_number in [1, 3, 5, 50]:
@@ -332,7 +332,7 @@ def run_preprocessing(
 @pytest.fixture(scope="session")
 def run_training(
     run_preprocessing,
-    project_path,
+    project_root,
     training_config_path_cat,
     training_config_path_real,
     training_config_path_cat_inf_size_1,
@@ -340,20 +340,20 @@ def run_training(
     training_config_path_cat_multitarget,
 ):
     for model_number in [1, 3, 5, 50]:
-        ddconfig_path_cat = os.path.join(
-            "configs", "ddconfigs", f"test-data-categorical-{model_number}.json"
+        metadata_config_path_cat = os.path.join(
+            "configs", "metadata_configs", f"test-data-categorical-{model_number}.json"
         )
         model_name_cat = f"model-categorical-{model_number}"
         write_and_log(
-            f"sequifier train --config-path={training_config_path_cat} --ddconfig-path={ddconfig_path_cat} --model-name={model_name_cat} --selected-columns={SELECTED_COLUMNS['categorical'][model_number]}"
+            f"sequifier train --config-path={training_config_path_cat} --metadata-config-path={metadata_config_path_cat} --model-name={model_name_cat} --input-columns={SELECTED_COLUMNS['categorical'][model_number]}"
         )
 
-        ddconfig_path_real = os.path.join(
-            "configs", "ddconfigs", f"test-data-real-{model_number}.json"
+        metadata_config_path_real = os.path.join(
+            "configs", "metadata_configs", f"test-data-real-{model_number}.json"
         )
         model_name_real = f"model-real-{model_number}"
         write_and_log(
-            f"sequifier train --config-path={training_config_path_real} --ddconfig-path={ddconfig_path_real} --model-name={model_name_real} --selected-columns=None"
+            f"sequifier train --config-path={training_config_path_real} --metadata-config-path={metadata_config_path_real} --model-name={model_name_real} --input-columns=None"
         )
 
     write_and_log(
@@ -369,22 +369,22 @@ def run_training(
     )
 
     source_path = os.path.join(
-        project_path, "models", "sequifier-model-real-1-best-3.pt"
+        project_root, "models", "sequifier-model-real-1-best-3.pt"
     )
     target_path = os.path.join(
-        project_path, "models", "sequifier-model-real-1-best-3-autoregression.pt"
+        project_root, "models", "sequifier-model-real-1-best-3-autoregression.pt"
     )
 
     shutil.copy(source_path, target_path)
 
 
 @pytest.fixture(scope="session")
-def copy_autoregression_model(project_path, run_training):
+def copy_autoregression_model(project_root, run_training):
     model_path = os.path.join(
-        project_path, "models", "sequifier-model-categorical-1-best-3.onnx"
+        project_root, "models", "sequifier-model-categorical-1-best-3.onnx"
     )
     target_path = os.path.join(
-        project_path,
+        project_root,
         "models",
         "sequifier-model-categorical-1-best-3-autoregression.onnx",
     )
@@ -393,7 +393,7 @@ def copy_autoregression_model(project_path, run_training):
 
 @pytest.fixture(scope="session")
 def run_inference(
-    project_path,
+    project_root,
     run_training,
     copy_autoregression_model,
     inference_config_path_cat,
@@ -413,11 +413,11 @@ def run_inference(
         data_path_cat = os.path.join(
             "data", f"test-data-categorical-{model_number}-split2"
         )
-        ddconfig_path_cat = os.path.join(
-            "configs", "ddconfigs", f"test-data-categorical-{model_number}.json"
+        metadata_config_path_cat = os.path.join(
+            "configs", "metadata_configs", f"test-data-categorical-{model_number}.json"
         )
         write_and_log(
-            f"sequifier infer --config-path={inference_config_path_cat} --ddconfig-path={ddconfig_path_cat} --model-path={model_path_cat} --data-path={data_path_cat} --selected-columns={SELECTED_COLUMNS['categorical'][model_number]}"
+            f"sequifier infer --config-path={inference_config_path_cat} --metadata-config-path={metadata_config_path_cat} --model-path={model_path_cat} --data-path={data_path_cat} --input-columns={SELECTED_COLUMNS['categorical'][model_number]}"
         )
 
         model_path_real = os.path.join(
@@ -426,11 +426,11 @@ def run_inference(
         data_path_real = os.path.join(
             "data", f"test-data-real-{model_number}-split1.parquet"
         )
-        ddconfig_path_real = os.path.join(
-            "configs", "ddconfigs", f"test-data-real-{model_number}.json"
+        metadata_config_path_real = os.path.join(
+            "configs", "metadata_configs", f"test-data-real-{model_number}.json"
         )
         write_and_log(
-            f"sequifier infer --config-path={inference_config_path_real} --ddconfig-path={ddconfig_path_real} --model-path={model_path_real} --data-path={data_path_real} --selected-columns=None"
+            f"sequifier infer --config-path={inference_config_path_real} --metadata-config-path={metadata_config_path_real} --model-path={model_path_real} --data-path={data_path_real} --input-columns=None"
         )
 
     write_and_log(
@@ -438,7 +438,7 @@ def run_inference(
     )
 
     write_and_log(
-        f"sequifier infer --config-path={inference_config_path_real_autoregression} --selected-columns={SELECTED_COLUMNS['real'][1]}"
+        f"sequifier infer --config-path={inference_config_path_real_autoregression} --input-columns={SELECTED_COLUMNS['real'][1]}"
     )
 
     write_and_log(
@@ -450,11 +450,11 @@ def run_inference(
     )
 
     write_and_log(
-        f"sequifier infer --config-path={inference_config_path_categorical_autoregression}  --selected-columns=itemId"
+        f"sequifier infer --config-path={inference_config_path_categorical_autoregression}  --input-columns=itemId"
     )
 
     write_and_log(
-        f"sequifier infer --config-path={inference_config_path_embedding}  --selected-columns=itemId"
+        f"sequifier infer --config-path={inference_config_path_embedding}  --input-columns=itemId"
     )
 
     write_and_log(

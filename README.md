@@ -91,7 +91,7 @@ sequifier make YOUR_PROJECT_NAME
 ```console
 sequifier preprocess
 ```
-5. the preprocessing step outputs a "data driven config" at `configs/ddconfigs/[FILE NAME]`. It contains the number of classes found in the data, a map of classes to indices and the oaths to train, validation and test splits of data. Adapt the `dd_config` parameter in `train.yaml` and `infer.yaml` in to the path `configs/ddconfigs/[FILE NAME]`
+5. the preprocessing step outputs a "data driven config" at `configs/metadata_configs/[FILE NAME]`. It contains the number of classes found in the data, a map of classes to indices and the oaths to train, validation and test splits of data. Adapt the `metadata_config` parameter in `train.yaml` and `infer.yaml` in to the path `configs/metadata_configs/[FILE NAME]`
 6. Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 ```console
 sequifier train
@@ -131,7 +131,7 @@ sequifier train --config_path=[CONFIG PATH]
 If the data on which the model is trained DOES NOT come from the preprocessing step, the flag
 
 ```console
---on-unprocessed
+--skip-metadata
 ```
 
 should be added.

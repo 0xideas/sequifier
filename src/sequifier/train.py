@@ -49,7 +49,8 @@ def setup(rank: int, world_size: int, backend: str = "nccl"):
         world_size: The total number of processes.
         backend: The distributed backend to use.
     """
-    os.environ["MASTER_ADDR"] = "localhost"
+
+    os.environ["MASTER_ADDR"] = os.getenv("MASTER_ADDR", "localhost")
     os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
     dist.init_process_group(backend, rank=rank, world_size=world_size)
 
@@ -183,7 +184,7 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
         args_config: The configuration dictionary.
     """
     config_path = args.config_path or "configs/train.yaml"
-    config = load_train_config(config_path, args_config, args.on_unprocessed)
+    config = load_train_config(config_path, args_config, args.skip_metadata)
     print(f"--- Starting Training for model: {config.model_name} ---")
 
     world_size = config.training_spec.world_size
@@ -271,22 +272,22 @@ class TransformerModel(nn.Module):
             rank: The rank of the current process (for distributed training).
         """
         super().__init__()
-        self.project_path = hparams.project_path
+        self.project_root = hparams.project_root
         self.model_type = "Transformer"
         self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
 
         self.rank = rank
 
-        self.selected_columns = hparams.selected_columns
+        self.input_columns = hparams.input_columns
         self.categorical_columns = [
             col
             for col in hparams.categorical_columns
-            if self.selected_columns is None or col in self.selected_columns
+            if self.input_columns is None or col in self.input_columns
         ]
         self.real_columns = [
             col
             for col in hparams.real_columns
-            if self.selected_columns is None or col in self.selected_columns
+            if self.input_columns is None or col in self.input_columns
         ]
         print(f"[INFO] {self.categorical_columns = }")
         print(f"[INFO] {self.real_columns = }")
@@ -313,44 +314,46 @@ class TransformerModel(nn.Module):
         self.encoder = ModuleDict()
         self.pos_encoder = ModuleDict()
         self.embedding_size = max(
-            self.hparams.model_spec.d_model, self.hparams.model_spec.nhead
+            self.hparams.model_spec.dim_model, self.hparams.model_spec.n_head
         )
-        if hparams.model_spec.d_model_by_column is not None:
-            self.d_model_by_column = hparams.model_spec.d_model_by_column
+        if hparams.model_spec.feature_embedding_dims is not None:
+            self.feature_embedding_dims = hparams.model_spec.feature_embedding_dims
         else:
-            self.d_model_by_column = self._get_d_model_by_column(
+            self.feature_embedding_dims = self._get_feature_embedding_dims(
                 self.embedding_size, self.categorical_columns, self.real_columns
             )
 
         self.real_columns_with_embedding = []
         self.real_columns_direct = []
         for col in self.real_columns:
-            if self.d_model_by_column[col] > 1:
-                self.encoder[col] = nn.Linear(1, self.d_model_by_column[col])
+            if self.feature_embedding_dims[col] > 1:
+                self.encoder[col] = nn.Linear(1, self.feature_embedding_dims[col])
                 self.real_columns_with_embedding.append(col)
             else:
-                assert self.d_model_by_column[col] == 1
+                assert self.feature_embedding_dims[col] == 1
                 self.real_columns_direct.append(col)
             self.pos_encoder[col] = nn.Embedding(
-                self.seq_length, self.d_model_by_column[col]
+                self.seq_length, self.feature_embedding_dims[col]
             )
         for col, n_classes in self.n_classes.items():
             if col in self.categorical_columns:
-                self.encoder[col] = nn.Embedding(n_classes, self.d_model_by_column[col])
+                self.encoder[col] = nn.Embedding(
+                    n_classes, self.feature_embedding_dims[col]
+                )
                 self.pos_encoder[col] = nn.Embedding(
-                    self.seq_length, self.d_model_by_column[col]
+                    self.seq_length, self.feature_embedding_dims[col]
                 )
 
         encoder_layers = TransformerEncoderLayer(
             self.embedding_size,
-            hparams.model_spec.nhead,
-            hparams.model_spec.d_hid,
+            hparams.model_spec.n_head,
+            hparams.model_spec.dim_feedforward,
             hparams.training_spec.dropout,
         )
         self.transformer_encoder = TransformerEncoder(
-            encoder_layers, hparams.model_spec.nlayers, enable_nested_tensor=False
+            encoder_layers, hparams.model_spec.num_layers, enable_nested_tensor=False
         )
-        self.inference_size = hparams.model_spec.inference_size
+        self.prediction_length = hparams.model_spec.prediction_length
 
         self.decoder = ModuleDict()
         self.softmax = ModuleDict()
@@ -393,9 +396,9 @@ class TransformerModel(nn.Module):
         self.scheduler = self._get_scheduler(
             **self._filter_key(hparams.training_spec.scheduler, "name")
         )
-        self.scheduler_step_iter = hparams.training_spec.scheduler_step_iter
+        self.scheduler_step_on = hparams.training_spec.scheduler_step_on
 
-        self.iter_save = hparams.training_spec.iter_save
+        self.save_interval_epochs = hparams.training_spec.save_interval_epochs
         self.continue_training = hparams.training_spec.continue_training
         load_string = self._load_weights_conditional()
         self._initialize_log_file()
@@ -414,9 +417,12 @@ class TransformerModel(nn.Module):
         """
         criterion = {}
         for target_column in self.target_columns:
-            criterion_class = eval(
-                f"torch.nn.{hparams.training_spec.criterion[target_column]}"
-            )
+            criterion_name = hparams.training_spec.criterion[target_column]
+            if hasattr(torch.nn, criterion_name):
+                criterion_class = getattr(torch.nn, criterion_name)
+            else:
+                raise ValueError(f"Criterion {criterion_name} not found in torch.nn")
+
             criterion_kwargs = {}
             if (
                 hparams.training_spec.class_weights is not None
@@ -429,7 +435,7 @@ class TransformerModel(nn.Module):
         return criterion
 
     @beartype
-    def _get_d_model_by_column(
+    def _get_feature_embedding_dims(
         self,
         embedding_size: int,
         categorical_columns: list[str],
@@ -441,35 +447,36 @@ class TransformerModel(nn.Module):
         input columns.
 
         Args:
-            embedding_size: The total embedding dimension (d_model).
+            embedding_size: The total embedding dimension (dim_model).
             categorical_columns: List of categorical column names.
             real_columns: List of real-valued column names.
 
         Returns:
             A dictionary mapping column names to their calculated embedding dimension.
         """
-        print(f"{len(categorical_columns) = } {len(real_columns) = }")
         assert (len(categorical_columns) + len(real_columns)) > 0, "No columns found"
         if len(categorical_columns) == 0 and len(real_columns) > 0:
-            d_model_by_column = {col: 1 for col in real_columns}
+            feature_embedding_dims = {col: 1 for col in real_columns}
             column_index = dict(enumerate(real_columns))
             for i in range(embedding_size):
-                if sum(d_model_by_column.values()) % embedding_size != 0:
+                if sum(feature_embedding_dims.values()) % embedding_size != 0:
                     j = i % len(real_columns)
-                    d_model_by_column[column_index[j]] += 1
-            assert sum(d_model_by_column.values()) % embedding_size == 0
+                    feature_embedding_dims[column_index[j]] += 1
+            assert sum(feature_embedding_dims.values()) % embedding_size == 0
         elif len(real_columns) == 0 and len(categorical_columns) > 0:
             assert (
                 (embedding_size % len(categorical_columns)) == 0
-            ), f"If only categorical variables are included, d_model must be a multiple of the number of categorical variables ({embedding_size = } % {len(categorical_columns) = }) != 0"
-            d_model_comp = embedding_size // len(categorical_columns)
-            d_model_by_column = {col: d_model_comp for col in categorical_columns}
+            ), f"If only categorical variables are included, dim_model must be a multiple of the number of categorical variables ({embedding_size = } % {len(categorical_columns) = }) != 0"
+            dim_model_comp = embedding_size // len(categorical_columns)
+            feature_embedding_dims = {
+                col: dim_model_comp for col in categorical_columns
+            }
         else:
             raise UserWarning(
-                "If both real and categorical variables are present, d_model_by_column config value must be set"
+                "If both real and categorical variables are present, feature_embedding_dims config value must be set"
             )
 
-        return d_model_by_column
+        return feature_embedding_dims
 
     @staticmethod
     def _generate_square_subsequent_mask(sz: int) -> Tensor:
@@ -551,7 +558,7 @@ class TransformerModel(nn.Module):
 
         Returns:
             The raw output tensor from the TransformerEncoder
-            (seq_length, batch_size, d_model).
+            (seq_length, batch_size, dim_model).
         """
         srcs = []
         for col in self.categorical_columns:
@@ -608,9 +615,9 @@ class TransformerModel(nn.Module):
 
         Returns:
             The embedding tensor for the last token
-            (batch_size, d_model).
+            (batch_size, dim_model).
         """
-        return self.forward_inner(src)[-self.inference_size :, :, :]
+        return self.forward_inner(src)[-self.prediction_length :, :, :]
 
     @beartype
     def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -644,7 +651,7 @@ class TransformerModel(nn.Module):
         Args:
             target_column: The name of the target column to decode.
             output: The raw output tensor from the TransformerEncoder
-                    (seq_length, batch_size, d_model).
+                    (seq_length, batch_size, dim_model).
 
         Returns:
             The decoded output (logits or real value) for the target column
@@ -691,7 +698,7 @@ class TransformerModel(nn.Module):
         output = self.forward_train(src)
         return {
             target_column: self.apply_softmax(
-                target_column, out[-self.inference_size :, :, :]
+                target_column, out[-self.prediction_length :, :, :]
             )
             for target_column, out in output.items()
         }
@@ -759,10 +766,10 @@ class TransformerModel(nn.Module):
                     else:
                         n_epochs_no_improvement += 1
 
-                    if self.scheduler_step_iter == "epoch":
+                    if self.scheduler_step_on == "epoch":
                         self.scheduler.step()
 
-                    if epoch % self.iter_save == 0:
+                    if epoch % self.save_interval_epochs == 0:
                         self._save(epoch, total_loss)
 
                     last_epoch = epoch
@@ -842,7 +849,7 @@ class TransformerModel(nn.Module):
 
         Iterates through the training DataLoader, computes loss, performs
         backpropagation, and updates model parameters. The DataLoader is expected
-        to yield tuples of (data_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
+        to yield tuples of (sequences_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
         The IDs and positions are currently unused in this training loop.
 
         Args:
@@ -859,7 +866,7 @@ class TransformerModel(nn.Module):
             data = {
                 k: v.to(self.device, non_blocking=True)
                 for k, v in data.items()
-                if k in self.selected_columns
+                if k in self.input_columns
             }
             targets = {
                 k: v.to(self.device, non_blocking=True)
@@ -884,17 +891,17 @@ class TransformerModel(nn.Module):
 
             total_loss += loss.item()
             if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
-                lr = self.scheduler.get_last_lr()[0]
+                learning_rate = self.scheduler.get_last_lr()[0]
                 s_per_batch = (time.time() - start_time) / self.log_interval
                 self.log_file.write(
-                    f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(total_loss)} | LR: {format_number(lr)} | S/Batch {format_number(s_per_batch)}"
+                    f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(total_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
                 )
                 total_loss = 0.0
                 start_time = time.time()
 
             del data, targets, output, loss, losses
 
-            if self.scheduler_step_iter == "batch":
+            if self.scheduler_step_on == "batch":
                 self.scheduler.step()
 
     @beartype
@@ -1002,7 +1009,7 @@ class TransformerModel(nn.Module):
         and aggregates results across all processes if in distributed mode.
         Also calculates a one-time baseline loss on the first call.
         The DataLoader is expected to yield tuples of
-        (data_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
+        (sequences_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
         The IDs and positions are currently unused during evaluation.
 
         Args:
@@ -1026,7 +1033,7 @@ class TransformerModel(nn.Module):
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
-                    if k in self.selected_columns
+                    if k in self.input_columns
                 }
                 targets = {
                     k: v.to(self.device, non_blocking=True)
@@ -1085,7 +1092,7 @@ class TransformerModel(nn.Module):
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
-                    if k in self.selected_columns
+                    if k in self.input_columns
                 }
                 targets = {
                     k: v.to(self.device, non_blocking=True)
@@ -1213,7 +1220,7 @@ class TransformerModel(nn.Module):
 
         self.eval()
 
-        os.makedirs(os.path.join(self.project_path, "models"), exist_ok=True)
+        os.makedirs(os.path.join(self.project_root, "models"), exist_ok=True)
 
         if self.export_generative_model:
             self._export_model(model, suffix, epoch)
@@ -1258,7 +1265,7 @@ class TransformerModel(nn.Module):
 
             # Export the model
             export_path = os.path.join(
-                self.project_path,
+                self.project_root,
                 "models",
                 f"sequifier-{self.model_name}-{suffix}-{epoch}.onnx",
             )
@@ -1285,7 +1292,7 @@ class TransformerModel(nn.Module):
             )
         if self.export_pt:
             export_path = os.path.join(
-                self.project_path,
+                self.project_root,
                 "models",
                 f"sequifier-{self.model_name}-{suffix}-{epoch}.pt",
             )
@@ -1310,10 +1317,10 @@ class TransformerModel(nn.Module):
         """
         if self.rank != 0:
             return
-        os.makedirs(os.path.join(self.project_path, "checkpoints"), exist_ok=True)
+        os.makedirs(os.path.join(self.project_root, "checkpoints"), exist_ok=True)
 
         output_path = os.path.join(
-            self.project_path,
+            self.project_root,
             "checkpoints",
             f"{self.model_name}-epoch-{epoch}.pt",
         )
@@ -1345,7 +1352,7 @@ class TransformerModel(nn.Module):
         """
         optimizer_class = get_optimizer_class(self.hparams.training_spec.optimizer.name)
         return optimizer_class(
-            self.parameters(), lr=self.hparams.training_spec.lr, **kwargs
+            self.parameters(), lr=self.hparams.training_spec.learning_rate, **kwargs
         )
 
     @beartype
@@ -1361,17 +1368,21 @@ class TransformerModel(nn.Module):
         Returns:
             An initialized torch.optim.lr_scheduler._LRScheduler instance.
         """
-        scheduler_class = eval(
-            f"torch.optim.lr_scheduler.{self.hparams.training_spec.scheduler.name}"
-        )
+        scheduler_name = self.hparams.training_spec.scheduler.name
+        if hasattr(torch.optim.lr_scheduler, scheduler_name):
+            scheduler_class = getattr(torch.optim.lr_scheduler, scheduler_name)
+        else:
+            raise ValueError(
+                f"Scheduler {scheduler_name} not found in torch.optim.lr_scheduler"
+            )
         return scheduler_class(self.optimizer, **kwargs)
 
     @beartype
     def _initialize_log_file(self):
         """Initializes the log file."""
-        os.makedirs(os.path.join(self.project_path, "logs"), exist_ok=True)
+        os.makedirs(os.path.join(self.project_root, "logs"), exist_ok=True)
         path = os.path.join(
-            self.project_path, "logs", f"sequifier-{self.model_name}-[NUMBER].txt"
+            self.project_root, "logs", f"sequifier-{self.model_name}-[NUMBER].txt"
         )
         if self.rank is not None:
             path = path.replace("[NUMBER]", f"rank{self.rank}-[NUMBER]")
@@ -1426,7 +1437,7 @@ class TransformerModel(nn.Module):
             The file path (str) to the latest checkpoint, or None if no
             checkpoint is found.
         """
-        checkpoint_path = os.path.join(self.project_path, "checkpoints", "*")
+        checkpoint_path = os.path.join(self.project_root, "checkpoints", "*")
 
         files = glob.glob(checkpoint_path)
         files = [
@@ -1461,11 +1472,11 @@ class TransformerModel(nn.Module):
                     used for class share logging.
         """
         if self.rank == 0:
-            lr = self.optimizer.state_dict()["param_groups"][0]["lr"]
+            learning_rate = self.optimizer.state_dict()["param_groups"][0]["lr"]
 
             self.log_file.write("-" * 89)
             self.log_file.write(
-                f"[INFO] Validation | Epoch: {epoch:3d} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(lr)}"
+                f"[INFO] Validation | Epoch: {epoch:3d} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(learning_rate)}"
             )
 
             if len(total_losses) > 1:
@@ -1520,8 +1531,12 @@ def load_inference_model(
         The loaded and compiled torch.nn.Module (TransformerModel or
         TransformerEmbeddingModel) in evaluation mode.
     """
+    skip_metadata = args_config.get("skip_metadata", False)
+    args_config_subset = {
+        k: v for k, v in args_config.items() if k not in ["model_path", "data_path"]
+    }
     training_config = load_train_config(
-        training_config_path, args_config, args_config["on_unprocessed"]
+        training_config_path, args_config_subset, skip_metadata
     )
 
     with torch.no_grad():

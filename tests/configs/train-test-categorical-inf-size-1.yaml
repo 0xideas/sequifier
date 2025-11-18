@@ -1,9 +1,9 @@
-project_path: tests/project_folder
+project_root: tests/project_folder
 model_name: model-categorical-1-inf-size
 read_format: pt
-ddconfig_path: configs/ddconfigs/test-data-categorical-1.json
+metadata_config_path: configs/metadata_configs/test-data-categorical-1.json
 
-selected_columns: [itemId]
+input_columns: [itemId]
 target_columns: [itemId]
 target_column_types:
   itemId: categorical
@@ -17,19 +17,19 @@ export_onnx: true
 export_pt: false
 
 model_spec:
-  d_model: 200
-  nhead: 2
-  d_hid: 12
-  nlayers: 2
-  inference_size: 3
+  dim_model: 200
+  n_head: 2
+  dim_feedforward: 12
+  num_layers: 2
+  prediction_length: 3
 training_spec:
   device: cpu
   epochs: 3
-  iter_save: 1
+  save_interval_epochs: 1
   batch_size: 5
   log_interval: 200
   class_share_log_columns: ["itemId"]
-  lr: 0.003
+  learning_rate: 0.003
   accumulation_steps: 2
   dropout: 0.3
   criterion:
@@ -42,5 +42,5 @@ training_spec:
     name: StepLR
     step_size: 1.0
     gamma: 0.99
-  scheduler_step_iter: epoch
+  scheduler_step_on: epoch
   continue_training: false
