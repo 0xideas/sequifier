@@ -18,7 +18,7 @@ from sequifier.helpers import normalize_path, try_catch_excess_keys
 
 @beartype
 def load_hyperparameter_search_config(
-    config_path: str, on_unprocessed: bool
+    config_path: str, skip_metadata: bool
 ) -> "HyperparameterSearch":
     """Load a hyperparameter search configuration from a YAML file.
 
@@ -28,7 +28,7 @@ def load_hyperparameter_search_config(
 
     Args:
         config_path: The path to the hyperparameter search configuration file.
-        on_unprocessed: A boolean flag indicating whether the configuration is
+        skip_metadata: A boolean flag indicating whether the configuration is
             for unprocessed data. If False, it will load and integrate
             data-driven configurations.
 
@@ -39,7 +39,7 @@ def load_hyperparameter_search_config(
     with open(config_path, "r") as f:
         config_values = yaml.safe_load(f)
 
-    if not on_unprocessed:
+    if not skip_metadata:
         metadata_config_path = config_values.get("metadata_config_path")
 
         with open(

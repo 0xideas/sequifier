@@ -39,7 +39,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
 
     Args:
         args: Command-line arguments, typically from `argparse`. Expected
-            to have attributes like `config_path` and `on_unprocessed`.
+            to have attributes like `config_path` and `skip_metadata`.
         args_config: A dictionary of configuration overrides, often
             passed from the command line, that will be merged into the
             loaded configuration file.
@@ -49,8 +49,8 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         args.config_path if args.config_path is not None else "configs/infer.yaml"
     )
 
-    on_unprocessed = args_config.get("on_unprocessed", False)
-    config = load_inferer_config(config_path, args_config, on_unprocessed)
+    skip_metadata = args_config.get("skip_metadata", False)
+    config = load_inferer_config(config_path, args_config, skip_metadata)
 
     if config.map_to_id or (len(config.real_columns) > 0):
         assert config.metadata_config_path is not None, (

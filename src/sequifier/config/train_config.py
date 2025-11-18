@@ -101,7 +101,7 @@ VALID_SCHEDULERS = [
 
 @beartype
 def load_train_config(
-    config_path: str, args_config: dict[str, Any], on_unprocessed: bool
+    config_path: str, args_config: dict[str, Any], skip_metadata: bool
 ) -> "TrainModel":
     """
     Load training configuration from a YAML file and update it with args_config.
@@ -109,7 +109,7 @@ def load_train_config(
     Args:
         config_path: Path to the YAML configuration file.
         args_config: Dictionary containing additional configuration arguments.
-        on_unprocessed: Flag indicating whether to process the configuration or not.
+        skip_metadata: Flag indicating whether to process the configuration or not.
 
     Returns:
         TrainModel instance with loaded configuration.
@@ -119,7 +119,7 @@ def load_train_config(
 
     config_values.update(args_config)
 
-    if not on_unprocessed:
+    if not skip_metadata:
         metadata_config_path = config_values.get("metadata_config_path")
 
         with open(

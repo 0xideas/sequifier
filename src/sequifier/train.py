@@ -184,7 +184,7 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
         args_config: The configuration dictionary.
     """
     config_path = args.config_path or "configs/train.yaml"
-    config = load_train_config(config_path, args_config, args.on_unprocessed)
+    config = load_train_config(config_path, args_config, args.skip_metadata)
     print(f"--- Starting Training for model: {config.model_name} ---")
 
     world_size = config.training_spec.world_size
@@ -1529,12 +1529,12 @@ def load_inference_model(
         The loaded and compiled torch.nn.Module (TransformerModel or
         TransformerEmbeddingModel) in evaluation mode.
     """
-    on_unprocessed = args_config.get("on_unprocessed", False)
+    skip_metadata = args_config.get("skip_metadata", False)
     args_config_subset = {
         k: v for k, v in args_config.items() if k not in ["model_path", "data_path"]
     }
     training_config = load_train_config(
-        training_config_path, args_config_subset, on_unprocessed
+        training_config_path, args_config_subset, skip_metadata
     )
 
     with torch.no_grad():

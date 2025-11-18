@@ -345,7 +345,7 @@ def run_training(
         )
         model_name_cat = f"model-categorical-{model_number}"
         write_and_log(
-            f"sequifier train --config-path={training_config_path_cat} --metadata_config-path={metadata_config_path_cat} --model-name={model_name_cat} --input-columns={SELECTED_COLUMNS['categorical'][model_number]}"
+            f"sequifier train --config-path={training_config_path_cat} --metadata-config-path={metadata_config_path_cat} --model-name={model_name_cat} --input-columns={SELECTED_COLUMNS['categorical'][model_number]}"
         )
 
         metadata_config_path_real = os.path.join(
@@ -353,7 +353,7 @@ def run_training(
         )
         model_name_real = f"model-real-{model_number}"
         write_and_log(
-            f"sequifier train --config-path={training_config_path_real} --metadata_config-path={metadata_config_path_real} --model-name={model_name_real} --input-columns=None"
+            f"sequifier train --config-path={training_config_path_real} --metadata-config-path={metadata_config_path_real} --model-name={model_name_real} --input-columns=None"
         )
 
     write_and_log(
@@ -417,7 +417,7 @@ def run_inference(
             "configs", "metadata_configs", f"test-data-categorical-{model_number}.json"
         )
         write_and_log(
-            f"sequifier infer --config-path={inference_config_path_cat} --metadata_config-path={metadata_config_path_cat} --model-path={model_path_cat} --data-path={data_path_cat} --input-columns={SELECTED_COLUMNS['categorical'][model_number]}"
+            f"sequifier infer --config-path={inference_config_path_cat} --metadata-config-path={metadata_config_path_cat} --model-path={model_path_cat} --data-path={data_path_cat} --input-columns={SELECTED_COLUMNS['categorical'][model_number]}"
         )
 
         model_path_real = os.path.join(
@@ -430,7 +430,7 @@ def run_inference(
             "configs", "metadata_configs", f"test-data-real-{model_number}.json"
         )
         write_and_log(
-            f"sequifier infer --config-path={inference_config_path_real} --metadata_config-path={metadata_config_path_real} --model-path={model_path_real} --data-path={data_path_real} --input-columns=None"
+            f"sequifier infer --config-path={inference_config_path_real} --metadata-config-path={metadata_config_path_real} --model-path={model_path_real} --data-path={data_path_real} --input-columns=None"
         )
 
     write_and_log(

@@ -32,7 +32,7 @@ def try_catch_excess_keys(
 ):
     try:
         return PydanticClass(
-            **{k: v for k, v in config_values.items() if k != "on_unprocessed"}
+            **{k: v for k, v in config_values.items() if k != "skip_metadata"}
         )
     except ValidationError as e:
         # Filter the errors to find only the "extra fields"

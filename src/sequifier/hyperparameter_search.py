@@ -21,7 +21,7 @@ from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 
 
 @beartype
-def hyperparameter_search(config_path, on_unprocessed) -> None:
+def hyperparameter_search(config_path, skip_metadata) -> None:
     """Main function for initiating a hyperparameter search process.
 
     This function loads the hyperparameter search configuration, initializes
@@ -30,14 +30,14 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
     Args:
         config_path (str): Path to the hyperparameter search YAML
             configuration file.
-        on_unprocessed (bool): Flag indicating whether to run the search
+        skip_metadata (bool): Flag indicating whether to run the search
             on unprocessed data.
 
     Returns:
         None
     """
     hyperparameter_search_config = load_hyperparameter_search_config(
-        config_path, on_unprocessed
+        config_path, skip_metadata
     )
 
     hyperparameter_searcher = HyperparameterSearcher(hyperparameter_search_config)
@@ -107,14 +107,12 @@ class HyperparameterSearcher:
             None
         """
         os.makedirs(os.path.join(self.config.project_path, "logs"), exist_ok=True)
-        open_mode = "w" if self.start_run == 1 else "a"
         self.log_file = LogFile(
             os.path.join(
                 self.config.project_path,
                 "logs",
                 f"sequifier-{self.config.hp_search_name}-[NUMBER].txt",
-            ),
-            open_mode,
+            )
         )
 
     @beartype

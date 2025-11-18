@@ -12,7 +12,7 @@ from sequifier.helpers import normalize_path, try_catch_excess_keys
 
 @beartype
 def load_inferer_config(
-    config_path: str, args_config: dict, on_unprocessed: bool
+    config_path: str, args_config: dict, skip_metadata: bool
 ) -> "InfererModel":
     """
     Load inferer configuration from a YAML file and update it with args_config.
@@ -20,7 +20,7 @@ def load_inferer_config(
     Args:
         config_path: Path to the YAML configuration file.
         args_config: Dictionary containing additional configuration arguments.
-        on_unprocessed: Flag indicating whether to process the configuration or not.
+        skip_metadata: Flag indicating whether to process the configuration or not.
 
     Returns:
         InfererModel instance with loaded configuration.
@@ -29,7 +29,7 @@ def load_inferer_config(
         config_values = yaml.safe_load(f)
     config_values.update(args_config)
 
-    if not on_unprocessed:
+    if not skip_metadata:
         metadata_config_path = config_values.get("metadata_config_path")
 
         with open(

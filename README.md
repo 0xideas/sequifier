@@ -131,7 +131,7 @@ sequifier train --config_path=[CONFIG PATH]
 If the data on which the model is trained DOES NOT come from the preprocessing step, the flag
 
 ```console
---on-unprocessed
+--skip-metadata
 ```
 
 should be added.

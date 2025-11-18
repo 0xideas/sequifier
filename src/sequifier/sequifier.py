@@ -97,14 +97,14 @@ def setup_parser() -> ArgumentParser:
 
     for subparser in [parser_train, parser_infer, parser_hyperparameter_search]:
         subparser.add_argument("-ic", "--input-columns", type=str)
-        subparser.add_argument("-ddcp", "--metadata_config-path", type=str)
-        subparser.add_argument("-op", "--on-unprocessed", action="store_true")
+        subparser.add_argument("-mc", "--metadata-config-path", type=str)
+        subparser.add_argument("-sm", "--skip-metadata", action="store_true")
 
     parser_preprocess.add_argument("-sc", "--selected-columns", type=str)
     parser_train.add_argument("-mn", "--model-name", type=str)
     parser_train.add_argument("-s", "--seed", type=int)
 
-    parser_infer.add_argument("-imp", "--model-path", type=str)
+    parser_infer.add_argument("-mp", "--model-path", type=str)
     parser_infer.add_argument("-s", "--seed", type=int)
 
     return parser
@@ -129,7 +129,7 @@ def main() -> None:
         elif args.command == "infer":
             infer(args, args_config)
     elif args.command == "hyperparameter-search":
-        hyperparameter_search(args.config_path, args.on_unprocessed)
+        hyperparameter_search(args.config_path, args.skip_metadata)
 
 
 if __name__ == "__main__":
