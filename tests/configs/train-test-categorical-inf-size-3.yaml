@@ -20,7 +20,7 @@ export_pt: true
 
 model_spec:
   dim_model: 200
-  dim_model_by_column:
+  feature_embedding_dims:
     itemId: 100
     sup1: 50
     sup2: 50

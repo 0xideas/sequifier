@@ -294,14 +294,14 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
     Attributes:
         dim_model: A list of possible numbers of expected features in the input.
-        dim_model_by_column: A list of possible embedding dimensions for each input column.
+        feature_embedding_dims: A list of possible embedding dimensions for each input column.
         n_head: A list of possible numbers of heads in the multi-head attention models.
         dim_feedforward: A list of possible dimensions of the feedforward network model.
         num_layers: A list of possible numbers of layers in the transformer model.
     """
 
     dim_model: list[int]
-    dim_model_by_column: Optional[list[dict[str, int]]]
+    feature_embedding_dims: Optional[list[dict[str, int]]]
     n_head: list[int]
     dim_feedforward: list[int]
     num_layers: list[int]
@@ -309,10 +309,10 @@ class ModelSpecHyperparameterSampling(BaseModel):
     @field_validator("n_head")
     @classmethod
     def validate_model_spec(cls, v, values):
-        if values["dim_model_by_column"] is not None:
+        if values["feature_embedding_dims"] is not None:
             assert (
-                len(values["dim_model"]) == len(values["dim_model_by_column"])
-            ), "dim_model and dim_model_by_column must have the same number of candidate values, that are paired"
+                len(values["dim_model"]) == len(values["feature_embedding_dims"])
+            ), "dim_model and feature_embedding_dims must have the same number of candidate values, that are paired"
 
         assert (
             len(values["dim_model"]) == len(v)
@@ -323,7 +323,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         """Randomly sample a set of model hyperparameters.
 
         This method selects a random combination of model hyperparameters from the
-        defined lists of possibilities. It ensures that dim_model, dim_model_by_column,
+        defined lists of possibilities. It ensures that dim_model, feature_embedding_dims,
         and n_head are paired correctly.
 
         Returns:
@@ -331,10 +331,10 @@ class ModelSpecHyperparameterSampling(BaseModel):
             hyperparameters.
         """
         dim_model_index = np.random.randint(len(self.dim_model))
-        dim_model_by_column = (
+        feature_embedding_dims = (
             None
-            if self.dim_model_by_column is None
-            else self.dim_model_by_column[dim_model_index]
+            if self.feature_embedding_dims is None
+            else self.feature_embedding_dims[dim_model_index]
         )
         dim_model = self.dim_model[dim_model_index]
         dim_feedforward = np.random.choice(self.dim_feedforward)
@@ -343,7 +343,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
         return ModelSpecModel(
             dim_model=self.dim_model[dim_model_index],
-            dim_model_by_column=dim_model_by_column,
+            feature_embedding_dims=feature_embedding_dims,
             n_head=self.n_head[dim_model_index],
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
@@ -372,15 +372,15 @@ class ModelSpecHyperparameterSampling(BaseModel):
         dim_model = self.dim_model[dim_model_index]
         print(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
 
-        dim_model_by_column = (
+        feature_embedding_dims = (
             None
-            if self.dim_model_by_column is None
-            else self.dim_model_by_column[dim_model_index]
+            if self.feature_embedding_dims is None
+            else self.feature_embedding_dims[dim_model_index]
         )
 
         return ModelSpecModel(
             dim_model=dim_model,
-            dim_model_by_column=dim_model_by_column,
+            feature_embedding_dims=feature_embedding_dims,
             n_head=self.n_head[dim_model_index],
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,

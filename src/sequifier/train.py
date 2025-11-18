@@ -316,32 +316,32 @@ class TransformerModel(nn.Module):
         self.embedding_size = max(
             self.hparams.model_spec.dim_model, self.hparams.model_spec.n_head
         )
-        if hparams.model_spec.dim_model_by_column is not None:
-            self.dim_model_by_column = hparams.model_spec.dim_model_by_column
+        if hparams.model_spec.feature_embedding_dims is not None:
+            self.feature_embedding_dims = hparams.model_spec.feature_embedding_dims
         else:
-            self.dim_model_by_column = self._get_dim_model_by_column(
+            self.feature_embedding_dims = self._get_feature_embedding_dims(
                 self.embedding_size, self.categorical_columns, self.real_columns
             )
 
         self.real_columns_with_embedding = []
         self.real_columns_direct = []
         for col in self.real_columns:
-            if self.dim_model_by_column[col] > 1:
-                self.encoder[col] = nn.Linear(1, self.dim_model_by_column[col])
+            if self.feature_embedding_dims[col] > 1:
+                self.encoder[col] = nn.Linear(1, self.feature_embedding_dims[col])
                 self.real_columns_with_embedding.append(col)
             else:
-                assert self.dim_model_by_column[col] == 1
+                assert self.feature_embedding_dims[col] == 1
                 self.real_columns_direct.append(col)
             self.pos_encoder[col] = nn.Embedding(
-                self.seq_length, self.dim_model_by_column[col]
+                self.seq_length, self.feature_embedding_dims[col]
             )
         for col, n_classes in self.n_classes.items():
             if col in self.categorical_columns:
                 self.encoder[col] = nn.Embedding(
-                    n_classes, self.dim_model_by_column[col]
+                    n_classes, self.feature_embedding_dims[col]
                 )
                 self.pos_encoder[col] = nn.Embedding(
-                    self.seq_length, self.dim_model_by_column[col]
+                    self.seq_length, self.feature_embedding_dims[col]
                 )
 
         encoder_layers = TransformerEncoderLayer(
@@ -435,7 +435,7 @@ class TransformerModel(nn.Module):
         return criterion
 
     @beartype
-    def _get_dim_model_by_column(
+    def _get_feature_embedding_dims(
         self,
         embedding_size: int,
         categorical_columns: list[str],
@@ -456,25 +456,27 @@ class TransformerModel(nn.Module):
         """
         assert (len(categorical_columns) + len(real_columns)) > 0, "No columns found"
         if len(categorical_columns) == 0 and len(real_columns) > 0:
-            dim_model_by_column = {col: 1 for col in real_columns}
+            feature_embedding_dims = {col: 1 for col in real_columns}
             column_index = dict(enumerate(real_columns))
             for i in range(embedding_size):
-                if sum(dim_model_by_column.values()) % embedding_size != 0:
+                if sum(feature_embedding_dims.values()) % embedding_size != 0:
                     j = i % len(real_columns)
-                    dim_model_by_column[column_index[j]] += 1
-            assert sum(dim_model_by_column.values()) % embedding_size == 0
+                    feature_embedding_dims[column_index[j]] += 1
+            assert sum(feature_embedding_dims.values()) % embedding_size == 0
         elif len(real_columns) == 0 and len(categorical_columns) > 0:
             assert (
                 (embedding_size % len(categorical_columns)) == 0
             ), f"If only categorical variables are included, dim_model must be a multiple of the number of categorical variables ({embedding_size = } % {len(categorical_columns) = }) != 0"
             dim_model_comp = embedding_size // len(categorical_columns)
-            dim_model_by_column = {col: dim_model_comp for col in categorical_columns}
+            feature_embedding_dims = {
+                col: dim_model_comp for col in categorical_columns
+            }
         else:
             raise UserWarning(
-                "If both real and categorical variables are present, dim_model_by_column config value must be set"
+                "If both real and categorical variables are present, feature_embedding_dims config value must be set"
             )
 
-        return dim_model_by_column
+        return feature_embedding_dims
 
     @staticmethod
     def _generate_square_subsequent_mask(sz: int) -> Tensor:

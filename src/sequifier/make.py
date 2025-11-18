@@ -37,7 +37,7 @@ export_onnx: true
 
 model_spec:
   dim_model: 128
-  dim_model_by_column: # the size of the embedding of individual variables, must sum to dim_model
+  feature_embedding_dims: # the size of the embedding of individual variables, must sum to dim_model
     EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical
   n_head: 16
   dim_feedforward: 128

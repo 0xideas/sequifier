@@ -18,7 +18,7 @@ export_embedding_model: true
 
 model_spec:
   dim_model: 16
-  dim_model_by_column:
+  feature_embedding_dims:
     itemId: 5
     sup1: 4
     sup2: 2
