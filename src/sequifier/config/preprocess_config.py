@@ -43,7 +43,7 @@ class PreprocessorModel(BaseModel):
         group_proportions: A list of floats that define the relative sizes of data splits (e.g., for train, validation, test).
                            The sum of proportions must be 1.0.
         seq_length: The sequence length for the model inputs.
-        seq_step_sizes: A list of step sizes for creating subsequences within each data split.
+        stride_by_split: A list of step sizes for creating subsequences within each data split.
         max_rows: The maximum number of input rows to process. If None, all rows are processed.
         seed: A random seed for reproducibility.
         n_cores: The number of CPU cores to use for parallel processing. If None, it uses the available CPU cores.
@@ -62,7 +62,7 @@ class PreprocessorModel(BaseModel):
 
     group_proportions: list[float]
     seq_length: int
-    seq_step_sizes: Optional[list[int]]
+    stride_by_split: Optional[list[int]]
     max_rows: Optional[int]
     seed: int
     n_cores: Optional[int]
@@ -104,22 +104,22 @@ class PreprocessorModel(BaseModel):
             raise ValueError(f"All group_proportions must be positive: {v}")
         return v
 
-    @validator("seq_step_sizes", always=True)
+    @validator("stride_by_split", always=True)
     def validate_step_sizes(cls, v: Optional[list[int]], values: dict) -> list[int]:
         group_proportions = values.get("group_proportions")
         assert (
             group_proportions is not None
-        ), "group_proportions must be set to validate seq_step_sizes"
+        ), "group_proportions must be set to validate stride_by_split"
 
-        assert isinstance(v, list), "seq_step_sizes should be a list after __init__"
+        assert isinstance(v, list), "stride_by_split should be a list after __init__"
 
         if len(v) != len(group_proportions):
             raise ValueError(
-                f"Length of seq_step_sizes ({len(v)}) must match length of "
+                f"Length of stride_by_split ({len(v)}) must match length of "
                 f"group_proportions ({len(group_proportions)})"
             )
         if not all(step > 0 for step in v):
-            raise ValueError(f"All seq_step_sizes must be positive integers: {v}")
+            raise ValueError(f"All stride_by_split must be positive integers: {v}")
         return v
 
     @validator("batches_per_file")
@@ -148,5 +148,5 @@ class PreprocessorModel(BaseModel):
         default_seq_step_size = [kwargs["seq_length"]] * len(
             kwargs["group_proportions"]
         )
-        kwargs["seq_step_sizes"] = kwargs.get("seq_step_sizes", default_seq_step_size)
+        kwargs["stride_by_split"] = kwargs.get("stride_by_split", default_seq_step_size)
         super().__init__(**kwargs)

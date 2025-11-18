@@ -11,7 +11,7 @@ group_proportions:
 - 0.1
 - 0.1
 seq_length: 48
-seq_step_sizes:
+stride_by_split:
 - 1
 - 1
 - 1

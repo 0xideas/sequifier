@@ -70,7 +70,7 @@ class Preprocessor:
         selected_columns: Optional[list[str]],
         group_proportions: list[float],
         seq_length: int,
-        seq_step_sizes: list[int],
+        stride_by_split: list[int],
         max_rows: Optional[int],
         seed: int,
         n_cores: Optional[int],
@@ -89,7 +89,7 @@ class Preprocessor:
             selected_columns: A list of columns to be included in the preprocessing.
             group_proportions: A list of floats that define the relative sizes of data splits.
             seq_length: The sequence length for the model inputs.
-            seq_step_sizes: A list of step sizes for creating subsequences.
+            stride_by_split: A list of step sizes for creating subsequences.
             max_rows: The maximum number of input rows to process.
             seed: A random seed for reproducibility.
             n_cores: The number of CPU cores to use for parallel processing.
@@ -148,7 +148,7 @@ class Preprocessor:
                 schema,
                 self.n_cores,
                 seq_length,
-                seq_step_sizes,
+                stride_by_split,
                 data_columns,
                 col_types,
                 group_proportions,
@@ -202,7 +202,7 @@ class Preprocessor:
                 schema,
                 self.n_cores,
                 seq_length,
-                seq_step_sizes,
+                stride_by_split,
                 data_columns,
                 n_classes,
                 id_maps,
@@ -422,7 +422,7 @@ class Preprocessor:
         schema: Any,
         n_cores: int,
         seq_length: int,
-        seq_step_sizes: list[int],
+        stride_by_split: list[int],
         data_columns: list[str],
         n_classes: dict[str, int],
         id_maps: dict[str, dict[Union[int, str], int]],
@@ -443,7 +443,7 @@ class Preprocessor:
             schema: The schema for the preprocessed data.
             n_cores: The number of cores to use for parallel processing.
             seq_length: The sequence length for the model inputs.
-            seq_step_sizes: A list of step sizes for creating subsequences.
+            stride_by_split: A list of step sizes for creating subsequences.
             data_columns: A list of data columns.
             n_classes: A dictionary containing the number of classes for each categorical column.
             id_maps: A dictionary containing the id maps for each categorical column.
@@ -466,7 +466,7 @@ class Preprocessor:
                 schema=schema,
                 n_cores=n_cores,
                 seq_length=seq_length,
-                seq_step_sizes=seq_step_sizes,
+                stride_by_split=stride_by_split,
                 data_columns=data_columns,
                 n_classes=n_classes,
                 id_maps=id_maps,
@@ -510,7 +510,7 @@ class Preprocessor:
                 "schema": schema,
                 "n_cores": 1,
                 "seq_length": seq_length,
-                "seq_step_sizes": seq_step_sizes,
+                "stride_by_split": stride_by_split,
                 "data_columns": data_columns,
                 "n_classes": n_classes,
                 "id_maps": id_maps,
@@ -938,7 +938,7 @@ def _process_batches_multiple_files_inner(
     schema: Any,
     n_cores: int,
     seq_length: int,
-    seq_step_sizes: list[int],
+    stride_by_split: list[int],
     data_columns: list[str],
     n_classes: dict[str, int],
     id_maps: dict[str, dict[Union[int, str], int]],
@@ -966,7 +966,7 @@ def _process_batches_multiple_files_inner(
         schema: The schema for the preprocessed data.
         n_cores: The number of cores to use for parallel processing.
         seq_length: The sequence length for the model inputs.
-        seq_step_sizes: A list of step sizes for creating subsequences.
+        stride_by_split: A list of step sizes for creating subsequences.
         data_columns: A list of data columns.
         n_classes: A dictionary containing the number of classes for each categorical column.
         id_maps: A dictionary containing the id maps for each categorical column.
@@ -1041,7 +1041,7 @@ def _process_batches_multiple_files_inner(
                 schema,
                 n_cores,
                 seq_length,
-                seq_step_sizes,
+                stride_by_split,
                 data_columns,
                 col_types,
                 group_proportions,
@@ -1087,7 +1087,7 @@ def _process_batches_single_file(
     schema: Any,
     n_cores: Optional[int],
     seq_length: int,
-    seq_step_sizes: list[int],
+    stride_by_split: list[int],
     data_columns: list[str],
     col_types: dict[str, str],
     group_proportions: list[float],
@@ -1106,7 +1106,7 @@ def _process_batches_single_file(
         schema: The schema for the preprocessed data.
         n_cores: The number of cores to use for parallel processing.
         seq_length: The sequence length for the model inputs.
-        seq_step_sizes: A list of step sizes for creating subsequences.
+        stride_by_split: A list of step sizes for creating subsequences.
         data_columns: A list of data columns.
         col_types: A dictionary containing the column types.
         group_proportions: A list of floats that define the relative sizes of data splits.
@@ -1130,7 +1130,7 @@ def _process_batches_single_file(
             schema,
             split_paths,
             seq_length,
-            seq_step_sizes,
+            stride_by_split,
             data_columns,
             col_types,
             group_proportions,
@@ -1442,7 +1442,7 @@ def preprocess_batch(
     schema: Any,
     split_paths: list[str],
     seq_length: int,
-    seq_step_sizes: list[int],
+    stride_by_split: list[int],
     data_columns: list[str],
     col_types: dict[str, str],
     group_proportions: list[float],
@@ -1461,7 +1461,7 @@ def preprocess_batch(
         schema: The schema for the preprocessed data.
         split_paths: The paths to the output split files.
         seq_length: The sequence length for the model inputs.
-        seq_step_sizes: A list of step sizes for creating subsequences.
+        stride_by_split: A list of step sizes for creating subsequences.
         data_columns: A list of data columns.
         col_types: A dictionary containing the column types.
         group_proportions: A list of floats that define the relative sizes of data splits.
@@ -1487,7 +1487,7 @@ def preprocess_batch(
                         data_subset.slice(lb, ub - lb),
                         schema,
                         seq_length,
-                        seq_step_sizes[i],
+                        stride_by_split[i],
                         data_columns,
                         subsequence_start_mode,
                     )
@@ -1539,7 +1539,7 @@ def preprocess_batch(
                         data_subset.slice(lb, ub - lb),
                         schema,
                         seq_length,
-                        seq_step_sizes[j],
+                        stride_by_split[j],
                         data_columns,
                         subsequence_start_mode,
                     )
