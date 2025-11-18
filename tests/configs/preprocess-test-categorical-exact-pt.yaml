@@ -5,7 +5,7 @@ read_format: csv
 write_format: pt
 selected_columns: null
 
-group_proportions:
+split_ratios:
 - 1.0
 seq_length: 5
 stride_by_split:

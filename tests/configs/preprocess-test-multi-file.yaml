@@ -8,7 +8,7 @@ selected_columns: null
 
 batches_per_file: 1
 
-group_proportions:
+split_ratios:
 - 0.8
 - 0.1
 - 0.1

@@ -6,7 +6,7 @@ read_format: csv
 write_format: parquet
 selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
 
-group_proportions:
+split_ratios:
 - 0.8
 - 0.1
 - 0.1

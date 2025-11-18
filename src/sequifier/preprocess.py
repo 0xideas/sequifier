@@ -68,7 +68,7 @@ class Preprocessor:
         write_format: str,
         combine_into_single_file: bool,
         selected_columns: Optional[list[str]],
-        group_proportions: list[float],
+        split_ratios: list[float],
         seq_length: int,
         stride_by_split: list[int],
         max_rows: Optional[int],
@@ -87,7 +87,7 @@ class Preprocessor:
             write_format: The file type for the preprocessed output data.
             combine_into_single_file: Whether to combine the output into a single file.
             selected_columns: A list of columns to be included in the preprocessing.
-            group_proportions: A list of floats that define the relative sizes of data splits.
+            split_ratios: A list of floats that define the relative sizes of data splits.
             seq_length: The sequence length for the model inputs.
             stride_by_split: A list of step sizes for creating subsequences.
             max_rows: The maximum number of input rows to process.
@@ -116,7 +116,7 @@ class Preprocessor:
         if selected_columns is not None:
             selected_columns = ["sequenceId", "itemPosition"] + selected_columns
 
-        self._setup_split_paths(write_format, len(group_proportions))
+        self._setup_split_paths(write_format, len(split_ratios))
 
         if os.path.isfile(data_path):
             data = _load_and_preprocess_data(
@@ -151,7 +151,7 @@ class Preprocessor:
                 stride_by_split,
                 data_columns,
                 col_types,
-                group_proportions,
+                split_ratios,
                 write_format,
                 self.split_paths,
                 self.target_dir,
@@ -163,7 +163,7 @@ class Preprocessor:
                 input_files = create_file_paths_for_single_file(
                     self.project_path,
                     self.target_dir,
-                    len(group_proportions),
+                    len(split_ratios),
                     n_batches,
                     self.data_name_root,
                     write_format,
@@ -171,7 +171,7 @@ class Preprocessor:
                 combine_multiprocessing_outputs(
                     self.project_path,
                     self.target_dir,
-                    len(group_proportions),
+                    len(split_ratios),
                     input_files,
                     self.data_name_root,
                     write_format,
@@ -208,7 +208,7 @@ class Preprocessor:
                 id_maps,
                 selected_columns_statistics,
                 col_types,
-                group_proportions,
+                split_ratios,
                 write_format,
                 process_by_file,
                 subsequence_start_mode,
@@ -428,7 +428,7 @@ class Preprocessor:
         id_maps: dict[str, dict[Union[int, str], int]],
         selected_columns_statistics: dict[str, dict[str, float]],
         col_types: dict[str, str],
-        group_proportions: list[float],
+        split_ratios: list[float],
         write_format: str,
         process_by_file: bool = True,
         subsequence_start_mode: str = "distribute",
@@ -449,7 +449,7 @@ class Preprocessor:
             id_maps: A dictionary containing the id maps for each categorical column.
             selected_columns_statistics: A dictionary containing the statistics for each numerical column.
             col_types: A dictionary containing the column types.
-            group_proportions: A list of floats that define the relative sizes of data splits.
+            split_ratios: A list of floats that define the relative sizes of data splits.
             write_format: The file format for the output files.
             process_by_file: A flag to indicate if processing should be done file by file.
             subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
@@ -472,7 +472,7 @@ class Preprocessor:
                 id_maps=id_maps,
                 selected_columns_statistics=selected_columns_statistics,
                 col_types=col_types,
-                group_proportions=group_proportions,
+                split_ratios=split_ratios,
                 write_format=write_format,
                 split_paths=self.split_paths,
                 target_dir=self.target_dir,
@@ -484,7 +484,7 @@ class Preprocessor:
             input_files = create_file_paths_for_multiple_files2(
                 self.project_path,
                 self.target_dir,
-                len(group_proportions),
+                len(split_ratios),
                 1,
                 {0: len(file_paths)},
                 self.data_name_root,
@@ -516,7 +516,7 @@ class Preprocessor:
                 "id_maps": id_maps,
                 "selected_columns_statistics": selected_columns_statistics,
                 "col_types": col_types,
-                "group_proportions": group_proportions,
+                "split_ratios": split_ratios,
                 "write_format": write_format,
                 "split_paths": self.split_paths,
                 "target_dir": self.target_dir,
@@ -543,7 +543,7 @@ class Preprocessor:
             input_files = create_file_paths_for_multiple_files2(
                 self.project_path,
                 self.target_dir,
-                len(group_proportions),
+                len(split_ratios),
                 len(job_params),
                 {i: len(file_sets[i]) for i in range(len(file_sets))},
                 self.data_name_root,
@@ -553,7 +553,7 @@ class Preprocessor:
             combine_multiprocessing_outputs(
                 self.project_path,
                 self.target_dir,
-                len(group_proportions),
+                len(split_ratios),
                 input_files,
                 self.data_name_root,
                 write_format,
@@ -880,7 +880,7 @@ def _check_file_has_been_processed(
     project_path: str,
     data_name_root: str,
     process_id: int,
-    group_proportions: list[float],
+    split_ratios: list[float],
     write_format: str,
     target_dir: str,
     combine_into_single_file: bool,
@@ -892,7 +892,7 @@ def _check_file_has_been_processed(
         # Case 1: Combining into a single file. Check for the intermediate
         # combined file in the target_dir.
         expected_file_path = ""
-        for split_index in range(len(group_proportions)):
+        for split_index in range(len(split_ratios)):
             expected_file_path = create_split_file_path(
                 project_path,
                 data_name_root,
@@ -944,7 +944,7 @@ def _process_batches_multiple_files_inner(
     id_maps: dict[str, dict[Union[int, str], int]],
     selected_columns_statistics: dict[str, dict[str, float]],
     col_types: dict[str, str],
-    group_proportions: list[float],
+    split_ratios: list[float],
     write_format: str,
     split_paths: list[str],
     target_dir: str,
@@ -972,7 +972,7 @@ def _process_batches_multiple_files_inner(
         id_maps: A dictionary containing the id maps for each categorical column.
         selected_columns_statistics: A dictionary containing the statistics for each numerical column.
         col_types: A dictionary containing the column types.
-        group_proportions: A list of floats that define the relative sizes of data splits.
+        split_ratios: A list of floats that define the relative sizes of data splits.
         write_format: The file format for the output files.
         split_paths: The paths to the output split files.
         target_dir: The target directory for temporary files.
@@ -1001,7 +1001,7 @@ def _process_batches_multiple_files_inner(
                     project_path,
                     data_name_root,
                     process_id,
-                    group_proportions,
+                    split_ratios,
                     write_format,
                     target_dir,
                     combine_into_single_file,
@@ -1044,7 +1044,7 @@ def _process_batches_multiple_files_inner(
                 stride_by_split,
                 data_columns,
                 col_types,
-                group_proportions,
+                split_ratios,
                 write_format,
                 adjusted_split_paths,
                 target_dir,
@@ -1056,7 +1056,7 @@ def _process_batches_multiple_files_inner(
                 input_files = create_file_paths_for_multiple_files1(
                     project_path,
                     target_dir,
-                    len(group_proportions),
+                    len(split_ratios),
                     n_batches,
                     process_id,
                     file_index_str,
@@ -1066,7 +1066,7 @@ def _process_batches_multiple_files_inner(
                 combine_multiprocessing_outputs(
                     project_path,
                     target_dir,
-                    len(group_proportions),
+                    len(split_ratios),
                     input_files,
                     data_name_root,
                     write_format,
@@ -1090,7 +1090,7 @@ def _process_batches_single_file(
     stride_by_split: list[int],
     data_columns: list[str],
     col_types: dict[str, str],
-    group_proportions: list[float],
+    split_ratios: list[float],
     write_format: str,
     split_paths: list[str],
     target_dir: str,
@@ -1109,7 +1109,7 @@ def _process_batches_single_file(
         stride_by_split: A list of step sizes for creating subsequences.
         data_columns: A list of data columns.
         col_types: A dictionary containing the column types.
-        group_proportions: A list of floats that define the relative sizes of data splits.
+        split_ratios: A list of floats that define the relative sizes of data splits.
         write_format: The file format for the output files.
         split_paths: The paths to the output split files.
         target_dir: The target directory for temporary files.
@@ -1133,7 +1133,7 @@ def _process_batches_single_file(
             stride_by_split,
             data_columns,
             col_types,
-            group_proportions,
+            split_ratios,
             target_dir,
             write_format,
             batches_per_file,
@@ -1280,17 +1280,17 @@ def combine_maps(
 
 
 @beartype
-def get_group_bounds(data_subset: pl.DataFrame, group_proportions: list[float]):
+def get_group_bounds(data_subset: pl.DataFrame, split_ratios: list[float]):
     """Calculates row indices for splitting a sequence into groups.
 
     This function takes a DataFrame `data_subset` (which typically
     contains all items for a single `sequenceId`) and calculates the
     row indices to split it into multiple groups (e.g., train, val, test)
-    based on the provided `group_proportions`.
+    based on the provided `split_ratios`.
 
     Args:
         data_subset: The DataFrame (for a single sequence) to split.
-        group_proportions: A list of floats (e.g., [0.8, 0.1, 0.1]) that
+        split_ratios: A list of floats (e.g., [0.8, 0.1, 0.1]) that
             sum to 1.0, defining the relative sizes of the splits.
 
     Returns:
@@ -1298,7 +1298,7 @@ def get_group_bounds(data_subset: pl.DataFrame, group_proportions: list[float]):
         proportion, defining the row slices for each group.
     """
     n = data_subset.shape[0]
-    upper_bounds = list((np.cumsum(group_proportions) * n).astype(int))
+    upper_bounds = list((np.cumsum(split_ratios) * n).astype(int))
     lower_bounds = [0] + list(upper_bounds[:-1])
     group_bounds = list(zip(lower_bounds, upper_bounds))
     return group_bounds
@@ -1445,7 +1445,7 @@ def preprocess_batch(
     stride_by_split: list[int],
     data_columns: list[str],
     col_types: dict[str, str],
-    group_proportions: list[float],
+    split_ratios: list[float],
     target_dir: str,
     write_format: str,
     batches_per_file: int,
@@ -1464,7 +1464,7 @@ def preprocess_batch(
         stride_by_split: A list of step sizes for creating subsequences.
         data_columns: A list of data columns.
         col_types: A dictionary containing the column types.
-        group_proportions: A list of floats that define the relative sizes of data splits.
+        split_ratios: A list of floats that define the relative sizes of data splits.
         target_dir: The target directory for temporary files.
         write_format: The file format for the output files.
         batches_per_file: The number of batches to process per file.
@@ -1480,7 +1480,7 @@ def preprocess_batch(
         pad_width = len(str(math.ceil(len(sequence_ids) / batches_per_file) + 1))
         for i, sequence_id in enumerate(sequence_ids):
             data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
-            group_bounds = get_group_bounds(data_subset, group_proportions)
+            group_bounds = get_group_bounds(data_subset, split_ratios)
             sequences = {
                 i: cast_columns_to_string(
                     extract_sequences(
@@ -1532,7 +1532,7 @@ def preprocess_batch(
         written_files: dict[int, list[str]] = {i: [] for i in range(len(split_paths))}
         for i, sequence_id in enumerate(sequence_ids):
             data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
-            group_bounds = get_group_bounds(data_subset, group_proportions)
+            group_bounds = get_group_bounds(data_subset, split_ratios)
             sequences = {
                 j: cast_columns_to_string(
                     extract_sequences(

@@ -40,7 +40,7 @@ class PreprocessorModel(BaseModel):
         write_format: The file type for the preprocessed output data.
         combine_into_single_file: If True, combines all preprocessed data into a single file.
         selected_columns: A list of columns to be included in the preprocessing. If None, all columns are used.
-        group_proportions: A list of floats that define the relative sizes of data splits (e.g., for train, validation, test).
+        split_ratios: A list of floats that define the relative sizes of data splits (e.g., for train, validation, test).
                            The sum of proportions must be 1.0.
         seq_length: The sequence length for the model inputs.
         stride_by_split: A list of step sizes for creating subsequences within each data split.
@@ -60,7 +60,7 @@ class PreprocessorModel(BaseModel):
     combine_into_single_file: bool = True
     selected_columns: Optional[list[str]]
 
-    group_proportions: list[float]
+    split_ratios: list[float]
     seq_length: int
     stride_by_split: Optional[list[int]]
     max_rows: Optional[int]
@@ -94,29 +94,27 @@ class PreprocessorModel(BaseModel):
             )
         return v
 
-    @validator("group_proportions")
+    @validator("split_ratios")
     def validate_proportions_sum(cls, v: list[float]) -> list[float]:
         if not np.isclose(np.sum(v), 1.0):
-            raise ValueError(
-                f"group_proportions must sum to 1.0, but sums to {np.sum(v)}"
-            )
+            raise ValueError(f"split_ratios must sum to 1.0, but sums to {np.sum(v)}")
         if not all(p > 0 for p in v):
-            raise ValueError(f"All group_proportions must be positive: {v}")
+            raise ValueError(f"All split_ratios must be positive: {v}")
         return v
 
     @validator("stride_by_split", always=True)
     def validate_step_sizes(cls, v: Optional[list[int]], values: dict) -> list[int]:
-        group_proportions = values.get("group_proportions")
+        split_ratios = values.get("split_ratios")
         assert (
-            group_proportions is not None
-        ), "group_proportions must be set to validate stride_by_split"
+            split_ratios is not None
+        ), "split_ratios must be set to validate stride_by_split"
 
         assert isinstance(v, list), "stride_by_split should be a list after __init__"
 
-        if len(v) != len(group_proportions):
+        if len(v) != len(split_ratios):
             raise ValueError(
                 f"Length of stride_by_split ({len(v)}) must match length of "
-                f"group_proportions ({len(group_proportions)})"
+                f"split_ratios ({len(split_ratios)})"
             )
         if not all(step > 0 for step in v):
             raise ValueError(f"All stride_by_split must be positive integers: {v}")
@@ -145,9 +143,7 @@ class PreprocessorModel(BaseModel):
         return v
 
     def __init__(self, **kwargs):
-        default_stride_for_split = [kwargs["seq_length"]] * len(
-            kwargs["group_proportions"]
-        )
+        default_stride_for_split = [kwargs["seq_length"]] * len(kwargs["split_ratios"])
         kwargs["stride_by_split"] = kwargs.get(
             "stride_by_split", default_stride_for_split
         )

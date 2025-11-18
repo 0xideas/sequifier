@@ -5,7 +5,7 @@ read_format: csv
 write_format: pt
 selected_columns: null
 continue_preprocessing: true
-group_proportions:
+split_ratios:
 - 0.6
 - 0.2
 - 0.2

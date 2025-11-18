@@ -5,7 +5,7 @@ read_format: csv
 write_format: parquet
 selected_columns: null
 
-group_proportions:
+split_ratios:
 - 0.5
 - 0.5
 seq_length: 8
