@@ -35,7 +35,7 @@ model_spec:
 training_spec:
   device: "cpu" # device for model training
   epochs: 100 # number of epochs
-  checkpoint_frequency: 50 # frequency of checkpointing
+  save_interval_epochs: 50 # frequency of checkpointing
   batch_size: 50 # batch size for training
   lr: 0.01  # learning rate
   dropout: 0.1 # dropout rate during training

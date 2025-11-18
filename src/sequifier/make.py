@@ -46,7 +46,7 @@ model_spec:
 training_spec:
   device: cuda
   epochs: 1000
-  checkpoint_frequency: 10
+  save_interval_epochs: 10
   batch_size: 100
   log_interval: 10
   lr: 0.0001

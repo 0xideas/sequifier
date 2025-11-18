@@ -32,7 +32,7 @@ model_spec:
 training_spec:
   device: cpu
   epochs: 3
-  checkpoint_frequency: 1
+  save_interval_epochs: 1
   batch_size: 10
   lr: 0.003
   log_interval: 200

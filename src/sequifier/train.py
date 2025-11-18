@@ -395,7 +395,7 @@ class TransformerModel(nn.Module):
         )
         self.scheduler_step_iter = hparams.training_spec.scheduler_step_iter
 
-        self.checkpoint_frequency = hparams.training_spec.checkpoint_frequency
+        self.save_interval_epochs = hparams.training_spec.save_interval_epochs
         self.continue_training = hparams.training_spec.continue_training
         load_string = self._load_weights_conditional()
         self._initialize_log_file()
@@ -762,7 +762,7 @@ class TransformerModel(nn.Module):
                     if self.scheduler_step_iter == "epoch":
                         self.scheduler.step()
 
-                    if epoch % self.checkpoint_frequency == 0:
+                    if epoch % self.save_interval_epochs == 0:
                         self._save(epoch, total_loss)
 
                     last_epoch = epoch

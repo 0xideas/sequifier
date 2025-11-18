@@ -1,5 +1,6 @@
 import os
 import shutil
+import time
 
 import pytest
 import yaml
@@ -10,6 +11,9 @@ test_project_name = os.path.join("tests", "sequifier-make-test-project")
 
 @pytest.fixture
 def setup_for_test_make():
+    if os.path.exists(test_project_name):
+        shutil.rmtree(test_project_name)
+        time.sleep(1)
     os.system(f"sequifier make {test_project_name}")
 
 
