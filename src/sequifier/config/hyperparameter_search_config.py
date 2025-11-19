@@ -481,6 +481,8 @@ class HyperparameterSearch(BaseModel):
     n_classes: dict[str, int]
     inference_batch_size: int
 
+    export_generative_model: bool
+    export_embedding_model: bool
     export_onnx: bool = True
     export_pt: bool = False
     export_with_dropout: bool = False
@@ -535,8 +537,8 @@ class HyperparameterSearch(BaseModel):
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=101,
-            export_embedding_model=False,
-            export_generative_model=True,
+            export_embedding_model=self.export_embedding_model,
+            export_generative_model=self.export_generative_model,
             export_onnx=self.export_onnx,
             export_pt=self.export_pt,
             export_with_dropout=self.export_with_dropout,

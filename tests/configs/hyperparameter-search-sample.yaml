@@ -17,6 +17,8 @@ n_samples: 4
 # Configuration Loading Overrides (set to null to use values from metadata)
 input_columns: null
 # Export Settings
+export_embedding_model: false
+export_generative_model: true
 export_onnx: false
 export_pt: true
 export_with_dropout: false
