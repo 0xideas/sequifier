@@ -61,7 +61,7 @@ def load_hyperparameter_search_config(
             [
                 col
                 for col, type_ in metadata_config["column_types"].items()
-                if type_ == "Int64" and col in input_columns
+                if "int" in type_.lower() and col in input_columns
             ]
             for input_columns in config_values["input_columns"]
         ]
@@ -70,7 +70,7 @@ def load_hyperparameter_search_config(
             [
                 col
                 for col, type_ in metadata_config["column_types"].items()
-                if type_ == "Float64" and col in input_columns
+                if "float" in type_.lower() and col in input_columns
             ]
             for input_columns in config_values["input_columns"]
         ]
@@ -549,7 +549,6 @@ class HyperparameterSearch(BaseModel):
             product(np.arange(len(self.input_columns)), self.seq_length)
         )
 
-        # import code; code.interact(local=locals())
         input_columns_index, seq_length = hyperparameter_combinations[i_outer]
 
         return TrainModel(
