@@ -5,7 +5,7 @@ from typing import Optional, Union
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from sequifier.helpers import normalize_path, try_catch_excess_keys
 
@@ -108,9 +108,7 @@ class InfererModel(BaseModel):
         autoregression_extra_steps: The number of additional steps for autoregressive inference.
     """
 
-    class Config:
-        arbitrary_types_allowed = True
-        extra = "forbid"
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     project_root: str
     metadata_config_path: str

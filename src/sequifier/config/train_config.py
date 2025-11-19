@@ -5,7 +5,7 @@ from typing import Any, Optional, Union
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from sequifier.helpers import normalize_path, try_catch_excess_keys
 
@@ -213,9 +213,7 @@ class TrainingSpecModel(BaseModel):
         backend: The distributed training backend (e.g., 'nccl').
     """
 
-    class Config:
-        arbitrary_types_allowed = True
-        extra = "forbid"
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     device: str
     device_max_concat_length: int = 12
@@ -315,9 +313,7 @@ class ModelSpecModel(BaseModel):
         num_layers: The number of layers in the transformer model.
     """
 
-    class Config:
-        arbitrary_types_allowed = True
-        extra = "forbid"
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     dim_model: int
     feature_embedding_dims: Optional[dict[str, int]] = None
@@ -367,9 +363,7 @@ class TrainModel(BaseModel):
         training_spec: The specification of the training run configuration.
     """
 
-    class Config:
-        arbitrary_types_allowed = True
-        extra = "forbid"
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     project_root: str
     metadata_config_path: str
