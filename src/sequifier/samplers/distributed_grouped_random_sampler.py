@@ -1,4 +1,3 @@
-import random
 from typing import Iterator, Union
 
 import torch
@@ -71,11 +70,13 @@ class DistributedGroupedRandomSampler(Sampler[int]):
         """
         Returns an iterator over indices for the current rank.
         """
-        # 1. Deterministically shuffle the list of ALL files based on seed and epoch
+        # 1. Initialize generator with deterministic seed for this epoch
         if self.shuffle:
-            g = torch.Generator()
-            g.manual_seed(self.seed + self.epoch)
-            all_files_order = torch.randperm(self.num_files, generator=g).tolist()
+            generator = torch.Generator()
+            generator.manual_seed(self.seed + self.epoch)
+            all_files_order = torch.randperm(
+                self.num_files, generator=generator
+            ).tolist()
         else:
             all_files_order = list(range(self.num_files))
 
@@ -85,10 +86,15 @@ class DistributedGroupedRandomSampler(Sampler[int]):
         # 3. Create the final list of indices for this rank
         final_indices = []
         for file_idx in files_for_this_rank:
-            group = self.index_groups[file_idx]
+            # IMPORTANT: Create a copy to avoid mutating self.index_groups in-place
+            group = list(self.index_groups[file_idx])
+
             if self.shuffle:
-                # Shuffle samples within the file group
-                random.shuffle(group)
+                # Use the deterministic generator 'g' to permute indices
+
+                perm = torch.randperm(len(group), generator=generator).tolist()  # type: ignore
+                group = [group[i] for i in perm]
+
             final_indices.extend(group)
 
         return iter(final_indices)
