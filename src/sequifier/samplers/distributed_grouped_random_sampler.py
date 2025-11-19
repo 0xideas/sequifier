@@ -39,7 +39,7 @@ class DistributedGroupedRandomSampler(Sampler[int]):
             shuffle: If True, shuffles the order of files and samples within files.
             seed: Random seed used to create the permutation.
         """
-        super().__init__(data_source)
+        super().__init__(None)
         self.data_source = data_source
         self.num_replicas = num_replicas
         self.rank = rank
@@ -90,8 +90,6 @@ class DistributedGroupedRandomSampler(Sampler[int]):
             group = list(self.index_groups[file_idx])
 
             if self.shuffle:
-                # Use the deterministic generator 'g' to permute indices
-
                 perm = torch.randperm(len(group), generator=generator).tolist()  # type: ignore
                 group = [group[i] for i in perm]
 

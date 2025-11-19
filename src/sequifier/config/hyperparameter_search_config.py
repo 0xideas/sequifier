@@ -5,7 +5,7 @@ from typing import Optional, Union
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from sequifier.config.train_config import (
     DotDict,
@@ -119,9 +119,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         continue_training: Flag to continue training from a checkpoint.
     """
 
-    class Config:
-        arbitrary_types_allowed = True
-        extra = "forbid"
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     device: str
     epochs: list[int]

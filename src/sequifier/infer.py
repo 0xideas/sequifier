@@ -3,13 +3,14 @@ import os
 import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator, Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import onnxruntime
 import polars as pl
 import torch
 from beartype import beartype
+from beartype.typing import Iterator
 
 from sequifier.config.infer_config import InfererModel, load_inferer_config
 from sequifier.helpers import (
@@ -74,7 +75,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
 
 
 @beartype
-def load_pt_dataset(data_path: str, start_pct: float, end_pct: float) -> Iterator:
+def load_pt_dataset(data_path: str, start_pct: float, end_pct: float) -> Iterator[Any]:
     """Lazily loads and yields data from .pt files in a directory.
 
     This function scans a directory for `.pt` files, sorts them, and then

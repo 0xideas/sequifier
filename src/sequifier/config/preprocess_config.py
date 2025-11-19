@@ -4,7 +4,7 @@ from typing import Optional
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
 
 from sequifier.helpers import try_catch_excess_keys
 
@@ -57,9 +57,7 @@ class PreprocessorModel(BaseModel):
         subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
     """
 
-    class Config:
-        arbitrary_types_allowed = True
-        extra = "forbid"
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     project_root: str
     data_path: str
