@@ -1,6 +1,6 @@
 import copy
 import json
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import numpy as np
 import yaml
@@ -240,6 +240,7 @@ class TrainingSpecModel(BaseModel):
     continue_training: bool = True
     distributed: bool = False
     load_full_data_to_ram: bool = True
+    max_ram_gb: Union[int, float] = 16
     world_size: int = 1
     num_workers: int = 0
     backend: str = "nccl"

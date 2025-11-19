@@ -27,7 +27,7 @@ class SequifierDatasetFromFolderLazy(Dataset):
     for training on datasets larger than the available system memory.
     """
 
-    def __init__(self, data_path: str, config: TrainModel, ram_threshold: float = 70.0):
+    def __init__(self, data_path: str, config: TrainModel):
         """
         Initializes the dataset by reading metadata and setting up the cache.
         Each .pt file is expected to contain a tuple:
@@ -37,12 +37,10 @@ class SequifierDatasetFromFolderLazy(Dataset):
             data_path (str): The path to the directory containing the pre-processed
                              .pt files and a metadata.json file.
             config (TrainModel): The training configuration object.
-            ram_threshold (float): The system RAM usage percentage (0-100)
-                                   at which to trigger cache eviction.
         """
         self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
-        self.ram_threshold = ram_threshold
+        self.max_ram_bytes = config.training_spec.max_ram_gb * (1024**3)
         metadata_path = os.path.join(self.data_dir, "metadata.json")
 
         if not os.path.exists(metadata_path):
@@ -122,7 +120,7 @@ class SequifierDatasetFromFolderLazy(Dataset):
         until usage is below the threshold. This method must be called from
         within a locked context.
         """
-        while psutil.virtual_memory().percent > self.ram_threshold:
+        while psutil.virtual_memory().used > self.max_ram_bytes:
             if not self.cache:
                 # Cache is empty, but memory is still high. Nothing to evict.
                 break
