@@ -131,7 +131,7 @@ class HyperparameterSearcher:
                 is 'sample'.
         """
         n_combinations = self.config.n_combinations()
-        print(f"Found {n_combinations} hyperparameter combinations")
+        self.logger.info(f"Found {n_combinations} hyperparameter combinations")
         if self.config.search_strategy == "sample":
             n_samples = self.config.n_samples
             if n_samples is None:

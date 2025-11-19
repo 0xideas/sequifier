@@ -5,6 +5,7 @@ from typing import Optional, Union
 import numpy as np
 import yaml
 from beartype import beartype
+from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 
 from sequifier.config.train_config import (
@@ -192,6 +193,23 @@ class TrainingSpecHyperparameterSampling(BaseModel):
 
         return v
 
+    @field_validator("scheduler")
+    @classmethod
+    def validate_scheduler_config(cls, v, info_dict):
+        for i, scheduler_config in enumerate(v):
+            if "total_steps" in scheduler_config:
+                if info_dict.data.get("scheduler_step_on") == "epoch":
+                    epochs = info_dict.data.get("epochs")[i]
+                    if not scheduler_config["total_steps"] == epochs:
+                        raise ValueError(
+                            f"scheduler total steps: {scheduler_config['total_steps']} != {epochs}: total epochs"
+                        )
+                else:
+                    logger.warning(
+                        f"{scheduler_config['total_steps']} scheduler steps at {info_dict.data.get('epochs')[i]} epochs implies {scheduler_config['total_steps']/info_dict.data.get('epochs')[i]:.2f} batches. Does this seem correct?"
+                    )
+        return v
+
     def random_sample(self):
         """Randomly sample a set of training hyperparameters.
 
@@ -211,7 +229,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         optimizer = self.optimizer[optimizer_index]
         learning_rate = self.learning_rate[learning_rate_and_scheduler_index]
 
-        print(f"{learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }")
+        logger.info(
+            f"{learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }"
+        )
 
         return TrainingSpecModel(
             device=self.device,
@@ -272,7 +292,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
 
         learning_rate = self.learning_rate[learning_rate_and_scheduler_index]
 
-        print(f"{learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }")
+        logger.info(
+            f"{learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }"
+        )
 
         return TrainingSpecModel(
             device=self.device,
@@ -375,7 +397,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         dim_model = self.dim_model[dim_model_index]
         dim_feedforward = np.random.choice(self.dim_feedforward)
         num_layers = np.random.choice(self.num_layers)
-        print(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
+        logger.info(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
 
         return ModelSpecModel(
             dim_model=self.dim_model[dim_model_index],
@@ -407,7 +429,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
         dim_model_index, dim_feedforward, num_layers = hyperparameter_combinations[i]
         dim_model = self.dim_model[dim_model_index]
-        print(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
+        logger.info(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
 
         feature_embedding_dims = (
             None
@@ -526,7 +548,7 @@ class HyperparameterSearch(BaseModel):
         training_spec = self.training_hyperparameter_sampling.random_sample()
         input_columns_index = np.random.randint(len(self.input_columns))
         seq_length = np.random.choice(self.seq_length)
-        print(f"{input_columns_index = } - {seq_length = }")
+        logger.info(f"{input_columns_index = } - {seq_length = }")
         return TrainModel(
             project_root=self.project_root,
             metadata_config_path=self.metadata_config_path,

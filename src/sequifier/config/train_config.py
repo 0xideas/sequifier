@@ -5,6 +5,7 @@ from typing import Any, Optional, Union
 import numpy as np
 import yaml
 from beartype import beartype
+from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 
 from sequifier.helpers import normalize_path, try_catch_excess_keys
@@ -289,7 +290,7 @@ class TrainingSpecModel(BaseModel):
                         f"scheduler total steps: {v['total_steps']} != {info_dict.get('epochs')}: total epochs"
                     )
             else:
-                print(
+                logger.info(
                     f"[WARNING] {v['total_steps']} scheduler steps at {info_dict.get('epochs')} epochs implies {v['total_steps']/info_dict.get('epochs'):.2f} batches. Does this seem correct?"
                 )
         return v

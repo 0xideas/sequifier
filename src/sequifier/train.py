@@ -185,7 +185,6 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
     """
     config_path = args.config_path or "configs/train.yaml"
     config = load_train_config(config_path, args_config, args.skip_metadata)
-    print(f"--- Starting Training for model: {config.model_name} ---")
 
     world_size = config.training_spec.world_size
 
@@ -274,9 +273,14 @@ class TransformerModel(nn.Module):
         super().__init__()
         self.project_root = hparams.project_root
         self.model_type = "Transformer"
-        self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
 
         self.rank = rank
+
+        self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
+
+        self._initialize_log_file()
+
+        self.logger.info(f"--- Starting Training for model: {self.model_name} ---")
 
         self.input_columns = hparams.input_columns
         self.categorical_columns = [
@@ -289,8 +293,8 @@ class TransformerModel(nn.Module):
             for col in hparams.real_columns
             if self.input_columns is None or col in self.input_columns
         ]
-        print(f"[INFO] {self.categorical_columns = }")
-        print(f"[INFO] {self.real_columns = }")
+        self.logger.info(f"{self.categorical_columns = }")
+        self.logger.info(f"{self.real_columns = }")
 
         self.target_columns = hparams.target_columns
         self.target_column_types = hparams.target_column_types
@@ -403,7 +407,6 @@ class TransformerModel(nn.Module):
 
         self.save_interval_epochs = hparams.training_spec.save_interval_epochs
         self.continue_training = hparams.training_spec.continue_training
-        self._initialize_log_file()
         load_string = self._load_weights_conditional()
         self.logger.info(load_string)
 

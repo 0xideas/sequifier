@@ -10,6 +10,7 @@ import onnxruntime
 import polars as pl
 import torch
 from beartype import beartype
+from loguru import logger
 
 from sequifier.config.infer_config import InfererModel, load_inferer_config
 from sequifier.helpers import (
@@ -44,7 +45,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
             passed from the command line, that will be merged into the
             loaded configuration file.
     """
-    print("--- Starting Inference ---")
+    logger.info("--- Starting Inference ---")
     config_path = (
         args.config_path if args.config_path is not None else "configs/infer.yaml"
     )
@@ -137,7 +138,7 @@ def infer_worker(
         percentage_limits: A tuple (start_pct, end_pct) used only when
             `config.read_format == "pt"` to slice the dataset.
     """
-    print(f"[INFO] Reading data from '{config.data_path}'...")
+    logger.info(f"[INFO] Reading data from '{config.data_path}'...")
     # Step 1: Use Polars for data ingestion
     dataset = None
     if config.read_format == "parquet":
@@ -192,13 +193,13 @@ def infer_worker(
             f".{inferer.inference_model_type}", ""
         )
 
-        print(f"[INFO] Inferring for {model_id}")
+        logger.info(f"[INFO] Inferring for {model_id}")
         if config.model_type == "generative":
             infer_generative(config, inferer, model_id, dataset, column_types)
         if config.model_type == "embedding":
             infer_embedding(config, inferer, model_id, dataset, column_types)
 
-    print("--- Inference Complete ---")
+    logger.info("--- Inference Complete ---")
 
 
 @beartype
@@ -331,7 +332,7 @@ def infer_embedding(
         embeddings_path = os.path.join(
             config.project_root, "outputs", "embeddings", file_name
         )
-        print(f"[INFO] Writing predictions to '{embeddings_path}'")
+        logger.info(f"[INFO] Writing predictions to '{embeddings_path}'")
         write_data(
             embeddings_df,
             embeddings_path,
@@ -522,7 +523,9 @@ def infer_generative(
                     probabilities_path = os.path.join(
                         config.project_root, "outputs", "probabilities", file_name
                     )
-                    print(f"[INFO] Writing probabilities to '{probabilities_path}'")
+                    logger.info(
+                        f"[INFO] Writing probabilities to '{probabilities_path}'"
+                    )
                     # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
                     write_data(
                         pl.DataFrame(
@@ -564,7 +567,7 @@ def infer_generative(
         predictions_path = os.path.join(
             config.project_root, "outputs", "predictions", file_name
         )
-        print(f"[INFO] Writing predictions to '{predictions_path}'")
+        logger.info(f"[INFO] Writing predictions to '{predictions_path}'")
         write_data(
             predictions,
             predictions_path,
@@ -1135,7 +1138,7 @@ def get_probs_preds_autoregression(
 
         t4 = datetime.now()
 
-        print(
+        logger.debug(
             f"[DEBUG] Autoregression step {subsequence_id}/{len(subsequence_ids_distinct)}: Total: {format_delta(t4-t0)}s (Filter: {format_delta(t1-t0)}s, Infer: {format_delta(t3-t2)}s, Update: {format_delta(t4-t3)}s)"
         )
 

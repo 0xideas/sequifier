@@ -6,6 +6,7 @@ from typing import Dict, Tuple
 
 import psutil  # Dependency: pip install psutil
 import torch
+from loguru import logger
 from torch.utils.data import Dataset
 
 from sequifier.config.train_config import TrainModel
@@ -40,6 +41,7 @@ class SequifierDatasetFromFolderLazy(Dataset):
         """
         self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
+        self.max_ram_gb = config.training_spec.max_ram_gb
         self.max_ram_bytes = config.training_spec.max_ram_gb * (1024**3)
         metadata_path = os.path.join(self.data_dir, "metadata.json")
 
@@ -77,9 +79,9 @@ class SequifierDatasetFromFolderLazy(Dataset):
             ],
         ] = collections.OrderedDict()
 
-        print(
+        logger.info(
             f"[INFO] Initialized lazy dataset from {self.data_dir}. "
-            f"Total samples: {self.n_samples}. RAM threshold: {self.ram_threshold}%"
+            f"Total samples: {self.n_samples}. RAM threshold in GB: {self.max_ram_gb}%"
         )
 
     def __len__(self) -> int:
