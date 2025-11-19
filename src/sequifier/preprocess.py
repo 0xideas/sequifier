@@ -756,6 +756,7 @@ def _apply_column_statistics(
     for col in data_columns:
         if col in id_maps:
             data = data.with_columns(pl.col(col).replace(id_maps[col]))
+            col_types[col] = "Int64"
         elif col in selected_columns_statistics:
             data = data.with_columns(
                 (

@@ -64,6 +64,16 @@ def test_model_files_exists(run_training, project_root):
                 "sequifier-model-categorical-3-inf-size-best-embedding-3.pt",
                 "sequifier-model-categorical-3-inf-size-last-embedding-3.pt",
             ]
+            + [
+                f"sequifier-test-hp-search-sample-run-{i}-{suffix}-1.pt"
+                for i in range(4)
+                for suffix in ["best", "last"]
+            ]
+            + [
+                f"sequifier-test-hp-search-grid-run-{i}-{suffix}-1.pt"
+                for i in range(4)
+                for suffix in ["best", "last"]
+            ]
         )
     )
 

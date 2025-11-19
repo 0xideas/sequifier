@@ -29,6 +29,8 @@ def load_inferer_config(
         config_values = yaml.safe_load(f)
     config_values.update(args_config)
 
+    config_values["seed"] = config_values.get("seed", 1010)
+
     if not skip_metadata:
         metadata_config_path = config_values.get("metadata_config_path")
 

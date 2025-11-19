@@ -34,8 +34,6 @@ def build_args_config(args: Any) -> dict[str, Any]:
             args_config["seed"] = seed
         elif args.command in ["train", "infer"] and args.seed:
             args_config["seed"] = args.seed
-        else:
-            args_config["seed"] = 1010
 
     if "selected_columns" in args_config:
         if args_config["selected_columns"] == "None":
