@@ -337,20 +337,38 @@ class Preprocessor:
                         selected_columns,
                         max_rows_inner,
                     )
-                    data_columns = [
+
+                    # Get columns for the current file (excluding metadata cols)
+                    current_file_cols = [
                         col
                         for col in data.columns
                         if col not in ["sequenceId", "itemPosition"]
                     ]
 
                     if col_types is None:
+                        data_columns = current_file_cols
                         col_types = {col: str(data.schema[col]) for col in data_columns}
                     else:
-                        for col in data_columns:
+                        if set(current_file_cols) != set(col_types.keys()):
+                            missing = set(col_types.keys()) - set(current_file_cols)
+                            extra = set(current_file_cols) - set(col_types.keys())
+                            raise ValueError(
+                                f"Schema mismatch in file '{file}'.\n"
+                                f"Expected columns: {list(col_types.keys())}\n"
+                                f"Found columns: {current_file_cols}\n"
+                                f"Missing: {missing}\n"
+                                f"Extra: {extra}"
+                            )
+
+                        for col in current_file_cols:
                             if str(data.schema[col]) != col_types[col]:
                                 raise ValueError(
-                                    f"Schema mismatch for column {col}: {str(data.schema[col])} != {col_types[col]}"
+                                    f"Type mismatch for column '{col}' in file '{file}'. "
+                                    f"Expected {col_types[col]}, got {str(data.schema[col])}"
                                 )
+
+                    if data_columns is None:
+                        raise ValueError("data_columns is None")
 
                     id_maps, selected_columns_statistics = _get_column_statistics(
                         data,
