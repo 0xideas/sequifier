@@ -458,7 +458,9 @@ class TransformerModel(nn.Module):
         Returns:
             A dictionary mapping column names to their calculated embedding dimension.
         """
-        assert (len(categorical_columns) + len(real_columns)) > 0, "No columns found"
+        if not (len(categorical_columns) + len(real_columns)) > 0:
+            raise ValueError("No columns found")
+
         if len(categorical_columns) == 0 and len(real_columns) > 0:
             feature_embedding_dims = {col: 1 for col in real_columns}
             column_index = dict(enumerate(real_columns))

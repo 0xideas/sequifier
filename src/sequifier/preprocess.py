@@ -1766,9 +1766,10 @@ def extract_subsequences(
         in_seq_length, seq_length, stride_for_split, subsequence_start_mode
     )
     subsequence_starts_diff = subsequence_starts[1:] - subsequence_starts[:-1]
-    assert np.all(
-        subsequence_starts_diff <= stride_for_split
-    ), f"Diff of {subsequence_starts = }, {subsequence_starts_diff = } larger than {stride_for_split = }"
+    if not np.all(subsequence_starts_diff <= stride_for_split):
+        raise ValueError(
+            f"Diff of {subsequence_starts = }, {subsequence_starts_diff = } larger than {stride_for_split = }"
+        )
 
     return {
         col: [list(in_seq[col][i : i + seq_length + 1]) for i in subsequence_starts]
