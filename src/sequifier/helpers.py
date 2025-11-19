@@ -339,14 +339,18 @@ def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0
     logger.add(
         file_2_path,
         level="DEBUG",
-        format="{message}",
-        enqueue=True,  # Multiprocessing safe
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+        enqueue=True,
         mode="a",
     )
 
-    # 3. File 3 (Summary/Info) - Equivalent to old 'level=3'
-    # Captures INFO and up.
+    # 3. File 3 (Summary/Info)
     file_3_path = os.path.join(log_dir, f"sequifier-{model_name}-{rank_str}-3.txt")
-    logger.add(file_3_path, level="INFO", format="{message}", enqueue=True, mode="a")
-
+    logger.add(
+        file_3_path,
+        level="INFO",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+        enqueue=True,
+        mode="a",
+    )
     return logger
