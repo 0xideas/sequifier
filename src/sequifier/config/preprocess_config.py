@@ -131,11 +131,11 @@ class PreprocessorModel(BaseModel):
         cls, v: Optional[list[int]], info: ValidationInfo
     ) -> list[int]:
         split_ratios = info.data.get("split_ratios")
-        assert (
-            split_ratios is not None
-        ), "split_ratios must be set to validate stride_by_split"
+        if not (split_ratios is not None):
+            raise ValueError("split_ratios must be set to validate stride_by_split")
 
-        assert isinstance(v, list), "stride_by_split should be a list after __init__"
+        if not isinstance(v, list):
+            raise ValueError("stride_by_split should be a list after __init__")
 
         if len(v) != len(split_ratios):
             raise ValueError(

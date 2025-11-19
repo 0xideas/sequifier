@@ -104,7 +104,10 @@ class Preprocessor:
         if self.merge_output:
             self.target_dir = "temp"
         else:
-            assert write_format == "pt"
+            if write_format != "pt":
+                raise ValueError(
+                    f"write_format must be 'pt' when merge_output is False, got '{write_format}'"
+                )
             self.target_dir = f"{self.data_name_root}-temp"
 
         self.seed = seed
@@ -247,12 +250,13 @@ class Preprocessor:
         if (np.unique(list(col_types.values())) == np.array(["Int64"]))[0]:
             sequence_position_type = pl.Int64
         else:
-            assert np.all(
+            if not np.all(
                 [
-                    type_.startswith("Int") or type_.startswith("Float")
+                    type_.lower().startswith("int") or type_.lower().startswith("float")
                     for type_ in col_types.values()
                 ]
-            )
+            ):
+                raise ValueError("All column types must start with int or float")
             sequence_position_type = pl.Float64
 
         schema.update(
@@ -343,9 +347,10 @@ class Preprocessor:
                         col_types = {col: str(data.schema[col]) for col in data_columns}
                     else:
                         for col in data_columns:
-                            assert (
-                                str(data.schema[col]) == col_types[col]
-                            ), f"{str(data.schema[col]) = } != {col_types[col] = }"
+                            if str(data.schema[col]) != col_types[col]:
+                                raise ValueError(
+                                    f"Schema mismatch for column {col}: {str(data.schema[col])} != {col_types[col]}"
+                                )
 
                     id_maps, selected_columns_statistics = _get_column_statistics(
                         data,
@@ -355,10 +360,15 @@ class Preprocessor:
                         n_rows_running_count,
                     )
                     n_rows_running_count += data.shape[0]
-        assert data_columns is not None
+
+        if data_columns is None:
+            raise RuntimeError("data_columns was not initialized correctly.")
         n_classes = {col: len(id_maps[col]) + 1 for col in id_maps}
-        assert col_types is not None
+
+        if col_types is None:
+            raise RuntimeError("col_types was not initialized correctly.")
         files_to_process = sorted(files_to_process)
+
         return (
             files_to_process,
             n_classes,
@@ -582,13 +592,16 @@ class Preprocessor:
         directory = Path(temp_output_path)
 
         if not self.target_dir == "temp":
-            assert write_format == "pt"
             for i, split_path in enumerate(self.split_paths):
                 split = f"split{i}"
                 folder_path = os.path.join(
                     self.project_root, "data", f"{self.data_name_root}-{split}"
                 )
-                assert folder_path in split_path
+                if folder_path not in split_path:
+                    raise ValueError(
+                        f"Folder path '{folder_path}' mismatch with split path '{split_path}'"
+                    )
+
                 os.makedirs(folder_path, exist_ok=True)
 
                 pattern = re.compile(rf".+split{i}-\d+-\d+\.\w+")
@@ -865,9 +878,9 @@ def _load_and_preprocess_data(
     """
     print(f"[INFO] Reading data from '{data_path}'...")
     data = read_data(data_path, read_format, columns=selected_columns)
-    assert (
-        data.null_count().sum().sum_horizontal().item() == 0
-    ), f"NaN or null values not accepted: {data.null_count()}"
+
+    if data.null_count().sum().sum_horizontal().item() != 0:
+        raise ValueError(f"NaN or null values not accepted: {data.null_count()}")
 
     if selected_columns:
         selected_columns_filtered = [
@@ -987,7 +1000,8 @@ def _process_batches_multiple_files_inner(
         subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
     """
     n_files = len(file_paths)
-    assert n_files > 0
+    if n_files <= 0:
+        raise ValueError("No files found to process.")
     pad_width = len(str(n_files - 1))
     n_rows_running_count = 0
     for file_index, path in enumerate(file_paths):
@@ -1640,7 +1654,10 @@ def extract_sequences(
                     subsequence_id * stride_for_split,
                     col,
                 ] + subseqs[subsequence_id]
-                assert len(row) == (seq_length + 5), f"{row = }"
+                if len(row) != (seq_length + 5):
+                    raise RuntimeError(
+                        f"Row length mismatch. Expected {seq_length + 5}, got {len(row)}. Row: {row}"
+                    )
                 rows.append(row)
 
     sequences = pl.DataFrame(
@@ -1675,10 +1692,11 @@ def get_subsequence_starts(
     Returns:
         A numpy array of integer start indices for each subsequence.
     """
-    assert subsequence_start_mode in [
-        "distribute",
-        "exact",
-    ], f"{subsequence_start_mode = } not in ['distribute', 'exact']"
+    if subsequence_start_mode not in ["distribute", "exact"]:
+        raise ValueError(
+            f"subsequence_start_mode must be 'distribute' or 'exact', got '{subsequence_start_mode}'"
+        )
+
     if subsequence_start_mode == "distribute":
         last_available_start = in_seq_length - (seq_length + 1)
         starts = np.arange(0, last_available_start + stride_for_split, stride_for_split)
@@ -1693,9 +1711,10 @@ def get_subsequence_starts(
         return starts
 
     if subsequence_start_mode == "exact":
-        assert (
-            ((in_seq_length - 1) - seq_length) % stride_for_split == 0
-        ), f"'exact' can only be used if: ((in_seq_length - 1) - seq_length) % stride_for_split == 0, {(in_seq_length -1) = }, {seq_length = }, {stride_for_split = }"
+        if ((in_seq_length - 1) - seq_length) % stride_for_split != 0:
+            raise ValueError(
+                f"'exact' mode requires sequence length alignment, i.e. if: ((in_seq_length - 1) - seq_length) % stride_for_split == 0, {(in_seq_length -1) = }, {seq_length = }, {stride_for_split = }"
+            )
         last_possible_start = (
             in_seq_length - (seq_length - 1) - 1
         )  # the latter '-1' is to translate to index
@@ -1747,9 +1766,10 @@ def extract_subsequences(
         in_seq_length, seq_length, stride_for_split, subsequence_start_mode
     )
     subsequence_starts_diff = subsequence_starts[1:] - subsequence_starts[:-1]
-    assert np.all(
-        subsequence_starts_diff <= stride_for_split
-    ), f"Diff of {subsequence_starts = }, {subsequence_starts_diff = } larger than {stride_for_split = }"
+    if not np.all(subsequence_starts_diff <= stride_for_split):
+        raise ValueError(
+            f"Diff of {subsequence_starts = }, {subsequence_starts_diff = } larger than {stride_for_split = }"
+        )
 
     return {
         col: [list(in_seq[col][i : i + seq_length + 1]) for i in subsequence_starts]
@@ -2009,7 +2029,10 @@ def combine_multiprocessing_outputs(
                 ["csvstack"] + input_files[split] + [f"> {split_file_path}"]
             )
             result = os.system(command)
-            assert result == 0, f"command '{command}' failes: {result = }"
+            if result != 0:
+                raise RuntimeError(
+                    f"Command '{command}' failed with exit code {result}"
+                )
         elif write_format == "parquet":
             combine_parquet_files(input_files[split], split_file_path)
 

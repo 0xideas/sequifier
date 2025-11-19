@@ -91,7 +91,10 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
                 config.validation_data_path, config
             )
     else:
-        assert config.training_spec.distributed == False  # noqa: E712
+        if config.training_spec.distributed:
+            raise ValueError(
+                "Distributed training is not supported with single-file datasets."
+            )
         train_dataset = SequifierDatasetFromFile(config.training_data_path, config)
         valid_dataset = SequifierDatasetFromFile(config.validation_data_path, config)
 
@@ -139,7 +142,8 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
             sampler=valid_sampler,
             shuffle=False,
         )
-    elif not from_folder:
+    else:
+        assert not from_folder
         train_loader = DataLoader(
             train_dataset,
             batch_size=None,
@@ -151,10 +155,7 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
         valid_loader = DataLoader(
             valid_dataset, batch_size=None, sampler=None, shuffle=False
         )
-    else:
-        assert False, "not possible"
 
-    # 2. Instantiate and wrap the model
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
 
@@ -330,7 +331,10 @@ class TransformerModel(nn.Module):
                 self.encoder[col] = nn.Linear(1, self.feature_embedding_dims[col])
                 self.real_columns_with_embedding.append(col)
             else:
-                assert self.feature_embedding_dims[col] == 1
+                if self.feature_embedding_dims[col] != 1:
+                    raise ValueError(
+                        f"Real column {col} without embedding must have feature_embedding_dims=1"
+                    )
                 self.real_columns_direct.append(col)
             self.pos_encoder[col] = nn.Embedding(
                 self.seq_length, self.feature_embedding_dims[col]
@@ -454,7 +458,9 @@ class TransformerModel(nn.Module):
         Returns:
             A dictionary mapping column names to their calculated embedding dimension.
         """
-        assert (len(categorical_columns) + len(real_columns)) > 0, "No columns found"
+        if not (len(categorical_columns) + len(real_columns)) > 0:
+            raise ValueError("No columns found")
+
         if len(categorical_columns) == 0 and len(real_columns) > 0:
             feature_embedding_dims = {col: 1 for col in real_columns}
             column_index = dict(enumerate(real_columns))
@@ -462,11 +468,15 @@ class TransformerModel(nn.Module):
                 if sum(feature_embedding_dims.values()) % embedding_size != 0:
                     j = i % len(real_columns)
                     feature_embedding_dims[column_index[j]] += 1
-            assert sum(feature_embedding_dims.values()) % embedding_size == 0
+            if sum(feature_embedding_dims.values()) % embedding_size != 0:
+                raise ValueError(
+                    "Auto-calculated embedding dimensions do not sum to embedding_size."
+                )
         elif len(real_columns) == 0 and len(categorical_columns) > 0:
-            assert (
-                (embedding_size % len(categorical_columns)) == 0
-            ), f"If only categorical variables are included, dim_model must be a multiple of the number of categorical variables ({embedding_size = } % {len(categorical_columns) = }) != 0"
+            if (embedding_size % len(categorical_columns)) != 0:
+                raise ValueError(
+                    f"dim_model ({embedding_size}) must be divisible by n_categorical ({len(categorical_columns)})"
+                )
             dim_model_comp = embedding_size // len(categorical_columns)
             feature_embedding_dims = {
                 col: dim_model_comp for col in categorical_columns
@@ -951,7 +961,10 @@ class TransformerModel(nn.Module):
             else:
                 loss += losses[target_column]
 
-        assert loss is not None
+        if loss is None:
+            raise RuntimeError(
+                "Loss calculation failed; no loss tensors were generated."
+            )
 
         return loss, losses
 
@@ -996,7 +1009,8 @@ class TransformerModel(nn.Module):
                 .float()
             )
         else:
-            assert self.target_column_types[col] == "real"
+            if self.target_column_types[col] != "real":
+                raise ValueError(f"Column {col} must be 'real' if not 'categorical'.")
             return val
 
     @beartype
