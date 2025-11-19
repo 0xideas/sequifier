@@ -15,7 +15,7 @@ from sequifier.config.hyperparameter_search_config import (  # noqa: E402
     load_hyperparameter_search_config,
 )
 from sequifier.config.train_config import TrainModel  # noqa: E402
-from sequifier.helpers import LogFile  # noqa: E402
+from sequifier.helpers import configure_logger  # noqa: E402
 from sequifier.helpers import normalize_path  # noqa: E402
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 
@@ -108,13 +108,8 @@ class HyperparameterSearcher:
         Returns:
             None
         """
-        os.makedirs(os.path.join(self.config.project_root, "logs"), exist_ok=True)
-        self.log_file = LogFile(
-            os.path.join(
-                self.config.project_root,
-                "logs",
-                f"sequifier-{self.config.hp_search_name}-[NUMBER].txt",
-            )
+        self.logger = configure_logger(
+            self.config.project_root, self.config.hp_search_name
         )
 
     @beartype
@@ -136,7 +131,7 @@ class HyperparameterSearcher:
                 is 'sample'.
         """
         n_combinations = self.config.n_combinations()
-        print(f"Found {n_combinations} hyperparameter combinations")
+        self.logger.info(f"Found {n_combinations} hyperparameter combinations")
         if self.config.search_strategy == "sample":
             n_samples = self.config.n_samples
             if n_samples is None:
@@ -207,7 +202,7 @@ class HyperparameterSearcher:
                 )
             )
 
-        self.log_file.write(
+        self.logger.info(
             f"--- Starting Hyperparameter Search Run {i} with seed {seed} ---"
         )
         try:
@@ -220,7 +215,7 @@ class HyperparameterSearcher:
                 ],
                 check=True,
             )
-            self.log_file.write(f"--- Finished Hyperparameter Search Run {i} ---")
+            self.logger.info(f"--- Finished Hyperparameter Search Run {i} ---")
 
         except subprocess.CalledProcessError as e:
             if attempt < 3:
@@ -233,12 +228,12 @@ class HyperparameterSearcher:
                         "Batch size reduced to 0 or less during retry logic."
                     )
                 config.training_spec.batch_size = new_batch_size
-                self.log_file.write(
+                self.logger.info(
                     f"ERROR: Run {i} failed with exit code {e.returncode}. Halving batch size to {new_batch_size} in attempt {attempt + 1}"
                 )
                 self._create_config_and_run(i, seed, config, attempt=attempt + 1)
             else:
-                self.log_file.write(
+                self.logger.info(
                     f"ERROR: Run {i} failed with exit code {e.returncode}. Stopping run {i}"
                 )
 

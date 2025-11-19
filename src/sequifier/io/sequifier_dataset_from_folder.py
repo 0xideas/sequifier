@@ -3,6 +3,7 @@ import os
 from typing import Dict, List, Tuple
 
 import torch
+from loguru import logger
 from torch.utils.data import Dataset
 
 from sequifier.config.train_config import TrainModel
@@ -40,7 +41,9 @@ class SequifierDatasetFromFolder(Dataset):
         self.batch_files_info = metadata["batch_files"]
         self.n_samples = metadata["total_samples"]
 
-        print(f"[INFO] Loading training dataset into memory from '{self.data_dir}'...")
+        logger.info(
+            f"[INFO] Loading training dataset into memory from '{self.data_dir}'..."
+        )
 
         all_sequences: Dict[str, List[torch.Tensor]] = {
             col: [] for col in config.input_columns
@@ -91,7 +94,7 @@ class SequifierDatasetFromFolder(Dataset):
         for tensor in self.targets.values():
             tensor.share_memory_()
 
-        print(f"[INFO] Dataset loaded with {self.n_samples} samples.")
+        logger.info(f"[INFO] Dataset loaded with {self.n_samples} samples.")
 
         # Verify that the number of loaded samples matches the metadata
         first_key = next(iter(self.sequences.keys()))

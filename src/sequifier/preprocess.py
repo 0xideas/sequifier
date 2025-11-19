@@ -12,6 +12,7 @@ import polars as pl
 import pyarrow.parquet as pq
 import torch
 from beartype import beartype
+from loguru import logger
 
 from sequifier.config.preprocess_config import load_preprocessor_config
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES, read_data, write_data
@@ -33,11 +34,11 @@ def preprocess(args: Any, args_config: dict[str, Any]) -> None:
             that may override or supplement the settings loaded from the
             config file.
     """
-    print("--- Starting Preprocessing ---")
+    logger.info("--- Starting Preprocessing ---")
     config_path = args.config_path or "configs/preprocess.yaml"
     config = load_preprocessor_config(config_path, args_config)
     Preprocessor(**config.dict())
-    print("--- Preprocessing Complete ---")
+    logger.info("--- Preprocessing Complete ---")
 
 
 class Preprocessor:
@@ -317,14 +318,14 @@ class Preprocessor:
         id_maps, selected_columns_statistics = {}, {}
         col_types, data_columns = None, None
         files_to_process = []
-        print(f"[INFO] Data path: {data_path}")
+        logger.info(f"Data path: {data_path}")
         for root, dirs, files in os.walk(data_path):
-            print(f"[INFO] N Files : {len(files)}")
+            logger.info(f"N Files : {len(files)}")
             for file in sorted(list(files)):
                 if file.endswith(read_format) and (
                     max_rows is None or n_rows_running_count < max_rows
                 ):
-                    print(f"[INFO] Preprocessing: reading {file}")
+                    logger.info(f"Preprocessing: reading {file}")
                     files_to_process.append(os.path.join(root, file))
                     max_rows_inner = (
                         None
@@ -560,8 +561,8 @@ class Preprocessor:
                 + list(kwargs_2.values())
                 for process_id, file_set in enumerate(file_sets)
             ]
-            print(f"[INFO] _process_batches_multiple_files n_cores: {n_cores}")
-            print(f"[INFO] _process_batches_multiple_files {len(job_params) = }")
+            logger.info(f"_process_batches_multiple_files n_cores: {n_cores}")
+            logger.info(f"_process_batches_multiple_files {len(job_params) = }")
 
             with multiprocessing.get_context("spawn").Pool(
                 processes=len(job_params)
@@ -724,7 +725,7 @@ class Preprocessor:
                     total_samples += n_samples
             except Exception as e:
                 # Add a warning for robustness in case a file is corrupted
-                print(f"[WARNING] Could not process file {file_path} for metadata: {e}")
+                logger.warning(f"Could not process file {file_path} for metadata: {e}")
 
         # Final metadata structure required by SequifierDatasetFromFolder
         metadata = {
@@ -894,7 +895,7 @@ def _load_and_preprocess_data(
         A Polars DataFrame containing the loaded and initially
         prepared data.
     """
-    print(f"[INFO] Reading data from '{data_path}'...")
+    logger.info(f"Reading data from '{data_path}'...")
     data = read_data(data_path, read_format, columns=selected_columns)
 
     if data.null_count().sum().sum_horizontal().item() != 0:
@@ -942,8 +943,8 @@ def _check_file_has_been_processed(
             if not os.path.exists(expected_file_path):
                 # If any split's intermediate file is missing, we must re-process
                 return False
-        print(
-            f"[INFO] Files: {expected_file_path.split('split')[0] + 'splitX'} found, skipping"
+        logger.info(
+            f"Files: {expected_file_path.split('split')[0] + 'splitX'} found, skipping"
         )
         return True
     else:
@@ -956,7 +957,7 @@ def _check_file_has_been_processed(
             if file_name.startswith(file_prefix_str) and file_name.endswith(
                 f".{write_format}"
             ):
-                print(f"[INFO] Found {file_name}, skipping corresponding input file...")
+                logger.info(f"Found {file_name}, skipping corresponding input file...")
                 return True
 
         return False
@@ -1046,7 +1047,7 @@ def _process_batches_multiple_files_inner(
                 )
 
                 if file_has_been_processed:
-                    print(f"[INFO] Skipping already processed file: {path}")
+                    logger.info(f"Skipping already processed file: {path}")
                     if max_rows is not None:
                         data = _load_and_preprocess_data(
                             path, read_format, selected_columns, max_rows_inner
@@ -1416,7 +1417,7 @@ def process_and_write_data_pt(
     if not sequences_dict:
         return
 
-    print(f"[INFO] Writing preprocessed data to '{path}'...")
+    logger.info(f"Writing preprocessed data to '{path}'...")
     data_to_save = (
         sequences_dict,
         targets_dict,
@@ -2041,7 +2042,7 @@ def combine_multiprocessing_outputs(
             post_split_str,
         )
 
-        print(f"[INFO] writing to: {split_file_path}")
+        logger.info(f"writing to: {split_file_path}")
         if write_format == "csv":
             command = " ".join(
                 ["csvstack"] + input_files[split] + [f"> {split_file_path}"]
