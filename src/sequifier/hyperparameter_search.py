@@ -139,7 +139,8 @@ class HyperparameterSearcher:
         print(f"Found {n_combinations} hyperparameter combinations")
         if self.config.search_strategy == "sample":
             n_samples = self.config.n_samples
-            assert n_samples is not None
+            if n_samples is None:
+                raise ValueError("n_samples must be defined for 'sample' strategy")
             if n_samples > self.config.n_combinations():
                 if not override_input:
                     input(
@@ -158,7 +159,8 @@ class HyperparameterSearcher:
                 f"search strategy '{self.config.search_strategy}' is not valid. Allowed values are 'grid' and 'sample'"
             )
 
-        assert n_samples is not None
+        if n_samples is None:
+            raise ValueError("n_samples must be defined for 'sample' strategy")
 
         return n_samples
 
@@ -222,10 +224,14 @@ class HyperparameterSearcher:
 
         except subprocess.CalledProcessError as e:
             if attempt < 3:
-                assert config is not None
+                if config is None:
+                    raise RuntimeError("Config object lost during retry logic.")
                 new_batch_size = int(config.training_spec.batch_size / 2)
 
-                assert new_batch_size > 0
+                if new_batch_size <= 0:
+                    raise ValueError(
+                        "Batch size reduced to 0 or less during retry logic."
+                    )
                 config.training_spec.batch_size = new_batch_size
                 self.log_file.write(
                     f"ERROR: Run {i} failed with exit code {e.returncode}. Halving batch size to {new_batch_size} in attempt {attempt + 1}"

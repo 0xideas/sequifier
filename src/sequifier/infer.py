@@ -53,10 +53,11 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     config = load_inferer_config(config_path, args_config, skip_metadata)
 
     if config.map_to_id or (len(config.real_columns) > 0):
-        assert config.metadata_config_path is not None, (
-            "If you want to map to id, you need to provide a file path to a json that contains: {{'id_maps':{...}}} to metadata_config_path"
-            "\nIf you have real columns in the data, you need to provide a json that contains: {{'selected_columns_statistics':{COL_NAME:{'std':..., 'mean':...}}}}"
-        )
+        if config.metadata_config_path is None:
+            raise ValueError(
+                "If you want to map to id, you need to provide a file path to a json that contains: {{'id_maps':{...}}} to metadata_config_path"
+                "\nIf you have real columns in the data, you need to provide a json that contains: {{'selected_columns_statistics':{COL_NAME:{'std':..., 'mean':...}}}}"
+            )
         with open(
             normalize_path(config.metadata_config_path, config.project_root), "r"
         ) as f:
@@ -151,7 +152,10 @@ def infer_worker(
     )
     for model_path in model_paths:
         if config.read_format == "pt":
-            assert percentage_limits is not None
+            if percentage_limits is None:
+                raise ValueError(
+                    "percentage_limits must be provided for 'pt' read format"
+                )
             start_pct, end_pct = percentage_limits
             dataset = load_pt_dataset(config.data_path, start_pct, end_pct)
 
@@ -405,9 +409,10 @@ def infer_generative(
                 item_positions_for_preds = item_positions_repeated + position_offsets
 
             else:
-                assert (
-                    inferer.prediction_length == 1
-                ), f"{inferer.prediction_length = } != 1, is not allowed for autoregressive inference"
+                if inferer.prediction_length != 1:
+                    raise ValueError(
+                        f"prediction_length must be 1 for autoregression, got {inferer.prediction_length}"
+                    )
                 if config.autoregression_extra_steps is not None:
                     data = expand_data_by_autoregression(
                         data,
@@ -470,7 +475,6 @@ def infer_generative(
                     [np.arange(start, end) for start, end in item_position_boundaries],
                     axis=0,
                 )
-            # --- END OF MODIFICATION ---
         else:
             raise Exception("impossible")
 
@@ -986,9 +990,8 @@ def verify_variable_order(data: pl.DataFrame) -> None:
     is_globally_sorted = data.select(
         (pl.col("sequenceId").diff().fill_null(0) >= 0).all()
     ).item()
-    assert (
-        is_globally_sorted
-    ), "sequenceId must be in ascending order for autoregression"
+    if not is_globally_sorted:
+        raise ValueError("sequenceId must be in ascending order for autoregression")
 
     # Check if 'subsequenceId' is sorted within each 'sequenceId' group.
     # This results in a boolean Series, on which we can call .all() directly.
@@ -1003,7 +1006,8 @@ def verify_variable_order(data: pl.DataFrame) -> None:
         .all()
     )
 
-    assert is_group_sorted, "subsequenceId must be in ascending order within each sequenceId for autoregression"
+    if not is_group_sorted:
+        raise ValueError("subsequenceId must be sorted within sequenceId groups")
 
 
 @beartype
@@ -1376,7 +1380,10 @@ class Inferer:
             outs = self.adjust_and_infer_generative(x, size)
 
             for target_column, target_outs in outs.items():
-                assert not np.any(target_outs == np.inf), target_outs
+                if np.any(target_outs == np.inf):
+                    raise ValueError(
+                        f"Inference resulted in infinite values: {target_outs}"
+                    )
 
             if return_probs:
                 preds = {

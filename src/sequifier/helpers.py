@@ -87,14 +87,16 @@ def construct_index_maps(
     """
     index_map = {}
     if map_to_id is not None and map_to_id:
-        assert id_maps is not None
+        if id_maps is None:
+            raise ValueError("id_maps cannot be None when map_to_id is True")
         for target_column in target_columns_index_map:
             map_ = {v: k for k, v in id_maps[target_column].items()}
             val = next(iter(map_.values()))
             if isinstance(val, str):
                 map_[0] = "unknown"
             else:
-                assert isinstance(val, int)
+                if not isinstance(val, int):
+                    raise TypeError(f"Expected integer ID in map, got {type(val)}")
                 map_[0] = min(map_.values()) - 1  # type: ignore
             index_map[target_column] = map_
     return index_map

@@ -99,9 +99,8 @@ def make(args):
     """
     project_name = args.project_name
 
-    assert (
-        project_name is not None and len(project_name) > 0
-    ), f"project_name '{project_name}' is not admissible"
+    if not (project_name and len(project_name) > 0):
+        raise ValueError(f"project_name '{project_name}' is not admissible")
 
     os.makedirs(f"{project_name}/configs")
 
