@@ -1,10 +1,12 @@
 import os
+import sys
 from typing import Any, Optional, Union
 
 import numpy as np
 import polars as pl
 import torch
 from beartype import beartype
+from loguru import logger
 from pydantic import ValidationError
 from torch import Tensor
 
@@ -214,9 +216,9 @@ def subset_to_input_columns(
 def numpy_to_pytorch(
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
-    all_columns: list[str],  # Changed from selected_columns, target_columns
+    all_columns: list[str],
     seq_length: int,
-) -> dict[str, Tensor]:  # Now returns a single dictionary
+) -> dict[str, Tensor]:
     """Converts a long-format Polars DataFrame to a dict of sequence tensors.
 
     This function assumes the input DataFrame `data` is in a long format
@@ -249,7 +251,6 @@ def numpy_to_pytorch(
         tensors. Target tensors are stored with a `_target` suffix
         (e.g., `{'price': <tensor>, 'price_target': <tensor>}`).
     """
-    # Define both input and target sequence column names
     input_seq_cols = [str(c) for c in range(seq_length, 0, -1)]
     target_seq_cols = [str(c) for c in range(seq_length - 1, -1, -1)]
 
@@ -279,72 +280,6 @@ def numpy_to_pytorch(
     return unified_tensors
 
 
-class LogFile:
-    """Manages logging to multiple files based on verbosity levels.
-
-    This class opens multiple log files based on a path template and a
-    hardcoded list of levels (2 and 3). Messages are written to files
-    based on their assigned level, and high-level messages are also
-    printed to the console on the main process (rank 0).
-
-    Attributes:
-        rank (Optional[int]): The rank of the current process, used to
-            control console output.
-        levels (list[int]): The hardcoded list of log levels [2, 3]
-            for which files are created.
-        _files (dict[int, io.TextIOWrapper]): A dictionary mapping log
-            levels to their open file handlers.
-        _path (str): The original path template provided.
-    """
-
-    @beartype
-    def __init__(self, path: str, rank: Optional[int] = None):
-        """Initializes the LogFile and opens log files.
-
-        The `path` argument should be a template containing "[NUMBER]",
-        which will be replaced by the log levels (2 and 3) to create
-        separate log files.
-
-        Args:
-            path: The path template for the log files (e.g.,
-                "run_log_[NUMBER].txt").
-            rank: The rank of the current process (e.g., in distributed
-                training). If None or 0, high-level messages will be
-                printed to stdout.
-        """
-        self.rank = rank
-        self.levels = [2, 3]
-        self._files = {
-            level: path.replace("[NUMBER]", str(level)) for level in self.levels
-        }
-        self._path = path
-
-    @beartype
-    def write(self, string: str, level: int = 3) -> None:
-        """Writes a string to log files and potentially the console.
-
-        The string is written to all log files whose level is less than
-        or equal to the specified `level`.
-
-        - A message with `level=2` goes to file 2.
-        - A message with `level=3` goes to file 2 and file 3.
-
-        If `level` is 3 or greater, the message is also printed to stdout
-        if `self.rank` is None or 0.
-
-        Args:
-            string: The message to log.
-            level: The verbosity level of the message. Defaults to 3.
-        """
-        for level2 in self.levels:
-            if level2 <= level:
-                with open(self._files[level2], "a+", encoding="utf-8") as f:
-                    f.write(f"{string}\n")
-        if level >= 3:
-            if self.rank is None or self.rank == 0:
-                print(string)
-
-
 @beartype
 def normalize_path(path: str, project_root: str) -> str:
     """Normalizes a path to be relative to a project path, then joins them.
@@ -368,3 +303,50 @@ def normalize_path(path: str, project_root: str) -> str:
     project_root_normalized = (project_root + os.sep).replace(os.sep + os.sep, os.sep)
     path2 = os.path.join(project_root, path.replace(project_root_normalized, ""))
     return path2
+
+
+@beartype
+def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0):
+    """Configures Loguru to replicate the legacy LogFile behavior.
+
+    Legacy Behavior Mapping:
+    1. Console: Only Rank 0 prints high-level info.
+    2. File 2 (Detailed): Captures ALL logs (equivalent to old level 2).
+    3. File 3 (Summary): Captures only HIGH importance logs (equivalent to old level 3).
+    4. Formatting: Files contain raw messages only (no timestamp prefix).
+    """
+    # Clear default handler
+    logger.remove()
+
+    # 1. Console Handler (Rank 0 only, INFO/Level 3 and up)
+    if rank == 0 or rank is None:
+        logger.add(
+            sys.stderr,
+            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{message}</level>",
+            level="INFO",
+        )
+
+    # Determine paths
+    log_dir = os.path.join(project_root, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    rank_str = f"rank{rank}" if rank is not None else "rank0"
+
+    # 2. File 2 (Detailed/Debug) - Equivalent to old 'level=2'
+    # Captures everything from DEBUG up.
+    # Format is just {message} to match f.write(f"{string}\n")
+    file_2_path = os.path.join(log_dir, f"sequifier-{model_name}-{rank_str}-2.txt")
+    logger.add(
+        file_2_path,
+        level="DEBUG",
+        format="{message}",
+        enqueue=True,  # Multiprocessing safe
+        mode="a",
+    )
+
+    # 3. File 3 (Summary/Info) - Equivalent to old 'level=3'
+    # Captures INFO and up.
+    file_3_path = os.path.join(log_dir, f"sequifier-{model_name}-{rank_str}-3.txt")
+    logger.add(file_3_path, level="INFO", format="{message}", enqueue=True, mode="a")
+
+    return logger

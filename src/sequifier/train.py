@@ -23,7 +23,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 torch._dynamo.config.suppress_errors = True
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
-from sequifier.helpers import LogFile  # noqa: E402
+from sequifier.helpers import configure_logger  # noqa: E402
 from sequifier.helpers import construct_index_maps  # noqa: E402
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
@@ -49,7 +49,6 @@ def setup(rank: int, world_size: int, backend: str = "nccl"):
         world_size: The total number of processes.
         backend: The distributed backend to use.
     """
-
     os.environ["MASTER_ADDR"] = os.getenv("MASTER_ADDR", "localhost")
     os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
     dist.init_process_group(backend, rank=rank, world_size=world_size)
@@ -235,7 +234,7 @@ class TransformerEmbeddingModel(nn.Module):
         """
         super().__init__()
         self.transformer_model = transformer_model
-        self.log_file = self.transformer_model.log_file
+        self.logger = self.transformer_model.logger
 
     def forward(self, src: dict[str, Tensor]):
         """Forward pass for the embedding model.
@@ -404,9 +403,9 @@ class TransformerModel(nn.Module):
 
         self.save_interval_epochs = hparams.training_spec.save_interval_epochs
         self.continue_training = hparams.training_spec.continue_training
-        load_string = self._load_weights_conditional()
         self._initialize_log_file()
-        self.log_file.write(load_string)
+        load_string = self._load_weights_conditional()
+        self.logger.info(load_string)
 
     @beartype
     def _init_criterion(self, hparams: Any) -> dict[str, Any]:
@@ -784,8 +783,8 @@ class TransformerModel(nn.Module):
 
                     last_epoch = epoch
         except KeyboardInterrupt:
-            self.log_file.write("\n" + "=" * 89)
-            self.log_file.write("[WARNING] Training interrupted by user (Ctrl+C).")
+            self.logger.info("\n" + "=" * 89)
+            self.logger.info("[WARNING] Training interrupted by user (Ctrl+C).")
 
             if self.hparams.training_spec.distributed:
                 dist.barrier()
@@ -804,33 +803,33 @@ class TransformerModel(nn.Module):
                     answer = "n"
 
                 if answer == "y":
-                    self.log_file.write("[INFO] User opted to export models.")
+                    self.logger.info("[INFO] User opted to export models.")
 
                     # Export last model (current state)
                     if last_epoch is not None and best_model is not None:
-                        self.log_file.write(
+                        self.logger.info(
                             f"[INFO] Exporting 'last' model from epoch {last_epoch}..."
                         )
                         self._export(self, "last", last_epoch)
 
                         # Export best model if it exists
                         if best_model is not None:
-                            self.log_file.write(
+                            self.logger.info(
                                 "[INFO] Exporting 'best' model (based on best val loss)..."
                             )
                             self._export(best_model, "best", last_epoch)
                         else:
-                            self.log_file.write(
+                            self.logger.info(
                                 "[WARNING] No 'best' model was saved (no validation improvement yet)."
                             )
 
-                        self.log_file.write("[INFO] Models exported.")
+                        self.logger.info("[INFO] Models exported.")
                     else:
-                        self.log_file.write(
+                        self.logger.info(
                             "[INFO] Could not export model as no epoch ran."
                         )
                 else:
-                    self.log_file.write("[INFO] User opted *not* to export. Exiting.")
+                    self.logger.info("[INFO] User opted *not* to export. Exiting.")
 
         if self.hparams.training_spec.distributed:
             dist.barrier()
@@ -840,14 +839,14 @@ class TransformerModel(nn.Module):
             if (
                 best_model is None
             ):  # <-- MODIFICATION: Handle case where no improvement was ever made
-                self.log_file.write(
+                self.logger.info(
                     "[INFO] No validation improvement during training. Saving last model as 'best'."
                 )
                 best_model = self._copy_model()
 
             self._export(self, "last", last_epoch)  # type: ignore
             self._export(best_model, "best", last_epoch)  # type: ignore
-            self.log_file.write("--- Training Complete ---")
+            self.logger.info("--- Training Complete ---")
 
     @beartype
     def _train_epoch(
@@ -903,7 +902,7 @@ class TransformerModel(nn.Module):
             if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
                 learning_rate = self.scheduler.get_last_lr()[0]
                 s_per_batch = (time.time() - start_time) / self.log_interval
-                self.log_file.write(
+                self.logger.info(
                     f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(total_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
                 )
                 total_loss = 0.0
@@ -979,16 +978,16 @@ class TransformerModel(nn.Module):
         Returns:
             A deep copy of the current TransformerModel instance.
         """
-        log_file = self.log_file
-        del self.log_file
+        logger_ref = self.logger
+        del self.logger
         model_copy = copy.deepcopy(self)
         model_copy._initialize_log_file()
-        self.log_file = log_file
+        self.logger = logger_ref
         return model_copy
 
     @beartype
     def _transform_val(self, col: str, val: Tensor) -> Tensor:
-        """Transforms input data to match the format of model output.
+        """ "Transforms input data to match the format of model output.
 
         This is used *only* for calculating the baseline loss, where
         the input (e.g., categorical indices) needs to be one-hot encoded
@@ -1349,7 +1348,7 @@ class TransformerModel(nn.Module):
             output_path,
         )
         if self.rank == 0:
-            self.log_file.write(f"[INFO] Saved model to {output_path}")
+            self.logger.info(f"[INFO] Saved model to {output_path}")
 
     @beartype
     def _get_optimizer(self, **kwargs):
@@ -1394,17 +1393,13 @@ class TransformerModel(nn.Module):
     @beartype
     def _initialize_log_file(self):
         """Initializes the log file."""
-        os.makedirs(os.path.join(self.project_root, "logs"), exist_ok=True)
-        path = os.path.join(
-            self.project_root, "logs", f"sequifier-{self.model_name}-[NUMBER].txt"
-        )
-        if self.rank is not None:
-            path = path.replace("[NUMBER]", f"rank{self.rank}-[NUMBER]")
-        self.log_file = LogFile(path, self.rank)
+        # Replaces old LogFile class instantiation
+        self.logger = configure_logger(self.project_root, self.model_name, self.rank)
 
     @beartype
     def _load_weights_conditional(self) -> str:
-        """Loads the weights of the model if a checkpoint is found.
+        """
+        Loads the weights of the model if a checkpoint is found.
 
         If `continue_training` is True and a checkpoint for the current
         `model_name` exists, it loads the model and optimizer states.
@@ -1488,8 +1483,8 @@ class TransformerModel(nn.Module):
         if self.rank == 0:
             learning_rate = self.optimizer.state_dict()["param_groups"][0]["lr"]
 
-            self.log_file.write("-" * 89)
-            self.log_file.write(
+            self.logger.info("-" * 89)
+            self.logger.info(
                 f"[INFO] Validation | Epoch: {epoch:3d} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(learning_rate)}"
             )
 
@@ -1498,7 +1493,7 @@ class TransformerModel(nn.Module):
                     f"{key}_loss: {format_number(value)}"
                     for key, value in total_losses.items()
                 ]
-                self.log_file.write("[INFO]  - " + ", ".join(loss_strs))
+                self.logger.info("[INFO]  - " + ", ".join(loss_strs))
 
             for categorical_column in self.class_share_log_columns:
                 output_values = (
@@ -1516,9 +1511,9 @@ class TransformerModel(nn.Module):
                         for row in output_counts_df.iter_rows(named=True)
                     ]
                 )
-                self.log_file.write(f"[INFO] {categorical_column}: {value_shares}")
+                self.logger.info(f"[INFO] {categorical_column}: {value_shares}")
 
-            self.log_file.write("-" * 89)
+            self.logger.info("-" * 89)
 
 
 @beartype
@@ -1563,7 +1558,7 @@ def load_inference_model(
         else:
             assert False, "impossible"
 
-        model.log_file.write(f"[INFO] Loading model weights from {model_path}")
+        model.logger.info(f"[INFO] Loading model weights from {model_path}")
         model_state = torch.load(
             model_path, map_location=torch.device(device), weights_only=False
         )
