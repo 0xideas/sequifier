@@ -1,6 +1,6 @@
 import json
 from itertools import product
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 import yaml
@@ -145,6 +145,14 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         ]
     )
     continue_training: bool
+    scheduler_step_on: str = "epoch"
+    distributed: bool = False
+    load_full_data_to_ram: bool = True
+    max_ram_gb: Union[int, float] = 16
+    device_max_concat_length: int = 12
+    world_size: int = 1
+    num_workers: int = 0
+    backend: str = "nccl"
 
     def __init__(self, **kwargs):
         """Initialize the TrainingSpecHyperparameterSampling instance.
@@ -219,6 +227,14 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             optimizer=optimizer,
             scheduler=self.scheduler[learning_rate_and_scheduler_index],
             continue_training=self.continue_training,
+            scheduler_step_on=self.scheduler_step_on,
+            distributed=self.distributed,
+            load_full_data_to_ram=self.load_full_data_to_ram,
+            max_ram_gb=self.max_ram_gb,
+            device_max_concat_length=self.device_max_concat_length,
+            world_size=self.world_size,
+            num_workers=self.num_workers,
+            backend=self.backend,
         )
 
     def grid_sample(self, i):
@@ -272,6 +288,14 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             optimizer=optimizer,
             scheduler=self.scheduler[learning_rate_and_scheduler_index],
             continue_training=self.continue_training,
+            scheduler_step_on=self.scheduler_step_on,
+            distributed=self.distributed,
+            load_full_data_to_ram=self.load_full_data_to_ram,
+            max_ram_gb=self.max_ram_gb,
+            device_max_concat_length=self.device_max_concat_length,
+            world_size=self.world_size,
+            num_workers=self.num_workers,
+            backend=self.backend,
         )
 
     def n_combinations(self):
