@@ -148,10 +148,11 @@ def load_train_config(
             for col, type_ in metadata_config["column_types"].items()
             if "float" in type_.lower() and col in config_values["input_columns"]
         ]
-        assert (
+        if not (
             len(config_values["real_columns"] + config_values["categorical_columns"])
             > 0
-        )
+        ):
+            raise ValueError("No columns found in config_values")
         config_values["n_classes"] = config_values.get(
             "n_classes", metadata_config["n_classes"]
         )
@@ -328,9 +329,10 @@ class ModelSpecModel(BaseModel):
     @field_validator("feature_embedding_dims")
     @classmethod
     def validate_feature_embedding_dims(cls, v, info):
-        assert (
-            v is None or np.sum(list(v.values())) == info.data.get("dim_model")
-        ), f'{info.data.get("dim_model")} is not the sum of the feature_embedding_dims values'
+        if not (v is None or np.sum(list(v.values())) == info.data.get("dim_model")):
+            raise ValueError(
+                f'{info.data.get("dim_model")} is not the sum of the feature_embedding_dims values'
+            )
 
         return v
 
@@ -401,39 +403,47 @@ class TrainModel(BaseModel):
     @field_validator("model_name")
     @classmethod
     def validate_model_name(cls, v):
-        assert "embedding" not in v, "model_name cannot contain 'embedding'"
+        if not "embedding" not in v:
+            raise ValueError("model_name cannot contain 'embedding'")
         return v
 
     @field_validator("target_column_types")
     @classmethod
     def validate_target_column_types(cls, v, info):
-        assert all(vv in ["categorical", "real"] for vv in v.values())
-        assert (
-            list(v.keys()) == info.data.get("target_columns")
-        ), "target_columns and target_column_types must contain the same values/keys in the same order"
+        if not all(vv in ["categorical", "real"] for vv in v.values()):
+            raise ValueError(
+                f"Invalid target_column_types found: {[vv not in ['categorical', 'real'] for vv in v.values()]}. Only 'categorical' and 'real' are allowed."
+            )
+        if not (list(v.keys()) == info.data.get("target_columns")):
+            raise ValueError(
+                "target_columns and target_column_types must contain the same values/keys in the same order"
+            )
         return v
 
     @field_validator("read_format")
     @classmethod
     def validate_read_format(cls, v):
-        assert v in [
+        if v not in [
             "csv",
             "parquet",
             "pt",
-        ], "Currently only 'csv', 'parquet' and 'pt' are supported"
+        ]:
+            raise ValueError("Currently only 'csv', 'parquet' and 'pt' are supported")
         return v
 
     @field_validator("training_spec")
     @classmethod
     def validate_training_spec(cls, v, info):
-        assert set(info.data.get("target_columns")) == set(
-            v.criterion.keys()
-        ), "target_columns and criterion must contain the same values/keys"
+        if not set(info.data.get("target_columns")) == set(v.criterion.keys()):
+            raise ValueError(
+                "target_columns and criterion must contain the same values/keys"
+            )
 
         if v.distributed:
-            assert (
-                info.data.get("read_format") == "pt"
-            ), "If distributed is set to 'true', the format has to be 'pt'"
+            if not (info.data.get("read_format") == "pt"):
+                raise ValueError(
+                    "If distributed is set to 'true', the format has to be 'pt'"
+                )
         return v
 
     @field_validator("column_types")
@@ -442,23 +452,25 @@ class TrainModel(BaseModel):
         target_columns = info.data.get("target_columns", [])
         column_ordered = list(v.keys())
         columns_ordered_filtered = [c for c in column_ordered if c in target_columns]
-        assert (
-            columns_ordered_filtered == target_columns
-        ), f"{columns_ordered_filtered = } != {target_columns = }"
+        if not (columns_ordered_filtered == target_columns):
+            raise ValueError(f"{columns_ordered_filtered = } != {target_columns = }")
         return v
 
     @field_validator("model_spec")
     @classmethod
     def validate_model_spec(cls, v, info):
         # Original validation: consistent columns
-        assert (
+        if not (
             info.data.get("input_columns") is None
             or (v.feature_embedding_dims is None)
             or np.all(
                 np.array(list(v.feature_embedding_dims.keys()))
                 == np.array(list(info.data.get("input_columns")))
             )
-        )
+        ):
+            raise ValueError(
+                "If feature_embedding_dims is not None, dimensions must be specified for all input columns"
+            )
 
         # Additional validation based on constraints in src/sequifier/train.py
         categorical_columns = info.data.get("categorical_columns", [])

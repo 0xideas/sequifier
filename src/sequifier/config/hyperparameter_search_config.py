@@ -173,9 +173,11 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         self.optimizer = [
             DotDict(optimizer_config) for optimizer_config in kwargs["optimizer"]
         ]
-        assert len(self.learning_rate) == len(
-            kwargs["scheduler"]
-        ), f"{len(self.learning_rate) = } != {len(kwargs['scheduler']) = }"
+        if not len(self.learning_rate) == len(kwargs["scheduler"]):
+            raise ValueError(
+                f"{len(self.learning_rate) = } != {len(kwargs['scheduler']) = }"
+            )
+
         self.scheduler = [
             DotDict(scheduler_config) for scheduler_config in kwargs["scheduler"]
         ]
@@ -183,9 +185,10 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     @field_validator("learning_rate")
     @classmethod
     def validate_model_spec(cls, v, info):
-        assert (
-            len(info.data.get("epochs")) == len(v)
-        ), "learning_rate and epochs must have the same number of candidate values, that are paired"
+        if not (len(info.data.get("epochs")) == len(v)):
+            raise ValueError(
+                "learning_rate and epochs must have the same number of candidate values, that are paired"
+            )
 
         return v
 
@@ -338,14 +341,18 @@ class ModelSpecHyperparameterSampling(BaseModel):
     @classmethod
     def validate_model_spec(cls, v, info):
         if info.data.get("feature_embedding_dims") is not None:
-            assert (
+            if not (
                 len(info.data.get("dim_model"))
                 == len(info.data.get("feature_embedding_dims"))
-            ), "dim_model and feature_embedding_dims must have the same number of candidate values, that are paired"
+            ):
+                raise ValueError(
+                    "dim_model and feature_embedding_dims must have the same number of candidate values, that are paired"
+                )
 
-        assert (
-            len(info.data.get("dim_model")) == len(v)
-        ), "dim_model and n_head must have the same number of candidate values, that are paired"
+        if not (len(info.data.get("dim_model")) == len(v)):
+            raise ValueError(
+                "dim_model and n_head must have the same number of candidate values, that are paired"
+            )
         return v
 
     def random_sample(self):
@@ -496,9 +503,10 @@ class HyperparameterSearch(BaseModel):
     @classmethod
     def validate_model_spec(cls, v, info):
         if v is not None:
-            assert (
-                len(info.data.get("input_columns")) == len(v)
-            ), "input_columns and column_types must have the same number of candidate values, that are paired"
+            if not (len(info.data.get("input_columns")) == len(v)):
+                raise ValueError(
+                    "input_columns and column_types must have the same number of candidate values, that are paired"
+                )
         return v
 
     def random_sample(self, i):

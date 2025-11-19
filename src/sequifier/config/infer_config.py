@@ -56,10 +56,11 @@ def load_inferer_config(
             for col, type_ in metadata_config["column_types"].items()
             if "float64" in type_.lower() and col in config_values["input_columns"]
         ]
-        assert (
+        if not (
             len(config_values["real_columns"] + config_values["categorical_columns"])
             > 0
-        )
+        ):
+            raise ValueError("No columns found in config")
         config_values["data_path"] = normalize_path(
             config_values.get(
                 "data_path",
@@ -148,10 +149,13 @@ class InfererModel(BaseModel):
     @field_validator("model_type")
     @classmethod
     def validate_model_type(cls, v: str) -> str:
-        assert v in [
+        if v not in [
             "embedding",
             "generative",
-        ], f"model_type must be one of 'embedding' and 'generative, {v} isn't"
+        ]:
+            raise ValueError(
+                f"model_type must be one of 'embedding' and 'generative, {v} isn't"
+            )
         return v
 
     @field_validator("output_probabilities")
@@ -268,6 +272,5 @@ class InfererModel(BaseModel):
         columns_ordered_filtered = [
             c for c in column_ordered if c in self.target_columns
         ]
-        assert (
-            columns_ordered_filtered == self.target_columns
-        ), f"{columns_ordered_filtered} != {self.target_columns}"
+        if not (columns_ordered_filtered == self.target_columns):
+            raise ValueError(f"{columns_ordered_filtered} != {self.target_columns}")
