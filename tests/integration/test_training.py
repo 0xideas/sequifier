@@ -3,9 +3,7 @@ import os
 import numpy as np
 
 
-def test_checkpoint_files_exists(
-    run_training, run_hp_search_sample, run_hp_search_grid, project_root
-):
+def test_checkpoint_files_exists(run_training, project_root):
     found_items = np.array(
         sorted(list(os.listdir(os.path.join(project_root, "checkpoints"))))
     )
@@ -65,6 +63,16 @@ def test_model_files_exists(run_training, project_root):
                 "sequifier-model-categorical-3-inf-size-last-3.pt",
                 "sequifier-model-categorical-3-inf-size-best-embedding-3.pt",
                 "sequifier-model-categorical-3-inf-size-last-embedding-3.pt",
+            ]
+            + [
+                f"sequifier-test-hp-search-sample-run-{i}-{suffix}-1.pt"
+                for i in range(4)
+                for suffix in ["best", "last"]
+            ]
+            + [
+                f"sequifier-test-hp-search-grid-run-{i}-{suffix}-1.pt"
+                for i in range(4)
+                for suffix in ["best", "last"]
             ]
         )
     )

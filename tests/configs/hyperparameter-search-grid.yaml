@@ -34,7 +34,7 @@ model_hyperparameter_sampling:
 training_hyperparameter_sampling:
   device: cpu
   epochs: [1]
-  save_interval_epochs: 1
+  save_interval_epochs: 10
   batch_size: [5]
   learning_rate: [0.001]
   criterion:
