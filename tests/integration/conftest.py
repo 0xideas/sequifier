@@ -8,20 +8,20 @@ import yaml
 SELECTED_COLUMNS = {
     "categorical": {
         1: "itemId",
-        3: "itemId,sup1",
-        5: "itemId,sup1,sup2,sup4",
-        50: "itemId," + ",".join([f"sup{i}" for i in range(1, 50)]),
+        3: "itemId sup1",
+        5: "itemId sup1 sup2 sup4",
+        50: "itemId " + " ".join([f"sup{i}" for i in range(1, 50)]),
     },
     "real": {
         1: "itemValue",
-        3: "itemValue,sup1,sup2",
-        5: "itemValue,sup1,sup2,sup3,sup4",
-        50: "itemValue," + ",".join([f"sup{i}" for i in range(1, 50)]),
+        3: "itemValue sup1 sup2",
+        5: "itemValue sup1 sup2 sup3 sup4",
+        50: "itemValue " + " ".join([f"sup{i}" for i in range(1, 50)]),
     },
 }
 
 
-def write_and_log(command: str) -> None:
+def run_and_log(command: str) -> None:
     os.system(command)
     with open(os.path.join("tests", "integration-test-log.txt"), "a+") as f:
         f.write(f"{command}\n")
@@ -295,35 +295,33 @@ def run_preprocessing(
             "source_data",
             f"test-data-categorical-{data_number}.csv",
         )
-        write_and_log(
-            f"sequifier preprocess --config-path={preprocessing_config_path_cat} --data-path={data_path_cat} --selected-columns=None"
+        run_and_log(
+            f"sequifier preprocess --config-path {preprocessing_config_path_cat} --data-path {data_path_cat} --selected-columns None"
         )
 
         data_path_real = os.path.join(
             "tests", "resources", "source_data", f"test-data-real-{data_number}.csv"
         )
-        write_and_log(
-            f"sequifier preprocess --config-path={preprocessing_config_path_real} --data-path={data_path_real} --selected-columns={SELECTED_COLUMNS['real'][data_number]}"
+        run_and_log(
+            f"sequifier preprocess --config-path {preprocessing_config_path_real} --data-path {data_path_real} --selected-columns {SELECTED_COLUMNS['real'][data_number]}"
         )
 
-    write_and_log(
-        f"sequifier preprocess --config-path={preprocessing_config_path_cat_multitarget}"
+    run_and_log(
+        f"sequifier preprocess --config-path {preprocessing_config_path_cat_multitarget}"
     )
 
-    write_and_log(
-        f"sequifier preprocess --config-path={preprocessing_config_path_multi_file}"
+    run_and_log(
+        f"sequifier preprocess --config-path {preprocessing_config_path_multi_file}"
     )
 
-    write_and_log(
-        f"sequifier preprocess --config-path={preprocessing_config_path_interrupted}"
+    run_and_log(
+        f"sequifier preprocess --config-path {preprocessing_config_path_interrupted}"
     )
 
-    write_and_log(
-        f"sequifier preprocess --config-path={preprocessing_config_path_exact}"
-    )
+    run_and_log(f"sequifier preprocess --config-path {preprocessing_config_path_exact}")
 
-    write_and_log(
-        f"sequifier preprocess --config-path={preprocessing_config_path_exact_pt}"
+    run_and_log(
+        f"sequifier preprocess --config-path {preprocessing_config_path_exact_pt}"
     )
 
     source_path = os.path.join(
@@ -355,29 +353,23 @@ def run_training(
             "configs", "metadata_configs", f"test-data-categorical-{model_number}.json"
         )
         model_name_cat = f"model-categorical-{model_number}"
-        write_and_log(
-            f"sequifier train --config-path={training_config_path_cat} --metadata-config-path={metadata_config_path_cat} --model-name={model_name_cat} --input-columns={SELECTED_COLUMNS['categorical'][model_number]}"
+        run_and_log(
+            f"sequifier train --config-path {training_config_path_cat} --metadata-config-path {metadata_config_path_cat} --model-name {model_name_cat} --input-columns {SELECTED_COLUMNS['categorical'][model_number]}"
         )
 
         metadata_config_path_real = os.path.join(
             "configs", "metadata_configs", f"test-data-real-{model_number}.json"
         )
         model_name_real = f"model-real-{model_number}"
-        write_and_log(
-            f"sequifier train --config-path={training_config_path_real} --metadata-config-path={metadata_config_path_real} --model-name={model_name_real} --input-columns=None"
+        run_and_log(
+            f"sequifier train --config-path {training_config_path_real} --metadata-config-path {metadata_config_path_real} --model-name {model_name_real} --input-columns None"
         )
 
-    write_and_log(
-        f"sequifier train --config-path={training_config_path_cat_inf_size_1}"
-    )
+    run_and_log(f"sequifier train --config-path {training_config_path_cat_inf_size_1}")
 
-    write_and_log(
-        f"sequifier train --config-path={training_config_path_cat_inf_size_3}"
-    )
+    run_and_log(f"sequifier train --config-path {training_config_path_cat_inf_size_3}")
 
-    write_and_log(
-        f"sequifier train --config-path={training_config_path_cat_multitarget}"
-    )
+    run_and_log(f"sequifier train --config-path {training_config_path_cat_multitarget}")
 
     source_path = os.path.join(
         project_root, "models", "sequifier-model-real-1-best-3.pt"
@@ -393,12 +385,12 @@ def run_training(
 def run_hp_search(
     project_root, hp_search_configs, format_configs_locally, run_preprocessing
 ):
-    write_and_log(
-        f"sequifier hyperparameter-search --config-path={hp_search_configs['grid']}"
+    run_and_log(
+        f"sequifier hyperparameter-search --config-path {hp_search_configs['grid']}"
     )
 
-    write_and_log(
-        f"sequifier hyperparameter-search --config-path={hp_search_configs['sample']}"
+    run_and_log(
+        f"sequifier hyperparameter-search --config-path {hp_search_configs['sample']}"
     )
 
 
@@ -440,8 +432,8 @@ def run_inference(
         metadata_config_path_cat = os.path.join(
             "configs", "metadata_configs", f"test-data-categorical-{model_number}.json"
         )
-        write_and_log(
-            f"sequifier infer --config-path={inference_config_path_cat} --metadata-config-path={metadata_config_path_cat} --model-path={model_path_cat} --data-path={data_path_cat} --input-columns={SELECTED_COLUMNS['categorical'][model_number]}"
+        run_and_log(
+            f"sequifier infer --config-path {inference_config_path_cat} --metadata-config-path {metadata_config_path_cat} --model-path {model_path_cat} --data-path {data_path_cat} --input-columns {SELECTED_COLUMNS['categorical'][model_number]}"
         )
 
         model_path_real = os.path.join(
@@ -453,34 +445,30 @@ def run_inference(
         metadata_config_path_real = os.path.join(
             "configs", "metadata_configs", f"test-data-real-{model_number}.json"
         )
-        write_and_log(
-            f"sequifier infer --config-path={inference_config_path_real} --metadata-config-path={metadata_config_path_real} --model-path={model_path_real} --data-path={data_path_real} --input-columns=None"
+        run_and_log(
+            f"sequifier infer --config-path {inference_config_path_real} --metadata-config-path {metadata_config_path_real} --model-path {model_path_real} --data-path {data_path_real} --input-columns None"
         )
 
-    write_and_log(
-        f"sequifier infer --config-path={inference_config_path_cat_multitarget}"
+    run_and_log(
+        f"sequifier infer --config-path {inference_config_path_cat_multitarget}"
     )
 
-    write_and_log(
-        f"sequifier infer --config-path={inference_config_path_real_autoregression} --input-columns={SELECTED_COLUMNS['real'][1]}"
+    run_and_log(
+        f"sequifier infer --config-path {inference_config_path_real_autoregression} --input-columns {SELECTED_COLUMNS['real'][1]}"
     )
 
-    write_and_log(
-        f"sequifier infer --config-path={inference_config_path_cat_inf_size_1}"
+    run_and_log(f"sequifier infer --config-path {inference_config_path_cat_inf_size_1}")
+
+    run_and_log(f"sequifier infer --config-path {inference_config_path_cat_inf_size_3}")
+
+    run_and_log(
+        f"sequifier infer --config-path {inference_config_path_categorical_autoregression}  --input-columns itemId"
     )
 
-    write_and_log(
-        f"sequifier infer --config-path={inference_config_path_cat_inf_size_3}"
+    run_and_log(
+        f"sequifier infer --config-path {inference_config_path_embedding}  --input-columns itemId"
     )
 
-    write_and_log(
-        f"sequifier infer --config-path={inference_config_path_categorical_autoregression}  --input-columns=itemId"
-    )
-
-    write_and_log(
-        f"sequifier infer --config-path={inference_config_path_embedding}  --input-columns=itemId"
-    )
-
-    write_and_log(
-        f"sequifier infer --config-path={inference_config_path_cat_inf_size_3_embedding}"
+    run_and_log(
+        f"sequifier infer --config-path {inference_config_path_cat_inf_size_3_embedding}"
     )

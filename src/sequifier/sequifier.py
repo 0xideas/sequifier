@@ -36,20 +36,18 @@ def build_args_config(args: Any) -> dict[str, Any]:
             args_config["seed"] = args.seed
 
     if "selected_columns" in args_config:
-        if args_config["selected_columns"] == "None":
+        if (
+            len(args_config["selected_columns"]) == 1
+            and args_config["selected_columns"][0] == "None"
+        ):
             args_config["selected_columns"] = None
-        else:
-            args_config["selected_columns"] = (
-                args_config["selected_columns"].replace(" ", "").split(",")
-            )
 
     if "input_columns" in args_config:
-        if args_config["input_columns"] == "None":
+        if (
+            len(args_config["input_columns"]) == 1
+            and args_config["input_columns"][0] == "None"
+        ):
             args_config["input_columns"] = None
-        else:
-            args_config["input_columns"] = (
-                args_config["input_columns"].replace(" ", "").split(",")
-            )
 
     return args_config
 
@@ -94,11 +92,23 @@ def setup_parser() -> ArgumentParser:
             subparser.add_argument("-dp", "--data-path", type=str)
 
     for subparser in [parser_train, parser_infer, parser_hyperparameter_search]:
-        subparser.add_argument("-ic", "--input-columns", type=str)
+        subparser.add_argument(
+            "-ic",
+            "--input-columns",
+            type=str,
+            nargs="+",
+            help="Space-separated list of input columns (e.g. --input-columns col1 col2)",
+        )
         subparser.add_argument("-mc", "--metadata-config-path", type=str)
         subparser.add_argument("-sm", "--skip-metadata", action="store_true")
 
-    parser_preprocess.add_argument("-sc", "--selected-columns", type=str)
+    parser_preprocess.add_argument(
+        "-sc",
+        "--selected-columns",
+        type=str,
+        nargs="+",
+        help="Space-separated list of selected columns",
+    )
     parser_train.add_argument("-mn", "--model-name", type=str)
     parser_train.add_argument("-s", "--seed", type=int)
 
