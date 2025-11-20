@@ -127,6 +127,7 @@ class InfererModel(BaseModel):
     target_column_types: dict[str, str]
 
     enforce_determinism: bool = Field(default=False)
+    dont_set_seeds: bool = Field(default=False)
     output_probabilities: bool = Field(default=False)
     map_to_id: bool = Field(default=True)
     seed: int
