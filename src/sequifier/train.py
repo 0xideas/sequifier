@@ -484,7 +484,7 @@ class TransformerModel(nn.Module):
                 col: dim_model_comp for col in categorical_columns
             }
         else:
-            raise UserWarning(
+            raise ValueError(
                 "If both real and categorical variables are present, feature_embedding_dims config value must be set"
             )
 
