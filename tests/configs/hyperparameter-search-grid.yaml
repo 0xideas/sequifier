@@ -25,11 +25,18 @@ export_with_dropout: false
 
 # Model Hyperparameter Search Space
 model_hyperparameter_sampling:
-  dim_model: [10, 20] # Two options for model dimensionality
-  feature_embedding_dims: null # Auto-calculate embedding dims based on dim_model
-  n_head: [2, 4]
+  dim_model: [20]
+  feature_embedding_dims: null
+  n_head: [2]
   dim_feedforward: [10]
-  num_layers: [3, 5]
+  num_layers: [2]
+  activation_fn: ["relu", "swiglu"]
+  normalization: ["layer_norm"]
+  positional_encoding: ["learned", "rope"]
+  attention_type: ["mqa"]
+  norm_first: [false]
+  n_kv_heads: [1]
+  rope_theta: [10000.0]
   prediction_length: 1
 
 # Training Hyperparameter Search Space

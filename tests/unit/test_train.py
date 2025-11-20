@@ -71,7 +71,7 @@ def test_transformer_model_initialization(model, model_config):
     """Tests that the model initializes with the correct layers."""
     # Check if encoder dicts were created
     assert "cat_col" in model.encoder
-    assert "cat_col" in model.pos_encoder
+    assert model.pos_encoder is None or "cat_col" in model.pos_encoder
 
     # Check decoder existence
     assert "cat_col" in model.decoder

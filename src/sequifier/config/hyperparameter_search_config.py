@@ -357,6 +357,15 @@ class ModelSpecHyperparameterSampling(BaseModel):
     num_layers: list[int]
     prediction_length: int
 
+    activation_fn: list[str]
+    normalization: list[str]
+    positional_encoding: list[str]
+    attention_type: list[str]
+
+    norm_first: list[bool]
+    n_kv_heads: list[Optional[int]]
+    rope_theta: list[float]
+
     @field_validator("n_head")
     @classmethod
     def validate_model_spec(cls, v, info):
@@ -421,13 +430,35 @@ class ModelSpecHyperparameterSampling(BaseModel):
         """
         hyperparameter_combinations = list(
             product(
-                np.arange(len(self.dim_model)), self.dim_feedforward, self.num_layers
+                np.arange(len(self.dim_model)),
+                self.dim_feedforward,
+                self.num_layers,
+                self.activation_fn,
+                self.normalization,
+                self.positional_encoding,
+                self.attention_type,
+                self.norm_first,
+                self.n_kv_heads,
+                self.rope_theta,
             )
         )
 
-        dim_model_index, dim_feedforward, num_layers = hyperparameter_combinations[i]
+        (
+            dim_model_index,
+            dim_feedforward,
+            num_layers,
+            activation_fn,
+            normalization,
+            positional_encoding,
+            attention_type,
+            norm_first,
+            n_kv_head,
+            rope_theta,
+        ) = hyperparameter_combinations[i]
         dim_model = self.dim_model[dim_model_index]
-        logger.info(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
+        logger.info(
+            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_head = } - {rope_theta = } "
+        )
 
         feature_embedding_dims = (
             None
@@ -441,6 +472,13 @@ class ModelSpecHyperparameterSampling(BaseModel):
             n_head=self.n_head[dim_model_index],
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
+            activation_fn=activation_fn,
+            normalization=normalization,
+            positional_encoding=positional_encoding,
+            attention_type=attention_type,
+            norm_first=norm_first,
+            n_kv_heads=n_kv_head,
+            rope_theta=rope_theta,
             prediction_length=self.prediction_length,
         )
 
@@ -453,7 +491,18 @@ class ModelSpecHyperparameterSampling(BaseModel):
         Returns:
             The total number of possible model hyperparameter combinations.
         """
-        return len(self.dim_model) * len(self.dim_feedforward) * len(self.num_layers)
+        return (
+            len(self.dim_model)
+            * len(self.dim_feedforward)
+            * len(self.num_layers)
+            * len(self.activation_fn)
+            * len(self.normalization)
+            * len(self.positional_encoding)
+            * len(self.attention_type)
+            * len(self.norm_first)
+            * len(self.n_kv_heads)
+            * len(self.rope_theta)
+        )
 
 
 class HyperparameterSearch(BaseModel):

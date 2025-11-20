@@ -321,6 +321,18 @@ class ModelSpecModel(BaseModel):
     n_head: int
     dim_feedforward: int
     num_layers: int
+
+    activation_fn: str = "swiglu"  # Options: "relu", "gelu", "swiglu"
+    normalization: str = "rmsnorm"  # Options: "layer_norm", "rmsnorm"
+    positional_encoding: str = "rope"  # Options: "learned", "rope" (Rotary)
+    attention_type: str = (
+        "mha"  # Options: "mha" (Multi-Head), "mqa" (Multi-Query), "gqa" (Grouped-Query)
+    )
+
+    norm_first: bool = True
+    n_kv_heads: Optional[int] = None
+    rope_theta: float = 10000.0
+
     prediction_length: int
 
     @field_validator("feature_embedding_dims")
