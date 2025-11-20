@@ -70,7 +70,7 @@ def test_model_files_exists(run_training, project_root):
                 for suffix in ["best", "last"]
             ]
             + [
-                f"sequifier-test-hp-search-grid-run-{i}-{suffix}-1.pt"
+                f"sequifier-test-hp-search-grid-run-{i}-{suffix}-2.pt"
                 for i in range(4)
                 for suffix in ["best", "last"]
             ]

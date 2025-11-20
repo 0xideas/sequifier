@@ -67,3 +67,4 @@ training_spec:
     three_phase: false
   scheduler_step_on: 'batch'
   continue_training: false
+  enforce_determinism: true

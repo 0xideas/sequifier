@@ -48,3 +48,4 @@ training_spec:
     step_size: 1.0
     gamma: 0.99
   continue_training: false
+  enforce_determinism: true

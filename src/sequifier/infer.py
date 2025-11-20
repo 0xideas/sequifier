@@ -16,6 +16,7 @@ from loguru import logger
 from sequifier.config.infer_config import InfererModel, load_inferer_config
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
+    configure_determinism,
     construct_index_maps,
     normalize_path,
     numpy_to_pytorch,
@@ -69,6 +70,8 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     else:
         id_maps = None
         selected_columns_statistics = {}
+
+    configure_determinism(config.seed, config.enforce_determinism)
 
     infer_worker(
         config, args_config, id_maps, selected_columns_statistics, (0.0, 100.0)

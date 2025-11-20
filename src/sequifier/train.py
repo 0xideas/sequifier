@@ -23,8 +23,8 @@ from torch.utils.data.distributed import DistributedSampler
 
 torch._dynamo.config.suppress_errors = True
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
-from sequifier.helpers import configure_logger  # noqa: E402
 from sequifier.helpers import construct_index_maps  # noqa: E402
+from sequifier.helpers import configure_determinism, configure_logger  # noqa: E402
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
 )
@@ -156,8 +156,7 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
             valid_dataset, batch_size=None, sampler=None, shuffle=False
         )
 
-    torch.manual_seed(config.seed)
-    np.random.seed(config.seed)
+    configure_determinism(config.seed, config.training_spec.enforce_determinism)
 
     model = TransformerModel(config, rank)
 

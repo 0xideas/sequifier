@@ -51,3 +51,4 @@ training_spec:
     gamma: 0.99
   scheduler_step_on: epoch
   continue_training: false
+  enforce_determinism: true

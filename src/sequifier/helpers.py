@@ -1,4 +1,5 @@
 import os
+import random
 import sys
 from typing import Any, Optional, Union
 
@@ -354,3 +355,25 @@ def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0
         mode="a",
     )
     return logger
+
+
+@beartype
+def configure_determinism(seed: int, strict: bool = False) -> None:
+    """Enforces deterministic execution for reproducibility."""
+    # 1. Set standard seeds
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # 2. Ensure deterministic behavior in CUDA/CuDNN
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    if strict:
+        # 3. Enforce deterministic algorithms in PyTorch (crucial for SDPA/FlashAttention)
+        # This forces PyTorch to error out if a non-deterministic operation is used,
+        # or select the deterministic version of a kernel (e.g. for Flash Attn).
+        torch.use_deterministic_algorithms(True, warn_only=True)
+
+        # 4. Set CuBLAS workspace (Required for deterministic algorithms with CUDA >= 10.2)
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"

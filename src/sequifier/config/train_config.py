@@ -238,6 +238,7 @@ class TrainingSpecModel(BaseModel):
     )
     scheduler_step_on: str = "epoch"
     continue_training: bool = True
+    enforce_determinism: bool = False
     distributed: bool = False
     load_full_data_to_ram: bool = True
     max_ram_gb: Union[int, float] = 16
