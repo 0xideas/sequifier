@@ -15,7 +15,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from beartype import beartype
 from torch import Tensor, nn
-from torch.nn import ModuleDict, TransformerEncoder, TransformerEncoderLayer
+from torch.nn import ModuleDict
 from torch.nn.functional import one_hot
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, RandomSampler
@@ -23,8 +23,8 @@ from torch.utils.data.distributed import DistributedSampler
 
 torch._dynamo.config.suppress_errors = True
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
-from sequifier.helpers import configure_logger  # noqa: E402
 from sequifier.helpers import construct_index_maps  # noqa: E402
+from sequifier.helpers import configure_determinism, configure_logger  # noqa: E402
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
 )
@@ -34,6 +34,7 @@ from sequifier.io.sequifier_dataset_from_folder import (  # noqa: E402
 from sequifier.io.sequifier_dataset_from_folder_lazy import (  # noqa: E402
     SequifierDatasetFromFolderLazy,
 )
+from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 from sequifier.samplers.distributed_grouped_random_sampler import (  # noqa: E402
     DistributedGroupedRandomSampler,
@@ -155,8 +156,7 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
             valid_dataset, batch_size=None, sampler=None, shuffle=False
         )
 
-    torch.manual_seed(config.seed)
-    np.random.seed(config.seed)
+    configure_determinism(config.seed, config.training_spec.enforce_determinism)
 
     model = TransformerModel(config, rank)
 
@@ -316,10 +316,10 @@ class TransformerModel(nn.Module):
         self.hparams = hparams
         self.drop = nn.Dropout(hparams.training_spec.dropout)
         self.encoder = ModuleDict()
-        self.pos_encoder = ModuleDict()
         self.embedding_size = max(
             self.hparams.model_spec.dim_model, self.hparams.model_spec.n_head
         )
+        self.use_rope = hparams.model_spec.positional_encoding == "rope"
         if hparams.model_spec.feature_embedding_dims is not None:
             self.feature_embedding_dims = hparams.model_spec.feature_embedding_dims
         else:
@@ -339,27 +339,49 @@ class TransformerModel(nn.Module):
                         f"Real column {col} without embedding must have feature_embedding_dims=1"
                     )
                 self.real_columns_direct.append(col)
-            self.pos_encoder[col] = nn.Embedding(
-                self.seq_length, self.feature_embedding_dims[col]
-            )
         for col, n_classes in self.n_classes.items():
             if col in self.categorical_columns:
                 self.encoder[col] = nn.Embedding(
                     n_classes, self.feature_embedding_dims[col]
                 )
+
+        if not self.use_rope:
+            self.pos_encoder = ModuleDict()
+            for col in self.real_columns:
                 self.pos_encoder[col] = nn.Embedding(
                     self.seq_length, self.feature_embedding_dims[col]
                 )
+            for col, n_classes in self.n_classes.items():
+                if col in self.categorical_columns:
+                    self.pos_encoder[col] = nn.Embedding(
+                        self.seq_length, self.feature_embedding_dims[col]
+                    )
+        else:
+            self.pos_encoder = None
 
-        encoder_layers = TransformerEncoderLayer(
-            self.embedding_size,
-            hparams.model_spec.n_head,
-            hparams.model_spec.dim_feedforward,
-            hparams.training_spec.dropout,
+        self.layers = nn.ModuleList(
+            [
+                SequifierEncoderLayer(
+                    hparams.model_spec,
+                    self.embedding_size,
+                    hparams.model_spec.n_head,
+                    hparams.model_spec.dim_feedforward,
+                    hparams.training_spec.dropout,
+                )
+                for _ in range(hparams.model_spec.num_layers)
+            ]
         )
-        self.transformer_encoder = TransformerEncoder(
-            encoder_layers, hparams.model_spec.num_layers, enable_nested_tensor=False
-        )
+
+        if hparams.model_spec.norm_first:
+            NormClass = (
+                RMSNorm
+                if hparams.model_spec.normalization == "rmsnorm"
+                else nn.LayerNorm
+            )
+            self.final_norm = NormClass(self.embedding_size)
+        else:
+            self.final_norm = nn.Identity()
+
         self.prediction_length = hparams.model_spec.prediction_length
 
         self.decoder = ModuleDict()
@@ -529,8 +551,9 @@ class TransformerModel(nn.Module):
             self.decoder[target_column].bias.data.zero_()
             self.decoder[target_column].weight.data.normal_(mean=0.0, std=init_std)
 
-        for col_name in self.pos_encoder:
-            self.pos_encoder[col_name].weight.data.normal_(mean=0.0, std=init_std)
+        if self.pos_encoder is not None:
+            for col_name in self.pos_encoder:
+                self.pos_encoder[col_name].weight.data.normal_(mean=0.0, std=init_std)
 
     @beartype
     def _recursive_concat(self, srcs: list[Tensor]):
@@ -575,14 +598,20 @@ class TransformerModel(nn.Module):
         srcs = []
         for col in self.categorical_columns:
             src_t = self.encoder[col](src[col].T) * math.sqrt(self.embedding_size)
-            pos = (
-                torch.arange(0, self.seq_length, dtype=torch.long, device=self.device)
-                .repeat(src_t.shape[1], 1)
-                .T
-            )
-            src_p = self.pos_encoder[col](pos)
 
-            src_c = self.drop(src_t + src_p)
+            if not self.use_rope:
+                pos = (
+                    torch.arange(
+                        0, self.seq_length, dtype=torch.long, device=self.device
+                    )
+                    .repeat(src_t.shape[1], 1)
+                    .T
+                )
+                src_p = self.pos_encoder[col](pos)  # type: ignore
+
+                src_c = self.drop(src_t + src_p)
+            else:
+                src_c = self.drop(src_t)
 
             srcs.append(src_c)
 
@@ -597,23 +626,30 @@ class TransformerModel(nn.Module):
                     self.embedding_size
                 )
 
-            pos = (
-                torch.arange(0, self.seq_length, dtype=torch.long, device=self.device)
-                .repeat(src_t.shape[1], 1)
-                .T
-            )
-
-            src_p = self.pos_encoder[col](pos)
-
-            src_c = self.drop(src_t + src_p)
+            if not self.use_rope:
+                pos = (
+                    torch.arange(
+                        0, self.seq_length, dtype=torch.long, device=self.device
+                    )
+                    .repeat(src_t.shape[1], 1)
+                    .T
+                )
+                src_p = self.pos_encoder[col](pos)  # type: ignore
+                src_c = self.drop(src_t + src_p)
+            else:
+                src_c = self.drop(src_t)
 
             srcs.append(src_c)
 
         src2 = self._recursive_concat(srcs)
+        src2 = src2.transpose(0, 1)
 
-        output = self.transformer_encoder(src2, self.src_mask)
+        for layer in self.layers:
+            src2 = layer(src2, src_mask=self.src_mask)
 
-        return output
+        src2 = self.final_norm(src2)
+
+        return src2.transpose(0, 1)
 
     @beartype
     def forward_embed(self, src: dict[str, Tensor]) -> Tensor:

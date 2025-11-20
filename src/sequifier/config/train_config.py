@@ -238,6 +238,7 @@ class TrainingSpecModel(BaseModel):
     )
     scheduler_step_on: str = "epoch"
     continue_training: bool = True
+    enforce_determinism: bool = False
     distributed: bool = False
     load_full_data_to_ram: bool = True
     max_ram_gb: Union[int, float] = 16
@@ -321,15 +322,85 @@ class ModelSpecModel(BaseModel):
     n_head: int
     dim_feedforward: int
     num_layers: int
+
+    activation_fn: str = "swiglu"  # Options: "relu", "gelu", "swiglu"
+    normalization: str = "rmsnorm"  # Options: "layer_norm", "rmsnorm"
+    positional_encoding: str = "rope"  # Options: "learned", "rope" (Rotary)
+    attention_type: str = (
+        "mha"  # Options: "mha" (Multi-Head), "mqa" (Multi-Query), "gqa" (Grouped-Query)
+    )
+
+    norm_first: bool = True
+    n_kv_heads: Optional[int] = None
+    rope_theta: float = 10000.0
+
     prediction_length: int
+
+    @field_validator("activation_fn")
+    @classmethod
+    def validate_activation(cls, v):
+        if v not in ["relu", "gelu", "swiglu"]:
+            raise ValueError(f"Invalid activation_fn: {v}")
+        return v
+
+    @field_validator("normalization")
+    @classmethod
+    def validate_normalization(cls, v):
+        if v not in ["layer_norm", "rmsnorm"]:
+            raise ValueError(f"Invalid normalization: {v}")
+        return v
+
+    @field_validator("positional_encoding")
+    @classmethod
+    def validate_pos_encoding(cls, v):
+        if v not in ["learned", "rope"]:
+            raise ValueError(f"Invalid positional_encoding: {v}")
+        return v
+
+    @field_validator("attention_type")
+    @classmethod
+    def validate_attention_type(cls, v):
+        if v not in ["mha", "mqa", "gqa"]:
+            raise ValueError(f"Invalid attention_type: {v}")
+        return v
 
     @field_validator("feature_embedding_dims")
     @classmethod
     def validate_feature_embedding_dims(cls, v, info):
-        if not (v is None or np.sum(list(v.values())) == info.data.get("dim_model")):
+        dim_model = info.data.get("dim_model")
+        if v is not None and dim_model and sum(v.values()) != dim_model:
             raise ValueError(
-                f'{info.data.get("dim_model")} is not the sum of the feature_embedding_dims values'
+                f"Sum of feature_embedding_dims {sum(v.values())} != dim_model {dim_model}"
             )
+        return v
+
+    @field_validator("n_head")
+    @classmethod
+    def validate_n_head(cls, v, info):
+        dim_model = info.data.get("dim_model")
+        if dim_model and dim_model % v != 0:
+            raise ValueError(f"dim_model {dim_model} not divisible by n_head {v}")
+        return v
+
+    @field_validator("n_kv_heads")
+    @classmethod
+    def validate_n_kv_heads(cls, v, info):
+        n_head = info.data.get("n_head")
+        attn_type = info.data.get("attention_type")
+
+        if v is not None:
+            if n_head and n_head % v != 0:
+                raise ValueError(f"n_head {n_head} not divisible by n_kv_heads {v}")
+            if n_head and v > n_head:
+                raise ValueError(f"n_kv_heads {v} > n_head {n_head}")
+
+            if attn_type == "mqa" and v != 1:
+                raise ValueError(f"n_kv_heads must be 1 for mqa, got {v}")
+            if attn_type == "mha" and v != n_head:
+                raise ValueError(f"n_kv_heads must equal n_head for mha, got {v}")
+        else:
+            if attn_type in ["gqa", "mqa"]:
+                raise ValueError(f"n_kv_heads must be specified for {attn_type}")
 
         return v
 

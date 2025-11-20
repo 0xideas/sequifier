@@ -25,11 +25,18 @@ export_with_dropout: false
 
 # Model Hyperparameter Search Space
 model_hyperparameter_sampling:
-  dim_model: [10, 20, 40] # Two options for model dimensionality
+  dim_model: [40, 80] # Two options for model dimensionality
   feature_embedding_dims: null
-  n_head: [2, 4, 8]
-  dim_feedforward: [10, 12, 15]
-  num_layers: [1, 2, 3]
+  n_head: [2, 4]
+  dim_feedforward: [10, 12]
+  num_layers: [2]
+  activation_fn: ["swiglu"]
+  normalization: ["rmsnorm"]
+  positional_encoding: ["rope"]
+  attention_type: ["mqa", "gqa"]
+  norm_first: [ true]
+  n_kv_heads: [1]
+  rope_theta: [10000.0]
   prediction_length: 1
 
 # Training Hyperparameter Search Space

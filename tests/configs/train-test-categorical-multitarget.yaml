@@ -28,6 +28,15 @@ model_spec:
   dim_feedforward: 10
   num_layers: 2
   prediction_length: 1
+
+  activation_fn: gelu
+  normalization: rmsnorm
+  positional_encoding: rope
+  attention_type: gqa
+  norm_first: true
+  n_kv_heads: 1
+  rope_theta: 10000.0
+
 training_spec:
   device: cpu
   epochs: 3
@@ -58,3 +67,4 @@ training_spec:
     three_phase: false
   scheduler_step_on: 'batch'
   continue_training: false
+  enforce_determinism: true

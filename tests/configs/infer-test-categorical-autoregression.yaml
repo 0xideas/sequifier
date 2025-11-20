@@ -17,6 +17,7 @@ map_to_id: true
 device: cpu
 seq_length: 8
 inference_batch_size: 10
+enforce_determinism: true
 
 sample_from_distribution_columns: null
 autoregression: true

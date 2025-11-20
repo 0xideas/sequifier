@@ -126,12 +126,14 @@ class InfererModel(BaseModel):
     column_types: dict[str, str]
     target_column_types: dict[str, str]
 
+    enforce_determinism: bool = Field(default=False)
+    dont_set_seeds: bool = Field(default=False)
     output_probabilities: bool = Field(default=False)
     map_to_id: bool = Field(default=True)
     seed: int
     device: str
     seq_length: int
-    prediction_length: int = 1
+    prediction_length: int = Field(default=1)
     inference_batch_size: int
 
     distributed: bool = False

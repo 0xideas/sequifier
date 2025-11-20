@@ -28,6 +28,13 @@ model_spec:
   dim_feedforward: 12
   num_layers: 2
   prediction_length: 3
+  activation_fn: swiglu
+  normalization: layer_norm
+  positional_encoding: rope
+  attention_type: mqa
+  norm_first: false
+  n_kv_heads: 1
+  rope_theta: 10000.0
 training_spec:
   device: cpu
   epochs: 3
@@ -50,3 +57,4 @@ training_spec:
     gamma: 0.99
   scheduler_step_on: epoch
   continue_training: false
+  enforce_determinism: true

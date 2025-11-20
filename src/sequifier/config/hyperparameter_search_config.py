@@ -1,4 +1,5 @@
 import json
+import random
 from itertools import product
 from typing import Optional, Union
 
@@ -248,6 +249,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             optimizer=optimizer,
             scheduler=self.scheduler[learning_rate_and_scheduler_index],
             continue_training=self.continue_training,
+            enforce_determinism=True,
             scheduler_step_on=self.scheduler_step_on,
             distributed=self.distributed,
             load_full_data_to_ram=self.load_full_data_to_ram,
@@ -311,6 +313,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             optimizer=optimizer,
             scheduler=self.scheduler[learning_rate_and_scheduler_index],
             continue_training=self.continue_training,
+            enforce_determinism=True,
             scheduler_step_on=self.scheduler_step_on,
             distributed=self.distributed,
             load_full_data_to_ram=self.load_full_data_to_ram,
@@ -357,6 +360,15 @@ class ModelSpecHyperparameterSampling(BaseModel):
     num_layers: list[int]
     prediction_length: int
 
+    activation_fn: list[str]
+    normalization: list[str]
+    positional_encoding: list[str]
+    attention_type: list[str]
+
+    norm_first: list[bool]
+    n_kv_heads: list[Optional[int]]
+    rope_theta: list[float]
+
     @field_validator("n_head")
     @classmethod
     def validate_model_spec(cls, v, info):
@@ -380,7 +392,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
         This method selects a random combination of model hyperparameters from the
         defined lists of possibilities. It ensures that dim_model, feature_embedding_dims,
-        and n_head are paired correctly.
+        and n_head are paired correctly, and that n_kv_heads is a valid divisor of n_head.
 
         Returns:
             A ModelSpecModel instance populated with a randomly sampled set of
@@ -393,16 +405,50 @@ class ModelSpecHyperparameterSampling(BaseModel):
             else self.feature_embedding_dims[dim_model_index]
         )
         dim_model = self.dim_model[dim_model_index]
+        n_head = self.n_head[dim_model_index]
         dim_feedforward = np.random.choice(self.dim_feedforward)
         num_layers = np.random.choice(self.num_layers)
-        logger.info(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
+
+        activation_fn = np.random.choice(self.activation_fn)
+        normalization = np.random.choice(self.normalization)
+        positional_encoding = np.random.choice(self.positional_encoding)
+        attention_type = np.random.choice(self.attention_type)
+        norm_first = np.random.choice(self.norm_first)
+        rope_theta = np.random.choice(self.rope_theta)
+
+        valid_kv_heads = [
+            kv
+            for kv in self.n_kv_heads
+            if kv is None or (n_head % kv == 0 and kv <= n_head)
+        ]
+
+        if not valid_kv_heads:
+            logger.warning(
+                f"No valid n_kv_heads found in config for n_head={n_head}. Defaulting to None (MHA)."
+            )
+            n_kv_heads = None
+        else:
+            # Use random.choice because valid_kv_heads might contain None
+            # and np.random.choice behaves weirdly with mixed None types.
+            n_kv_heads = random.choice(valid_kv_heads)
+
+        logger.info(
+            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
+        )
 
         return ModelSpecModel(
-            dim_model=self.dim_model[dim_model_index],
+            dim_model=dim_model,
             feature_embedding_dims=feature_embedding_dims,
-            n_head=self.n_head[dim_model_index],
+            n_head=n_head,
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
+            activation_fn=activation_fn,
+            normalization=normalization,
+            positional_encoding=positional_encoding,
+            attention_type=attention_type,
+            norm_first=norm_first,
+            n_kv_heads=n_kv_heads,
+            rope_theta=rope_theta,
             prediction_length=self.prediction_length,
         )
 
@@ -411,6 +457,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
         This method generates a grid of all possible model hyperparameter
         combinations and selects the combination at the given index.
+        Includes sanitation logic to prevent invalid n_kv_heads combinations.
 
         Args:
             i: The index of the hyperparameter combination to select from the grid.
@@ -421,13 +468,45 @@ class ModelSpecHyperparameterSampling(BaseModel):
         """
         hyperparameter_combinations = list(
             product(
-                np.arange(len(self.dim_model)), self.dim_feedforward, self.num_layers
+                np.arange(len(self.dim_model)),
+                self.dim_feedforward,
+                self.num_layers,
+                self.activation_fn,
+                self.normalization,
+                self.positional_encoding,
+                self.attention_type,
+                self.norm_first,
+                self.n_kv_heads,
+                self.rope_theta,
             )
         )
 
-        dim_model_index, dim_feedforward, num_layers = hyperparameter_combinations[i]
+        (
+            dim_model_index,
+            dim_feedforward,
+            num_layers,
+            activation_fn,
+            normalization,
+            positional_encoding,
+            attention_type,
+            norm_first,
+            n_kv_heads,
+            rope_theta,
+        ) = hyperparameter_combinations[i]
+
         dim_model = self.dim_model[dim_model_index]
-        logger.info(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
+        n_head = self.n_head[dim_model_index]
+
+        if n_kv_heads is not None:
+            if n_head % n_kv_heads != 0 or n_kv_heads > n_head:
+                logger.debug(
+                    f"Grid sample index {i}: forcing n_kv_heads=None because {n_kv_heads} does not divide {n_head}"
+                )
+                n_kv_heads = None
+
+        logger.info(
+            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
+        )
 
         feature_embedding_dims = (
             None
@@ -438,9 +517,16 @@ class ModelSpecHyperparameterSampling(BaseModel):
         return ModelSpecModel(
             dim_model=dim_model,
             feature_embedding_dims=feature_embedding_dims,
-            n_head=self.n_head[dim_model_index],
+            n_head=n_head,
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
+            activation_fn=activation_fn,
+            normalization=normalization,
+            positional_encoding=positional_encoding,
+            attention_type=attention_type,
+            norm_first=norm_first,
+            n_kv_heads=n_kv_heads,
+            rope_theta=rope_theta,
             prediction_length=self.prediction_length,
         )
 
@@ -453,7 +539,18 @@ class ModelSpecHyperparameterSampling(BaseModel):
         Returns:
             The total number of possible model hyperparameter combinations.
         """
-        return len(self.dim_model) * len(self.dim_feedforward) * len(self.num_layers)
+        return (
+            len(self.dim_model)
+            * len(self.dim_feedforward)
+            * len(self.num_layers)
+            * len(self.activation_fn)
+            * len(self.normalization)
+            * len(self.positional_encoding)
+            * len(self.attention_type)
+            * len(self.norm_first)
+            * len(self.n_kv_heads)
+            * len(self.rope_theta)
+        )
 
 
 class HyperparameterSearch(BaseModel):

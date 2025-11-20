@@ -18,10 +18,17 @@ export_pt: true
 export_with_dropout: true
 
 model_spec:
-  dim_model: 50
+  dim_model: 100
   n_head: 2
   dim_feedforward: 10
   num_layers: 2
+  activation_fn: relu
+  normalization: layer_norm
+  positional_encoding: learned
+  attention_type: mha
+  norm_first: false
+  n_kv_heads: null
+  rope_theta: 10000.0
   prediction_length: 1
 training_spec:
   device: cpu
@@ -41,3 +48,4 @@ training_spec:
     step_size: 1.0
     gamma: 0.99
   continue_training: false
+  enforce_determinism: true
