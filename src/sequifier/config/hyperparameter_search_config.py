@@ -404,14 +404,33 @@ class ModelSpecHyperparameterSampling(BaseModel):
         dim_model = self.dim_model[dim_model_index]
         dim_feedforward = np.random.choice(self.dim_feedforward)
         num_layers = np.random.choice(self.num_layers)
-        logger.info(f"{dim_model = } - {dim_feedforward = } - {num_layers = }")
+        activation_fn = np.random.choice(self.activation_fn)
+        normalization = np.random.choice(self.normalization)
+        positional_encoding = np.random.choice(self.positional_encoding)
+        attention_type = np.random.choice(self.attention_type)
+        norm_first = np.random.choice(self.norm_first)
+        if len(self.n_kv_heads) != 1 or self.n_kv_heads[0] is not None:
+            n_kv_heads = np.random.choice(self.n_kv_heads)  # type: ignore
+        else:
+            n_kv_heads = None
 
+        rope_theta = np.random.choice(self.rope_theta)
+        logger.info(
+            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
+        )
         return ModelSpecModel(
             dim_model=self.dim_model[dim_model_index],
             feature_embedding_dims=feature_embedding_dims,
             n_head=self.n_head[dim_model_index],
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
+            activation_fn=activation_fn,
+            normalization=normalization,
+            positional_encoding=positional_encoding,
+            attention_type=attention_type,
+            norm_first=norm_first,
+            n_kv_heads=n_kv_heads,
+            rope_theta=rope_theta,
             prediction_length=self.prediction_length,
         )
 
@@ -452,12 +471,12 @@ class ModelSpecHyperparameterSampling(BaseModel):
             positional_encoding,
             attention_type,
             norm_first,
-            n_kv_head,
+            n_kv_heads,
             rope_theta,
         ) = hyperparameter_combinations[i]
         dim_model = self.dim_model[dim_model_index]
         logger.info(
-            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_head = } - {rope_theta = } "
+            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
         )
 
         feature_embedding_dims = (
@@ -477,7 +496,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             positional_encoding=positional_encoding,
             attention_type=attention_type,
             norm_first=norm_first,
-            n_kv_heads=n_kv_head,
+            n_kv_heads=n_kv_heads,
             rope_theta=rope_theta,
             prediction_length=self.prediction_length,
         )
