@@ -23,11 +23,11 @@ model_spec:
   num_layers: 2
   prediction_length: 1
   activation_fn: relu
-  normalization: learned
+  normalization: rmsnorm
   positional_encoding: rope
   attention_type: mqa
   norm_first: true
-  n_kv_heads: 2
+  n_kv_heads: 1
   rope_theta: 1000.0
 training_spec:
   device: cpu

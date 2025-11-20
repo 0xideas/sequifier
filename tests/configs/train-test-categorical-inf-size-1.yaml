@@ -27,7 +27,7 @@ model_spec:
   positional_encoding: learned
   attention_type: mha
   norm_first: false
-  n_kv_heads: 1
+  n_kv_heads: 2
   rope_theta: 10000.0
 training_spec:
   device: cpu

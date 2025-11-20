@@ -10,7 +10,7 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
-        var = torch.mean(x**2, dim=-1, keepdim=True)
+        var = torch.mean(x.to(torch.float32).pow(2), dim=-1, keepdim=True)
         x_normed = x * torch.rsqrt(var + self.eps)
         return self.weight * x_normed
 
@@ -37,8 +37,8 @@ class RotaryEmbedding(nn.Module):
             "sin_cached", emb.sin()[None, None, :, :], persistent=False
         )
 
-    def forward(self, x, seq_len=None):
-        if seq_len > self.cos_cached.shape[2]:
+    def forward(self, x, seq_len):
+        if int(seq_len) > self.cos_cached.shape[2]:
             self._update_cos_sin_cache(seq_len)
         return self.cos_cached[:, :, :seq_len, ...], self.sin_cached[
             :, :, :seq_len, ...
@@ -110,6 +110,8 @@ class CustomSelfAttention(nn.Module):
 
         if use_rope:
             self.rope = RotaryEmbedding(self.head_dim, theta=rope_theta)
+            if self.head_dim % 2 != 0:
+                raise ValueError(f"head_dim ({self.head_dim}) must be even for RoPE")
 
     def forward(self, x, mask=None):
         # x shape: (batch, seq_len, dim)

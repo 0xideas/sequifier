@@ -42,7 +42,7 @@ model_hyperparameter_sampling:
 # Training Hyperparameter Search Space
 training_hyperparameter_sampling:
   device: cpu
-  epochs: [1]
+  epochs: [2]
   save_interval_epochs: 10
   batch_size: [5]
   learning_rate: [0.001]

@@ -33,7 +33,7 @@ model_hyperparameter_sampling:
   activation_fn: ["swiglu"]
   normalization: ["rmsnorm"]
   positional_encoding: ["rope"]
-  attention_type: ["mha", "gqa"]
+  attention_type: ["mqa", "gqa"]
   norm_first: [ true]
   n_kv_heads: [1]
   rope_theta: [10000.0]

@@ -18,7 +18,7 @@ export_pt: true
 export_with_dropout: true
 
 model_spec:
-  dim_model: 50
+  dim_model: 100
   n_head: 2
   dim_feedforward: 10
   num_layers: 2
