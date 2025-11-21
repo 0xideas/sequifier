@@ -454,7 +454,7 @@ def run_inference(
     )
 
     run_and_log(
-        f"sequifier infer --config-path {inference_config_path_real_autoregression} --input-columns {SELECTED_COLUMNS['real'][1]}"
+        f"sequifier infer --config-path {inference_config_path_real_autoregression} --input-columns {SELECTED_COLUMNS['real'][1]} --randomize"
     )
 
     run_and_log(f"sequifier infer --config-path {inference_config_path_cat_inf_size_1}")

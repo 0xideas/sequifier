@@ -33,7 +33,7 @@ sequifier infer --config-path tests/configs/infer-test-real.yaml --metadata-conf
 sequifier infer --config-path tests/configs/infer-test-categorical.yaml --metadata-config-path configs/metadata_configs/test-data-categorical-50.json --model-path models/sequifier-model-categorical-50-best-3.onnx --data-path data/test-data-categorical-50-split2 --input-columns itemId sup1 sup2 sup3 sup4 sup5 sup6 sup7 sup8 sup9 sup10 sup11 sup12 sup13 sup14 sup15 sup16 sup17 sup18 sup19 sup20 sup21 sup22 sup23 sup24 sup25 sup26 sup27 sup28 sup29 sup30 sup31 sup32 sup33 sup34 sup35 sup36 sup37 sup38 sup39 sup40 sup41 sup42 sup43 sup44 sup45 sup46 sup47 sup48 sup49
 sequifier infer --config-path tests/configs/infer-test-real.yaml --metadata-config-path configs/metadata_configs/test-data-real-50.json --model-path models/sequifier-model-real-50-best-3.pt --data-path data/test-data-real-50-split1.parquet --input-columns None
 sequifier infer --config-path tests/configs/infer-test-categorical-multitarget.yaml
-sequifier infer --config-path tests/configs/infer-test-real-autoregression.yaml --input-columns itemValue
+sequifier infer --config-path tests/configs/infer-test-real-autoregression.yaml --input-columns itemValue --randomize
 sequifier infer --config-path tests/configs/infer-test-categorical-inf-size-1.yaml
 sequifier infer --config-path tests/configs/infer-test-categorical-inf-size-3.yaml
 sequifier infer --config-path tests/configs/infer-test-categorical-autoregression.yaml  --input-columns itemId

@@ -316,15 +316,23 @@ class TransformerModel(nn.Module):
         self.hparams = hparams
         self.drop = nn.Dropout(hparams.training_spec.dropout)
         self.encoder = ModuleDict()
-        self.embedding_size = max(
-            self.hparams.model_spec.dim_model, self.hparams.model_spec.n_head
-        )
+        self.dim_model = self.hparams.model_spec.dim_model
+        self.initial_embedding_dim = self.hparams.model_spec.initial_embedding_dim
+        self.joint_embedding_dim = hparams.model_spec.joint_embedding_dim
+
+        if self.joint_embedding_dim is not None:
+            self.joint_embedding_layer = nn.Linear(
+                self.initial_embedding_dim, self.joint_embedding_dim
+            )
+        else:
+            self.joint_embedding_layer = None
+
         self.use_rope = hparams.model_spec.positional_encoding == "rope"
         if hparams.model_spec.feature_embedding_dims is not None:
             self.feature_embedding_dims = hparams.model_spec.feature_embedding_dims
         else:
             self.feature_embedding_dims = self._get_feature_embedding_dims(
-                self.embedding_size, self.categorical_columns, self.real_columns
+                self.initial_embedding_dim, self.categorical_columns, self.real_columns
             )
 
         self.real_columns_with_embedding = []
@@ -363,7 +371,7 @@ class TransformerModel(nn.Module):
             [
                 SequifierEncoderLayer(
                     hparams.model_spec,
-                    self.embedding_size,
+                    self.dim_model,
                     hparams.model_spec.n_head,
                     hparams.model_spec.dim_feedforward,
                     hparams.training_spec.dropout,
@@ -378,7 +386,7 @@ class TransformerModel(nn.Module):
                 if hparams.model_spec.normalization == "rmsnorm"
                 else nn.LayerNorm
             )
-            self.final_norm = NormClass(self.embedding_size)
+            self.final_norm = NormClass(self.dim_model)
         else:
             self.final_norm = nn.Identity()
 
@@ -389,12 +397,12 @@ class TransformerModel(nn.Module):
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
                 self.decoder[target_column] = nn.Linear(
-                    self.embedding_size,
+                    self.dim_model,
                     self.n_classes[target_column],
                 )
                 self.softmax[target_column] = nn.LogSoftmax(dim=-1)
             elif target_column_type == "real":
-                self.decoder[target_column] = nn.Linear(self.embedding_size, 1)
+                self.decoder[target_column] = nn.Linear(self.dim_model, 1)
             else:
                 raise ValueError(
                     f"Target column type {target_column_type} not in ['categorical', 'real']"
@@ -475,7 +483,7 @@ class TransformerModel(nn.Module):
         input columns.
 
         Args:
-            embedding_size: The total embedding dimension (dim_model).
+            embedding_size: The total embedding dimension (initial_embedding_dim).
             categorical_columns: List of categorical column names.
             real_columns: List of real-valued column names.
 
@@ -486,20 +494,34 @@ class TransformerModel(nn.Module):
             raise ValueError("No columns found")
 
         if len(categorical_columns) == 0 and len(real_columns) > 0:
+            if embedding_size < len(real_columns):
+                raise ValueError(
+                    f"initial_embedding_dim ({embedding_size}) is smaller than the number of real input columns ({len(real_columns)}). "
+                    "Cannot allocate at least 1 dimension per column."
+                )
+
             feature_embedding_dims = {col: 1 for col in real_columns}
             column_index = dict(enumerate(real_columns))
-            for i in range(embedding_size):
-                if sum(feature_embedding_dims.values()) % embedding_size != 0:
-                    j = i % len(real_columns)
-                    feature_embedding_dims[column_index[j]] += 1
-            if sum(feature_embedding_dims.values()) % embedding_size != 0:
+
+            remaining_dims = embedding_size - len(real_columns)
+            for i in range(remaining_dims):
+                j = i % len(real_columns)
+                feature_embedding_dims[column_index[j]] += 1
+
+            if sum(feature_embedding_dims.values()) != embedding_size:
                 raise ValueError(
-                    "Auto-calculated embedding dimensions do not sum to embedding_size."
+                    f"Auto-calculated embedding dimensions ({sum(feature_embedding_dims.values())}) do not sum to initial_embedding_dim ({embedding_size})."
                 )
         elif len(real_columns) == 0 and len(categorical_columns) > 0:
+            if embedding_size < len(categorical_columns):
+                raise ValueError(
+                    f"initial_embedding_dim ({embedding_size}) is smaller than the number of categorical columns ({len(categorical_columns)}). "
+                    "Resulting embedding dimension would be 0."
+                )
+
             if (embedding_size % len(categorical_columns)) != 0:
                 raise ValueError(
-                    f"dim_model ({embedding_size}) must be divisible by n_categorical ({len(categorical_columns)})"
+                    f"initial_embedding_dim ({embedding_size}) must be divisible by n_categorical ({len(categorical_columns)})"
                 )
             dim_model_comp = embedding_size // len(categorical_columns)
             feature_embedding_dims = {
@@ -555,6 +577,11 @@ class TransformerModel(nn.Module):
             for col_name in self.pos_encoder:
                 self.pos_encoder[col_name].weight.data.normal_(mean=0.0, std=init_std)
 
+        if self.joint_embedding_layer is not None:
+            self.joint_embedding_layer.weight.data.normal_(mean=0.0, std=init_std)
+            if self.joint_embedding_layer.bias is not None:
+                self.joint_embedding_layer.bias.data.zero_()
+
     @beartype
     def _recursive_concat(self, srcs: list[Tensor]):
         """Recursively concatenates a list of tensors.
@@ -597,7 +624,9 @@ class TransformerModel(nn.Module):
         """
         srcs = []
         for col in self.categorical_columns:
-            src_t = self.encoder[col](src[col].T) * math.sqrt(self.embedding_size)
+            src_t = self.encoder[col](src[col].T) * math.sqrt(
+                self.initial_embedding_dim
+            )
 
             if not self.use_rope:
                 pos = (
@@ -617,13 +646,11 @@ class TransformerModel(nn.Module):
 
         for col in self.real_columns:
             if col in self.real_columns_direct:
-                src_t = src[col].T.unsqueeze(2).repeat(1, 1, 1) * math.sqrt(
-                    self.embedding_size
-                )
+                src_t = src[col].T.unsqueeze(2) * math.sqrt(self.initial_embedding_dim)
             else:
                 assert col in self.real_columns_with_embedding
                 src_t = self.encoder[col](src[col].T[:, :, None]) * math.sqrt(
-                    self.embedding_size
+                    self.initial_embedding_dim
                 )
 
             if not self.use_rope:
@@ -643,6 +670,9 @@ class TransformerModel(nn.Module):
 
         src2 = self._recursive_concat(srcs)
         src2 = src2.transpose(0, 1)
+
+        if self.joint_embedding_layer is not None:
+            src2 = self.joint_embedding_layer(src2)
 
         for layer in self.layers:
             src2 = layer(src2, src_mask=self.src_mask)

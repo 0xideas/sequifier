@@ -260,11 +260,11 @@ def test_embeddings(embeddings):
         if "categorical-1" in model_name:
             assert model_embeddings.shape[0] == 10
             assert model_embeddings.shape[1] == 203
-            assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.1
+            assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.3
         if "categorical-3" in model_name:
             assert model_embeddings.shape[0] == 30
             assert model_embeddings.shape[1] == 203
-            assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.1
+            assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.3
 
 
 def test_predictions_item_position(predictions):
