@@ -316,26 +316,23 @@ class TransformerModel(nn.Module):
         self.hparams = hparams
         self.drop = nn.Dropout(hparams.training_spec.dropout)
         self.encoder = ModuleDict()
-        self.embedding_size = max(
-            self.hparams.model_spec.dim_model, self.hparams.model_spec.n_head
-        )
+        self.dim_model = self.hparams.model_spec.dim_model
+        self.initial_embedding_dim = self.hparams.model_spec.initial_embedding_dim
         self.joint_embedding_dim = hparams.model_spec.joint_embedding_dim
 
         if self.joint_embedding_dim is not None:
             self.joint_embedding_layer = nn.Linear(
-                self.embedding_size, self.joint_embedding_dim
+                self.initial_embedding_dim, self.joint_embedding_dim
             )
-            self.transformer_dim = self.joint_embedding_dim
         else:
             self.joint_embedding_layer = None
-            self.transformer_dim = self.embedding_size
 
         self.use_rope = hparams.model_spec.positional_encoding == "rope"
         if hparams.model_spec.feature_embedding_dims is not None:
             self.feature_embedding_dims = hparams.model_spec.feature_embedding_dims
         else:
             self.feature_embedding_dims = self._get_feature_embedding_dims(
-                self.embedding_size, self.categorical_columns, self.real_columns
+                self.initial_embedding_dim, self.categorical_columns, self.real_columns
             )
 
         self.real_columns_with_embedding = []
@@ -374,7 +371,7 @@ class TransformerModel(nn.Module):
             [
                 SequifierEncoderLayer(
                     hparams.model_spec,
-                    self.transformer_dim,
+                    self.dim_model,
                     hparams.model_spec.n_head,
                     hparams.model_spec.dim_feedforward,
                     hparams.training_spec.dropout,
@@ -389,7 +386,7 @@ class TransformerModel(nn.Module):
                 if hparams.model_spec.normalization == "rmsnorm"
                 else nn.LayerNorm
             )
-            self.final_norm = NormClass(self.transformer_dim)
+            self.final_norm = NormClass(self.dim_model)
         else:
             self.final_norm = nn.Identity()
 
@@ -400,12 +397,12 @@ class TransformerModel(nn.Module):
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
                 self.decoder[target_column] = nn.Linear(
-                    self.transformer_dim,
+                    self.dim_model,
                     self.n_classes[target_column],
                 )
                 self.softmax[target_column] = nn.LogSoftmax(dim=-1)
             elif target_column_type == "real":
-                self.decoder[target_column] = nn.Linear(self.transformer_dim, 1)
+                self.decoder[target_column] = nn.Linear(self.dim_model, 1)
             else:
                 raise ValueError(
                     f"Target column type {target_column_type} not in ['categorical', 'real']"
@@ -608,7 +605,9 @@ class TransformerModel(nn.Module):
         """
         srcs = []
         for col in self.categorical_columns:
-            src_t = self.encoder[col](src[col].T) * math.sqrt(self.embedding_size)
+            src_t = self.encoder[col](src[col].T) * math.sqrt(
+                self.initial_embedding_dim
+            )
 
             if not self.use_rope:
                 pos = (
@@ -628,13 +627,11 @@ class TransformerModel(nn.Module):
 
         for col in self.real_columns:
             if col in self.real_columns_direct:
-                src_t = src[col].T.unsqueeze(2).repeat(1, 1, 1) * math.sqrt(
-                    self.embedding_size
-                )
+                src_t = src[col].T.unsqueeze(2) * math.sqrt(self.initial_embedding_dim)
             else:
                 assert col in self.real_columns_with_embedding
                 src_t = self.encoder[col](src[col].T[:, :, None]) * math.sqrt(
-                    self.embedding_size
+                    self.initial_embedding_dim
                 )
 
             if not self.use_rope:

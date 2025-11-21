@@ -19,12 +19,13 @@ export_onnx: false
 export_pt: true
 
 model_spec:
-  dim_model: 200
+  initial_embedding_dim: 100
   feature_embedding_dims:
-    itemId: 100
-    sup1: 50
-    sup2: 50
+    itemId: 50
+    sup1: 25
+    sup2: 25
   joint_embedding_dim: 200
+  dim_model: 200
   n_head: 2
   dim_feedforward: 12
   num_layers: 2

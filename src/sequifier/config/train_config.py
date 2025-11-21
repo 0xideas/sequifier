@@ -308,8 +308,9 @@ class ModelSpecModel(BaseModel):
     """Pydantic model for model specifications.
 
     Attributes:
-        dim_model: The number of expected features in the input.
-        feature_embedding_dims: The embedding dimensions for each input column. Must sum to dim_model.
+        initial_embedding_dim: The size of the input embedding. Must be equal to dim_model if joint_embedding_dim is None.
+        feature_embedding_dims: The embedding dimensions for each input column. Must sum to initial_embedding_dim.
+        joint_embedding_dim: Joint embedding layer after initial embedding. Must be equal to dim_model if specified.
         n_head: The number of heads in the multi-head attention models.
         dim_feedforward: The dimension of the feedforward network model.
         num_layers: The number of layers in the transformer model.
@@ -317,9 +318,10 @@ class ModelSpecModel(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    dim_model: int
+    initial_embedding_dim: int
     feature_embedding_dims: Optional[dict[str, int]] = None
     joint_embedding_dim: Optional[int] = None
+    dim_model: int
     n_head: int
     dim_feedforward: int
     num_layers: int
@@ -336,6 +338,26 @@ class ModelSpecModel(BaseModel):
     rope_theta: float = 10000.0
 
     prediction_length: int
+
+    @field_validator("dim_model")
+    @classmethod
+    def validate_dim_model(cls, v, info):
+        initial_embedding_dim = info.data.get("initial_embedding_dim")
+        joint_embedding_dim = info.data.get("joint_embedding_dim")
+        dim_model = v
+
+        if joint_embedding_dim is None:
+            if not v == initial_embedding_dim:
+                raise ValueError(
+                    f"If no joint_embedding_dim is configured, dim_model must be equal to initial_embedding_dim, {dim_model = } != {initial_embedding_dim = }"
+                )
+        else:
+            if not v == joint_embedding_dim:
+                raise ValueError(
+                    f"If joint_embedding_dim is configured it must be equal to dim_model, {dim_model = } != {joint_embedding_dim = }"
+                )
+
+        return v
 
     @field_validator("activation_fn")
     @classmethod
@@ -368,10 +390,14 @@ class ModelSpecModel(BaseModel):
     @field_validator("feature_embedding_dims")
     @classmethod
     def validate_feature_embedding_dims(cls, v, info):
-        dim_model = info.data.get("dim_model")
-        if v is not None and dim_model and sum(v.values()) != dim_model:
+        initial_embedding_dim = info.data.get("initial_embedding_dim")
+        if (
+            v is not None
+            and initial_embedding_dim
+            and sum(v.values()) != initial_embedding_dim
+        ):
             raise ValueError(
-                f"Sum of feature_embedding_dims {sum(v.values())} != dim_model {dim_model}"
+                f"Sum of feature_embedding_dims {sum(v.values())} != initial_embedding_dim {initial_embedding_dim}"
             )
         return v
 
@@ -379,18 +405,12 @@ class ModelSpecModel(BaseModel):
     @classmethod
     def validate_n_head(cls, v, info):
         dim_model = info.data.get("dim_model")
-        if dim_model and dim_model % v != 0:
+        if v is None:
+            raise ValueError("n_heads is None")
+        if dim_model is None:
+            raise ValueError("dim_model is None")
+        if dim_model % v != 0:
             raise ValueError(f"dim_model {dim_model} not divisible by n_head {v}")
-        return v
-
-    @field_validator("joint_embedding_dim")
-    @classmethod
-    def validate_joint_embedding_dim(cls, v, info):
-        n_head = info.data.get("n_head")
-        if v is not None and n_head and v % n_head != 0:
-            raise ValueError(
-                f"joint_embedding_dim {v} not divisible by n_head {n_head}"
-            )
         return v
 
     @field_validator("n_kv_heads")

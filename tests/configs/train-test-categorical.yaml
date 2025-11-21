@@ -17,8 +17,9 @@ export_onnx: true
 export_pt: true
 
 model_spec:
-  dim_model: 200
+  initial_embedding_dim: 100
   joint_embedding_dim: 200
+  dim_model: 200
   n_head: 2
   dim_feedforward: 12
   num_layers: 2

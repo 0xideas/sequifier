@@ -14,6 +14,7 @@ def model_config(tmp_path):
     (tmp_path / "logs").mkdir(exist_ok=True)
 
     model_spec = ModelSpecModel(
+        initial_embedding_dim=16,
         dim_model=16,
         n_head=4,
         dim_feedforward=32,

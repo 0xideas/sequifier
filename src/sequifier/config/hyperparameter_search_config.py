@@ -346,16 +346,18 @@ class ModelSpecHyperparameterSampling(BaseModel):
     """Pydantic model for model specification hyperparameter sampling.
 
     Attributes:
-        dim_model: A list of possible numbers of expected features in the input.
-        feature_embedding_dims: A list of possible embedding dimensions for each input column.
+        initial_embedding_dim: The sizes of the input embedding. Must be equal to dim_model if joint_embedding_dim is None.
+        feature_embedding_dims: The embedding dimensions for each input column. Must sum to initial_embedding_dim.
+        joint_embedding_dim: Joint embedding layer after initial embedding. Must be equal to dim_model if specified.        feature_embedding_dims: A list of possible embedding dimensions for each input column.
         n_head: A list of possible numbers of heads in the multi-head attention models.
         dim_feedforward: A list of possible dimensions of the feedforward network model.
         num_layers: A list of possible numbers of layers in the transformer model.
     """
 
+    initial_embedding_dim: list[int]
+    joint_embedding_dim: list[Optional[int]]
     dim_model: list[int]
     feature_embedding_dims: Optional[list[dict[str, int]]]
-    joint_embedding_dim: list[Optional[int]]
     n_head: list[int]
     dim_feedforward: list[int]
     num_layers: list[int]
@@ -373,6 +375,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
     @field_validator("n_head")
     @classmethod
     def validate_model_spec(cls, v, info):
+        dim_model_len = len(info.data.get("dim_model", []))
+
         if info.data.get("feature_embedding_dims") is not None:
             if not (
                 len(info.data.get("dim_model"))
@@ -386,6 +390,19 @@ class ModelSpecHyperparameterSampling(BaseModel):
             raise ValueError(
                 "dim_model and n_head must have the same number of candidate values, that are paired"
             )
+
+        if "initial_embedding_dim" in info.data:
+            if len(info.data["initial_embedding_dim"]) != dim_model_len:
+                raise ValueError(
+                    "initial_embedding_dim must have the same number of values as dim_model"
+                )
+
+        if "joint_embedding_dim" in info.data:
+            if len(info.data["joint_embedding_dim"]) != dim_model_len:
+                raise ValueError(
+                    "joint_embedding_dim must have the same number of values as dim_model"
+                )
+
         return v
 
     def random_sample(self):
@@ -405,11 +422,12 @@ class ModelSpecHyperparameterSampling(BaseModel):
             if self.feature_embedding_dims is None
             else self.feature_embedding_dims[dim_model_index]
         )
+        initial_embedding_dim = self.initial_embedding_dim[dim_model_index]
+        joint_embedding_dim = self.joint_embedding_dim[dim_model_index]
         dim_model = self.dim_model[dim_model_index]
         n_head = self.n_head[dim_model_index]
         dim_feedforward = np.random.choice(self.dim_feedforward)
         num_layers = np.random.choice(self.num_layers)
-        joint_embedding_dim = random.choice(self.joint_embedding_dim)
 
         activation_fn = np.random.choice(self.activation_fn)
         normalization = np.random.choice(self.normalization)
@@ -435,13 +453,14 @@ class ModelSpecHyperparameterSampling(BaseModel):
             n_kv_heads = random.choice(valid_kv_heads)
 
         logger.info(
-            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
+            f"{initial_embedding_dim} - {joint_embedding_dim = } - {dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
         )
 
         return ModelSpecModel(
-            dim_model=dim_model,
+            initial_embedding_dim=initial_embedding_dim,
             feature_embedding_dims=feature_embedding_dims,
             joint_embedding_dim=joint_embedding_dim,
+            dim_model=dim_model,
             n_head=n_head,
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
@@ -473,7 +492,6 @@ class ModelSpecHyperparameterSampling(BaseModel):
             product(
                 np.arange(len(self.dim_model)),
                 self.dim_feedforward,
-                self.joint_embedding_dim,
                 self.num_layers,
                 self.activation_fn,
                 self.normalization,
@@ -488,7 +506,6 @@ class ModelSpecHyperparameterSampling(BaseModel):
         (
             dim_model_index,
             dim_feedforward,
-            joint_embedding_dim,
             num_layers,
             activation_fn,
             normalization,
@@ -499,6 +516,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
             rope_theta,
         ) = hyperparameter_combinations[i]
 
+        initial_embedding_dim = self.initial_embedding_dim[dim_model_index]
+        joint_embedding_dim = self.joint_embedding_dim[dim_model_index]
         dim_model = self.dim_model[dim_model_index]
         n_head = self.n_head[dim_model_index]
 
@@ -520,9 +539,10 @@ class ModelSpecHyperparameterSampling(BaseModel):
         )
 
         return ModelSpecModel(
-            dim_model=dim_model,
+            initial_embedding_dim=initial_embedding_dim,
             feature_embedding_dims=feature_embedding_dims,
             joint_embedding_dim=joint_embedding_dim,
+            dim_model=dim_model,
             n_head=n_head,
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,

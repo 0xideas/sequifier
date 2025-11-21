@@ -18,6 +18,7 @@ export_pt: true
 export_with_dropout: true
 
 model_spec:
+  initial_embedding_dim: 100
   dim_model: 100
   n_head: 2
   dim_feedforward: 10

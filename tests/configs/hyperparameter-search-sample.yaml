@@ -25,9 +25,10 @@ export_with_dropout: false
 
 # Model Hyperparameter Search Space
 model_hyperparameter_sampling:
-  dim_model: [40, 80] # Two options for model dimensionality
+  initial_embedding_dim: [40, 80]
+  joint_embedding_dim: [null, null]
   feature_embedding_dims: null
-  joint_embedding_dim: [null]
+  dim_model: [40, 80]
   n_head: [2, 4]
   dim_feedforward: [10, 12]
   num_layers: [2]
