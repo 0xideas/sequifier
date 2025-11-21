@@ -71,8 +71,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         id_maps = None
         selected_columns_statistics = {}
 
-    if config.dont_set_seeds is False:
-        configure_determinism(config.seed, config.enforce_determinism)
+    configure_determinism(config.seed, config.enforce_determinism)
 
     infer_worker(
         config, args_config, id_maps, selected_columns_statistics, (0.0, 100.0)
