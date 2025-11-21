@@ -79,7 +79,7 @@ def test_transformer_model_initialization(model, model_config):
     assert "real_col" in model.decoder
 
     # Check embedding sizes
-    assert model.embedding_size == 16
+    assert model.dim_model == 16
     assert model.encoder["cat_col"].embedding_dim == 15
     # Real column 'real_col' has feature_embedding_dims=1, but it goes through a Linear layer
     # if dim > 1, or direct if dim == 1. In setup:
