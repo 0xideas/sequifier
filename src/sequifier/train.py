@@ -319,6 +319,17 @@ class TransformerModel(nn.Module):
         self.embedding_size = max(
             self.hparams.model_spec.dim_model, self.hparams.model_spec.n_head
         )
+        self.joint_embedding_dim = hparams.model_spec.joint_embedding_dim
+
+        if self.joint_embedding_dim is not None:
+            self.joint_embedding_layer = nn.Linear(
+                self.embedding_size, self.joint_embedding_dim
+            )
+            self.transformer_dim = self.joint_embedding_dim
+        else:
+            self.joint_embedding_layer = None
+            self.transformer_dim = self.embedding_size
+
         self.use_rope = hparams.model_spec.positional_encoding == "rope"
         if hparams.model_spec.feature_embedding_dims is not None:
             self.feature_embedding_dims = hparams.model_spec.feature_embedding_dims
@@ -363,7 +374,7 @@ class TransformerModel(nn.Module):
             [
                 SequifierEncoderLayer(
                     hparams.model_spec,
-                    self.embedding_size,
+                    self.transformer_dim,
                     hparams.model_spec.n_head,
                     hparams.model_spec.dim_feedforward,
                     hparams.training_spec.dropout,
@@ -378,7 +389,7 @@ class TransformerModel(nn.Module):
                 if hparams.model_spec.normalization == "rmsnorm"
                 else nn.LayerNorm
             )
-            self.final_norm = NormClass(self.embedding_size)
+            self.final_norm = NormClass(self.transformer_dim)
         else:
             self.final_norm = nn.Identity()
 
@@ -389,12 +400,12 @@ class TransformerModel(nn.Module):
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
                 self.decoder[target_column] = nn.Linear(
-                    self.embedding_size,
+                    self.transformer_dim,
                     self.n_classes[target_column],
                 )
                 self.softmax[target_column] = nn.LogSoftmax(dim=-1)
             elif target_column_type == "real":
-                self.decoder[target_column] = nn.Linear(self.embedding_size, 1)
+                self.decoder[target_column] = nn.Linear(self.transformer_dim, 1)
             else:
                 raise ValueError(
                     f"Target column type {target_column_type} not in ['categorical', 'real']"
@@ -643,6 +654,9 @@ class TransformerModel(nn.Module):
 
         src2 = self._recursive_concat(srcs)
         src2 = src2.transpose(0, 1)
+
+        if self.joint_embedding_layer is not None:
+            src2 = self.joint_embedding_layer(src2)
 
         for layer in self.layers:
             src2 = layer(src2, src_mask=self.src_mask)

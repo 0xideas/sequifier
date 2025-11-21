@@ -355,6 +355,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
     dim_model: list[int]
     feature_embedding_dims: Optional[list[dict[str, int]]]
+    joint_embedding_dim: list[Optional[int]]
     n_head: list[int]
     dim_feedforward: list[int]
     num_layers: list[int]
@@ -408,6 +409,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         n_head = self.n_head[dim_model_index]
         dim_feedforward = np.random.choice(self.dim_feedforward)
         num_layers = np.random.choice(self.num_layers)
+        joint_embedding_dim = random.choice(self.joint_embedding_dim)
 
         activation_fn = np.random.choice(self.activation_fn)
         normalization = np.random.choice(self.normalization)
@@ -439,6 +441,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         return ModelSpecModel(
             dim_model=dim_model,
             feature_embedding_dims=feature_embedding_dims,
+            joint_embedding_dim=joint_embedding_dim,
             n_head=n_head,
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
@@ -470,6 +473,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             product(
                 np.arange(len(self.dim_model)),
                 self.dim_feedforward,
+                self.joint_embedding_dim,
                 self.num_layers,
                 self.activation_fn,
                 self.normalization,
@@ -484,6 +488,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         (
             dim_model_index,
             dim_feedforward,
+            joint_embedding_dim,
             num_layers,
             activation_fn,
             normalization,
@@ -505,7 +510,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
                 n_kv_heads = None
 
         logger.info(
-            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
+            f"{dim_model = } - {dim_feedforward = } - {joint_embedding_dim = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
         )
 
         feature_embedding_dims = (
@@ -517,6 +522,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         return ModelSpecModel(
             dim_model=dim_model,
             feature_embedding_dims=feature_embedding_dims,
+            joint_embedding_dim=joint_embedding_dim,
             n_head=n_head,
             dim_feedforward=dim_feedforward,
             num_layers=num_layers,
@@ -542,6 +548,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         return (
             len(self.dim_model)
             * len(self.dim_feedforward)
+            * len(self.joint_embedding_dim)
             * len(self.num_layers)
             * len(self.activation_fn)
             * len(self.normalization)

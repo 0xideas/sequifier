@@ -18,6 +18,7 @@ export_pt: true
 
 model_spec:
   dim_model: 200
+  joint_embedding_dim: 200
   n_head: 2
   dim_feedforward: 12
   num_layers: 2

@@ -319,6 +319,7 @@ class ModelSpecModel(BaseModel):
 
     dim_model: int
     feature_embedding_dims: Optional[dict[str, int]] = None
+    joint_embedding_dim: Optional[int] = None
     n_head: int
     dim_feedforward: int
     num_layers: int
@@ -380,6 +381,16 @@ class ModelSpecModel(BaseModel):
         dim_model = info.data.get("dim_model")
         if dim_model and dim_model % v != 0:
             raise ValueError(f"dim_model {dim_model} not divisible by n_head {v}")
+        return v
+
+    @field_validator("joint_embedding_dim")
+    @classmethod
+    def validate_joint_embedding_dim(cls, v, info):
+        n_head = info.data.get("n_head")
+        if v is not None and n_head and v % n_head != 0:
+            raise ValueError(
+                f"joint_embedding_dim {v} not divisible by n_head {n_head}"
+            )
         return v
 
     @field_validator("n_kv_heads")

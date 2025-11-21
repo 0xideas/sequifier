@@ -27,6 +27,7 @@ export_with_dropout: false
 model_hyperparameter_sampling:
   dim_model: [40, 80] # Two options for model dimensionality
   feature_embedding_dims: null
+  joint_embedding_dim: [null]
   n_head: [2, 4]
   dim_feedforward: [10, 12]
   num_layers: [2]

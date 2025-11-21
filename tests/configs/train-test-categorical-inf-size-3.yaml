@@ -24,6 +24,7 @@ model_spec:
     itemId: 100
     sup1: 50
     sup2: 50
+  joint_embedding_dim: 200
   n_head: 2
   dim_feedforward: 12
   num_layers: 2
