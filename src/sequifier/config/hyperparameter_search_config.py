@@ -346,9 +346,10 @@ class ModelSpecHyperparameterSampling(BaseModel):
     """Pydantic model for model specification hyperparameter sampling.
 
     Attributes:
-        initial_embedding_dim: The sizes of the input embedding. Must be equal to dim_model if joint_embedding_dim is None.
-        feature_embedding_dims: The embedding dimensions for each input column. Must sum to initial_embedding_dim.
-        joint_embedding_dim: Joint embedding layer after initial embedding. Must be equal to dim_model if specified.        feature_embedding_dims: A list of possible embedding dimensions for each input column.
+        initial_embedding_dim: A list of possible sizes for the initial input embedding.
+        feature_embedding_dims: A list of possible dictionaries defining embedding dimensions for each input column.
+        joint_embedding_dim: A list of possible sizes for the joint embedding layer projection.
+        dim_model: A list of possible numbers of expected features in the input (d_model).
         n_head: A list of possible numbers of heads in the multi-head attention models.
         dim_feedforward: A list of possible dimensions of the feedforward network model.
         num_layers: A list of possible numbers of layers in the transformer model.

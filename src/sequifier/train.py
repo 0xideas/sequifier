@@ -483,7 +483,7 @@ class TransformerModel(nn.Module):
         input columns.
 
         Args:
-            embedding_size: The total embedding dimension (dim_model).
+            embedding_size: The total embedding dimension (initial_embedding_dim).
             categorical_columns: List of categorical column names.
             real_columns: List of real-valued column names.
 
@@ -494,20 +494,34 @@ class TransformerModel(nn.Module):
             raise ValueError("No columns found")
 
         if len(categorical_columns) == 0 and len(real_columns) > 0:
+            if embedding_size < len(real_columns):
+                raise ValueError(
+                    f"initial_embedding_dim ({embedding_size}) is smaller than the number of real input columns ({len(real_columns)}). "
+                    "Cannot allocate at least 1 dimension per column."
+                )
+
             feature_embedding_dims = {col: 1 for col in real_columns}
             column_index = dict(enumerate(real_columns))
-            for i in range(embedding_size):
-                if sum(feature_embedding_dims.values()) % embedding_size != 0:
-                    j = i % len(real_columns)
-                    feature_embedding_dims[column_index[j]] += 1
-            if sum(feature_embedding_dims.values()) % embedding_size != 0:
+
+            remaining_dims = embedding_size - len(real_columns)
+            for i in range(remaining_dims):
+                j = i % len(real_columns)
+                feature_embedding_dims[column_index[j]] += 1
+
+            if sum(feature_embedding_dims.values()) != embedding_size:
                 raise ValueError(
-                    "Auto-calculated embedding dimensions do not sum to embedding_size."
+                    f"Auto-calculated embedding dimensions ({sum(feature_embedding_dims.values())}) do not sum to initial_embedding_dim ({embedding_size})."
                 )
         elif len(real_columns) == 0 and len(categorical_columns) > 0:
+            if embedding_size < len(categorical_columns):
+                raise ValueError(
+                    f"initial_embedding_dim ({embedding_size}) is smaller than the number of categorical columns ({len(categorical_columns)}). "
+                    "Resulting embedding dimension would be 0."
+                )
+
             if (embedding_size % len(categorical_columns)) != 0:
                 raise ValueError(
-                    f"dim_model ({embedding_size}) must be divisible by n_categorical ({len(categorical_columns)})"
+                    f"initial_embedding_dim ({embedding_size}) must be divisible by n_categorical ({len(categorical_columns)})"
                 )
             dim_model_comp = embedding_size // len(categorical_columns)
             feature_embedding_dims = {
@@ -562,6 +576,11 @@ class TransformerModel(nn.Module):
         if self.pos_encoder is not None:
             for col_name in self.pos_encoder:
                 self.pos_encoder[col_name].weight.data.normal_(mean=0.0, std=init_std)
+
+        if self.joint_embedding_layer is not None:
+            self.joint_embedding_layer.weight.data.normal_(mean=0.0, std=init_std)
+            if self.joint_embedding_layer.bias is not None:
+                self.joint_embedding_layer.bias.data.zero_()
 
     @beartype
     def _recursive_concat(self, srcs: list[Tensor]):
