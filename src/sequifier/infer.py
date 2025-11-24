@@ -610,7 +610,12 @@ def expand_data_by_autoregression(
         A new Polars DataFrame containing all original rows plus the
         newly generated future rows with placeholders.
     """
-    # Ensure data is sorted for window functions
+
+    data_cols = [str(c) for c in range(seq_length, 0, -1)]
+    data = data.with_columns(
+        [pl.col(c).cast(pl.Float64) for c in data_cols if c in data.columns]
+    )
+
     data = data.sort("sequenceId", "subsequenceId")
 
     # Identify the last observation for each sequence
