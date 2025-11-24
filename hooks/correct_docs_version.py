@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 
 """
-Compares the project version in pyproject.toml with the
-release version in docs/source/conf.py.
+Compares the project version in:
+1. pyproject.toml (project.version or tool.poetry.version)
+2. docs/source/conf.py (release = "...")
+3. README.md (BibTeX citation version = {...})
 
-Exits with a non-zero status code if they do not match.
+Exits with a non-zero status code if they do not ALL match exactly.
 """
 
 import re
@@ -12,103 +14,100 @@ import sys
 from pathlib import Path
 
 # --- Configuration ---
-# Assumes this script is in <root>/scripts/check_versions.py
 ROOT_DIR = Path(__file__).parent.parent
 PYPROJECT_PATH = ROOT_DIR / "pyproject.toml"
 CONF_PATH = ROOT_DIR / "docs/source/conf.py"
+README_PATH = ROOT_DIR / "README.md"
 # ---------------------
 
 try:
-    # tomli is a standard library in Python 3.11+ (as tomllib)
-    # For older versions, pre-commit will install it from dependencies
     try:
         import tomllib
     except ImportError:
         import tomli as tomllib
 except ImportError:
-    print(
-        f"Error: 'tomli' (or 'tomllib') is required to parse {PYPROJECT_PATH}",
-        file=sys.stderr,
-    )
-    print(
-        "Please add 'tomli' to your pre-commit 'additional_dependencies'",
-        file=sys.stderr,
-    )
+    print("Error: 'tomli' (or python 3.11+) is required.", file=sys.stderr)
     sys.exit(1)
 
 
 def get_toml_version() -> str | None:
-    """Fetches the version from pyproject.toml."""
+    """Fetches version from pyproject.toml."""
     if not PYPROJECT_PATH.exists():
-        print(f"Error: File not found: {PYPROJECT_PATH}", file=sys.stderr)
         return None
-
     try:
         data = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
 
-        # Standard PEP 621 (used by Hatch, Flit, etc.)
+        # Check standard PEP 621
+        val = None
         if "project" in data and "version" in data["project"]:
-            return data["project"]["version"]
-
-        # Poetry (common alternative)
-        if (
+            val = data["project"]["version"]
+        # Check Poetry
+        elif (
             "tool" in data
             and "poetry" in data["tool"]
             and "version" in data["tool"]["poetry"]
         ):
-            return data["tool"]["poetry"]["version"]
+            val = data["tool"]["poetry"]["version"]
 
-        print(
-            f"Error: Could not find [project.version] or [tool.poetry.version] in {PYPROJECT_PATH}",
-            file=sys.stderr,
-        )
-        return None
-    except tomllib.TOMLDecodeError as e:
-        print(f"Error parsing {PYPROJECT_PATH}: {e}", file=sys.stderr)
+        return str(val).strip() if val else None
+    except Exception:
         return None
 
 
 def get_conf_version() -> str | None:
-    """Fetches the release from docs/source/conf.py using regex."""
+    """Fetches release from docs/source/conf.py."""
     if not CONF_PATH.exists():
-        print(f"Error: File not found: {CONF_PATH}", file=sys.stderr)
         return None
-
     try:
         content = CONF_PATH.read_text(encoding="utf-8")
-        # Regex to find: release = "..." or release = '...'
+        # Regex for: release = "..." or release = '...'
         match = re.search(r"^release\s*=\s*['\"]([^'\"]+)['\"]", content, re.MULTILINE)
-
-        if match:
-            return match.group(1)
-
-        print(
-            f"Error: Could not find 'release = ...' line in {CONF_PATH}",
-            file=sys.stderr,
-        )
+        return match.group(1).strip() if match else None
+    except Exception:
         return None
-    except Exception as e:
-        print(f"Error reading {CONF_PATH}: {e}", file=sys.stderr)
+
+
+def get_readme_version() -> str | None:
+    """Fetches version from README.md BibTeX citation."""
+    if not README_PATH.exists():
+        return None
+    try:
+        content = README_PATH.read_text(encoding="utf-8")
+        # Regex for BibTeX: version = {1.0.0} or version = "1.0.0"
+        # Captures the content inside the first { } or " " encountered after 'version ='
+        match = re.search(r"version\s*=\s*[{\"]([^}\"]+)[}\"]", content)
+        return match.group(1).strip() if match else None
+    except Exception:
         return None
 
 
 def main():
-    print("Checking project version consistency...")
-    toml_version = get_toml_version()
-    conf_version = get_conf_version()
+    print(f"Checking versions in: {ROOT_DIR}")
 
-    if toml_version is None or conf_version is None:
-        print("Could not retrieve one or more versions. Aborting commit.")
+    v_toml = get_toml_version()
+    v_conf = get_conf_version()
+    v_readme = get_readme_version()
+
+    # 1. Print detected versions for transparency
+    print(f"  pyproject.toml: '{v_toml}'")
+    print(f"  docs/conf.py:   '{v_conf}'")
+    print(f"  README.md:      '{v_readme}'")
+
+    # 2. Check for missing versions
+    if v_toml is None or v_conf is None or v_readme is None:
+        print(
+            "\n❌ Error: Could not extract version from one or more files.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
-    if toml_version == conf_version:
-        print(f"Versions match: {toml_version} 👍")
+    # 3. Check for exact equality
+    if v_toml == v_conf == v_readme:
+        print("\n✅ All versions match.")
         sys.exit(0)
     else:
-        print("Error: Version mismatch! ❌", file=sys.stderr)
-        print(f"  pyproject.toml version: {toml_version}", file=sys.stderr)
-        print(f"  docs/source/conf.py release: {conf_version}", file=sys.stderr)
-        print("Please update versions to match before committing.", file=sys.stderr)
+        print("\n❌ Error: Version mismatch found!", file=sys.stderr)
+        print("Please update all files to be exactly the same.", file=sys.stderr)
         sys.exit(1)
 
 

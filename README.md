@@ -3,26 +3,30 @@
 
 ### What is sequifier?
 
-Sequifier is the library that make prototyping autoregressive transformer models for sequence modelling easy, reliable and comparable.
+Sequifier makes training and inference of powerful causal transformer models fast and trustworthy.
 
 The process looks like this:
 
 <img src="./design/sequifier-illustration.png">
 
 
-### Motivation
+### Value Proposition
 
-Researchers, data scientists and ml scientists can take their sequential data sets, transform them into a standardized format, and from then use sequifier and configuration files to develop a model for these sequential data. These models can be applied to a test set, and be used to extrapolate these sequences through autoregression for an arbitrary number of steps. This should enable **much faster development and evaluation cycles of generative transformer models across domains**.
+Implementing a model from scratch takes time, and there are a surprising number of aspects to consider. The idea is: why not do it once, make it configurable, and then use the same implementation across domains and datasets.
 
-Importantly, sequifier works for an **arbitrary number of categorical and real valued input and output columns**, and can therefore represent a large set of possible mappings from inputs to outputs. The input and output columns do not have to be identical.
+This gives us a number of benefits:
 
-The standardized implementation of a decoder-only autorgressive transformer saves the work of implementing this model and the workflows around it repeatedly, across different domains and data sets, thereby **reducing duplicate work and the probability of bugs and compromised results**.
+- rapid prototyping
+- configurable architecture
+- trusted implementation (you can't create bugs inadvertedly)
+- standardized logging
+- native multi-gpu support
+- native multi-core preprocessing
+- scales to datasets larger than RAM
+- hyperparameter search
+- can be used for prediction, generation and embeddding on/of arbitrary sequences
 
-The standardized configuration enables easier experimentation and experiment tracking, and, if results are shared, an **ever-improving basis for decision making on the initial configuration** when applying the transformer architecture to a new problem.
-
-Overall, it should be possible, **even for non-experts in machine learning**, to develop an initial prototype for a transformer model for a new domain. If the results are promising, it might become necessary to implement architecture variants that fall outside the scope of sequifier, but with a much cheaper (in terms of time and effort) initial exploration, many more potential application domains can be investigated.
-
-Sequifier can also be used to train and infer **forward-looking embedding models**. These models output the activations of the last shared layer of the transformer, which encapsulate the information contained by the sequence so far that is useful in predicting the next time step.
+The only requirement is having input data in the right format, and having sequifier installed.
 
 ### Data Formats
 
@@ -120,68 +124,32 @@ sequifier infer
 
 9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/sequifier-default-best-predictions.csv`
 
-### More detailed explanations of the three steps
 
-#### Preprocessing of data into sequences for training
+### Embedding Model
 
-```console
-sequifier preprocess --config-path=[CONFIG PATH]
-```
+While Sequifier's primary use case is training predictive or generative causal transformer models, it also supports the export of embedding models.
 
-The config path specifies the path to the preprocessing config and the project root the path to the (preferably empty) folder the output files of the different steps are written to.
+Configuration:
+- Training: Set export_embedding_model: true in the training config.
+- Inference: Set model_type: embedding in the inference config.
 
-#### Configuring and training the sequence classification model
+Technical Details: The generated embedding has dimensionality `dim_model` and consists of the final hidden state (activations) of the transformer's last layer corresponding to the last token in the sequence. Because the model is trained on a causal objective, this is a "forward-looking" embedding: it is optimized to compress the sequence history into a representation that maximizes information about the future state of the data.
 
-The training step is executed with the command:
-
-```console
-sequifier train --config-path=[CONFIG PATH]
-```
-
-If the data on which the model is trained DOES NOT come from the preprocessing step, the flag
-
-```console
---skip-metadata
-```
-
-should be added.
-
-If the training data does not come from the preprocessing step, both train and validation
-data have to take the form of a csv file with the columns "sequenceId", "subsequenceId", "inputCol", [SEQ LENGTH], [SEQ LENGTH - 1],...,"1", "0".
-You can find an example of the preprocessing input data at [documentation/example_inputs/training_input.csv](./documentation/example_inputs/training_input.csv)
-
-The training step is configured using the config. The two default configs can be found here:
-
-[configs/train.yaml](./configs/train.yaml)
-
-depending on whether the preprocessing step was executed.
-
-
-#### Inferring on test data using the trained model
-
-Inference is done using the command:
-
-```console
-sequifier infer --config-path=[CONFIG PATH]
-```
-
-and configured using a config file. The default version can be found here:
-
-[configs/infer.yaml](./configs/infer.yaml)
 
 ### Hyperparameter Search
 
-Sequifier now supports hyperparameter search (grid search or random sampling) via a dedicated command.
+Sequifier supports hyperparameter search (grid search or random sampling) via a dedicated command.
 
 ```console
 sequifier hyperparameter-search --config-path=[CONFIG PATH]
 ```
 
-You must provide a hyperparameter search config file (defining ranges for `learning_rate`, `dim_model`, `dropout`, etc.) instead of a standard train config.
+You must provide a hyperparameter search config file.
+
 
 ### Distributed Training
 
-Sequifier supports distributed training using torch DistributedDataParallel. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
+Sequifier supports distributed training using torch `DistributedDataParallel`. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
 
 ## Citation
 
@@ -190,10 +158,10 @@ Please cite with:
 ```bibtex
 @software{sequifier_2025,
   author = {Luithlen, Leon},
-  title = {sequifier - autoregressive transformer models for multivariate sequence modelling},
+  title = {sequifier - causal transformer models for multivariate sequence modelling},
   year = {2025},
   publisher = {GitHub},
-  version = {1.0.0.0},
+  version = {v1.0.0.0},
   url = {https://github.com/0xideas/sequifier}
 }
 ```
