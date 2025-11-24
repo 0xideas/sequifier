@@ -328,7 +328,7 @@ class ModelSpecModel(BaseModel):
 
     activation_fn: str = "swiglu"  # Options: "relu", "gelu", "swiglu"
     normalization: str = "rmsnorm"  # Options: "layer_norm", "rmsnorm"
-    positional_encoding: str = "rope"  # Options: "learned", "rope" (Rotary)
+    positional_encoding: str = "learned"  # Options: "learned", "rope" (Rotary)
     attention_type: str = (
         "mha"  # Options: "mha" (Multi-Head), "mqa" (Multi-Query), "gqa" (Grouped-Query)
     )
