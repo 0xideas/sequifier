@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/make.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.make - sequifier v0.9.1.0 documentation</title>
+        <title>sequifier.make - sequifier v1.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v0.9.1.0 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v1.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v0.9.1.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -193,11 +193,11 @@
   <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html">Preprocessing Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.train_config">Training Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#training-config">Training Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#inference-config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#hyperparameter-search-config">Hyperparameter Search Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.sequifier">Internals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.make">Internals</a></li>
 </ul>
 
 </div>
@@ -251,30 +251,30 @@
           <h1>Source code for sequifier.make</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 
-<span class="n">preprocess_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_path: .</span>
+<span class="n">preprocess_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_root: .</span>
 <span class="s2">data_path: PLEASE FILL</span>
 <span class="s2">read_format: csv</span>
 <span class="s2">write_format: parquet</span>
 <span class="s2">selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
 
-<span class="s2">group_proportions:</span>
+<span class="s2">split_ratios:</span>
 <span class="s2">- 0.8</span>
 <span class="s2">- 0.1</span>
 <span class="s2">- 0.1</span>
 <span class="s2">seq_length: 48</span>
-<span class="s2">seq_step_sizes:</span>
+<span class="s2">stride_by_split:</span>
 <span class="s2">- 1</span>
 <span class="s2">- 1</span>
 <span class="s2">- 1</span>
 <span class="s2">max_rows: null</span>
 <span class="s2">&quot;&quot;&quot;</span>
 
-<span class="n">train_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_path: .</span>
-<span class="s2">model_name: default</span>
+<span class="n">train_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_root: .</span>
+<span class="s2">model_name: PLEASE FILL</span>
 <span class="s2">read_format: parquet</span>
-<span class="s2">ddconfig_path: PLEASE FILL</span>
+<span class="s2">metadata_config_path: PLEASE FILL</span>
 
-<span class="s2">selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
+<span class="s2">input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
 <span class="s2">target_columns: [EXAMPLE_TARGET_COLUMN_NAME]</span>
 <span class="s2">target_column_types: # &#39;criterion&#39; in training_spec must also be adapted</span>
 <span class="s2">  EXAMPLE_TARGET_COLUMN_NAME: real</span>
@@ -287,20 +287,22 @@
 <span class="s2">export_onnx: true</span>
 
 <span class="s2">model_spec:</span>
-<span class="s2">  d_model: 128</span>
-<span class="s2">  d_model_by_column: # the size of the embedding of individual variables, must sum to d_model</span>
+<span class="s2">  initial_embedding_dim: 128</span>
+<span class="s2">  feature_embedding_dims: # the size of the embedding of individual variables, must sum to dim_model</span>
 <span class="s2">    EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical</span>
-<span class="s2">  nhead: 16</span>
-<span class="s2">  d_hid: 128</span>
-<span class="s2">  nlayers: 3</span>
-<span class="s2">  inference_size: 1</span>
+<span class="s2">  joint_embedding_dim: null</span>
+<span class="s2">  dim_model: 128</span>
+<span class="s2">  n_head: 16</span>
+<span class="s2">  dim_feedforward: 128</span>
+<span class="s2">  num_layers: 3</span>
+<span class="s2">  prediction_length: 1</span>
 <span class="s2">training_spec:</span>
 <span class="s2">  device: cuda</span>
 <span class="s2">  epochs: 1000</span>
-<span class="s2">  iter_save: 10</span>
+<span class="s2">  save_interval_epochs: 10</span>
 <span class="s2">  batch_size: 100</span>
 <span class="s2">  log_interval: 10</span>
-<span class="s2">  lr: 0.0001</span>
+<span class="s2">  learning_rate: 0.0001</span>
 <span class="s2">  accumulation_steps: 1</span>
 <span class="s2">  dropout: 0.2</span>
 <span class="s2">  criterion:</span>
@@ -314,13 +316,13 @@
 <span class="s2">  continue_training: true</span>
 <span class="s2">&quot;&quot;&quot;</span>
 
-<span class="n">infer_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_path: .</span>
-<span class="s2">ddconfig_path: PLEASE FILL</span>
+<span class="n">infer_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_root: .</span>
+<span class="s2">metadata_config_path: PLEASE FILL</span>
 <span class="s2">model_type: PLEASE_FILL # generative or embedding</span>
 <span class="s2">model_path: PLEASE FILL</span>
 <span class="s2">data_path: PLEASE FILL</span>
 
-<span class="s2">selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
+<span class="s2">input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
 <span class="s2">target_columns: [EXAMPLE_TARGET_COLUMN_NAME]</span>
 <span class="s2">target_column_types:</span>
 <span class="s2">  EXAMPLE_TARGET_COLUMN_NAME: real</span>
@@ -352,9 +354,8 @@
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">project_name</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">project_name</span>
 
-    <span class="k">assert</span> <span class="p">(</span>
-        <span class="n">project_name</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">project_name</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
-    <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;project_name &#39;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">&#39; is not admissible&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">project_name</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">project_name</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;project_name &#39;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">&#39; is not admissible&quot;</span><span class="p">)</span>
 
     <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs&quot;</span><span class="p">)</span>
 
@@ -402,7 +403,7 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=12b42f55"></script>
+</div><script src="../../_static/documentation_options.js?v=081181b0"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>

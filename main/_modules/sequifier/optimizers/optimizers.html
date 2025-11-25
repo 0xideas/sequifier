@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/optimizers/optimizers.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.optimizers.optimizers - sequifier v0.9.1.0 documentation</title>
+        <title>sequifier.optimizers.optimizers - sequifier v1.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v0.9.1.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v1.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v0.9.1.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -193,11 +193,11 @@
   <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html">Preprocessing Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.train_config">Training Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#training-config">Training Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#inference-config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#hyperparameter-search-config">Hyperparameter Search Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.sequifier">Internals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.make">Internals</a></li>
 </ul>
 
 </div>
@@ -254,38 +254,7 @@
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.optimizers.ademamix</span><span class="w"> </span><span class="kn">import</span> <span class="n">AdEMAMix</span>
 
-<span class="n">CUSTOM_OPTIMIZERS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;AdEMAMix&quot;</span><span class="p">]</span>
-
-<span class="n">TORCH_OPTIMIZERS</span> <span class="o">=</span> <span class="p">[</span>
-    <span class="s2">&quot;A2GradUni&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;A2GradInc&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;A2GradExp&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;AccSGD&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;AdaBelief&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;AdaBound&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;Adafactor&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;Adahessian&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;AdaMod&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;AdamP&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;AggMo&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;Apollo&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;DiffGrad&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;Lamb&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;LARS&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;Lion&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;Lookahead&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;MADGRAD&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;NovoGrad&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;PID&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;QHAdam&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;QHM&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;RAdam&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;SGDP&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;SGDW&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;Shampoo&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;SWATS&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;Yogi&quot;</span><span class="p">,</span>
-<span class="p">]</span>
+<span class="n">CUSTOM_OPTIMIZERS</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;AdEMAMix&quot;</span><span class="p">:</span> <span class="n">AdEMAMix</span><span class="p">}</span>
 
 
 <div class="viewcode-block" id="get_optimizer_class">
@@ -300,14 +269,13 @@
 <span class="sd">        The optimizer class.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="n">optimizer_name</span> <span class="ow">in</span> <span class="n">CUSTOM_OPTIMIZERS</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">optimizer_name</span> <span class="o">==</span> <span class="s2">&quot;AdEMAMix&quot;</span><span class="p">:</span>
-            <span class="k">return</span> <span class="n">AdEMAMix</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Optimizer &#39;</span><span class="si">{</span><span class="n">optimizer_name</span><span class="si">}</span><span class="s2">&#39; is not available&quot;</span><span class="p">)</span>
-    <span class="k">elif</span> <span class="n">optimizer_name</span> <span class="ow">in</span> <span class="n">TORCH_OPTIMIZERS</span><span class="p">:</span>
-        <span class="k">return</span> <span class="nb">eval</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;torch_optimizer.</span><span class="si">{</span><span class="n">optimizer_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">CUSTOM_OPTIMIZERS</span><span class="p">[</span><span class="n">optimizer_name</span><span class="p">]</span>
+    <span class="k">elif</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch_optimizer</span><span class="p">,</span> <span class="n">optimizer_name</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">torch_optimizer</span><span class="p">,</span> <span class="n">optimizer_name</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="p">,</span> <span class="n">optimizer_name</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="p">,</span> <span class="n">optimizer_name</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="k">return</span> <span class="nb">eval</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;torch.optim.</span><span class="si">{</span><span class="n">optimizer_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Optimizer &#39;</span><span class="si">{</span><span class="n">optimizer_name</span><span class="si">}</span><span class="s2">&#39; not found.&quot;</span><span class="p">)</span></div>
 
 </pre></div>
         </article>
@@ -341,7 +309,7 @@
       
     </aside>
   </div>
-</div><script src="../../../_static/documentation_options.js?v=12b42f55"></script>
+</div><script src="../../../_static/documentation_options.js?v=081181b0"></script>
     <script src="../../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

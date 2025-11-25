@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/optimizers/ademamix.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.optimizers.ademamix - sequifier v0.9.1.0 documentation</title>
+        <title>sequifier.optimizers.ademamix - sequifier v1.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v0.9.1.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v1.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v0.9.1.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -193,11 +193,11 @@
   <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html">Preprocessing Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.train_config">Training Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#training-config">Training Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#inference-config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#hyperparameter-search-config">Hyperparameter Search Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.sequifier">Internals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.make">Internals</a></li>
 </ul>
 
 </div>
@@ -271,7 +271,7 @@
 <span class="sd">    Args:</span>
 <span class="sd">        params (iterable): Iterable of parameters to optimize or dicts defining</span>
 <span class="sd">            parameter groups.</span>
-<span class="sd">        lr (float, optional): Learning rate (default: 1e-3).</span>
+<span class="sd">        learning_rate (float, optional): Learning rate (default: 1e-3).</span>
 <span class="sd">        betas (Tuple[float, float, float], optional): Coefficients used for</span>
 <span class="sd">            computing running averages of gradient and its square</span>
 <span class="sd">            (default: (0.9, 0.999, 0.9999)).</span>
@@ -397,7 +397,7 @@
                 <span class="n">beta3</span><span class="o">=</span><span class="n">beta3</span><span class="p">,</span>
                 <span class="n">alpha</span><span class="o">=</span><span class="n">alpha</span><span class="p">,</span>
                 <span class="n">T_alpha_beta3</span><span class="o">=</span><span class="n">T_alpha_beta3</span><span class="p">,</span>
-                <span class="n">lr</span><span class="o">=</span><span class="n">group</span><span class="p">[</span><span class="s2">&quot;lr&quot;</span><span class="p">],</span>
+                <span class="n">learning_rate</span><span class="o">=</span><span class="n">group</span><span class="p">[</span><span class="s2">&quot;lr&quot;</span><span class="p">],</span>
                 <span class="n">weight_decay</span><span class="o">=</span><span class="n">group</span><span class="p">[</span><span class="s2">&quot;weight_decay&quot;</span><span class="p">],</span>
                 <span class="n">eps</span><span class="o">=</span><span class="n">group</span><span class="p">[</span><span class="s2">&quot;eps&quot;</span><span class="p">],</span>
             <span class="p">)</span>
@@ -418,7 +418,7 @@
         <span class="n">beta3</span><span class="p">,</span>
         <span class="n">alpha</span><span class="p">,</span>
         <span class="n">T_alpha_beta3</span><span class="p">,</span>
-        <span class="n">lr</span><span class="p">,</span>
+        <span class="n">learning_rate</span><span class="p">,</span>
         <span class="n">weight_decay</span><span class="p">,</span>
         <span class="n">eps</span><span class="p">,</span>
     <span class="p">):</span>
@@ -439,7 +439,7 @@
 <span class="sd">            beta3 (float): Coefficient for the slow moment estimate.</span>
 <span class="sd">            alpha (float): Mixing coefficient.</span>
 <span class="sd">            T_alpha_beta3 (int): Time period for alpha and beta3 scheduling.</span>
-<span class="sd">            lr (float): Learning rate.</span>
+<span class="sd">            learning_rate (float): Learning rate.</span>
 <span class="sd">            weight_decay (float): Weight decay.</span>
 <span class="sd">            eps (float): Epsilon term for numerical stability.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
@@ -477,10 +477,10 @@
 
             <span class="n">denom</span> <span class="o">=</span> <span class="p">(</span><span class="n">exp_avg_sq</span><span class="o">.</span><span class="n">sqrt</span><span class="p">()</span> <span class="o">/</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">bias_correction2</span><span class="p">))</span><span class="o">.</span><span class="n">add_</span><span class="p">(</span><span class="n">eps</span><span class="p">)</span>
 
-            <span class="n">step_size</span> <span class="o">=</span> <span class="n">lr</span> <span class="o">/</span> <span class="n">bias_correction1</span>
+            <span class="n">step_size</span> <span class="o">=</span> <span class="n">learning_rate</span> <span class="o">/</span> <span class="n">bias_correction1</span>
 
             <span class="k">if</span> <span class="n">weight_decay</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
-                <span class="n">param</span><span class="o">.</span><span class="n">add_</span><span class="p">(</span><span class="n">param</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=-</span><span class="n">weight_decay</span> <span class="o">*</span> <span class="n">lr</span><span class="p">)</span>
+                <span class="n">param</span><span class="o">.</span><span class="n">add_</span><span class="p">(</span><span class="n">param</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=-</span><span class="n">weight_decay</span> <span class="o">*</span> <span class="n">learning_rate</span><span class="p">)</span>
 
             <span class="n">param</span><span class="o">.</span><span class="n">addcdiv_</span><span class="p">(</span><span class="n">exp_avg</span> <span class="o">+</span> <span class="n">alpha_t</span> <span class="o">*</span> <span class="n">exp_avg_slow_i</span><span class="p">,</span> <span class="n">denom</span><span class="p">,</span> <span class="n">value</span><span class="o">=-</span><span class="n">step_size</span><span class="p">)</span></div>
 
@@ -516,7 +516,7 @@
       
     </aside>
   </div>
-</div><script src="../../../_static/documentation_options.js?v=12b42f55"></script>
+</div><script src="../../../_static/documentation_options.js?v=081181b0"></script>
     <script src="../../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
