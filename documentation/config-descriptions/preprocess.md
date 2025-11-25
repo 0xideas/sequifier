@@ -1,4 +1,3 @@
-
 # Preprocess Command Guide
 
 The `sequifier preprocess` command transforms raw tabular data (CSV or Parquet) into the specific sequence format required for training causal transformer models. It handles windowing, data splitting (train/validation/test), categorical encoding, and numerical standardization.
