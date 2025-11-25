@@ -91,13 +91,11 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `num_workers` | `int` | No | **Fixed.** Data loading subprocesses. |
 | `loss_weights` | `dict` | No | **Fixed.** Weights for multi-objective loss. |
 | `class_weights` | `dict` | No | **Fixed.** Weights for imbalanced classes. |
-
-### 6\. System Parameters
-| `backend` | `"nccl"` | Found in `TrainingSpecHyperparameterSampling`. |
-| `device_max_concat_length` | `12` | Found in `TrainingSpecHyperparameterSampling`. |
-| `max_ram_gb` | `16` | Found in `TrainingSpecHyperparameterSampling`. Limits RAM usage for lazy loading during search. |
-| `load_full_data_to_ram` | `true` | Found in `TrainingSpecHyperparameterSampling`. |
-| `distributed` | `false` | Found in `TrainingSpecHyperparameterSampling`. |
+| `backend` | str | No | `"nccl"` | The distributed training backend to use (e.g., `nccl` for GPUs, `gloo` for CPUs). Only relevant if `distributed: true`. |
+| `device_max_concat_length` | `int` | No | `12` |  Controls recursive tensor concatenation to prevent CUDA kernel limits on specific hardware. Lower this if you encounter "CUDA error: too many resources requested for launch". |
+| `max_ram_gb` | `int` | No | `16` | RAM limit (GB) for the cache when using lazy loading. |
+| `load_full_data_to_ram` | `bool` | No |  `true` |  If `false`, uses lazy loading (requires `read_format: pt`). |
+| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
 
 -----
 
