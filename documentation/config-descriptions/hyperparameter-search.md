@@ -1,3 +1,5 @@
+Here is the updated `hyperparameter-search.md` file. I have added the mandatory export flags, the `override_input` utility for automation, and the advanced architecture/training fields (like `rope_theta`, `norm_first`, and `save_interval_epochs`).
+
 # Hyperparameter Search Command Guide
 
 The `sequifier hyperparameter-search` command automates the process of finding the optimal model architecture and training configuration. It supports both **Grid Search** (exhaustive) and **Random Sampling** strategies. It creates multiple unique training configurations, executes them sequentially, and logs the results.
@@ -22,10 +24,24 @@ The configuration is defined in a YAML file. Unlike the `train.yaml` where field
 | `model_config_write_path`| `str` | **Yes** | - | Directory to save the generated config files for each run (e.g., `configs/hp_search/`). |
 | `search_strategy` | `str` | No | `sample` | `sample` (Random Search) or `grid` (Grid Search). |
 | `n_samples` | `int` | *Conditional* | - | Required if `search_strategy` is `sample`. Number of distinct runs to execute. |
+| `override_input` | `bool` | No | `false` | If `true`, suppresses interactive confirmation prompts. Useful for CI/CD or automated scripts. |
 | `training_data_path` | `str` | No | Metadata split 0 | Path to training data. |
 | `validation_data_path`| `str` | No | Metadata split 1 | Path to validation data. |
 
-### 2\. Schema & Feature Selection
+### 2\. System & Export (Fixed Values)
+
+These fields are constant across all search runs (not sampled) but are required to configure the output models.
+
+| Field | Type | Mandatory | Default | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `export_generative_model`| `bool` | **Yes** | - | Export the standard next-token prediction model for every run. |
+| `export_embedding_model` | `bool` | **Yes** | - | Export the vector embedding model for every run. |
+| `inference_batch_size` | `int` | **Yes** | - | Batch size hardcoded into exported ONNX models. |
+| `export_onnx` | `bool` | No | `true` | Export to ONNX format. |
+| `export_pt` | `bool` | No | `false` | Export to PyTorch state dict (`.pt`). |
+| `export_with_dropout` | `bool` | No | `false` | Export models with dropout enabled (for MC Dropout inference). |
+
+### 3\. Schema & Feature Selection
 
 Sequifier allows you to search not just for model parameters, but for the best **subset of input features**.
 
@@ -37,9 +53,9 @@ Sequifier allows you to search not just for model parameters, but for the best *
 | `target_column_types`| `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
 | `column_types` | `list[dict]` | *Conditional*| Required if `input_columns` varies. List of type maps corresponding to the input sets. |
 
-### 3\. Model Architecture Sampling (`model_hyperparameter_sampling`)
+### 4\. Model Architecture Sampling (`model_hyperparameter_sampling`)
 
-These fields define the search space for the Transformer architecture. All fields accept a **list** of values.
+These fields define the search space for the Transformer architecture. All fields accept a **list** of values unless noted.
 
 | Field | Type | Mandatory | Description |
 | :--- | :--- | :--- | :--- |
@@ -48,23 +64,35 @@ These fields define the search space for the Transformer architecture. All field
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list[int]` | **Yes** | Feedforward network dimension. |
 | `initial_embedding_dim`| `list[int]` | **Yes** | Feature embedding size. Usually matches `dim_model`. |
+| `joint_embedding_dim` | `list[int]` | **Yes** | Joint embedding size. If not null, must match `dim_model`. |
 | `activation_fn` | `list[str]` | **Yes** | `['swiglu', 'gelu', 'relu']`. |
 | `attention_type` | `list[str]` | **Yes** | `['mha', 'mqa', 'gqa']`. |
 | `n_kv_heads` | `list[int]` | **Yes** | Number of KV heads (for MQA/GQA). Use `null` for MHA. |
 | `normalization` | `list[str]` | **Yes** | `['rmsnorm', 'layer_norm']`. |
+| `norm_first` | `list[bool]` | **Yes** | `[true, false]`. Pre-LN vs Post-LN. |
 | `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope']`. |
+| `rope_theta` | `list[float]` | **Yes** | Base frequency for RoPE (e.g., `[10000.0, 50000.0]`). |
+| `prediction_length` | `int` | No | Fixed value (not sampled). Steps to predict simultaneously. Default 1. |
 
-### 4\. Training Hyperparameters (`training_hyperparameter_sampling`)
+### 5\. Training Hyperparameters (`training_hyperparameter_sampling`)
+
+Most fields here are lists for sampling, but some are scalar values fixed for all runs.
 
 | Field | Type | Mandatory | Description |
 | :--- | :--- | :--- | :--- |
 | `learning_rate` | `list[float]`| **Yes** | List of learning rates to test. |
 | `batch_size` | `list[int]` | **Yes** | List of batch sizes. |
 | `epochs` | `list[int]` | **Yes** | Epochs to train. Paired with `learning_rate`. |
+| `accumulation_steps` | `list[int]` | **Yes** | Gradient accumulation steps. |
 | `dropout` | `list[float]`| No | List of dropout probabilities (default `[0.0]`). |
 | `optimizer` | `list[dict]` | No | List of optimizer configs (e.g., `[{'name': 'AdamW'}, {'name': 'AdEMAMix'}]`). |
 | `scheduler` | `list[dict]` | No | List of scheduler configs. |
-| `accumulation_steps` | `list[int]` | **Yes** | Gradient accumulation steps. |
+| `save_interval_epochs` | `int` | **Yes** | **Fixed.** Checkpoint save frequency. |
+| `log_interval` | `int` | No | **Fixed.** Logging frequency (batches). Default 10. |
+| `early_stopping_epochs`| `int` | No | **Fixed.** Stop if validation metric doesn't improve. |
+| `num_workers` | `int` | No | **Fixed.** Data loading subprocesses. |
+| `loss_weights` | `dict` | No | **Fixed.** Weights for multi-objective loss. |
+| `class_weights` | `dict` | No | **Fixed.** Weights for imbalanced classes. |
 
 -----
 
@@ -93,7 +121,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 All other parameters are considered **Independent**. Sequifier will test every value in these lists against every combination of the linked groups above.
 
-  * **Model:** `num_layers`, `dim_feedforward`, `activation_fn`, `normalization`, `positional_encoding`, `attention_type`, `rope_theta`.
+  * **Model:** `num_layers`, `dim_feedforward`, `activation_fn`, `normalization`, `norm_first`, `positional_encoding`, `attention_type`, `rope_theta`.
   * **Training:** `batch_size`, `dropout`, `accumulation_steps`, `optimizer`.
   * **Data:** `seq_length`.
 
