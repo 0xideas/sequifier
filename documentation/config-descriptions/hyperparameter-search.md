@@ -1,5 +1,3 @@
-Here is the updated `hyperparameter-search.md` file. I have added the mandatory export flags, the `override_input` utility for automation, and the advanced architecture/training fields (like `rope_theta`, `norm_first`, and `save_interval_epochs`).
-
 # Hyperparameter Search Command Guide
 
 The `sequifier hyperparameter-search` command automates the process of finding the optimal model architecture and training configuration. It supports both **Grid Search** (exhaustive) and **Random Sampling** strategies. It creates multiple unique training configurations, executes them sequentially, and logs the results.
@@ -94,7 +92,15 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `loss_weights` | `dict` | No | **Fixed.** Weights for multi-objective loss. |
 | `class_weights` | `dict` | No | **Fixed.** Weights for imbalanced classes. |
 
+### 6\. System Parameters
+| `backend` | `"nccl"` | Found in `TrainingSpecHyperparameterSampling`. |
+| `device_max_concat_length` | `12` | Found in `TrainingSpecHyperparameterSampling`. |
+| `max_ram_gb` | `16` | Found in `TrainingSpecHyperparameterSampling`. Limits RAM usage for lazy loading during search. |
+| `load_full_data_to_ram` | `true` | Found in `TrainingSpecHyperparameterSampling`. |
+| `distributed` | `false` | Found in `TrainingSpecHyperparameterSampling`. |
+
 -----
+
 
 ## Parameter Linkage vs. Independence
 

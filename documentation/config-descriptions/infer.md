@@ -18,7 +18,7 @@ The configuration is defined in a YAML file (e.g., `infer.yaml`).
 | :--- | :--- | :--- | :--- | :--- |
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
 | `data_path` | `str` | **Yes** | - | Path to the input data file (csv/parquet) or folder (if `read_format: pt`). |
-| `model_path` | `str` | **Yes** | - | Path to the specific model file (e.g., `models/sequifier-[NAME]-best-[EPOCH].pt`). |
+| `model_path` | `str` or `list[str]` | **Yes** | - | Path to a specific model file, or a list of paths to process sequentially. (e.g., `models/sequifier-[NAME]-best-[EPOCH].pt`). |
 | `training_config_path`| `str` | No | `configs/train.yaml`| Path to the config used to train the model. Required to reconstruct the model architecture. |
 | `metadata_config_path`| `str` | **Yes** | - | Path to the JSON metadata file generated during preprocessing. Used for ID mapping and normalization. |
 | `read_format` | `str` | No | `parquet` | Format of input data (`csv`, `parquet`, `pt`). |
@@ -41,7 +41,7 @@ These fields tell the inference engine which columns to extract from the new dat
 | :--- | :--- | :--- | :--- | :--- |
 | `model_type` | `str` | **Yes** | - | `generative` (predict next value) or `embedding` (extract vector representation). |
 | `seq_length` | `int` | **Yes** | - | The context window size. Must match training. |
-| `prediction_length` | `int` | No | `1` | Number of steps to predict *simultaneously* (if model supports it). Usually 1. |
+| `prediction_length` | `int` | No | `1` | Number of steps to predict *simultaneously*. **Must be 1** if `autoregression: true`. |
 | `inference_batch_size`| `int` | **Yes** | - | Number of sequences to process at once. |
 | `autoregression` | `bool` | No | `false` | If `true`, feeds predictions back into the model to predict further into the future. |
 | `autoregression_extra_steps`| `int` | No | `null` | If `autoregression: true`, how many *additional* future steps to predict beyond the first. |

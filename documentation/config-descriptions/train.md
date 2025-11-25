@@ -75,6 +75,9 @@ These fields determine the size and complexity of the Transformer.
 | `enforce_determinism` | `bool` | No | `false` | Force deterministic algorithms (slower, but reproducible). |
 | `num_workers` | `int` | No | `0` | Number of subprocesses for data loading. |
 | `max_ram_gb` | `float` | No | `16` | RAM limit (GB) for the cache when using lazy loading. |
+| `backend` | `str` | No | `nccl` | The distributed training backend to use (e.g., `nccl` for GPUs, `gloo` for CPUs). Only relevant if `distributed: true`. |
+| `device_max_concat_length`| `int` | No | `12` | Controls recursive tensor concatenation to prevent CUDA kernel limits on specific hardware. Lower this if you encounter "CUDA error: too many resources requested for launch". |
+
 
 ### 5\. System & Export
 
