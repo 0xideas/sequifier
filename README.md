@@ -155,6 +155,13 @@ You must provide a hyperparameter search config file.
 
 Sequifier supports distributed training using torch `DistributedDataParallel`. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
 
+### System Requirements
+
+Tiny transformer models on little data can be trained on CPU. Bigger ones require an Nvidia GPU with a compatible cuda version installed.
+
+Sequifier currently runs on MacOS and Ubuntu.
+
+
 ## Citation
 
 Please cite with:
