@@ -6,7 +6,7 @@ The `sequifier infer` command uses a trained Sequifier model (PyTorch `.pt` or O
 
 ```console
 sequifier infer --config-path configs/infer.yaml
-````
+```
 
 ## Configuration Fields
 
@@ -46,6 +46,7 @@ These fields tell the inference engine which columns to extract from the new dat
 | `autoregression` | `bool` | No | `false` | If `true`, feeds predictions back into the model to predict further into the future. |
 | `autoregression_extra_steps`| `int` | No | `null` | If `autoregression: true`, how many *additional* future steps to predict beyond the first. |
 | `output_probabilities`| `bool` | No | `false` | If `true`, outputs the full probability distribution for categorical targets. |
+| `sample_from_distribution_columns`| `list[str]`| No | `[]` | If set, the model **samples** from the predicted distribution for these columns instead of taking the top-1 (argmax). Essential for diversity in generation. |
 | `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). |
 | `infer_with_dropout` | `bool` | No | `false` | If `true`, keeps dropout active during inference (useful for uncertainty estimation/Monte Carlo Dropout). |
 
@@ -55,6 +56,9 @@ These fields tell the inference engine which columns to extract from the new dat
 | :--- | :--- | :--- | :--- | :--- |
 | `device` | `str` | **Yes** | - | `cuda`, `cpu`, or `mps`. |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU inference. Requires `read_format: pt`. |
+| `world_size` | `int` | No | `1` | Number of GPUs/processes for distributed inference. |
+| `num_workers` | `int` | No | `0` | Number of subprocesses for data loading. |
+| `enforce_determinism` | `bool` | No | `false` | Forces PyTorch to use deterministic algorithms. |
 | `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
 
 -----
@@ -76,12 +80,11 @@ Standard inference predicts the next step ($t+1$) based on history ($t-n \dots t
   * **Cons:** Errors accumulate. If the prediction for $t+1$ is slightly wrong, the prediction for $t+2$ relies on bad data. Inference is also significantly slower because steps must be calculated sequentially, not in parallel.
   * **Config:** Set `autoregression_extra_steps` to determine how far into the future to generate.
 
-### 3\. Probabilities (`output_probabilities: true`)
+### 3\. Sampling vs. Argmax
 
-  * **True:** For categorical targets, outputs the probability of *every class* rather than just the top prediction.
-      * *Pros:* Necessary for calculating uncertainty, setting custom confidence thresholds, or analyzing "top-k" predictions.
-      * *Cons:* Creates very large output files (Batch Size $\times$ Number of Classes).
-  * **False:** Outputs only the single most likely class (or value).
+  * **Default (Argmax):** The model selects the class with the highest probability. Best for accuracy metrics and "most likely" forecasts.
+  * **Sampling (`sample_from_distribution_columns`):** The model picks the next token randomly based on the probability distribution.
+      * *Use Case:* Creative generation or simulation where you want diversity. If `Probability(A)=0.6` and `Probability(B)=0.4`, Argmax always picks A. Sampling picks B 40% of the time.
 
 ### 4\. Input Format (`read_format`)
 
