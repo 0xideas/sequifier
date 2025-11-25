@@ -1159,6 +1159,7 @@ def _process_batches_single_file(
     """
     n_cores = n_cores or multiprocessing.cpu_count()
     batch_limits = get_batch_limits(data, n_cores)
+    valid_batch_limits = [(s, e) for s, e in batch_limits if (e - s) > 0]
     batches = [
         (
             project_root,
@@ -1177,8 +1178,7 @@ def _process_batches_single_file(
             batches_per_file,
             subsequence_start_mode,
         )
-        for process_id, (start, end) in enumerate(batch_limits)
-        if (end - start) > 0
+        for process_id, (start, end) in enumerate(valid_batch_limits)
     ]
 
     if len(batches) > 1:
