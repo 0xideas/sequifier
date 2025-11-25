@@ -32,6 +32,13 @@ The only requirement is having sequifier installed, and having input data in the
 
 There are five standalone commands within sequifier: `make`, `preprocess`, `train`, `infer` and `hyperparameter-search`. `make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, and `hyperparameter-search` executes multiple training runs to find optimal configurations.
 
+There are documentation pages for each command, except make:
+
+ - preprocess: [./documentation/configs/preprocess.md]
+ - train: [./documentation/configs/train.md]
+ - infer: [./documentation/configs/infer.md]
+ - hyperparameter-search: [./documentation/configs/hyperparameter-search.md]
+
 
 ### Data Formats
 
