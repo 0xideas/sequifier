@@ -10,6 +10,7 @@ The process looks like this:
 <img src="./design/sequifier-illustration.png">
 
 
+
 ### Value Proposition
 
 Implementing a model from scratch takes time, and there are a surprising number of aspects to consider. The idea is: why not do it once, make it configurable, and then use the same implementation across domains and datasets.
@@ -28,6 +29,8 @@ This gives us a number of benefits:
 
 The only requirement is having sequifier installed, and having input data in the right format.
 
+
+
 ### The Five Commands
 
 There are five standalone commands within sequifier: `make`, `preprocess`, `train`, `infer` and `hyperparameter-search`. `make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, and `hyperparameter-search` executes multiple training runs to find optimal configurations.
@@ -40,6 +43,7 @@ There are documentation pages for each command, except make:
  - [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
 
 
+
 ### Other Materials
 
 To get the full auto-generated documentation, visit [sequifier.com](https://sequifier.com)
@@ -48,6 +52,7 @@ If you want to first get a more specific understanding of the transformer archit
 the [Wikipedia article.](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model))
 
 If you want to see an end-to-end example on very simple synthetic data, check out this [this notebook.](./documentation/demos/self-contained-example.ipynb)
+
 
 
 ### Structure of a Sequifier Project
@@ -69,6 +74,7 @@ YOUR_PROJECT_NAME/
 The `sequifier` commands should typically be run in the project root.
 
 Within YOUR_PROJECT_NAME, you can also add other folders for additional steps, such as `notebooks` or `scripts` for pre- or postprocessing, and `analysis`, `visualizations` or `evals` for files you generate in other, manual steps.
+
 
 
 ### Data Transformations in Sequifier
@@ -105,6 +111,7 @@ On inference, the output is returned in the library input format, introduced fir
 |...|...|...|...|...|
 |1|732|"medium"|14.4|...|
 |...|...|...|...|...|
+
 
 
 ### Complete Example of Training and Inferring a Transformer Model
@@ -149,6 +156,7 @@ sequifier infer
 9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/sequifier-default-best-predictions.csv`
 
 
+
 ### Embedding Model
 
 While Sequifier's primary use case is training predictive or generative causal transformer models, it also supports the export of embedding models.
@@ -160,9 +168,11 @@ Configuration:
 Technical Details: The generated embedding has dimensionality `dim_model` and consists of the final hidden state (activations) of the transformer's last layer corresponding to the last token in the sequence. Because the model is trained on a causal objective, this is a "forward-looking" embedding: it is optimized to compress the sequence history into a representation that maximizes information about the future state of the data.
 
 
+
 ### Distributed Training
 
 Sequifier supports distributed training using torch `DistributedDataParallel`. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
+
 
 
 ### System Requirements
@@ -170,6 +180,7 @@ Sequifier supports distributed training using torch `DistributedDataParallel`. T
 Tiny transformer models on little data can be trained on CPU. Bigger ones require an Nvidia GPU with a compatible cuda version installed.
 
 Sequifier currently runs on MacOS and Ubuntu.
+
 
 
 ## Citation
