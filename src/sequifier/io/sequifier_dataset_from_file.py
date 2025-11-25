@@ -2,6 +2,7 @@ from typing import Dict, Iterator, Tuple
 
 import torch
 import torch.distributed as dist
+from loguru import logger
 from torch.utils.data import IterableDataset
 
 from sequifier.config.train_config import TrainModel
@@ -26,9 +27,11 @@ class SequifierDatasetFromFile(IterableDataset):
         self.epoch = 0
 
         # Create a unified list of all columns the model might need
-        all_columns = sorted(list(set(config.selected_columns + config.target_columns)))
+        all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
-        print(f"[INFO] Loading training dataset into memory from '{data_path}'...")
+        logger.info(
+            f"[INFO] Loading training dataset into memory from '{data_path}'..."
+        )
         data_df = read_data(data_path, config.read_format)
 
         column_types = {
@@ -48,7 +51,7 @@ class SequifierDatasetFromFile(IterableDataset):
         del data_df
 
         self.sequence_tensors = {
-            key: all_tensors[key] for key in self.config.selected_columns
+            key: all_tensors[key] for key in self.config.input_columns
         }
         self.target_tensors = {
             key: all_tensors[f"{key}_target"] for key in self.config.target_columns
@@ -61,7 +64,7 @@ class SequifierDatasetFromFile(IterableDataset):
             for key in self.target_tensors:
                 self.target_tensors[key] = self.target_tensors[key].pin_memory()
 
-        print(f"[INFO] Dataset loaded with {self.n_samples} samples.")
+        logger.info(f"[INFO] Dataset loaded with {self.n_samples} samples.")
 
     def set_epoch(self, epoch: int):
         """Allows the training loop to set the epoch for deterministic shuffling."""

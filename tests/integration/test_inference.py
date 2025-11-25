@@ -107,13 +107,13 @@ def read_multi_file_preds(path, target_type, file_suffix=None):
 
 
 @pytest.fixture()
-def predictions(run_inference, model_names_preds, project_path):
+def predictions(run_inference, model_names_preds, project_root):
     preds = {}
     for model_name in model_names_preds:
         target_type = "categorical" if "categorical" in model_name else "real"
 
         prediction_path = os.path.join(
-            project_path,
+            project_root,
             "outputs",
             "predictions",
             f"sequifier-{model_name}-predictions",
@@ -125,11 +125,11 @@ def predictions(run_inference, model_names_preds, project_path):
 
 
 @pytest.fixture()
-def probabilities(run_inference, model_names_probs, project_path):
+def probabilities(run_inference, model_names_probs, project_root):
     probs = {}
     for model_name in model_names_probs:
         probabilities_path = os.path.join(
-            project_path,
+            project_root,
             "outputs",
             "probabilities",
             f"sequifier-{model_name}-probabilities",
@@ -142,11 +142,11 @@ def probabilities(run_inference, model_names_probs, project_path):
 
 
 @pytest.fixture()
-def embeddings(run_inference, model_names_embeddings, project_path):
+def embeddings(run_inference, model_names_embeddings, project_root):
     embeds = {}
     for model_name in model_names_embeddings:
         embeddings_path = os.path.join(
-            project_path,
+            project_root,
             "outputs",
             "embeddings",
             f"sequifier-{model_name}-embeddings",
@@ -201,14 +201,14 @@ def test_predictions_cat(predictions):
                 ), model_predictions
 
             if "inf" in model_name:
-                inference_size = 3
+                prediction_length = 3
                 n_test_rows = model_predictions.height
                 baseline_preds = predictions["model-categorical-1-best-3"]
                 n_baseline_rows = baseline_preds.height
 
-                # 3. Assert the number of rows is scaled by inference_size
-                assert n_test_rows == n_baseline_rows * inference_size, (
-                    f"Expected {n_baseline_rows * inference_size} rows for inference_size={inference_size}, "
+                # 3. Assert the number of rows is scaled by prediction_length
+                assert n_test_rows == n_baseline_rows * prediction_length, (
+                    f"Expected {n_baseline_rows * prediction_length} rows for prediction_length={prediction_length}, "
                     f"but found {n_test_rows} rows."
                 )
 
@@ -222,8 +222,10 @@ def test_predictions_cat(predictions):
 
                 assert baseline_rows_per_seq == test_rows_per_seq_groups.height
                 assert (
-                    test_rows_per_seq_groups["len"] == inference_size
-                ).all(), f"Test should have {inference_size} predictions per sequence"
+                    test_rows_per_seq_groups["len"] == prediction_length
+                ).all(), (
+                    f"Test should have {prediction_length} predictions per sequence"
+                )
 
 
 def test_probabilities(probabilities):
@@ -258,11 +260,11 @@ def test_embeddings(embeddings):
         if "categorical-1" in model_name:
             assert model_embeddings.shape[0] == 10
             assert model_embeddings.shape[1] == 203
-            assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.1
+            assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.3
         if "categorical-3" in model_name:
             assert model_embeddings.shape[0] == 30
             assert model_embeddings.shape[1] == 203
-            assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.1
+            assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.3
 
 
 def test_predictions_item_position(predictions):

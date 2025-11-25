@@ -2,7 +2,7 @@ models/
 data/
 checkpoints/
 logs/
-ddconfigs/
+metadata_configs/
 outputs/
 project_folder/
 
@@ -152,6 +152,9 @@ venv.bak/
 
 # mkdocs documentation
 /site
+
+
+documentation/demos/configs
 
 # mypy
 .mypy_cache/

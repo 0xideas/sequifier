@@ -1,10 +1,14 @@
 import os
-from typing import Optional, Union
+import random
+import sys
+from typing import Any, Optional, Union
 
 import numpy as np
 import polars as pl
 import torch
 from beartype import beartype
+from loguru import logger
+from pydantic import ValidationError
 from torch import Tensor
 
 PANDAS_TO_TORCH_TYPES = {
@@ -23,6 +27,28 @@ PANDAS_TO_TORCH_TYPES = {
     "Int8": torch.int8,
     "int8": torch.int8,
 }
+
+
+@beartype
+def try_catch_excess_keys(
+    config_path: str, PydanticClass: Any, config_values: dict[Any, Any]
+):
+    try:
+        return PydanticClass(
+            **{k: v for k, v in config_values.items() if k != "skip_metadata"}
+        )
+    except ValidationError as e:
+        # Filter the errors to find only the "extra fields"
+        extra_fields = [
+            err["loc"][0] for err in e.errors() if err["type"] == "value_error.extra"
+        ]
+
+        if extra_fields:
+            raise ValueError(
+                f"Found {len(extra_fields)} unrecognized configuration keys: {extra_fields}"
+            ) from None
+
+        raise e
 
 
 @beartype
@@ -64,14 +90,16 @@ def construct_index_maps(
     """
     index_map = {}
     if map_to_id is not None and map_to_id:
-        assert id_maps is not None
+        if id_maps is None:
+            raise ValueError("id_maps cannot be None when map_to_id is True")
         for target_column in target_columns_index_map:
             map_ = {v: k for k, v in id_maps[target_column].items()}
             val = next(iter(map_.values()))
             if isinstance(val, str):
                 map_[0] = "unknown"
             else:
-                assert isinstance(val, int)
+                if not isinstance(val, int):
+                    raise TypeError(f"Expected integer ID in map, got {type(val)}")
                 map_[0] = min(map_.values()) - 1  # type: ignore
             index_map[target_column] = map_
     return index_map
@@ -151,10 +179,10 @@ def write_data(data: pl.DataFrame, path: str, write_format: str, **kwargs) -> No
 
 
 @beartype
-def subset_to_selected_columns(
-    data: Union[pl.DataFrame, pl.LazyFrame], selected_columns: list[str]
+def subset_to_input_columns(
+    data: Union[pl.DataFrame, pl.LazyFrame], input_columns: list[str]
 ) -> Union[pl.DataFrame, pl.LazyFrame]:
-    """Filters a DataFrame to rows where 'inputCol' is in a selected list.
+    """Filters a DataFrame to rows where 'inputCol' is in a list of column_names.
 
     This function supports both Polars (DataFrame, LazyFrame) and Pandas
     DataFrames, dispatching to the appropriate filtering method.
@@ -169,17 +197,17 @@ def subset_to_selected_columns(
     Args:
         data: The Polars (DataFrame, LazyFrame) or Pandas DataFrame to
             filter. It must contain a column named "inputCol".
-        selected_columns: A list of values. Rows will be kept if their
+        input_columns: A list of values. Rows will be kept if their
             value in "inputCol" is present in this list.
 
     Returns:
         A filtered DataFrame or LazyFrame of the same type as the input.
     """
     if isinstance(data, (pl.DataFrame, pl.LazyFrame)):
-        return data.filter(pl.col("inputCol").is_in(selected_columns))
+        return data.filter(pl.col("inputCol").is_in(input_columns))
 
     column_filters = [
-        (data["inputCol"].values == input_col) for input_col in selected_columns
+        (data["inputCol"].values == input_col) for input_col in input_columns
     ]
     filter_ = np.logical_or.reduce(column_filters)
     return data.loc[filter_, :]
@@ -189,9 +217,9 @@ def subset_to_selected_columns(
 def numpy_to_pytorch(
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
-    all_columns: list[str],  # Changed from selected_columns, target_columns
+    all_columns: list[str],
     seq_length: int,
-) -> dict[str, Tensor]:  # Now returns a single dictionary
+) -> dict[str, Tensor]:
     """Converts a long-format Polars DataFrame to a dict of sequence tensors.
 
     This function assumes the input DataFrame `data` is in a long format
@@ -224,7 +252,6 @@ def numpy_to_pytorch(
         tensors. Target tensors are stored with a `_target` suffix
         (e.g., `{'price': <tensor>, 'price_target': <tensor>}`).
     """
-    # Define both input and target sequence column names
     input_seq_cols = [str(c) for c in range(seq_length, 0, -1)]
     target_seq_cols = [str(c) for c in range(seq_length - 1, -1, -1)]
 
@@ -254,80 +281,14 @@ def numpy_to_pytorch(
     return unified_tensors
 
 
-class LogFile:
-    """Manages logging to multiple files based on verbosity levels.
-
-    This class opens multiple log files based on a path template and a
-    hardcoded list of levels (2 and 3). Messages are written to files
-    based on their assigned level, and high-level messages are also
-    printed to the console on the main process (rank 0).
-
-    Attributes:
-        rank (Optional[int]): The rank of the current process, used to
-            control console output.
-        levels (list[int]): The hardcoded list of log levels [2, 3]
-            for which files are created.
-        _files (dict[int, io.TextIOWrapper]): A dictionary mapping log
-            levels to their open file handlers.
-        _path (str): The original path template provided.
-    """
-
-    @beartype
-    def __init__(self, path: str, rank: Optional[int] = None):
-        """Initializes the LogFile and opens log files.
-
-        The `path` argument should be a template containing "[NUMBER]",
-        which will be replaced by the log levels (2 and 3) to create
-        separate log files.
-
-        Args:
-            path: The path template for the log files (e.g.,
-                "run_log_[NUMBER].txt").
-            rank: The rank of the current process (e.g., in distributed
-                training). If None or 0, high-level messages will be
-                printed to stdout.
-        """
-        self.rank = rank
-        self.levels = [2, 3]
-        self._files = {
-            level: path.replace("[NUMBER]", str(level)) for level in self.levels
-        }
-        self._path = path
-
-    @beartype
-    def write(self, string: str, level: int = 3) -> None:
-        """Writes a string to log files and potentially the console.
-
-        The string is written to all log files whose level is less than
-        or equal to the specified `level`.
-
-        - A message with `level=2` goes to file 2.
-        - A message with `level=3` goes to file 2 and file 3.
-
-        If `level` is 3 or greater, the message is also printed to stdout
-        if `self.rank` is None or 0.
-
-        Args:
-            string: The message to log.
-            level: The verbosity level of the message. Defaults to 3.
-        """
-        for level2 in self.levels:
-            if level2 <= level:
-                with open(self._files[level2], "a+", encoding="utf-8") as f:
-                    f.write(f"{string}\n")
-        if level >= 3:
-            if self.rank is None or self.rank == 0:
-                print(string)
-
-
 @beartype
-def normalize_path(path: str, project_path: str) -> str:
+def normalize_path(path: str, project_root: str) -> str:
     """Normalizes a path to be relative to a project path, then joins them.
 
     This function ensures that a given `path` is correctly expressed as
-    an absolute path rooted at `project_path`. It does this by first
-    removing the `project_path` prefix from `path` (if it exists)
-    and then joining the result back to `project_path`.
+    an absolute path rooted at `project_root`. It does this by first
+    removing the `project_root` prefix from `path` (if it exists)
+    and then joining the result back to `project_root`.
 
     This is useful for handling paths that might be provided as either
     relative (e.g., "data/file.txt") or absolute
@@ -335,11 +296,84 @@ def normalize_path(path: str, project_path: str) -> str:
 
     Args:
         path: The path to normalize.
-        project_path: The absolute path to the project's root directory.
+        project_root: The absolute path to the project's root directory.
 
     Returns:
         A normalized, absolute path.
     """
-    project_path_normalized = (project_path + os.sep).replace(os.sep + os.sep, os.sep)
-    path2 = os.path.join(project_path, path.replace(project_path_normalized, ""))
+    project_root_normalized = (project_root + os.sep).replace(os.sep + os.sep, os.sep)
+    path2 = os.path.join(project_root, path.replace(project_root_normalized, ""))
     return path2
+
+
+@beartype
+def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0):
+    """Configures Loguru to replicate the legacy LogFile behavior.
+
+    Legacy Behavior Mapping:
+    1. Console: Only Rank 0 prints high-level info.
+    2. File 2 (Detailed): Captures ALL logs (equivalent to old level 2).
+    3. File 3 (Summary): Captures only HIGH importance logs (equivalent to old level 3).
+    4. Formatting: Files contain raw messages only (no timestamp prefix).
+    """
+    # Clear default handler
+    logger.remove()
+
+    # 1. Console Handler (Rank 0 only, INFO/Level 3 and up)
+    if rank == 0 or rank is None:
+        logger.add(
+            sys.stderr,
+            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{message}</level>",
+            level="INFO",
+        )
+
+    # Determine paths
+    log_dir = os.path.join(project_root, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    rank_str = f"rank{rank}" if rank is not None else "rank0"
+
+    # 2. File 2 (Detailed/Debug) - Equivalent to old 'level=2'
+    # Captures everything from DEBUG up.
+    # Format is just {message} to match f.write(f"{string}\n")
+    file_2_path = os.path.join(log_dir, f"sequifier-{model_name}-{rank_str}-2.txt")
+    logger.add(
+        file_2_path,
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+        enqueue=True,
+        mode="a",
+    )
+
+    # 3. File 3 (Summary/Info)
+    file_3_path = os.path.join(log_dir, f"sequifier-{model_name}-{rank_str}-3.txt")
+    logger.add(
+        file_3_path,
+        level="INFO",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+        enqueue=True,
+        mode="a",
+    )
+    return logger
+
+
+@beartype
+def configure_determinism(seed: int, strict: bool = False) -> None:
+    """Enforces deterministic execution for reproducibility."""
+    # 1. Set standard seeds
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # 2. Ensure deterministic behavior in CUDA/CuDNN
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    if strict:
+        # 3. Enforce deterministic algorithms in PyTorch (crucial for SDPA/FlashAttention)
+        # This forces PyTorch to error out if a non-deterministic operation is used,
+        # or select the deterministic version of a kernel (e.g. for Flash Attn).
+        torch.use_deterministic_algorithms(True, warn_only=True)
+
+        # 4. Set CuBLAS workspace (Required for deterministic algorithms with CUDA >= 10.2)
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"

@@ -15,7 +15,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from beartype import beartype
 from torch import Tensor, nn
-from torch.nn import ModuleDict, TransformerEncoder, TransformerEncoderLayer
+from torch.nn import ModuleDict
 from torch.nn.functional import one_hot
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, RandomSampler
@@ -23,8 +23,8 @@ from torch.utils.data.distributed import DistributedSampler
 
 torch._dynamo.config.suppress_errors = True
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
-from sequifier.helpers import LogFile  # noqa: E402
 from sequifier.helpers import construct_index_maps  # noqa: E402
+from sequifier.helpers import configure_determinism, configure_logger  # noqa: E402
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
 )
@@ -34,6 +34,7 @@ from sequifier.io.sequifier_dataset_from_folder import (  # noqa: E402
 from sequifier.io.sequifier_dataset_from_folder_lazy import (  # noqa: E402
     SequifierDatasetFromFolderLazy,
 )
+from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 from sequifier.samplers.distributed_grouped_random_sampler import (  # noqa: E402
     DistributedGroupedRandomSampler,
@@ -49,7 +50,7 @@ def setup(rank: int, world_size: int, backend: str = "nccl"):
         world_size: The total number of processes.
         backend: The distributed backend to use.
     """
-    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_ADDR"] = os.getenv("MASTER_ADDR", "localhost")
     os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
     dist.init_process_group(backend, rank=rank, world_size=world_size)
 
@@ -90,7 +91,10 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
                 config.validation_data_path, config
             )
     else:
-        assert config.training_spec.distributed == False  # noqa: E712
+        if config.training_spec.distributed:
+            raise ValueError(
+                "Distributed training is not supported with single-file datasets."
+            )
         train_dataset = SequifierDatasetFromFile(config.training_data_path, config)
         valid_dataset = SequifierDatasetFromFile(config.validation_data_path, config)
 
@@ -138,7 +142,8 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
             sampler=valid_sampler,
             shuffle=False,
         )
-    elif not from_folder:
+    else:
+        assert not from_folder
         train_loader = DataLoader(
             train_dataset,
             batch_size=None,
@@ -150,12 +155,8 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
         valid_loader = DataLoader(
             valid_dataset, batch_size=None, sampler=None, shuffle=False
         )
-    else:
-        assert False, "not possible"
 
-    # 2. Instantiate and wrap the model
-    torch.manual_seed(config.seed)
-    np.random.seed(config.seed)
+    configure_determinism(config.seed, config.training_spec.enforce_determinism)
 
     model = TransformerModel(config, rank)
 
@@ -183,8 +184,7 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
         args_config: The configuration dictionary.
     """
     config_path = args.config_path or "configs/train.yaml"
-    config = load_train_config(config_path, args_config, args.on_unprocessed)
-    print(f"--- Starting Training for model: {config.model_name} ---")
+    config = load_train_config(config_path, args_config, args.skip_metadata)
 
     world_size = config.training_spec.world_size
 
@@ -233,7 +233,7 @@ class TransformerEmbeddingModel(nn.Module):
         """
         super().__init__()
         self.transformer_model = transformer_model
-        self.log_file = self.transformer_model.log_file
+        self.logger = self.transformer_model.logger
 
     def forward(self, src: dict[str, Tensor]):
         """Forward pass for the embedding model.
@@ -271,25 +271,30 @@ class TransformerModel(nn.Module):
             rank: The rank of the current process (for distributed training).
         """
         super().__init__()
-        self.project_path = hparams.project_path
+        self.project_root = hparams.project_root
         self.model_type = "Transformer"
-        self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
 
         self.rank = rank
 
-        self.selected_columns = hparams.selected_columns
+        self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
+
+        self._initialize_log_file()
+
+        self.logger.info(f"--- Starting Training for model: {self.model_name} ---")
+
+        self.input_columns = hparams.input_columns
         self.categorical_columns = [
             col
             for col in hparams.categorical_columns
-            if self.selected_columns is None or col in self.selected_columns
+            if self.input_columns is None or col in self.input_columns
         ]
         self.real_columns = [
             col
             for col in hparams.real_columns
-            if self.selected_columns is None or col in self.selected_columns
+            if self.input_columns is None or col in self.input_columns
         ]
-        print(f"[INFO] {self.categorical_columns = }")
-        print(f"[INFO] {self.real_columns = }")
+        self.logger.info(f"{self.categorical_columns = }")
+        self.logger.info(f"{self.real_columns = }")
 
         self.target_columns = hparams.target_columns
         self.target_column_types = hparams.target_column_types
@@ -311,58 +316,93 @@ class TransformerModel(nn.Module):
         self.hparams = hparams
         self.drop = nn.Dropout(hparams.training_spec.dropout)
         self.encoder = ModuleDict()
-        self.pos_encoder = ModuleDict()
-        self.embedding_size = max(
-            self.hparams.model_spec.d_model, self.hparams.model_spec.nhead
-        )
-        if hparams.model_spec.d_model_by_column is not None:
-            self.d_model_by_column = hparams.model_spec.d_model_by_column
+        self.dim_model = self.hparams.model_spec.dim_model
+        self.initial_embedding_dim = self.hparams.model_spec.initial_embedding_dim
+        self.joint_embedding_dim = hparams.model_spec.joint_embedding_dim
+
+        if self.joint_embedding_dim is not None:
+            self.joint_embedding_layer = nn.Linear(
+                self.initial_embedding_dim, self.joint_embedding_dim
+            )
         else:
-            self.d_model_by_column = self._get_d_model_by_column(
-                self.embedding_size, self.categorical_columns, self.real_columns
+            self.joint_embedding_layer = None
+
+        self.use_rope = hparams.model_spec.positional_encoding == "rope"
+        if hparams.model_spec.feature_embedding_dims is not None:
+            self.feature_embedding_dims = hparams.model_spec.feature_embedding_dims
+        else:
+            self.feature_embedding_dims = self._get_feature_embedding_dims(
+                self.initial_embedding_dim, self.categorical_columns, self.real_columns
             )
 
         self.real_columns_with_embedding = []
         self.real_columns_direct = []
         for col in self.real_columns:
-            if self.d_model_by_column[col] > 1:
-                self.encoder[col] = nn.Linear(1, self.d_model_by_column[col])
+            if self.feature_embedding_dims[col] > 1:
+                self.encoder[col] = nn.Linear(1, self.feature_embedding_dims[col])
                 self.real_columns_with_embedding.append(col)
             else:
-                assert self.d_model_by_column[col] == 1
+                if self.feature_embedding_dims[col] != 1:
+                    raise ValueError(
+                        f"Real column {col} without embedding must have feature_embedding_dims=1"
+                    )
                 self.real_columns_direct.append(col)
-            self.pos_encoder[col] = nn.Embedding(
-                self.seq_length, self.d_model_by_column[col]
-            )
         for col, n_classes in self.n_classes.items():
             if col in self.categorical_columns:
-                self.encoder[col] = nn.Embedding(n_classes, self.d_model_by_column[col])
-                self.pos_encoder[col] = nn.Embedding(
-                    self.seq_length, self.d_model_by_column[col]
+                self.encoder[col] = nn.Embedding(
+                    n_classes, self.feature_embedding_dims[col]
                 )
 
-        encoder_layers = TransformerEncoderLayer(
-            self.embedding_size,
-            hparams.model_spec.nhead,
-            hparams.model_spec.d_hid,
-            hparams.training_spec.dropout,
+        if not self.use_rope:
+            self.pos_encoder = ModuleDict()
+            for col in self.real_columns:
+                self.pos_encoder[col] = nn.Embedding(
+                    self.seq_length, self.feature_embedding_dims[col]
+                )
+            for col, n_classes in self.n_classes.items():
+                if col in self.categorical_columns:
+                    self.pos_encoder[col] = nn.Embedding(
+                        self.seq_length, self.feature_embedding_dims[col]
+                    )
+        else:
+            self.pos_encoder = None
+
+        self.layers = nn.ModuleList(
+            [
+                SequifierEncoderLayer(
+                    hparams.model_spec,
+                    self.dim_model,
+                    hparams.model_spec.n_head,
+                    hparams.model_spec.dim_feedforward,
+                    hparams.training_spec.dropout,
+                )
+                for _ in range(hparams.model_spec.num_layers)
+            ]
         )
-        self.transformer_encoder = TransformerEncoder(
-            encoder_layers, hparams.model_spec.nlayers, enable_nested_tensor=False
-        )
-        self.inference_size = hparams.model_spec.inference_size
+
+        if hparams.model_spec.norm_first:
+            NormClass = (
+                RMSNorm
+                if hparams.model_spec.normalization == "rmsnorm"
+                else nn.LayerNorm
+            )
+            self.final_norm = NormClass(self.dim_model)
+        else:
+            self.final_norm = nn.Identity()
+
+        self.prediction_length = hparams.model_spec.prediction_length
 
         self.decoder = ModuleDict()
         self.softmax = ModuleDict()
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
                 self.decoder[target_column] = nn.Linear(
-                    self.embedding_size,
+                    self.dim_model,
                     self.n_classes[target_column],
                 )
                 self.softmax[target_column] = nn.LogSoftmax(dim=-1)
             elif target_column_type == "real":
-                self.decoder[target_column] = nn.Linear(self.embedding_size, 1)
+                self.decoder[target_column] = nn.Linear(self.dim_model, 1)
             else:
                 raise ValueError(
                     f"Target column type {target_column_type} not in ['categorical', 'real']"
@@ -393,13 +433,12 @@ class TransformerModel(nn.Module):
         self.scheduler = self._get_scheduler(
             **self._filter_key(hparams.training_spec.scheduler, "name")
         )
-        self.scheduler_step_iter = hparams.training_spec.scheduler_step_iter
+        self.scheduler_step_on = hparams.training_spec.scheduler_step_on
 
-        self.iter_save = hparams.training_spec.iter_save
+        self.save_interval_epochs = hparams.training_spec.save_interval_epochs
         self.continue_training = hparams.training_spec.continue_training
         load_string = self._load_weights_conditional()
-        self._initialize_log_file()
-        self.log_file.write(load_string)
+        self.logger.info(load_string)
 
     @beartype
     def _init_criterion(self, hparams: Any) -> dict[str, Any]:
@@ -414,9 +453,12 @@ class TransformerModel(nn.Module):
         """
         criterion = {}
         for target_column in self.target_columns:
-            criterion_class = eval(
-                f"torch.nn.{hparams.training_spec.criterion[target_column]}"
-            )
+            criterion_name = hparams.training_spec.criterion[target_column]
+            if hasattr(torch.nn, criterion_name):
+                criterion_class = getattr(torch.nn, criterion_name)
+            else:
+                raise ValueError(f"Criterion {criterion_name} not found in torch.nn")
+
             criterion_kwargs = {}
             if (
                 hparams.training_spec.class_weights is not None
@@ -429,7 +471,7 @@ class TransformerModel(nn.Module):
         return criterion
 
     @beartype
-    def _get_d_model_by_column(
+    def _get_feature_embedding_dims(
         self,
         embedding_size: int,
         categorical_columns: list[str],
@@ -441,35 +483,56 @@ class TransformerModel(nn.Module):
         input columns.
 
         Args:
-            embedding_size: The total embedding dimension (d_model).
+            embedding_size: The total embedding dimension (initial_embedding_dim).
             categorical_columns: List of categorical column names.
             real_columns: List of real-valued column names.
 
         Returns:
             A dictionary mapping column names to their calculated embedding dimension.
         """
-        print(f"{len(categorical_columns) = } {len(real_columns) = }")
-        assert (len(categorical_columns) + len(real_columns)) > 0, "No columns found"
+        if not (len(categorical_columns) + len(real_columns)) > 0:
+            raise ValueError("No columns found")
+
         if len(categorical_columns) == 0 and len(real_columns) > 0:
-            d_model_by_column = {col: 1 for col in real_columns}
+            if embedding_size < len(real_columns):
+                raise ValueError(
+                    f"initial_embedding_dim ({embedding_size}) is smaller than the number of real input columns ({len(real_columns)}). "
+                    "Cannot allocate at least 1 dimension per column."
+                )
+
+            feature_embedding_dims = {col: 1 for col in real_columns}
             column_index = dict(enumerate(real_columns))
-            for i in range(embedding_size):
-                if sum(d_model_by_column.values()) % embedding_size != 0:
-                    j = i % len(real_columns)
-                    d_model_by_column[column_index[j]] += 1
-            assert sum(d_model_by_column.values()) % embedding_size == 0
+
+            remaining_dims = embedding_size - len(real_columns)
+            for i in range(remaining_dims):
+                j = i % len(real_columns)
+                feature_embedding_dims[column_index[j]] += 1
+
+            if sum(feature_embedding_dims.values()) != embedding_size:
+                raise ValueError(
+                    f"Auto-calculated embedding dimensions ({sum(feature_embedding_dims.values())}) do not sum to initial_embedding_dim ({embedding_size})."
+                )
         elif len(real_columns) == 0 and len(categorical_columns) > 0:
-            assert (
-                (embedding_size % len(categorical_columns)) == 0
-            ), f"If only categorical variables are included, d_model must be a multiple of the number of categorical variables ({embedding_size = } % {len(categorical_columns) = }) != 0"
-            d_model_comp = embedding_size // len(categorical_columns)
-            d_model_by_column = {col: d_model_comp for col in categorical_columns}
+            if embedding_size < len(categorical_columns):
+                raise ValueError(
+                    f"initial_embedding_dim ({embedding_size}) is smaller than the number of categorical columns ({len(categorical_columns)}). "
+                    "Resulting embedding dimension would be 0."
+                )
+
+            if (embedding_size % len(categorical_columns)) != 0:
+                raise ValueError(
+                    f"initial_embedding_dim ({embedding_size}) must be divisible by n_categorical ({len(categorical_columns)})"
+                )
+            dim_model_comp = embedding_size // len(categorical_columns)
+            feature_embedding_dims = {
+                col: dim_model_comp for col in categorical_columns
+            }
         else:
-            raise UserWarning(
-                "If both real and categorical variables are present, d_model_by_column config value must be set"
+            raise ValueError(
+                "If both real and categorical variables are present, feature_embedding_dims config value must be set"
             )
 
-        return d_model_by_column
+        return feature_embedding_dims
 
     @staticmethod
     def _generate_square_subsequent_mask(sz: int) -> Tensor:
@@ -510,8 +573,14 @@ class TransformerModel(nn.Module):
             self.decoder[target_column].bias.data.zero_()
             self.decoder[target_column].weight.data.normal_(mean=0.0, std=init_std)
 
-        for col_name in self.pos_encoder:
-            self.pos_encoder[col_name].weight.data.normal_(mean=0.0, std=init_std)
+        if self.pos_encoder is not None:
+            for col_name in self.pos_encoder:
+                self.pos_encoder[col_name].weight.data.normal_(mean=0.0, std=init_std)
+
+        if self.joint_embedding_layer is not None:
+            self.joint_embedding_layer.weight.data.normal_(mean=0.0, std=init_std)
+            if self.joint_embedding_layer.bias is not None:
+                self.joint_embedding_layer.bias.data.zero_()
 
     @beartype
     def _recursive_concat(self, srcs: list[Tensor]):
@@ -551,50 +620,66 @@ class TransformerModel(nn.Module):
 
         Returns:
             The raw output tensor from the TransformerEncoder
-            (seq_length, batch_size, d_model).
+            (seq_length, batch_size, dim_model).
         """
         srcs = []
         for col in self.categorical_columns:
-            src_t = self.encoder[col](src[col].T) * math.sqrt(self.embedding_size)
-            pos = (
-                torch.arange(0, self.seq_length, dtype=torch.long, device=self.device)
-                .repeat(src_t.shape[1], 1)
-                .T
+            src_t = self.encoder[col](src[col].T) * math.sqrt(
+                self.initial_embedding_dim
             )
-            src_p = self.pos_encoder[col](pos)
 
-            src_c = self.drop(src_t + src_p)
+            if not self.use_rope:
+                pos = (
+                    torch.arange(
+                        0, self.seq_length, dtype=torch.long, device=self.device
+                    )
+                    .repeat(src_t.shape[1], 1)
+                    .T
+                )
+                src_p = self.pos_encoder[col](pos)  # type: ignore
+
+                src_c = self.drop(src_t + src_p)
+            else:
+                src_c = self.drop(src_t)
 
             srcs.append(src_c)
 
         for col in self.real_columns:
             if col in self.real_columns_direct:
-                src_t = src[col].T.unsqueeze(2).repeat(1, 1, 1) * math.sqrt(
-                    self.embedding_size
-                )
+                src_t = src[col].T.unsqueeze(2) * math.sqrt(self.initial_embedding_dim)
             else:
                 assert col in self.real_columns_with_embedding
                 src_t = self.encoder[col](src[col].T[:, :, None]) * math.sqrt(
-                    self.embedding_size
+                    self.initial_embedding_dim
                 )
 
-            pos = (
-                torch.arange(0, self.seq_length, dtype=torch.long, device=self.device)
-                .repeat(src_t.shape[1], 1)
-                .T
-            )
-
-            src_p = self.pos_encoder[col](pos)
-
-            src_c = self.drop(src_t + src_p)
+            if not self.use_rope:
+                pos = (
+                    torch.arange(
+                        0, self.seq_length, dtype=torch.long, device=self.device
+                    )
+                    .repeat(src_t.shape[1], 1)
+                    .T
+                )
+                src_p = self.pos_encoder[col](pos)  # type: ignore
+                src_c = self.drop(src_t + src_p)
+            else:
+                src_c = self.drop(src_t)
 
             srcs.append(src_c)
 
         src2 = self._recursive_concat(srcs)
+        src2 = src2.transpose(0, 1)
 
-        output = self.transformer_encoder(src2, self.src_mask)
+        if self.joint_embedding_layer is not None:
+            src2 = self.joint_embedding_layer(src2)
 
-        return output
+        for layer in self.layers:
+            src2 = layer(src2, src_mask=self.src_mask)
+
+        src2 = self.final_norm(src2)
+
+        return src2.transpose(0, 1)
 
     @beartype
     def forward_embed(self, src: dict[str, Tensor]) -> Tensor:
@@ -608,9 +693,9 @@ class TransformerModel(nn.Module):
 
         Returns:
             The embedding tensor for the last token
-            (batch_size, d_model).
+            (batch_size, dim_model).
         """
-        return self.forward_inner(src)[-self.inference_size :, :, :]
+        return self.forward_inner(src)[-self.prediction_length :, :, :]
 
     @beartype
     def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -644,7 +729,7 @@ class TransformerModel(nn.Module):
         Args:
             target_column: The name of the target column to decode.
             output: The raw output tensor from the TransformerEncoder
-                    (seq_length, batch_size, d_model).
+                    (seq_length, batch_size, dim_model).
 
         Returns:
             The decoded output (logits or real value) for the target column
@@ -691,7 +776,7 @@ class TransformerModel(nn.Module):
         output = self.forward_train(src)
         return {
             target_column: self.apply_softmax(
-                target_column, out[-self.inference_size :, :, :]
+                target_column, out[-self.prediction_length :, :, :]
             )
             for target_column, out in output.items()
         }
@@ -759,16 +844,16 @@ class TransformerModel(nn.Module):
                     else:
                         n_epochs_no_improvement += 1
 
-                    if self.scheduler_step_iter == "epoch":
+                    if self.scheduler_step_on == "epoch":
                         self.scheduler.step()
 
-                    if epoch % self.iter_save == 0:
+                    if epoch % self.save_interval_epochs == 0:
                         self._save(epoch, total_loss)
 
                     last_epoch = epoch
         except KeyboardInterrupt:
-            self.log_file.write("\n" + "=" * 89)
-            self.log_file.write("[WARNING] Training interrupted by user (Ctrl+C).")
+            self.logger.info("\n" + "=" * 89)
+            self.logger.info("[WARNING] Training interrupted by user (Ctrl+C).")
 
             if self.hparams.training_spec.distributed:
                 dist.barrier()
@@ -787,33 +872,33 @@ class TransformerModel(nn.Module):
                     answer = "n"
 
                 if answer == "y":
-                    self.log_file.write("[INFO] User opted to export models.")
+                    self.logger.info("[INFO] User opted to export models.")
 
                     # Export last model (current state)
                     if last_epoch is not None and best_model is not None:
-                        self.log_file.write(
+                        self.logger.info(
                             f"[INFO] Exporting 'last' model from epoch {last_epoch}..."
                         )
                         self._export(self, "last", last_epoch)
 
                         # Export best model if it exists
                         if best_model is not None:
-                            self.log_file.write(
+                            self.logger.info(
                                 "[INFO] Exporting 'best' model (based on best val loss)..."
                             )
                             self._export(best_model, "best", last_epoch)
                         else:
-                            self.log_file.write(
+                            self.logger.info(
                                 "[WARNING] No 'best' model was saved (no validation improvement yet)."
                             )
 
-                        self.log_file.write("[INFO] Models exported.")
+                        self.logger.info("[INFO] Models exported.")
                     else:
-                        self.log_file.write(
+                        self.logger.info(
                             "[INFO] Could not export model as no epoch ran."
                         )
                 else:
-                    self.log_file.write("[INFO] User opted *not* to export. Exiting.")
+                    self.logger.info("[INFO] User opted *not* to export. Exiting.")
 
         if self.hparams.training_spec.distributed:
             dist.barrier()
@@ -823,14 +908,14 @@ class TransformerModel(nn.Module):
             if (
                 best_model is None
             ):  # <-- MODIFICATION: Handle case where no improvement was ever made
-                self.log_file.write(
+                self.logger.info(
                     "[INFO] No validation improvement during training. Saving last model as 'best'."
                 )
                 best_model = self._copy_model()
 
             self._export(self, "last", last_epoch)  # type: ignore
             self._export(best_model, "best", last_epoch)  # type: ignore
-            self.log_file.write("--- Training Complete ---")
+            self.logger.info("--- Training Complete ---")
 
     @beartype
     def _train_epoch(
@@ -842,7 +927,7 @@ class TransformerModel(nn.Module):
 
         Iterates through the training DataLoader, computes loss, performs
         backpropagation, and updates model parameters. The DataLoader is expected
-        to yield tuples of (data_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
+        to yield tuples of (sequences_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
         The IDs and positions are currently unused in this training loop.
 
         Args:
@@ -859,7 +944,7 @@ class TransformerModel(nn.Module):
             data = {
                 k: v.to(self.device, non_blocking=True)
                 for k, v in data.items()
-                if k in self.selected_columns
+                if k in self.input_columns
             }
             targets = {
                 k: v.to(self.device, non_blocking=True)
@@ -884,17 +969,17 @@ class TransformerModel(nn.Module):
 
             total_loss += loss.item()
             if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
-                lr = self.scheduler.get_last_lr()[0]
+                learning_rate = self.scheduler.get_last_lr()[0]
                 s_per_batch = (time.time() - start_time) / self.log_interval
-                self.log_file.write(
-                    f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(total_loss)} | LR: {format_number(lr)} | S/Batch {format_number(s_per_batch)}"
+                self.logger.info(
+                    f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(total_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
                 )
                 total_loss = 0.0
                 start_time = time.time()
 
             del data, targets, output, loss, losses
 
-            if self.scheduler_step_iter == "batch":
+            if self.scheduler_step_on == "batch":
                 self.scheduler.step()
 
     @beartype
@@ -944,7 +1029,10 @@ class TransformerModel(nn.Module):
             else:
                 loss += losses[target_column]
 
-        assert loss is not None
+        if loss is None:
+            raise RuntimeError(
+                "Loss calculation failed; no loss tensors were generated."
+            )
 
         return loss, losses
 
@@ -959,16 +1047,16 @@ class TransformerModel(nn.Module):
         Returns:
             A deep copy of the current TransformerModel instance.
         """
-        log_file = self.log_file
-        del self.log_file
+        logger_ref = self.logger
+        del self.logger
         model_copy = copy.deepcopy(self)
         model_copy._initialize_log_file()
-        self.log_file = log_file
+        self.logger = logger_ref
         return model_copy
 
     @beartype
     def _transform_val(self, col: str, val: Tensor) -> Tensor:
-        """Transforms input data to match the format of model output.
+        """ "Transforms input data to match the format of model output.
 
         This is used *only* for calculating the baseline loss, where
         the input (e.g., categorical indices) needs to be one-hot encoded
@@ -989,7 +1077,8 @@ class TransformerModel(nn.Module):
                 .float()
             )
         else:
-            assert self.target_column_types[col] == "real"
+            if self.target_column_types[col] != "real":
+                raise ValueError(f"Column {col} must be 'real' if not 'categorical'.")
             return val
 
     @beartype
@@ -1002,7 +1091,7 @@ class TransformerModel(nn.Module):
         and aggregates results across all processes if in distributed mode.
         Also calculates a one-time baseline loss on the first call.
         The DataLoader is expected to yield tuples of
-        (data_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
+        (sequences_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
         The IDs and positions are currently unused during evaluation.
 
         Args:
@@ -1026,7 +1115,7 @@ class TransformerModel(nn.Module):
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
-                    if k in self.selected_columns
+                    if k in self.input_columns
                 }
                 targets = {
                     k: v.to(self.device, non_blocking=True)
@@ -1085,7 +1174,7 @@ class TransformerModel(nn.Module):
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
-                    if k in self.selected_columns
+                    if k in self.input_columns
                 }
                 targets = {
                     k: v.to(self.device, non_blocking=True)
@@ -1213,7 +1302,7 @@ class TransformerModel(nn.Module):
 
         self.eval()
 
-        os.makedirs(os.path.join(self.project_path, "models"), exist_ok=True)
+        os.makedirs(os.path.join(self.project_root, "models"), exist_ok=True)
 
         if self.export_generative_model:
             self._export_model(model, suffix, epoch)
@@ -1258,7 +1347,7 @@ class TransformerModel(nn.Module):
 
             # Export the model
             export_path = os.path.join(
-                self.project_path,
+                self.project_root,
                 "models",
                 f"sequifier-{self.model_name}-{suffix}-{epoch}.onnx",
             )
@@ -1285,7 +1374,7 @@ class TransformerModel(nn.Module):
             )
         if self.export_pt:
             export_path = os.path.join(
-                self.project_path,
+                self.project_root,
                 "models",
                 f"sequifier-{self.model_name}-{suffix}-{epoch}.pt",
             )
@@ -1310,10 +1399,10 @@ class TransformerModel(nn.Module):
         """
         if self.rank != 0:
             return
-        os.makedirs(os.path.join(self.project_path, "checkpoints"), exist_ok=True)
+        os.makedirs(os.path.join(self.project_root, "checkpoints"), exist_ok=True)
 
         output_path = os.path.join(
-            self.project_path,
+            self.project_root,
             "checkpoints",
             f"{self.model_name}-epoch-{epoch}.pt",
         )
@@ -1328,7 +1417,7 @@ class TransformerModel(nn.Module):
             output_path,
         )
         if self.rank == 0:
-            self.log_file.write(f"[INFO] Saved model to {output_path}")
+            self.logger.info(f"[INFO] Saved model to {output_path}")
 
     @beartype
     def _get_optimizer(self, **kwargs):
@@ -1345,7 +1434,7 @@ class TransformerModel(nn.Module):
         """
         optimizer_class = get_optimizer_class(self.hparams.training_spec.optimizer.name)
         return optimizer_class(
-            self.parameters(), lr=self.hparams.training_spec.lr, **kwargs
+            self.parameters(), lr=self.hparams.training_spec.learning_rate, **kwargs
         )
 
     @beartype
@@ -1361,25 +1450,25 @@ class TransformerModel(nn.Module):
         Returns:
             An initialized torch.optim.lr_scheduler._LRScheduler instance.
         """
-        scheduler_class = eval(
-            f"torch.optim.lr_scheduler.{self.hparams.training_spec.scheduler.name}"
-        )
+        scheduler_name = self.hparams.training_spec.scheduler.name
+        if hasattr(torch.optim.lr_scheduler, scheduler_name):
+            scheduler_class = getattr(torch.optim.lr_scheduler, scheduler_name)
+        else:
+            raise ValueError(
+                f"Scheduler {scheduler_name} not found in torch.optim.lr_scheduler"
+            )
         return scheduler_class(self.optimizer, **kwargs)
 
     @beartype
     def _initialize_log_file(self):
         """Initializes the log file."""
-        os.makedirs(os.path.join(self.project_path, "logs"), exist_ok=True)
-        path = os.path.join(
-            self.project_path, "logs", f"sequifier-{self.model_name}-[NUMBER].txt"
-        )
-        if self.rank is not None:
-            path = path.replace("[NUMBER]", f"rank{self.rank}-[NUMBER]")
-        self.log_file = LogFile(path, self.rank)
+        # Replaces old LogFile class instantiation
+        self.logger = configure_logger(self.project_root, self.model_name, self.rank)
 
     @beartype
     def _load_weights_conditional(self) -> str:
-        """Loads the weights of the model if a checkpoint is found.
+        """
+        Loads the weights of the model if a checkpoint is found.
 
         If `continue_training` is True and a checkpoint for the current
         `model_name` exists, it loads the model and optimizer states.
@@ -1426,7 +1515,7 @@ class TransformerModel(nn.Module):
             The file path (str) to the latest checkpoint, or None if no
             checkpoint is found.
         """
-        checkpoint_path = os.path.join(self.project_path, "checkpoints", "*")
+        checkpoint_path = os.path.join(self.project_root, "checkpoints", "*")
 
         files = glob.glob(checkpoint_path)
         files = [
@@ -1461,11 +1550,11 @@ class TransformerModel(nn.Module):
                     used for class share logging.
         """
         if self.rank == 0:
-            lr = self.optimizer.state_dict()["param_groups"][0]["lr"]
+            learning_rate = self.optimizer.state_dict()["param_groups"][0]["lr"]
 
-            self.log_file.write("-" * 89)
-            self.log_file.write(
-                f"[INFO] Validation | Epoch: {epoch:3d} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(lr)}"
+            self.logger.info("-" * 89)
+            self.logger.info(
+                f"[INFO] Validation | Epoch: {epoch:3d} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(learning_rate)}"
             )
 
             if len(total_losses) > 1:
@@ -1473,7 +1562,7 @@ class TransformerModel(nn.Module):
                     f"{key}_loss: {format_number(value)}"
                     for key, value in total_losses.items()
                 ]
-                self.log_file.write("[INFO]  - " + ", ".join(loss_strs))
+                self.logger.info("[INFO]  - " + ", ".join(loss_strs))
 
             for categorical_column in self.class_share_log_columns:
                 output_values = (
@@ -1491,9 +1580,9 @@ class TransformerModel(nn.Module):
                         for row in output_counts_df.iter_rows(named=True)
                     ]
                 )
-                self.log_file.write(f"[INFO] {categorical_column}: {value_shares}")
+                self.logger.info(f"[INFO] {categorical_column}: {value_shares}")
 
-            self.log_file.write("-" * 89)
+            self.logger.info("-" * 89)
 
 
 @beartype
@@ -1520,8 +1609,12 @@ def load_inference_model(
         The loaded and compiled torch.nn.Module (TransformerModel or
         TransformerEmbeddingModel) in evaluation mode.
     """
+    skip_metadata = args_config.get("skip_metadata", False)
+    args_config_subset = {
+        k: v for k, v in args_config.items() if k not in ["model_path", "data_path"]
+    }
     training_config = load_train_config(
-        training_config_path, args_config, args_config["on_unprocessed"]
+        training_config_path, args_config_subset, skip_metadata
     )
 
     with torch.no_grad():
@@ -1534,7 +1627,7 @@ def load_inference_model(
         else:
             assert False, "impossible"
 
-        model.log_file.write(f"[INFO] Loading model weights from {model_path}")
+        model.logger.info(f"[INFO] Loading model weights from {model_path}")
         model_state = torch.load(
             model_path, map_location=torch.device(device), weights_only=False
         )

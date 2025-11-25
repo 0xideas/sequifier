@@ -39,11 +39,9 @@ repos:
   - repo: local
     hooks:
       - id: version-check
-        name: Check pyproject.toml and conf.py versions
-        entry: hooks/correct_docs_version.py  # Path to your script
+        name: Check version consistency
+        entry: hooks/correct_docs_version.py
         language: python
-        # This hook will only run if these specific files are staged for commit
-        files: ^(pyproject\.toml|docs/source/conf\.py)$
+        files: ^(pyproject\.toml|docs/source/conf\.py|README\.md)$
         pass_filenames: false
-        # Dependencies needed for the hook's environment
         additional_dependencies: [tomli]

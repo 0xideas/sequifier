@@ -15,13 +15,13 @@ from sequifier.config.hyperparameter_search_config import (  # noqa: E402
     load_hyperparameter_search_config,
 )
 from sequifier.config.train_config import TrainModel  # noqa: E402
-from sequifier.helpers import LogFile  # noqa: E402
+from sequifier.helpers import configure_logger  # noqa: E402
 from sequifier.helpers import normalize_path  # noqa: E402
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 
 
 @beartype
-def hyperparameter_search(config_path, on_unprocessed) -> None:
+def hyperparameter_search(config_path, skip_metadata) -> None:
     """Main function for initiating a hyperparameter search process.
 
     This function loads the hyperparameter search configuration, initializes
@@ -30,14 +30,14 @@ def hyperparameter_search(config_path, on_unprocessed) -> None:
     Args:
         config_path (str): Path to the hyperparameter search YAML
             configuration file.
-        on_unprocessed (bool): Flag indicating whether to run the search
+        skip_metadata (bool): Flag indicating whether to run the search
             on unprocessed data.
 
     Returns:
         None
     """
     hyperparameter_search_config = load_hyperparameter_search_config(
-        config_path, on_unprocessed
+        config_path, skip_metadata
     )
 
     hyperparameter_searcher = HyperparameterSearcher(hyperparameter_search_config)
@@ -64,11 +64,13 @@ class HyperparameterSearcher:
         self.config = hyperparameter_search_config
         self.normalized_config_path = normalize_path(
             self.config.model_config_write_path,
-            self.config.project_path,
+            self.config.project_root,
         )
         self.start_run = self._get_start_run()
         self._initialize_log_file()
-        self.n_samples = self._calculate_n_samples()
+        self.n_samples = self._calculate_n_samples(
+            hyperparameter_search_config.override_input
+        )
 
     @beartype
     def _get_start_run(self) -> int:
@@ -91,9 +93,9 @@ class HyperparameterSearcher:
 
         if len(files) > 0:
             last_iter = int(files[-1].split(".")[0].replace(file_root, ""))
-            return last_iter + 1
+            return last_iter
         else:
-            return 1
+            return 0
 
     @beartype
     def _initialize_log_file(self) -> None:
@@ -106,19 +108,12 @@ class HyperparameterSearcher:
         Returns:
             None
         """
-        os.makedirs(os.path.join(self.config.project_path, "logs"), exist_ok=True)
-        open_mode = "w" if self.start_run == 1 else "a"
-        self.log_file = LogFile(
-            os.path.join(
-                self.config.project_path,
-                "logs",
-                f"sequifier-{self.config.hp_search_name}-[NUMBER].txt",
-            ),
-            open_mode,
+        self.logger = configure_logger(
+            self.config.project_root, self.config.hp_search_name
         )
 
     @beartype
-    def _calculate_n_samples(self) -> int:
+    def _calculate_n_samples(self, override_input: bool) -> int:
         """Calculates the total number of hyperparameter combinations to sample.
 
         Based on the `search_strategy` ('grid' or 'sample'), it either
@@ -136,27 +131,31 @@ class HyperparameterSearcher:
                 is 'sample'.
         """
         n_combinations = self.config.n_combinations()
-        print(f"Found {n_combinations} hyperparameter combinations")
+        self.logger.info(f"Found {n_combinations} hyperparameter combinations")
         if self.config.search_strategy == "sample":
             n_samples = self.config.n_samples
-            assert n_samples is not None
+            if n_samples is None:
+                raise ValueError("n_samples must be defined for 'sample' strategy")
             if n_samples > self.config.n_combinations():
-                input(
-                    f"{n_samples} is above the number of combinations of hyperparameters. Press any key to continue with grid search or abort to reconfigure"
-                )
+                if not override_input:
+                    input(
+                        f"{n_samples} is above the number of combinations of hyperparameters. Press any key to continue with grid search or abort to reconfigure"
+                    )
                 n_samples = self.config.n_combinations()
                 self.config.search_strategy = "grid"
         elif self.config.search_strategy == "grid":
             n_samples = self.config.n_combinations()
-            input(
-                f"Found {n_samples} hyperparameter combinations. Please enter any key to confirm, or change search strategy to 'sample'"
-            )
+            if not override_input:
+                input(
+                    f"Found {n_samples} hyperparameter combinations. Please enter any key to confirm, or change search strategy to 'sample'"
+                )
         else:
             raise Exception(
-                f"search strategy {self.config.search_strategy} is not valid. Allowed values are 'grid' and 'sample'"
+                f"search strategy '{self.config.search_strategy}' is not valid. Allowed values are 'grid' and 'sample'"
             )
 
-        assert n_samples is not None
+        if n_samples is None:
+            raise ValueError("n_samples must be defined for 'sample' strategy")
 
         return n_samples
 
@@ -203,7 +202,7 @@ class HyperparameterSearcher:
                 )
             )
 
-        self.log_file.write(
+        self.logger.info(
             f"--- Starting Hyperparameter Search Run {i} with seed {seed} ---"
         )
         try:
@@ -216,21 +215,25 @@ class HyperparameterSearcher:
                 ],
                 check=True,
             )
-            self.log_file.write(f"--- Finished Hyperparameter Search Run {i} ---")
+            self.logger.info(f"--- Finished Hyperparameter Search Run {i} ---")
 
         except subprocess.CalledProcessError as e:
             if attempt < 3:
-                assert config is not None
+                if config is None:
+                    raise RuntimeError("Config object lost during retry logic.")
                 new_batch_size = int(config.training_spec.batch_size / 2)
 
-                assert new_batch_size > 0
+                if new_batch_size <= 0:
+                    raise ValueError(
+                        "Batch size reduced to 0 or less during retry logic."
+                    )
                 config.training_spec.batch_size = new_batch_size
-                self.log_file.write(
+                self.logger.info(
                     f"ERROR: Run {i} failed with exit code {e.returncode}. Halving batch size to {new_batch_size} in attempt {attempt + 1}"
                 )
                 self._create_config_and_run(i, seed, config, attempt=attempt + 1)
             else:
-                self.log_file.write(
+                self.logger.info(
                     f"ERROR: Run {i} failed with exit code {e.returncode}. Stopping run {i}"
                 )
 
@@ -245,7 +248,7 @@ class HyperparameterSearcher:
         Returns:
             None
         """
-        for i in range(self.start_run, self.n_samples + 1):
+        for i in range(self.start_run, self.n_samples):
             seed = int(datetime.now().timestamp() * 1e6) % (2**32)
             np.random.seed(seed)
             self._create_config_and_run(i, seed=seed)

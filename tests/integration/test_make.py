@@ -1,5 +1,6 @@
 import os
 import shutil
+import time
 
 import pytest
 import yaml
@@ -10,6 +11,9 @@ test_project_name = os.path.join("tests", "sequifier-make-test-project")
 
 @pytest.fixture
 def setup_for_test_make():
+    if os.path.exists(test_project_name):
+        shutil.rmtree(test_project_name)
+        time.sleep(1)
     os.system(f"sequifier make {test_project_name}")
 
 
@@ -40,7 +44,7 @@ def adapt_configs(config_strings):
 
         preprocess_config_string = (
             preprocess_config_string.replace(
-                "project_path: .", f"project_path: {test_project_name}"
+                "project_root: .", f"project_root: {test_project_name}"
             )
             .replace(
                 "data_path: PLEASE FILL",
@@ -49,6 +53,7 @@ def adapt_configs(config_strings):
             .replace(
                 "selected_columns: [EXAMPLE_INPUT_COLUMN_NAME]", "selected_columns: "
             )
+            .replace("input_columns: [EXAMPLE_INPUT_COLUMN_NAME]", "input_columns: ")
             .replace("seq_length: 48", "seq_length: 10")
             .replace("max_rows: null", "max_rows: null\nn_cores: 1")
         )
@@ -62,11 +67,12 @@ def adapt_configs(config_strings):
 
         train_config_string = (
             train_config_string.replace(
-                "project_path: .", f"project_path: {test_project_name}"
+                "project_root: .", f"project_root: {test_project_name}"
             )
+            .replace("model_name: PLEASE FILL", "model_name: default")
             .replace(
-                "ddconfig_path: PLEASE FILL",
-                f"ddconfig_path: {test_project_name}/configs/ddconfigs/test-data-categorical-1.json",
+                "metadata_config_path: PLEASE FILL",
+                f"metadata_config_path: {test_project_name}/configs/metadata_configs/test-data-categorical-1.json",
             )
             .replace(
                 "export_generative_model: PLEASE FILL", "export_generative_model: true"
@@ -93,12 +99,12 @@ def adapt_configs(config_strings):
 
         infer_config_string = (
             infer_config_string.replace(
-                "project_path: .", f"project_path: {test_project_name}"
+                "project_root: .", f"project_root: {test_project_name}"
             )
             .replace("model_type: PLEASE_FILL", "model_type: generative")
             .replace(
-                "ddconfig_path: PLEASE FILL",
-                f"ddconfig_path: {test_project_name}/configs/ddconfigs/test-data-categorical-1.json",
+                "metadata_config_path: PLEASE FILL",
+                f"metadata_config_path: {test_project_name}/configs/metadata_configs/test-data-categorical-1.json",
             )
             .replace(
                 "model_path: PLEASE FILL",

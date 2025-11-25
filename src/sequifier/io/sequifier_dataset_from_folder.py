@@ -3,6 +3,7 @@ import os
 from typing import Dict, List, Tuple
 
 import torch
+from loguru import logger
 from torch.utils.data import Dataset
 
 from sequifier.config.train_config import TrainModel
@@ -24,7 +25,7 @@ class SequifierDatasetFromFolder(Dataset):
         into memory. Each .pt file is expected to contain a tuple:
         (sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor).
         """
-        self.data_dir = normalize_path(data_path, config.project_path)
+        self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
         metadata_path = os.path.join(self.data_dir, "metadata.json")
 
@@ -40,10 +41,12 @@ class SequifierDatasetFromFolder(Dataset):
         self.batch_files_info = metadata["batch_files"]
         self.n_samples = metadata["total_samples"]
 
-        print(f"[INFO] Loading training dataset into memory from '{self.data_dir}'...")
+        logger.info(
+            f"[INFO] Loading training dataset into memory from '{self.data_dir}'..."
+        )
 
         all_sequences: Dict[str, List[torch.Tensor]] = {
-            col: [] for col in config.selected_columns
+            col: [] for col in config.input_columns
         }
         all_targets: Dict[str, List[torch.Tensor]] = {
             col: [] for col in config.target_columns
@@ -91,7 +94,7 @@ class SequifierDatasetFromFolder(Dataset):
         for tensor in self.targets.values():
             tensor.share_memory_()
 
-        print(f"[INFO] Dataset loaded with {self.n_samples} samples.")
+        logger.info(f"[INFO] Dataset loaded with {self.n_samples} samples.")
 
         # Verify that the number of loaded samples matches the metadata
         first_key = next(iter(self.sequences.keys()))

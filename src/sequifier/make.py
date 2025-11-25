@@ -1,29 +1,29 @@
 import os
 
-preprocess_config_string = """project_path: .
+preprocess_config_string = """project_root: .
 data_path: PLEASE FILL
 read_format: csv
 write_format: parquet
 selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
 
-group_proportions:
+split_ratios:
 - 0.8
 - 0.1
 - 0.1
 seq_length: 48
-seq_step_sizes:
+stride_by_split:
 - 1
 - 1
 - 1
 max_rows: null
 """
 
-train_config_string = """project_path: .
-model_name: default
+train_config_string = """project_root: .
+model_name: PLEASE FILL
 read_format: parquet
-ddconfig_path: PLEASE FILL
+metadata_config_path: PLEASE FILL
 
-selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
+input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
 target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
 target_column_types: # 'criterion' in training_spec must also be adapted
   EXAMPLE_TARGET_COLUMN_NAME: real
@@ -36,20 +36,22 @@ export_embedding_model: PLEASE FILL # true or false
 export_onnx: true
 
 model_spec:
-  d_model: 128
-  d_model_by_column: # the size of the embedding of individual variables, must sum to d_model
+  initial_embedding_dim: 128
+  feature_embedding_dims: # the size of the embedding of individual variables, must sum to dim_model
     EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical
-  nhead: 16
-  d_hid: 128
-  nlayers: 3
-  inference_size: 1
+  joint_embedding_dim: null
+  dim_model: 128
+  n_head: 16
+  dim_feedforward: 128
+  num_layers: 3
+  prediction_length: 1
 training_spec:
   device: cuda
   epochs: 1000
-  iter_save: 10
+  save_interval_epochs: 10
   batch_size: 100
   log_interval: 10
-  lr: 0.0001
+  learning_rate: 0.0001
   accumulation_steps: 1
   dropout: 0.2
   criterion:
@@ -63,13 +65,13 @@ training_spec:
   continue_training: true
 """
 
-infer_config_string = """project_path: .
-ddconfig_path: PLEASE FILL
+infer_config_string = """project_root: .
+metadata_config_path: PLEASE FILL
 model_type: PLEASE_FILL # generative or embedding
 model_path: PLEASE FILL
 data_path: PLEASE FILL
 
-selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
+input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
 target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
 target_column_types:
   EXAMPLE_TARGET_COLUMN_NAME: real
@@ -99,9 +101,8 @@ def make(args):
     """
     project_name = args.project_name
 
-    assert (
-        project_name is not None and len(project_name) > 0
-    ), f"project_name '{project_name}' is not admissible"
+    if not (project_name and len(project_name) > 0):
+        raise ValueError(f"project_name '{project_name}' is not admissible")
 
     os.makedirs(f"{project_name}/configs")
 

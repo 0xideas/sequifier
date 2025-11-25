@@ -22,8 +22,11 @@ def build_args_config(args: Any) -> dict[str, Any]:
     Returns:
         Dictionary containing configuration options.
     """
+
     args_config = {
-        k: v for k, v in vars(args).items() if v is not None and k != "randomize"
+        k: v
+        for k, v in vars(args).items()
+        if v is not None and k not in ["randomize", "command", "config_path"]
     }
     if args.command != "make":
         if args.randomize:
@@ -31,16 +34,20 @@ def build_args_config(args: Any) -> dict[str, Any]:
             args_config["seed"] = seed
         elif args.command in ["train", "infer"] and args.seed:
             args_config["seed"] = args.seed
-        else:
-            args_config["seed"] = 1010
 
     if "selected_columns" in args_config:
-        if args_config["selected_columns"] == "None":
+        if (
+            len(args_config["selected_columns"]) == 1
+            and args_config["selected_columns"][0] == "None"
+        ):
             args_config["selected_columns"] = None
-        else:
-            args_config["selected_columns"] = (
-                args_config["selected_columns"].replace(" ", "").split(",")
-            )
+
+    if "input_columns" in args_config:
+        if (
+            len(args_config["input_columns"]) == 1
+            and args_config["input_columns"][0] == "None"
+        ):
+            args_config["input_columns"] = None
 
     return args_config
 
@@ -65,7 +72,7 @@ def setup_parser() -> ArgumentParser:
     parser_infer = subparsers.add_parser("infer", help="Run the inference step")
 
     parser_hyperparameter_search = subparsers.add_parser(
-        "hyperparametersearch", help="Run hyperparamter search"
+        "hyperparameter-search", help="Run hyperparamter search"
     )
 
     for subparser in [
@@ -82,17 +89,30 @@ def setup_parser() -> ArgumentParser:
 
         if subparser != parser_hyperparameter_search:
             subparser.add_argument("-r", "--randomize", action="store_true")
-            subparser.add_argument("-sc", "--selected-columns", type=str)
             subparser.add_argument("-dp", "--data-path", type=str)
 
     for subparser in [parser_train, parser_infer, parser_hyperparameter_search]:
-        subparser.add_argument("-ddcp", "--ddconfig-path", type=str)
-        subparser.add_argument("-op", "--on-unprocessed", action="store_true")
+        subparser.add_argument(
+            "-ic",
+            "--input-columns",
+            type=str,
+            nargs="+",
+            help="Space-separated list of input columns (e.g. --input-columns col1 col2)",
+        )
+        subparser.add_argument("-mc", "--metadata-config-path", type=str)
+        subparser.add_argument("-sm", "--skip-metadata", action="store_true")
 
+    parser_preprocess.add_argument(
+        "-sc",
+        "--selected-columns",
+        type=str,
+        nargs="+",
+        help="Space-separated list of selected columns",
+    )
     parser_train.add_argument("-mn", "--model-name", type=str)
     parser_train.add_argument("-s", "--seed", type=int)
 
-    parser_infer.add_argument("-imp", "--model-path", type=str)
+    parser_infer.add_argument("-mp", "--model-path", type=str)
     parser_infer.add_argument("-s", "--seed", type=int)
 
     return parser
@@ -105,7 +125,7 @@ def main() -> None:
     parser = setup_parser()
     args = parser.parse_args()
 
-    if args.command != "hyperparametersearch":
+    if args.command != "hyperparameter-search":
         args_config = build_args_config(args)
 
         if args.command == "make":
@@ -116,8 +136,8 @@ def main() -> None:
             train(args, args_config)
         elif args.command == "infer":
             infer(args, args_config)
-    elif args.command == "hyperparametersearch":
-        hyperparameter_search(args.config_path, args.on_unprocessed)
+    elif args.command == "hyperparameter-search":
+        hyperparameter_search(args.config_path, args.skip_metadata)
 
 
 if __name__ == "__main__":

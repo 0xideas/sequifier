@@ -18,7 +18,7 @@ class AdEMAMix(Optimizer):
     Args:
         params (iterable): Iterable of parameters to optimize or dicts defining
             parameter groups.
-        lr (float, optional): Learning rate (default: 1e-3).
+        learning_rate (float, optional): Learning rate (default: 1e-3).
         betas (Tuple[float, float, float], optional): Coefficients used for
             computing running averages of gradient and its square
             (default: (0.9, 0.999, 0.9999)).
@@ -139,7 +139,7 @@ class AdEMAMix(Optimizer):
                 beta3=beta3,
                 alpha=alpha,
                 T_alpha_beta3=T_alpha_beta3,
-                lr=group["lr"],
+                learning_rate=group["lr"],
                 weight_decay=group["weight_decay"],
                 eps=group["eps"],
             )
@@ -159,7 +159,7 @@ class AdEMAMix(Optimizer):
         beta3,
         alpha,
         T_alpha_beta3,
-        lr,
+        learning_rate,
         weight_decay,
         eps,
     ):
@@ -180,7 +180,7 @@ class AdEMAMix(Optimizer):
             beta3 (float): Coefficient for the slow moment estimate.
             alpha (float): Mixing coefficient.
             T_alpha_beta3 (int): Time period for alpha and beta3 scheduling.
-            lr (float): Learning rate.
+            learning_rate (float): Learning rate.
             weight_decay (float): Weight decay.
             eps (float): Epsilon term for numerical stability.
         """
@@ -218,9 +218,9 @@ class AdEMAMix(Optimizer):
 
             denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(eps)
 
-            step_size = lr / bias_correction1
+            step_size = learning_rate / bias_correction1
 
             if weight_decay != 0:
-                param.add_(param, alpha=-weight_decay * lr)
+                param.add_(param, alpha=-weight_decay * learning_rate)
 
             param.addcdiv_(exp_avg + alpha_t * exp_avg_slow_i, denom, value=-step_size)
