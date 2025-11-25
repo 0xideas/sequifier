@@ -40,7 +40,7 @@ There are documentation pages for each command, except make:
  - [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
 
 
-## Other Materials
+### Other Materials
 
 To get the full auto-generated documentation, visit [sequifier.com](https://sequifier.com)
 
@@ -50,7 +50,7 @@ the [Wikipedia article.](https://en.wikipedia.org/wiki/Transformer_(machine_lear
 If you want to see an end-to-end example on very simple synthetic data, check out this [this notebook.](./documentation/demos/self-contained-example.ipynb)
 
 
-## Structure of a Sequifier Project
+### Structure of a Sequifier Project
 
 Sequifier is designed with a specific folder structure in mind:
 
@@ -107,7 +107,7 @@ On inference, the output is returned in the library input format, introduced fir
 |...|...|...|...|...|
 
 
-## Complete example how to build and apply a transformer sequence classifier with sequifier
+### Complete Example of Training and Inferring a Transformer Model
 
 Once you have your data in the input format described above, you can train a transformer model in a couple of steps on them.
 
@@ -149,7 +149,6 @@ sequifier infer
 9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/sequifier-default-best-predictions.csv`
 
 
-
 ### Embedding Model
 
 While Sequifier's primary use case is training predictive or generative causal transformer models, it also supports the export of embedding models.
@@ -161,20 +160,10 @@ Configuration:
 Technical Details: The generated embedding has dimensionality `dim_model` and consists of the final hidden state (activations) of the transformer's last layer corresponding to the last token in the sequence. Because the model is trained on a causal objective, this is a "forward-looking" embedding: it is optimized to compress the sequence history into a representation that maximizes information about the future state of the data.
 
 
-### Hyperparameter Search
-
-Sequifier supports hyperparameter search (grid search or random sampling) via a dedicated command.
-
-```console
-sequifier hyperparameter-search --config-path=[CONFIG PATH]
-```
-
-You must provide a hyperparameter search config file.
-
-
 ### Distributed Training
 
 Sequifier supports distributed training using torch `DistributedDataParallel`. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
+
 
 ### System Requirements
 
