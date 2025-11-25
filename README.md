@@ -1,7 +1,7 @@
 <img src="./design/sequifier.png">
 
 
-### What is sequifier?
+## What is sequifier?
 
 Sequifier makes training and inference of powerful causal transformer models fast and trustworthy.
 
@@ -55,7 +55,7 @@ If you want to see an end-to-end example on very simple synthetic data, check ou
 
 
 
-### Structure of a Sequifier Project
+## Structure of a Sequifier Project
 
 Sequifier is designed with a specific folder structure in mind:
 
@@ -156,6 +156,7 @@ sequifier infer
 9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/sequifier-default-best-predictions.csv`
 
 
+## Other Features
 
 ### Embedding Model
 
