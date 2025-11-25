@@ -50,6 +50,23 @@ the [Wikipedia article.](https://en.wikipedia.org/wiki/Transformer_(machine_lear
 If you want to see an end-to-end example on very simple synthetic data, check out this [this notebook.](./documentation/demos/self-contained-example.ipynb)
 
 
+## Structure of a Sequifier Project
+
+Sequifier is designed with a specific folder structure in mind:
+
+YOUR_PROJECT_NAME/
+├── configs/
+│   ├── preprocess.yaml
+│   ├── train.yaml
+│   └── infer.yaml
+├── data/
+│   └── (Place your CSV/Parquet files here)
+├── outputs/
+└── logs/
+
+Within YOUR_PROJECT_NAME, you can also add other folders for additional steps, such as `notebooks` or `scripts` for pre- or postprocessing, and `analysis`, `visualizations` or `evals` for files you generate in other, manual steps.
+
+
 ### Data Transformations in Sequifier
 
 Let's start with the data format expected by sequifier. The basic data format that is used as input to the library takes the following form:
