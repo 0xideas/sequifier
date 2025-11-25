@@ -34,10 +34,10 @@ There are five standalone commands within sequifier: `make`, `preprocess`, `trai
 
 There are documentation pages for each command, except make:
 
- - preprocess: [./documentation/configs/preprocess.md]
- - train: [./documentation/configs/train.md]
- - infer: [./documentation/configs/infer.md]
- - hyperparameter-search: [./documentation/configs/hyperparameter-search.md]
+ - [preprocess documentation](./documentation/configs/preprocess.md)
+ - [train documentation](./documentation/configs/train.md)
+ - [infer documentation](./documentation/configs/infer.md)
+ - [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
 
 
 ### Data Formats
