@@ -26,7 +26,12 @@ This gives us a number of benefits:
 - hyperparameter search
 - can be used for prediction, generation and embeddding on/of arbitrary sequences
 
-The only requirement is having input data in the right format, and having sequifier installed.
+The only requirement is having sequifier installed, and having input data in the right format.
+
+### The five commands
+
+There are five standalone commands within sequifier: `make`, `preprocess`, `train`, `infer` and `hyperparameter-search`. `make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, and `hyperparameter-search` executes multiple training runs to find optimal configurations.
+
 
 ### Data Formats
 
@@ -63,7 +68,6 @@ On inference, the output is returned in the library input format, introduced fir
 |1|732|"medium"|14.4|...|
 |...|...|...|...|...|
 
-There are five standalone commands within sequifier: `make`, `preprocess`, `train`, `infer` and `hyperparameter-search`. `make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, and `hyperparameter-search` executes multiple training runs to find optimal configurations.
 
 The input data can be a single csv or parquet file, or a folder of csv or parquet files. The preprocessing output can be a csv or parquet file *per split*, or a folder of multiple torch tensor (pt) files *per split*. The training step does not output any data files (it outputs model files and logs). The inference output can be a single csv or parquet file, or a folder of csv and parquet files. In general, it is recommended to store every step as a single file if the initial input is a single file, and a folder of files if the initial data is a folder of files. For the folder "flow", the preprocessing step write format has to be "pt".
 
@@ -75,21 +79,17 @@ If you want to first get a more specific understanding of the transformer archit
 the [Wikipedia article.](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model))
 
 If you want to see a benchmark on a small synthetic dataset with 10k cases, agains a random forest,
-an xgboost model and a logistic regression, check out [this notebook.](https://www.google.com/search?q=./documentation/demos/benchmark-small-data.ipynb)
+an xgboost model and a logistic regression, check out [this notebook.](./documentation/demos/self-contained-example.ipynb)
 
 ## Complete example how to build and apply a transformer sequence classifier with sequifier
 
 1.  create a conda environment with python \>=3.9 activate and run
-
-<!-- end list -->
 
 ```console
 pip install sequifier
 ```
 
 2.  To create the project folder with the config templates in the configs subfolder, run
-
-<!-- end list -->
 
 ```console
 sequifier make YOUR_PROJECT_NAME
@@ -98,8 +98,6 @@ sequifier make YOUR_PROJECT_NAME
 3.  cd into the `YOUR_PROJECT_NAME` folder, create a `data` folder and add your data and adapt the config file `preprocess.yaml` in the configs folder to take the path to the data
 4.  run
 
-<!-- end list -->
-
 ```console
 sequifier preprocess
 ```
@@ -107,7 +105,6 @@ sequifier preprocess
 5.  the preprocessing step outputs a metadata config at `configs/metadata_configs/[FILE NAME]`. It contains the number of classes found in the data, a map of classes to indices and the paths to train, validation and test splits of data. Adapt the `metadata_config_path` parameter in `train.yaml` and `infer.yaml` to the path `configs/metadata_configs/[FILE NAME]`
 6.  Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 
-<!-- end list -->
 
 ```console
 sequifier train
@@ -116,7 +113,6 @@ sequifier train
 7.  adapt `data_path` in `infer.yaml` to one of the files output in the preprocessing step
 8.  run
 
-<!-- end list -->
 
 ```console
 sequifier infer
