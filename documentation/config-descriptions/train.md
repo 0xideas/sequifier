@@ -6,7 +6,7 @@ The `sequifier train` command initializes and trains a causal transformer model 
 
 ```console
 sequifier train --config-path configs/train.yaml
-````
+```
 
 ## Configuration Fields
 
@@ -44,10 +44,14 @@ These fields determine the size and complexity of the Transformer.
 | `dim_feedforward` | `int` | **Yes** | - | Dimension of the feedforward network model ($d_{ff}$). |
 | `initial_embedding_dim`| `int` | **Yes** | - | Size of initial feature embeddings. Usually equals `dim_model`. |
 | `joint_embedding_dim` | `int` | No | `null` | If set, projects concatenated inputs to this dim before the transformer. If set, must equal `dim_model`. |
+| `feature_embedding_dims`| `dict` | No | `null` | Manual map of column names to embedding sizes. If `null`, sizes are auto-calculated. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
+| `n_kv_heads` | `int` | No | `null` | Number of Key/Value heads for GQA/MQA. If `null`, defaults to `n_head` (standard MHA). |
 | `positional_encoding` | `str` | No | `learned`| `learned` (Standard absolute) or `rope` (Rotary Positional Embedding). |
+| `rope_theta` | `float` | No | `10000.0` | The base frequency for RoPE. Increase for long-context extrapolation. |
 | `normalization` | `str` | No | `rmsnorm`| `rmsnorm` or `layer_norm`. |
+| `norm_first` | `bool` | No | `true` | If `true` (Pre-LN), applies normalization before attention/FFN. More stable. |
 
 ### 4\. Training Hyperparameters (`training_spec`)
 
@@ -60,16 +64,28 @@ These fields determine the size and complexity of the Transformer.
 | `dropout` | `float` | No | `0.0` | Dropout probability. |
 | `optimizer` | `dict` | No | `{'name': 'Adam'}`| Optimizer config. Supports `Adam`, `AdamW`, `AdEMAMix`, etc. |
 | `scheduler` | `dict` | No | `StepLR...` | LR Scheduler config (e.g., `CosineAnnealingLR`). |
+| `scheduler_step_on` | `str` | No | `epoch` | When to step the scheduler: `epoch` or `batch`. |
 | `criterion` | `dict` | **Yes** | - | Map of target columns to loss functions (e.g., `CrossEntropyLoss`, `MSELoss`). |
+| `loss_weights` | `dict` | No | `null` | Weights for combining losses if predicting multiple targets. |
+| `class_weights` | `dict` | No | `null` | Weights for specific classes (useful for imbalanced datasets). |
+| `save_interval_epochs` | `int` | **Yes** | - | Save a checkpoint every N epochs. |
 | `early_stopping_epochs`| `int` | No | `null` | Stop training if validation loss doesn't improve for N epochs. |
+| `log_interval` | `int` | No | `10` | Print training logs every N batches. |
+| `class_share_log_columns`| `list[str]`| No | `[]` | Columns for which to log the predicted class distribution in validation. |
+| `enforce_determinism` | `bool` | No | `false` | Force deterministic algorithms (slower, but reproducible). |
+| `num_workers` | `int` | No | `0` | Number of subprocesses for data loading. |
+| `max_ram_gb` | `float` | No | `16` | RAM limit (GB) for the cache when using lazy loading. |
 
 ### 5\. System & Export
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `export_generative_model`| `bool` | **Yes** | - | Export the standard model for next-token prediction. |
+| `export_embedding_model` | `bool` | **Yes** | - | Export a model that outputs the vector embedding of the sequence. |
 | `inference_batch_size` | `int` | **Yes** | - | Batch size hardcoded into the exported ONNX model. |
 | `export_onnx` | `bool` | No | `true` | Export model as `.onnx` for high-performance inference. |
 | `export_pt` | `bool` | No | `false`| Export model as `.pt` (PyTorch state dict). |
+| `export_with_dropout` | `bool` | No | `false`| Export model with dropout enabled (useful for Monte Carlo Dropout inference). |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
 | `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
 
@@ -84,18 +100,18 @@ These fields determine the size and complexity of the Transformer.
       * *Cons:* Limited by physical RAM. If the dataset is 64GB and you have 32GB RAM, this will crash.
   * **`false` (Lazy Loading):** Loads individual files on-demand during training.
       * *Requirements:* `read_format` must be `pt`.
-      * *Pros:* Can train on datasets significantly larger than RAM. Uses an LRU cache to optimize repeated access.
-      * *Cons:* Slight I/O overhead depending on disk speed.
+      * *Pros:* Can train on datasets significantly larger than RAM. Uses an LRU cache (limit set by `max_ram_gb`) to optimize repeated access.
+      * *Cons:* Slight I/O overhead depending on disk speed. Increase `num_workers` to mitigate this.
 
-### 2\. Attention Mechanism (`attention_type`)
+### 2\. Attention Mechanism (`attention_type` & `n_kv_heads`)
 
   * **`mha` (Multi-Head Attention - Default):** Standard Transformer attention. Best for general accuracy but memory intensive for the KV cache during inference.
-  * **`mqa` (Multi-Query Attention):** Shares a single Key/Value head across all Query heads. Significantly reduces memory usage during inference and speeds up generation, usually with minimal accuracy loss.
-  * **`gqa` (Grouped-Query Attention):** A middle ground between MHA and MQA.
+  * **`mqa` (Multi-Query Attention):** Shares a single Key/Value head across all Query heads (`n_kv_heads: 1`). Significantly reduces memory usage during inference and speeds up generation.
+  * **`gqa` (Grouped-Query Attention):** A middle ground. Set `n_kv_heads` to a value that divides `n_head` (e.g., 8 heads, 2 KV heads).
 
 ### 3\. Activation Function (`activation_fn`)
 
-  * **`swiglu` (Default):** Generally offers better convergence and performance than ReLU or GeLU in modern LLMs (e.g., Llama 2/3). Note that SwiGLU adds learnable parameters, technically increasing the effective parameter count slightly compared to ReLU.
+  * **`swiglu` (Default):** Generally offers better convergence and performance than ReLU or GeLU in modern LLMs (e.g., Llama 2/3).
   * **`gelu` / `relu`:** Standard older activations. Use these if you need strictly smaller models or compatibility with older inference runtimes.
 
 ### 4\. Distributed Training (`distributed`)
