@@ -28,7 +28,7 @@ This gives us a number of benefits:
 
 The only requirement is having sequifier installed, and having input data in the right format.
 
-### The five commands
+### The Five Commands
 
 There are five standalone commands within sequifier: `make`, `preprocess`, `train`, `infer` and `hyperparameter-search`. `make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, and `hyperparameter-search` executes multiple training runs to find optimal configurations.
 
@@ -40,9 +40,19 @@ There are documentation pages for each command, except make:
  - [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
 
 
-### Data Formats
+## Other Materials
 
-The basic data format that is used as input to the library takes the following form:
+To get the full auto-generated documentation, visit [sequifier.com](https://sequifier.com)
+
+If you want to first get a more specific understanding of the transformer architecture, have a look at
+the [Wikipedia article.](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model))
+
+If you want to see an end-to-end example on very simple synthetic data, check out this [this notebook.](./documentation/demos/self-contained-example.ipynb)
+
+
+### Data Transformations in Sequifier
+
+Let's start with the data format expected by sequifier. The basic data format that is used as input to the library takes the following form:
 
 |sequenceId|itemPosition|column1|column2|...|
 |----------|------------|-------|-------|---|
@@ -54,7 +64,7 @@ The basic data format that is used as input to the library takes the following f
 
 The two columns "sequenceId" and "itemPosition" have to be present, and then there must be at least one feature column. There can also be many feature columns, and these can be categorical or real valued.
 
-Data of this input format can be transformed into the format that is used for model training and inference, which takes this form:
+Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`, which takes this form:
 
 |sequenceId|subsequenceId|startItemPosition|columnName|[Subsequence Length]|[Subsequence Length - 1]|...|0|
 |----------|-------------|-----------------|----------|--------------------|------------------------| - |-|
@@ -76,20 +86,11 @@ On inference, the output is returned in the library input format, introduced fir
 |...|...|...|...|...|
 
 
-The input data can be a single csv or parquet file, or a folder of csv or parquet files. The preprocessing output can be a csv or parquet file *per split*, or a folder of multiple torch tensor (pt) files *per split*. The training step does not output any data files (it outputs model files and logs). The inference output can be a single csv or parquet file, or a folder of csv and parquet files. In general, it is recommended to store every step as a single file if the initial input is a single file, and a folder of files if the initial data is a folder of files. For the folder "flow", the preprocessing step write format has to be "pt".
-
-## Other materials
-
-To get the full auto-generated documentation, visit [sequifier.com](https://sequifier.com)
-
-If you want to first get a more specific understanding of the transformer architecture, have a look at
-the [Wikipedia article.](https://en.wikipedia.org/wiki/Transformer_(machine_learning_model))
-
-If you want to see an end-to-end example on very simple synthetic data, check out this [this notebook.](./documentation/demos/self-contained-example.ipynb)
-
 ## Complete example how to build and apply a transformer sequence classifier with sequifier
 
-1.  create a conda environment with python \>=3.9 activate and run
+Once you have your data in the input format described above, you can train a transformer model in a couple of steps on them.
+
+1.  create a conda environment with python \>=3.10 and \<=3.13 activate and run
 
 ```console
 pip install sequifier
@@ -108,7 +109,7 @@ sequifier make YOUR_PROJECT_NAME
 sequifier preprocess
 ```
 
-5.  the preprocessing step outputs a metadata config at `configs/metadata_configs/[FILE NAME]`. It contains the number of classes found in the data, a map of classes to indices and the paths to train, validation and test splits of data. Adapt the `metadata_config_path` parameter in `train.yaml` and `infer.yaml` to the path `configs/metadata_configs/[FILE NAME]`
+5.  the preprocessing step outputs a metadata config at `configs/metadata_configs/[FILE NAME]`. Adapt the `metadata_config_path` parameter in `train.yaml` and `infer.yaml` to the path `configs/metadata_configs/[FILE NAME]`
 6.  Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 
 
@@ -125,6 +126,7 @@ sequifier infer
 ```
 
 9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/sequifier-default-best-predictions.csv`
+
 
 
 ### Embedding Model
