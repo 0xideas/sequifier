@@ -1,0 +1,11 @@
+Add encoder module with more data types and architectures, for e.g. images
+Add "folding"/patching functionality to preprocessing
+Add different configurable decoder modules, e.g. mlp (current), transformer, diffusion
+Add hyperparameter optimization instead of just hyperparameter sampling
+Enable "static" input variables to condition the sequence
+LLM roadmap:
+ - enable tokenization in preprocess and infer with pretrained tokenizer
+ - enable temperature/min_p sampling
+ - implement kv_cache
+ - implement tied encoder and decoder weights
+ - enable loss masking
