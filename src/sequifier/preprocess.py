@@ -1718,16 +1718,14 @@ def get_subsequence_starts(
 
     if subsequence_start_mode == "distribute":
         last_available_start = in_seq_length - (seq_length + 1)
-        starts = np.arange(0, last_available_start + stride_for_split, stride_for_split)
-        starts[-1] = last_available_start
-        if len(starts) > 2:
-            while True:
-                starts_delta = starts[1:] - starts[:-1]
-                if np.max(starts_delta) - np.min(starts_delta) > 1:
-                    starts[np.argmin(starts_delta) + 1] -= 1
-                else:
-                    return starts
-        return starts
+        raw_starts = np.arange(
+            0, last_available_start + stride_for_split, stride_for_split
+        )
+        num_subsequences = len(raw_starts)
+
+        starts = np.linspace(0, last_available_start, num_subsequences, dtype=int)
+
+        return np.unique(starts)
 
     if subsequence_start_mode == "exact":
         if ((in_seq_length - 1) - seq_length) % stride_for_split != 0:
