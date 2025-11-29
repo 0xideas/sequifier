@@ -45,3 +45,13 @@ repos:
         files: ^(pyproject\.toml|docs/source/conf\.py|README\.md)$
         pass_filenames: false
         additional_dependencies: [tomli]
+
+  - repo: local
+    hooks:
+      - id: version-check
+        name: Check dependency consistency
+        entry: hooks/validate_docs_deps.py
+        language: python
+        files: ^(pyproject\.toml|.github/workflows/docs.yml)$
+        pass_filenames: false
+        additional_dependencies: [tomli]
