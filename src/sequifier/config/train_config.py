@@ -3,101 +3,17 @@ import json
 from typing import Any, Optional, Union
 
 import numpy as np
+import torch
+import torch_optimizer
 import yaml
 from beartype import beartype
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+import sequifier
 from sequifier.helpers import normalize_path, try_catch_excess_keys
 
 AnyType = str | int | float
-
-VALID_LOSS_FUNCTIONS = [
-    "L1Loss",
-    "MSELoss",
-    "CrossEntropyLoss",
-    "CTCLoss",
-    "NLLLoss",
-    "PoissonNLLLoss",
-    "GaussianNLLLoss",
-    "KLDivLoss",
-    "BCELoss",
-    "BCEWithLogitsLoss",
-    "MarginRankingLoss",
-    "HingeEmbeddingLoss",
-    "MultiLabelMarginLoss",
-    "HuberLoss",
-    "SmoothL1Loss",
-    "SoftMarginLoss",
-    "MultiLabelSoftMarginLoss",
-    "CosineEmbeddingLoss",
-    "MultiMarginLoss",
-    "TripletMarginLoss",
-    "TripletMarginWithDistanceLoss",
-]
-
-VALID_OPTIMIZERS = [
-    "Adadelta",
-    "Adagrad",
-    "Adam",
-    "AdamW",
-    "SparseAdam",
-    "Adamax",
-    "ASGD",
-    "LBFGS",
-    "NAdam",
-    "RAdam",
-    "RMSprop",
-    "Rprop",
-    "SGD",
-    "AdEMAMix",
-    "A2GradUni",
-    "A2GradInc",
-    "A2GradExp",
-    "AccSGD",
-    "AdaBelief",
-    "AdaBound",
-    "Adafactor",
-    "Adahessian",
-    "AdaMod",
-    "AdamP",
-    "AggMo",
-    "Apollo",
-    "DiffGrad",
-    "Lamb",
-    "LARS",
-    "Lion",
-    "Lookahead",
-    "MADGRAD",
-    "NovoGrad",
-    "PID",
-    "QHAdam",
-    "QHM",
-    "RAdam",
-    "SGDP",
-    "SGDW",
-    "Shampoo",
-    "SWATS",
-    "Yogi",
-]
-
-VALID_SCHEDULERS = [
-    "LambdaLR",
-    "MultiplicativeLR",
-    "StepLR",
-    "MultiStepLR",
-    "ConstantLR",
-    "LinearLR",
-    "ExponentialLR",
-    "PolynomialLR",
-    "CosineAnnealingLR",
-    "ChainedScheduler",
-    "SequentialLR",
-    "ReduceLROnPlateau",
-    "CyclicLR",
-    "OneCycleLR",
-    "CosineAnnealingWarmRestarts",
-]
 
 
 @beartype
@@ -260,10 +176,8 @@ class TrainingSpecModel(BaseModel):
     @classmethod
     def validate_criterion(cls, v):
         for vv in v.values():
-            if vv not in VALID_LOSS_FUNCTIONS:
-                raise ValueError(
-                    f"criterion must be in {VALID_LOSS_FUNCTIONS}, {vv} isn't"
-                )
+            if not hasattr(torch.nn, vv):
+                raise ValueError(f"{vv} not in torch.nn")
         return v
 
     @field_validator("optimizer")
@@ -271,8 +185,12 @@ class TrainingSpecModel(BaseModel):
     def validate_optimizer_config(cls, v):
         if "name" not in v:
             raise ValueError("optimizer dict must specify 'name' field")
-        if v["name"] not in VALID_OPTIMIZERS:
-            raise ValueError(f"optimizer not valid as not found in {VALID_OPTIMIZERS}")
+        if (
+            not hasattr(torch.optim, v["name"])
+            and not hasattr(torch_optimizer, v["name"])
+            and not hasattr(sequifier.optimizers, v["name"])  # type: ignore
+        ):
+            raise ValueError(f"{v['name']} not in torch.optim or in torch_optimizer")
         return v
 
     @field_validator("scheduler")
@@ -280,8 +198,8 @@ class TrainingSpecModel(BaseModel):
     def validate_scheduler_config(cls, v, info_dict):
         if "name" not in v:
             raise ValueError("scheduler dict must specify 'name' field")
-        if v["name"] not in VALID_SCHEDULERS:
-            raise ValueError(f"scheduler not valid as not found in {VALID_SCHEDULERS}")
+        if not hasattr(torch.optim.lr_scheduler, v["name"]):
+            raise ValueError(f"{v} not in torch.optim.lr_scheduler")
         if "total_steps" in v:
             if info_dict.get("scheduler_step_on") == "epoch":
                 if not v["total_steps"] == info_dict.get("epochs"):
