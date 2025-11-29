@@ -10,6 +10,7 @@ from beartype import beartype
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+import sequifier
 from sequifier.helpers import normalize_path, try_catch_excess_keys
 
 AnyType = str | int | float
@@ -184,8 +185,10 @@ class TrainingSpecModel(BaseModel):
     def validate_optimizer_config(cls, v):
         if "name" not in v:
             raise ValueError("optimizer dict must specify 'name' field")
-        if not hasattr(torch.optim, v["name"]) and not hasattr(
-            torch_optimizer, v["name"]
+        if (
+            not hasattr(torch.optim, v["name"])
+            and not hasattr(torch_optimizer, v["name"])
+            and not hasattr(sequifier.optimizers, v["name"])  # type: ignore
         ):
             raise ValueError(f"{v['name']} not in torch.optim or in torch_optimizer")
         return v
