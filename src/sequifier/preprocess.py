@@ -193,6 +193,9 @@ class Preprocessor:
             ) = self._get_column_metadata_across_files(
                 data_path, read_format, max_rows, selected_columns
             )
+            for col in id_maps:
+                col_types[col] = "Int64"
+
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
@@ -843,9 +846,9 @@ def _get_column_statistics(
     """
     for data_col in data_columns:
         dtype = data.schema[data_col]
-        if isinstance(dtype, (pl.String, pl.Utf8)) or isinstance(
-            dtype, (pl.Int8, pl.Int16, pl.Int32, pl.Int64)
-        ):
+        if isinstance(
+            dtype, (pl.String, pl.Utf8, pl.Object, pl.Categorical, pl.Boolean)
+        ) or isinstance(dtype, (pl.Int8, pl.Int16, pl.Int32, pl.Int64)):
             new_id_map = create_id_map(data, column=data_col)
             id_maps[data_col] = combine_maps(new_id_map, id_maps.get(data_col, {}))
         elif isinstance(dtype, (pl.Float32, pl.Float64)):

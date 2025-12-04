@@ -1412,6 +1412,7 @@ class TransformerModel(nn.Module):
                 "epoch": epoch,
                 "model_state_dict": self.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
+                "scheduler_state_dict": self.scheduler.state_dict(),
                 "loss": val_loss,
             },
             output_path,
@@ -1489,6 +1490,10 @@ class TransformerModel(nn.Module):
             self.load_state_dict(checkpoint["model_state_dict"])
             self.start_epoch = checkpoint["epoch"] + 1
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+            if "scheduler_state_dict" in checkpoint:  # REMOVE if in v2
+                self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+
             for state in self.optimizer.state.values():
                 for k, v in state.items():
                     if isinstance(v, torch.Tensor):
