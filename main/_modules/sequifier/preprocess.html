@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/preprocess.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.preprocess - sequifier v1.0.0.2 documentation</title>
+        <title>sequifier.preprocess - sequifier v1.0.0.3 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v1.0.0.2 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v1.0.0.3 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.0.0.2 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.0.0.3 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -454,6 +454,9 @@
             <span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_column_metadata_across_files</span><span class="p">(</span>
                 <span class="n">data_path</span><span class="p">,</span> <span class="n">read_format</span><span class="p">,</span> <span class="n">max_rows</span><span class="p">,</span> <span class="n">selected_columns</span>
             <span class="p">)</span>
+            <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">id_maps</span><span class="p">:</span>
+                <span class="n">col_types</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;Int64&quot;</span>
+
             <span class="bp">self</span><span class="o">.</span><span class="n">_export_metadata</span><span class="p">(</span>
                 <span class="n">id_maps</span><span class="p">,</span> <span class="n">n_classes</span><span class="p">,</span> <span class="n">col_types</span><span class="p">,</span> <span class="n">selected_columns_statistics</span>
             <span class="p">)</span>
@@ -1106,9 +1109,9 @@
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">for</span> <span class="n">data_col</span> <span class="ow">in</span> <span class="n">data_columns</span><span class="p">:</span>
         <span class="n">dtype</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">schema</span><span class="p">[</span><span class="n">data_col</span><span class="p">]</span>
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">String</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Utf8</span><span class="p">))</span> <span class="ow">or</span> <span class="nb">isinstance</span><span class="p">(</span>
-            <span class="n">dtype</span><span class="p">,</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">Int8</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Int16</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Int32</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Int64</span><span class="p">)</span>
-        <span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span>
+            <span class="n">dtype</span><span class="p">,</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">String</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Utf8</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Object</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Categorical</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Boolean</span><span class="p">)</span>
+        <span class="p">)</span> <span class="ow">or</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">Int8</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Int16</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Int32</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Int64</span><span class="p">)):</span>
             <span class="n">new_id_map</span> <span class="o">=</span> <span class="n">create_id_map</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">column</span><span class="o">=</span><span class="n">data_col</span><span class="p">)</span>
             <span class="n">id_maps</span><span class="p">[</span><span class="n">data_col</span><span class="p">]</span> <span class="o">=</span> <span class="n">combine_maps</span><span class="p">(</span><span class="n">new_id_map</span><span class="p">,</span> <span class="n">id_maps</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">data_col</span><span class="p">,</span> <span class="p">{}))</span>
         <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">dtype</span><span class="p">,</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">Float32</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Float64</span><span class="p">)):</span>
@@ -2448,7 +2451,7 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=9b918fc3"></script>
+</div><script src="../../_static/documentation_options.js?v=3fe90bda"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
