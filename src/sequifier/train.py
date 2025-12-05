@@ -472,9 +472,10 @@ class TransformerModel(nn.Module):
 
         self.scaler = GradScaler(device=self.device.split(":")[0], enabled=use_scaler)
 
-        self._apply_layer_dtypes()
         load_string = self._load_weights_conditional()
         self.logger.info(load_string)
+
+        self._apply_layer_dtypes()
 
     @beartype
     def _apply_layer_dtypes(self) -> None:
@@ -715,7 +716,11 @@ class TransformerModel(nn.Module):
 
         for col in self.real_columns:
             if col in self.real_columns_direct:
-                target_dtype = self.final_norm.weight.dtype
+                if hasattr(self.layers[0].ff, "w1"):
+                    target_dtype = self.layers[0].ff.w1.weight.dtype
+                else:
+                    target_dtype = self.layers[0].ff.linear1.weight.dtype
+
                 src_t = src[col].T.unsqueeze(2).to(dtype=target_dtype) * math.sqrt(
                     self.initial_embedding_dim
                 )
