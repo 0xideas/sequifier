@@ -239,6 +239,26 @@ class TransformerEmbeddingModel(nn.Module):
         self.transformer_model = transformer_model
         self.logger = self.transformer_model.logger
 
+    @beartype
+    def _copy_model(self):
+        """Copies the model.
+
+        This creates a deep copy of the model, typically for saving the
+        "best model". It temporarily removes the `log_file` attribute
+        before copying to avoid errors, then re-initializes it.
+
+        Returns:
+            A deep copy of the current TransformerModel instance.
+        """
+        logger_ref = self.transformer_model.logger
+        del self.transformer_model.logger
+        del self.logger
+        model_copy = copy.deepcopy(self)
+        model_copy.transformer_model._initialize_log_file()
+        self.transformer_model.logger = logger_ref
+        self.logger = self.transformer_model.logger
+        return model_copy
+
     def forward(self, src: dict[str, Tensor]):
         """Forward pass for the embedding model.
 
@@ -1367,6 +1387,7 @@ class TransformerModel(nn.Module):
             suffix = f"{suffix}-embedding"
             self._export_model(model2, suffix, epoch)
 
+    @beartype
     def _export_model(
         self,
         model: Union["TransformerModel", "TransformerEmbeddingModel"],
@@ -1383,8 +1404,19 @@ class TransformerModel(nn.Module):
             suffix: A string suffix for the filename (e.g., "best", "last-embedding").
             epoch: The current epoch number, included in the filename.
         """
-
         if self.export_onnx:
+            is_different_type = any(
+                p.dtype in [torch.float16, torch.bfloat16, torch.float64]
+                for p in model.parameters()
+            )
+            model_to_export = model
+
+            if is_different_type:
+                self.logger.info(
+                    "[INFO] Casting model to float32 for ONNX export compatibility..."
+                )
+                model_to_export = model._copy_model().float()
+
             x_cat = {
                 col: torch.randint(
                     0,
@@ -1393,9 +1425,11 @@ class TransformerModel(nn.Module):
                 ).to(self.device, non_blocking=True)
                 for col in self.categorical_columns
             }
+
+            dtype_real = torch.float32 if is_different_type else None
             x_real = {
                 col: torch.rand(self.inference_batch_size, self.seq_length).to(
-                    self.device, non_blocking=True
+                    self.device, non_blocking=True, dtype=dtype_real
                 )
                 for col in self.real_columns
             }
@@ -1415,16 +1449,16 @@ class TransformerModel(nn.Module):
             )
             constant_folding = self.export_with_dropout == False  # noqa: E712
             torch.onnx.export(
-                model,  # model being run
+                model_to_export,
                 x,  # model input (or a tuple for multiple inputs)
-                export_path,  # where to save the model (can be a file or file-like object)
-                export_params=True,  # store the trained parameter weights inside the model file
-                opset_version=14,  # the ONNX version to export the model to
-                do_constant_folding=constant_folding,  # whether to execute constant folding for optimization
-                input_names=["input"],  # the model's input names
-                output_names=["output"],  # the model's output names
+                export_path,  # where to save the model
+                export_params=True,  # store the trained parameter weights
+                opset_version=14,  # the ONNX version
+                do_constant_folding=constant_folding,
+                input_names=["input"],
+                output_names=["output"],
                 dynamic_axes={
-                    "input": {0: "batch_size"},  # variable length axes
+                    "input": {0: "batch_size"},
                     "output": {0: "batch_size"},
                 },
                 training=training_mode,
@@ -1744,14 +1778,12 @@ def infer_with_embedding_model(
             data_gpu = {}
             for col, x_ in x_sub.items():
                 if col in categorical_cols:
-                    # Categorical inputs must be Long/Int64 for Embedding layers
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
                 else:
-                    # Real inputs should match the model's dtype (e.g. bfloat16, float32)
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=ref_dtype)
 
             output_gpu = model.forward(data_gpu)
-            output_cpu = output_gpu.cpu().detach().numpy()
+            output_cpu = output_gpu.cpu().detach().float().numpy()
             output_cpu = output_cpu.transpose(1, 0, 2).reshape(
                 output_cpu.shape[0] * output_cpu.shape[1], output_cpu.shape[2]
             )
@@ -1786,7 +1818,6 @@ def infer_with_generative_model(
     """
     outs0 = []
 
-    # Generative model is usually TransformerModel (not wrapped)
     categorical_cols = set(model.categorical_columns)
 
     with torch.no_grad():
@@ -1795,10 +1826,8 @@ def infer_with_generative_model(
             data_gpu = {}
             for col, x_ in x_sub.items():
                 if col in categorical_cols:
-                    # Categorical inputs must be Long/Int64 for Embedding layers
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
                 else:
-                    # Real inputs should match the model's dtype
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=ref_dtype)
 
             output_gpu = model.forward(data_gpu)
@@ -1811,6 +1840,7 @@ def infer_with_generative_model(
         target_column: np.concatenate(
             [
                 o[target_column]
+                .float()
                 .numpy()
                 .transpose(1, 0, 2)
                 .reshape(
