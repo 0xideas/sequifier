@@ -21,7 +21,7 @@ class RMSNorm(nn.Module):
 
         # 4. Cast back to the *input tensor's* dtype (traceable),
         #    rather than self.weight.dtype (not traceable in Cast ops)
-        return self.weight * x_normed.to(x.dtype)
+        return (self.weight.to(x_normed.dtype) * x_normed).to(x.dtype)
 
 
 class RotaryEmbedding(nn.Module):

@@ -715,12 +715,7 @@ class TransformerModel(nn.Module):
 
         for col in self.real_columns:
             if col in self.real_columns_direct:
-                target_dtype = torch.float32
-                if len(self.categorical_columns) > 0:
-                    target_dtype = self.encoder[
-                        self.categorical_columns[0]
-                    ].weight.dtype
-
+                target_dtype = self.final_norm.weight.dtype
                 src_t = src[col].T.unsqueeze(2).to(dtype=target_dtype) * math.sqrt(
                     self.initial_embedding_dim
                 )
@@ -1783,7 +1778,11 @@ def infer_with_embedding_model(
 
     with torch.no_grad():
         for x_sub in x:
-            ref_dtype = next(model.parameters()).dtype
+            layer_types = (
+                model.transformer_model.hparams.training_spec.layer_type_dtypes or {}
+            )
+            dtype_str = layer_types.get("linear", "float32")
+            ref_dtype = get_torch_dtype(dtype_str)
             data_gpu = {}
             for col, x_ in x_sub.items():
                 if col in categorical_cols:
@@ -1831,7 +1830,9 @@ def infer_with_generative_model(
 
     with torch.no_grad():
         for x_sub in x:
-            ref_dtype = next(model.parameters()).dtype
+            layer_types = model.hparams.training_spec.layer_type_dtypes or {}
+            dtype_str = layer_types.get("linear", "float32")
+            ref_dtype = get_torch_dtype(dtype_str)
             data_gpu = {}
             for col, x_ in x_sub.items():
                 if col in categorical_cols:
