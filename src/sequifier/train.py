@@ -490,9 +490,12 @@ class TransformerModel(nn.Module):
         # Iterate over all sub-modules and cast based on type
         for name, module in self.named_modules():
             # Linear Layers
-            if isinstance(module, nn.Linear) and "linear" in layer_config:
-                target_dtype = get_torch_dtype(layer_config["linear"])
-                module.to(dtype=target_dtype)
+            if isinstance(module, nn.Linear):
+                is_decoder = any(module is m for m in self.decoder.values())
+                if is_decoder and "decoder" in layer_config:
+                    module.to(dtype=get_torch_dtype(layer_config["decoder"]))
+                elif "linear" in layer_config:
+                    module.to(dtype=get_torch_dtype(layer_config["linear"]))
 
             # Embeddings
             elif isinstance(module, nn.Embedding) and "embedding" in layer_config:
@@ -813,7 +816,10 @@ class TransformerModel(nn.Module):
             The decoded output (logits or real value) for the target column
             (seq_length, batch_size, n_classes/1).
         """
-        decoded = self.decoder[target_column](output)
+
+        target_dtype = self.decoder[target_column].weight.dtype
+        decoded = self.decoder[target_column](output.to(target_dtype)).to(torch.float32)
+
         return decoded
 
     @beartype

@@ -189,7 +189,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     @field_validator("layer_type_dtypes")
     @classmethod
     def validate_layer_type_dtypes(cls, v):
-        expected_keys = ["embedding", "linear", "norm"]
+        expected_keys = ["embedding", "linear", "norm", "decoder"]
         allowed_types = [
             "float32",
             "float16",

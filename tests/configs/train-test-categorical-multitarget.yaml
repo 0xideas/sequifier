@@ -74,3 +74,4 @@ training_spec:
     embedding: bfloat16
     linear: bfloat16
     norm: bfloat16
+    decoder: float32
