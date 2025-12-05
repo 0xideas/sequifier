@@ -91,6 +91,8 @@ These fields determine the size and complexity of the Transformer.
 | `export_with_dropout` | `bool` | No | `false`| Export model with dropout enabled (useful for Monte Carlo Dropout inference). |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
 | `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
+| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
+| `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
 
 -----
 

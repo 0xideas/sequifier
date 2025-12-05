@@ -719,11 +719,7 @@ class TransformerModel(nn.Module):
 
         for col in self.real_columns:
             if col in self.real_columns_direct:
-                if hasattr(self.layers[0].ff, "w1"):
-                    target_dtype = self.layers[0].ff.w1.weight.dtype
-                else:
-                    target_dtype = self.layers[0].ff.linear1.weight.dtype
-
+                target_dtype = self.layers[0].ff.get_first_layer_dtype()
                 src_t = src[col].T.unsqueeze(2).to(dtype=target_dtype) * math.sqrt(
                     self.initial_embedding_dim
                 )

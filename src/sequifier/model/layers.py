@@ -85,6 +85,12 @@ class CustomFeedForward(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
+    def get_first_layer_dtype(self):
+        if self.activation_fn == "swiglu":
+            return self.w1.weight.dtype
+        else:
+            return self.linear1.weight.dtype
+
     def forward(self, x):
         if self.activation_fn == "swiglu":
             return self.w3(self.dropout(F.silu(self.w1(x)) * self.w2(x)))
