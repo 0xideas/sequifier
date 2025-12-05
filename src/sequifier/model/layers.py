@@ -10,9 +10,14 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
+        # Calculate variance in float32 for stability
         var = torch.mean(x.to(torch.float32).pow(2), dim=-1, keepdim=True)
-        x_normed = x * torch.rsqrt(var + self.eps)
-        return self.weight * x_normed
+
+        # Calculate norm in float32
+        x_normed = x.to(torch.float32) * torch.rsqrt(var + self.eps)
+
+        # Cast back to the weight's dtype (e.g., bfloat16) before multiplication
+        return self.weight * x_normed.to(self.weight.dtype)
 
 
 class RotaryEmbedding(nn.Module):
@@ -38,8 +43,6 @@ class RotaryEmbedding(nn.Module):
         )
 
     def forward(self, x, seq_len):
-        if int(seq_len) > self.cos_cached.shape[2]:
-            self._update_cos_sin_cache(seq_len)
         return self.cos_cached[:, :, :seq_len, ...], self.sin_cached[
             :, :, :seq_len, ...
         ]
@@ -51,6 +54,8 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin):
+    cos = cos.to(dtype=q.dtype)
+    sin = sin.to(dtype=q.dtype)
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
@@ -90,6 +95,7 @@ class CustomSelfAttention(nn.Module):
         n_kv_heads,
         attention_type,
         dropout,
+        seq_length,
         use_rope=False,
         rope_theta=10000.0,
     ):
@@ -109,7 +115,9 @@ class CustomSelfAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         if use_rope:
-            self.rope = RotaryEmbedding(self.head_dim, theta=rope_theta)
+            self.rope = RotaryEmbedding(
+                self.head_dim, max_seq_len=seq_length, theta=rope_theta
+            )
             if self.head_dim % 2 != 0:
                 raise ValueError(f"head_dim ({self.head_dim}) must be even for RoPE")
 
@@ -157,7 +165,7 @@ class CustomSelfAttention(nn.Module):
 
 
 class SequifierEncoderLayer(nn.Module):
-    def __init__(self, config, dim_model, n_head, dim_feedforward, dropout):
+    def __init__(self, config, dim_model, n_head, dim_feedforward, dropout, seq_length):
         super().__init__()
         self.norm_first = config.norm_first
 
@@ -173,6 +181,7 @@ class SequifierEncoderLayer(nn.Module):
             n_kv_heads=config.n_kv_heads,
             attention_type=config.attention_type,
             dropout=dropout,
+            seq_length=seq_length,
             use_rope=(config.positional_encoding == "rope"),
             rope_theta=config.rope_theta,
         )

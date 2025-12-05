@@ -379,6 +379,7 @@ class TransformerModel(nn.Module):
                     hparams.model_spec.n_head,
                     hparams.model_spec.dim_feedforward,
                     hparams.training_spec.dropout,
+                    hparams.seq_length,
                 )
                 for _ in range(hparams.model_spec.num_layers)
             ]
@@ -431,7 +432,6 @@ class TransformerModel(nn.Module):
         )
 
         self._init_weights()
-        self._apply_layer_dtypes()
 
         self.optimizer = self._get_optimizer(
             **self._filter_key(hparams.training_spec.optimizer, "name")
@@ -443,6 +443,8 @@ class TransformerModel(nn.Module):
 
         self.save_interval_epochs = hparams.training_spec.save_interval_epochs
         self.continue_training = hparams.training_spec.continue_training
+
+        self._apply_layer_dtypes()
         load_string = self._load_weights_conditional()
         self.logger.info(load_string)
 
@@ -472,6 +474,12 @@ class TransformerModel(nn.Module):
             elif isinstance(module, (nn.LayerNorm, RMSNorm)) and "norm" in layer_config:
                 target_dtype = get_torch_dtype(layer_config["norm"])
                 module.to(dtype=target_dtype)
+
+        if "linear" in layer_config:
+            target_dtype = get_torch_dtype(layer_config["linear"])
+            for criterion in self.criterion.values():
+                if hasattr(criterion, "weight") and criterion.weight is not None:
+                    criterion.weight.data = criterion.weight.data.to(dtype=target_dtype)
 
     @beartype
     def _init_criterion(self, hparams: Any) -> dict[str, Any]:
@@ -1118,10 +1126,11 @@ class TransformerModel(nn.Module):
             (e.g., one-hot encoded).
         """
         if self.target_column_types[col] == "categorical":
+            target_dtype = self.decoder[col].weight.dtype
             return (
                 one_hot(val, self.n_classes[col])
                 .reshape(-1, self.n_classes[col])
-                .float()
+                .to(dtype=target_dtype)
             )
         else:
             if self.target_column_types[col] != "real":
