@@ -91,6 +91,8 @@ These fields determine the size and complexity of the Transformer.
 | `export_with_dropout` | `bool` | No | `false`| Export model with dropout enabled (useful for Monte Carlo Dropout inference). |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
 | `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
+| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
+| `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
 
 -----
 
@@ -131,6 +133,54 @@ If you have multiple GPUs:
   * **Generative:** Exports the full model head. Use this if you want to predict the next token/value (forecasting, generation).
   * **Embedding:** Exports a model that outputs the vector representation of the final token *before* the decoding layer. Use this for clustering, similarity search, or feeding dense features into downstream models (e.g., XGBoost).
 
+### 6\. Mixed Precision & Weight Types (`layer_type_dtypes`)
+
+Sequifier v1.0.0.4 introduces advanced controls for numerical precision. This allows you to trade off numerical accuracy for significantly reduced memory usage (VRAM) and faster training speeds.
+
+  * **`layer_autocast`**: Enables PyTorch's Automatic Mixed Precision (AMP).
+  * **`layer_type_dtypes`**: Manually casts specific model components to lower precision formats (e.g., `bfloat16`, `float8`).
+
+#### A. Automatic vs. Manual Precision
+
+  * **Autocast (`layer_autocast: true`):**
+      * *How it works:* PyTorch automatically determines which operations are safe to run in half-precision (`float16` or `bfloat16`) and which require full precision (`float32`).
+      * *Pros:* Safest approach. Maintains model stability while speeding up math operations.
+      * *Cons:* Weights often remain stored in `float32` in memory, only downcasting for the calculation. Less VRAM savings than manual casting.
+  * **Manual Casting (`layer_type_dtypes`):**
+      * *How it works:* You explicitly force specific layers (e.g., `linear`) to store their weights in lower precision.
+      * *Pros:* Maximizes VRAM savings. Allows training much larger models on the same hardware.
+      * *Cons:* Higher risk of numerical instability (NaNs) or divergence if the precision is too low for the task.
+
+#### B. Data Type Selection (`float16` vs. `bfloat16` vs. `float8`)
+
+When defining `layer_type_dtypes`, you must choose the right format for your hardware:
+
+| Type | Description | Hardware Support | Trade-off |
+| :--- | :--- | :--- | :--- |
+| **`float32`** | Standard single precision. | All GPUs. | High precision, high memory usage. The safe default. |
+| **`float16`** | Half precision. | Volta (V100) & newer. | Fast, but has a small dynamic range. Prone to "overflow" (Infinity values). Sequifier automatically enables a `GradScaler` to mitigate this. |
+| **`bfloat16`** | Brain Floating Point. | Ampere (A100/3090) & newer. | **Recommended for modern GPUs.** Has the same dynamic range as `float32` but lower precision. Rarely overflows, requires no scaler, and is very stable. |
+| **`float8_e4m3fn`** | 8-bit floating point. | Hopper (H100) & newer. | **Experimental.** Extreme speed and memory efficiency. Only useful on cutting-edge hardware; may degrade model accuracy. |
+
+#### C. Layer Granularity
+
+You can mix and match precision for different parts of the model using the dictionary keys:
+
+  * **`linear`:** The bulk of the transformer parameters. Casting this to `bfloat16` or `float16` yields the biggest performance gains.
+  * **`embedding`:** Stores the vector representations of inputs. Often kept in `float32` for stability, as aggressive quantization here can hurt representation quality.
+  * **`norm`:** Normalization layers (RMSNorm/LayerNorm). **Strongly recommended** to keep these in `float32` to avoid exploding gradients.
+  * **`decoder`:** The final prediction head. Can usually match the `linear` type.
+
+> **Possible Configuration for A100/H100/3090/4090:**
+>
+> ```yaml
+> layer_autocast: true
+> layer_type_dtypes:
+>   linear: bfloat16
+>   decoder: bfloat16
+>   embedding: float32
+>   norm: float32
+> ```
 -----
 
 ## Outputs

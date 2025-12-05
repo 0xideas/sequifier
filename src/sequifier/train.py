@@ -15,6 +15,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from beartype import beartype
 from torch import Tensor, nn
+from torch.amp import GradScaler
 from torch.nn import ModuleDict
 from torch.nn.functional import one_hot
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -24,7 +25,11 @@ from torch.utils.data.distributed import DistributedSampler
 torch._dynamo.config.suppress_errors = True
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.helpers import construct_index_maps  # noqa: E402
-from sequifier.helpers import configure_determinism, configure_logger  # noqa: E402
+from sequifier.helpers import (  # noqa: E402
+    configure_determinism,
+    configure_logger,
+    get_torch_dtype,
+)
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
 )
@@ -235,6 +240,26 @@ class TransformerEmbeddingModel(nn.Module):
         self.transformer_model = transformer_model
         self.logger = self.transformer_model.logger
 
+    @beartype
+    def _copy_model(self):
+        """Copies the model.
+
+        This creates a deep copy of the model, typically for saving the
+        "best model". It temporarily removes the `log_file` attribute
+        before copying to avoid errors, then re-initializes it.
+
+        Returns:
+            A deep copy of the current TransformerModel instance.
+        """
+        logger_ref = self.transformer_model.logger
+        del self.transformer_model.logger
+        del self.logger
+        model_copy = copy.deepcopy(self)
+        model_copy.transformer_model._initialize_log_file()
+        self.transformer_model.logger = logger_ref
+        self.logger = self.transformer_model.logger
+        return model_copy
+
     def forward(self, src: dict[str, Tensor]):
         """Forward pass for the embedding model.
 
@@ -375,6 +400,7 @@ class TransformerModel(nn.Module):
                     hparams.model_spec.n_head,
                     hparams.model_spec.dim_feedforward,
                     hparams.training_spec.dropout,
+                    hparams.seq_length,
                 )
                 for _ in range(hparams.model_spec.num_layers)
             ]
@@ -427,6 +453,7 @@ class TransformerModel(nn.Module):
         )
 
         self._init_weights()
+
         self.optimizer = self._get_optimizer(
             **self._filter_key(hparams.training_spec.optimizer, "name")
         )
@@ -437,8 +464,54 @@ class TransformerModel(nn.Module):
 
         self.save_interval_epochs = hparams.training_spec.save_interval_epochs
         self.continue_training = hparams.training_spec.continue_training
+
+        use_scaler = False
+        if hparams.training_spec.layer_type_dtypes:
+            if "float16" in hparams.training_spec.layer_type_dtypes.values():
+                use_scaler = True
+
+        self.scaler = GradScaler(device=self.device.split(":")[0], enabled=use_scaler)
+
         load_string = self._load_weights_conditional()
         self.logger.info(load_string)
+
+        self._apply_layer_dtypes()
+
+    @beartype
+    def _apply_layer_dtypes(self) -> None:
+        """Casts specific layer types to configured dtypes (e.g., bfloat16, float8)."""
+        layer_config = self.hparams.training_spec.layer_type_dtypes
+
+        if not layer_config:
+            return
+
+        self.logger.info(f"[INFO] Applying custom layer dtypes: {layer_config}")
+
+        # Iterate over all sub-modules and cast based on type
+        for name, module in self.named_modules():
+            # Linear Layers
+            if isinstance(module, nn.Linear):
+                is_decoder = any(module is m for m in self.decoder.values())
+                if is_decoder and "decoder" in layer_config:
+                    module.to(dtype=get_torch_dtype(layer_config["decoder"]))
+                elif "linear" in layer_config:
+                    module.to(dtype=get_torch_dtype(layer_config["linear"]))
+
+            # Embeddings
+            elif isinstance(module, nn.Embedding) and "embedding" in layer_config:
+                target_dtype = get_torch_dtype(layer_config["embedding"])
+                module.to(dtype=target_dtype)
+
+            # Normalization (RMSNorm, LayerNorm)
+            elif isinstance(module, (nn.LayerNorm, RMSNorm)) and "norm" in layer_config:
+                target_dtype = get_torch_dtype(layer_config["norm"])
+                module.to(dtype=target_dtype)
+
+        if "linear" in layer_config:
+            target_dtype = get_torch_dtype(layer_config["linear"])
+            for criterion in self.criterion.values():
+                if hasattr(criterion, "weight") and criterion.weight is not None:
+                    criterion.weight.data = criterion.weight.data.to(dtype=target_dtype)
 
     @beartype
     def _init_criterion(self, hparams: Any) -> dict[str, Any]:
@@ -646,12 +719,15 @@ class TransformerModel(nn.Module):
 
         for col in self.real_columns:
             if col in self.real_columns_direct:
-                src_t = src[col].T.unsqueeze(2) * math.sqrt(self.initial_embedding_dim)
-            else:
-                assert col in self.real_columns_with_embedding
-                src_t = self.encoder[col](src[col].T[:, :, None]) * math.sqrt(
+                target_dtype = self.layers[0].ff.get_first_layer_dtype()
+                src_t = src[col].T.unsqueeze(2).to(dtype=target_dtype) * math.sqrt(
                     self.initial_embedding_dim
                 )
+            else:
+                assert col in self.real_columns_with_embedding
+                layer = self.encoder[col]
+                inp = src[col].T[:, :, None].to(dtype=layer.weight.dtype)
+                src_t = layer(inp) * math.sqrt(self.initial_embedding_dim)
 
             if not self.use_rope:
                 pos = (
@@ -674,8 +750,9 @@ class TransformerModel(nn.Module):
         if self.joint_embedding_layer is not None:
             src2 = self.joint_embedding_layer(src2)
 
+        mask = self.src_mask.to(dtype=src2.dtype)
         for layer in self.layers:
-            src2 = layer(src2, src_mask=self.src_mask)
+            src2 = layer(src2, src_mask=mask)
 
         src2 = self.final_norm(src2)
 
@@ -735,7 +812,10 @@ class TransformerModel(nn.Module):
             The decoded output (logits or real value) for the target column
             (seq_length, batch_size, n_classes/1).
         """
-        decoded = self.decoder[target_column](output)
+
+        target_dtype = self.decoder[target_column].weight.dtype
+        decoded = self.decoder[target_column](output.to(target_dtype)).to(torch.float32)
+
         return decoded
 
     @beartype
@@ -755,7 +835,7 @@ class TransformerModel(nn.Module):
         if target_column in self.real_columns:
             return output
         else:
-            return self.softmax[target_column](output)
+            return self.softmax[target_column](output.float())
 
     @beartype
     def forward(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -951,20 +1031,34 @@ class TransformerModel(nn.Module):
                 for k, v in targets.items()
                 if k in self.target_column_types
             }
-            output = self.forward_train(data)
+            if self.hparams.training_spec.layer_autocast:
+                amp_dtype = get_torch_dtype(
+                    self.hparams.training_spec.layer_type_dtypes.get(
+                        "linear", "bfloat16"
+                    )
+                    if self.hparams.training_spec.layer_type_dtypes
+                    else "float32"
+                )
+                with torch.autocast(
+                    device_type=self.device.split(":")[0], dtype=amp_dtype
+                ):
+                    output = self.forward_train(data)
+                    loss, losses = self._calculate_loss(output, targets)
+            else:
+                output = self.forward_train(data)
+                loss, losses = self._calculate_loss(output, targets)
 
-            loss, losses = self._calculate_loss(output, targets)
-
-            loss.backward()
-
-            torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+            self.scaler.scale(loss).backward()
 
             if (
                 self.accumulation_steps is None
                 or (batch_count + 1) % self.accumulation_steps == 0
                 or (batch_count + 1) == num_batches
             ):
-                self.optimizer.step()
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
                 self.optimizer.zero_grad()
 
             total_loss += loss.item()
@@ -1008,14 +1102,23 @@ class TransformerModel(nn.Module):
         for target_column in targets.keys():
             target_column_type = self.target_column_types[target_column]
             if target_column_type == "categorical":
-                output[target_column] = output[target_column].reshape(
-                    -1, self.n_classes[target_column]
+                output[target_column] = (
+                    output[target_column]
+                    .float()
+                    .reshape(-1, self.n_classes[target_column])
                 )
             elif target_column_type == "real":
-                output[target_column] = output[target_column].reshape(-1)
+                output[target_column] = (
+                    output[target_column].to(dtype=torch.float32).reshape(-1)
+                )
+
+            target_tensor = targets[target_column].T.contiguous().reshape(-1)
+
+            if self.target_column_types[target_column] == "real":
+                target_tensor = target_tensor.to(dtype=output[target_column].dtype)
 
             losses[target_column] = self.criterion[target_column](
-                output[target_column], targets[target_column].T.contiguous().reshape(-1)
+                output[target_column], target_tensor
             )
         loss = None
         for target_column in targets.keys():
@@ -1071,10 +1174,11 @@ class TransformerModel(nn.Module):
             (e.g., one-hot encoded).
         """
         if self.target_column_types[col] == "categorical":
+            target_dtype = self.decoder[col].weight.dtype
             return (
                 one_hot(val, self.n_classes[col])
                 .reshape(-1, self.n_classes[col])
-                .float()
+                .to(dtype=target_dtype)
             )
         else:
             if self.target_column_types[col] != "real":
@@ -1123,8 +1227,22 @@ class TransformerModel(nn.Module):
                     if k in self.target_column_types
                 }
 
-                output = self.forward_train(data)
-                loss, losses = self._calculate_loss(output, targets)
+                if self.hparams.training_spec.layer_autocast:
+                    amp_dtype = get_torch_dtype(
+                        self.hparams.training_spec.layer_type_dtypes.get(
+                            "linear", "bfloat16"
+                        )
+                        if self.hparams.training_spec.layer_type_dtypes
+                        else "float32"
+                    )
+                    with torch.autocast(
+                        device_type=self.device.split(":")[0], dtype=amp_dtype
+                    ):
+                        output = self.forward_train(data)
+                        loss, losses = self._calculate_loss(output, targets)
+                else:
+                    output = self.forward_train(data)
+                    loss, losses = self._calculate_loss(output, targets)
 
                 total_loss_collect.append(loss.item())
                 for col, loss in losses.items():
@@ -1311,6 +1429,7 @@ class TransformerModel(nn.Module):
             suffix = f"{suffix}-embedding"
             self._export_model(model2, suffix, epoch)
 
+    @beartype
     def _export_model(
         self,
         model: Union["TransformerModel", "TransformerEmbeddingModel"],
@@ -1328,6 +1447,18 @@ class TransformerModel(nn.Module):
             epoch: The current epoch number, included in the filename.
         """
         if self.export_onnx:
+            is_different_type = any(
+                p.dtype in [torch.float16, torch.bfloat16, torch.float64]
+                for p in model.parameters()
+            )
+            model_to_export = model
+
+            if is_different_type:
+                self.logger.info(
+                    "[INFO] Casting model to float32 for ONNX export compatibility..."
+                )
+                model_to_export = model._copy_model().float()
+
             x_cat = {
                 col: torch.randint(
                     0,
@@ -1336,9 +1467,11 @@ class TransformerModel(nn.Module):
                 ).to(self.device, non_blocking=True)
                 for col in self.categorical_columns
             }
+
+            dtype_real = torch.float32 if is_different_type else None
             x_real = {
                 col: torch.rand(self.inference_batch_size, self.seq_length).to(
-                    self.device, non_blocking=True
+                    self.device, non_blocking=True, dtype=dtype_real
                 )
                 for col in self.real_columns
             }
@@ -1358,16 +1491,16 @@ class TransformerModel(nn.Module):
             )
             constant_folding = self.export_with_dropout == False  # noqa: E712
             torch.onnx.export(
-                model,  # model being run
+                model_to_export,
                 x,  # model input (or a tuple for multiple inputs)
-                export_path,  # where to save the model (can be a file or file-like object)
-                export_params=True,  # store the trained parameter weights inside the model file
-                opset_version=14,  # the ONNX version to export the model to
-                do_constant_folding=constant_folding,  # whether to execute constant folding for optimization
-                input_names=["input"],  # the model's input names
-                output_names=["output"],  # the model's output names
+                export_path,  # where to save the model
+                export_params=True,  # store the trained parameter weights
+                opset_version=14,  # the ONNX version
+                do_constant_folding=constant_folding,
+                input_names=["input"],
+                output_names=["output"],
                 dynamic_axes={
-                    "input": {0: "batch_size"},  # variable length axes
+                    "input": {0: "batch_size"},
                     "output": {0: "batch_size"},
                 },
                 training=training_mode,
@@ -1678,13 +1811,25 @@ def infer_with_embedding_model(
         A NumPy array containing the concatenated embeddings from all batches.
     """
     outs0 = []
+
+    categorical_cols = set(model.transformer_model.categorical_columns)
+
     with torch.no_grad():
         for x_sub in x:
-            data_gpu = {
-                col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()
-            }
+            layer_types = (
+                model.transformer_model.hparams.training_spec.layer_type_dtypes or {}
+            )
+            dtype_str = layer_types.get("linear", "float32")
+            ref_dtype = get_torch_dtype(dtype_str)
+            data_gpu = {}
+            for col, x_ in x_sub.items():
+                if col in categorical_cols:
+                    data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
+                else:
+                    data_gpu[col] = torch.from_numpy(x_).to(device, dtype=ref_dtype)
+
             output_gpu = model.forward(data_gpu)
-            output_cpu = output_gpu.cpu().detach().numpy()
+            output_cpu = output_gpu.cpu().detach().float().numpy()
             output_cpu = output_cpu.transpose(1, 0, 2).reshape(
                 output_cpu.shape[0] * output_cpu.shape[1], output_cpu.shape[2]
             )
@@ -1718,11 +1863,21 @@ def infer_with_generative_model(
         output NumPy arrays, trimmed to `size`.
     """
     outs0 = []
+
+    categorical_cols = set(model.categorical_columns)
+
     with torch.no_grad():
         for x_sub in x:
-            data_gpu = {
-                col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()
-            }
+            layer_types = model.hparams.training_spec.layer_type_dtypes or {}
+            dtype_str = layer_types.get("linear", "float32")
+            ref_dtype = get_torch_dtype(dtype_str)
+            data_gpu = {}
+            for col, x_ in x_sub.items():
+                if col in categorical_cols:
+                    data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
+                else:
+                    data_gpu[col] = torch.from_numpy(x_).to(device, dtype=ref_dtype)
+
             output_gpu = model.forward(data_gpu)
             output_cpu = {k: v.cpu().detach() for k, v in output_gpu.items()}
             outs0.append(output_cpu)
@@ -1733,6 +1888,7 @@ def infer_with_generative_model(
         target_column: np.concatenate(
             [
                 o[target_column]
+                .float()
                 .numpy()
                 .transpose(1, 0, 2)
                 .reshape(

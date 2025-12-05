@@ -96,7 +96,8 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `max_ram_gb` | `int` | No | `16` | RAM limit (GB) for the cache when using lazy loading. |
 | `load_full_data_to_ram` | `bool` | No |  `true` |  If `false`, uses lazy loading (requires `read_format: pt`). |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
-
+| `layer_type_dtypes` | `dict` | No | **Fixed.** Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
+| `layer_autocast` | `bool` | No | **Fixed.** Enable `torch.autocast` (default `true`). |
 -----
 
 
