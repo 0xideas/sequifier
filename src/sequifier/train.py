@@ -1735,13 +1735,21 @@ def infer_with_embedding_model(
         A NumPy array containing the concatenated embeddings from all batches.
     """
     outs0 = []
+
+    categorical_cols = set(model.transformer_model.categorical_columns)
+
     with torch.no_grad():
         for x_sub in x:
             ref_dtype = next(model.parameters()).dtype
-            data_gpu = {
-                col: torch.from_numpy(x_).to(device, dtype=ref_dtype)
-                for col, x_ in x_sub.items()
-            }
+            data_gpu = {}
+            for col, x_ in x_sub.items():
+                if col in categorical_cols:
+                    # Categorical inputs must be Long/Int64 for Embedding layers
+                    data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
+                else:
+                    # Real inputs should match the model's dtype (e.g. bfloat16, float32)
+                    data_gpu[col] = torch.from_numpy(x_).to(device, dtype=ref_dtype)
+
             output_gpu = model.forward(data_gpu)
             output_cpu = output_gpu.cpu().detach().numpy()
             output_cpu = output_cpu.transpose(1, 0, 2).reshape(
@@ -1777,13 +1785,22 @@ def infer_with_generative_model(
         output NumPy arrays, trimmed to `size`.
     """
     outs0 = []
+
+    # Generative model is usually TransformerModel (not wrapped)
+    categorical_cols = set(model.categorical_columns)
+
     with torch.no_grad():
         for x_sub in x:
             ref_dtype = next(model.parameters()).dtype
-            data_gpu = {
-                col: torch.from_numpy(x_).to(device, dtype=ref_dtype)
-                for col, x_ in x_sub.items()
-            }
+            data_gpu = {}
+            for col, x_ in x_sub.items():
+                if col in categorical_cols:
+                    # Categorical inputs must be Long/Int64 for Embedding layers
+                    data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
+                else:
+                    # Real inputs should match the model's dtype
+                    data_gpu[col] = torch.from_numpy(x_).to(device, dtype=ref_dtype)
+
             output_gpu = model.forward(data_gpu)
             output_cpu = {k: v.cpu().detach() for k, v in output_gpu.items()}
             outs0.append(output_cpu)

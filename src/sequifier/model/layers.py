@@ -10,14 +10,18 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
-        # Calculate variance in float32 for stability
-        var = torch.mean(x.to(torch.float32).pow(2), dim=-1, keepdim=True)
+        # 1. Cast input to float32 once for stability
+        x_fp32 = x.to(torch.float32)
 
-        # Calculate norm in float32
-        x_normed = x.to(torch.float32) * torch.rsqrt(var + self.eps)
+        # 2. Calculate variance
+        var = torch.mean(x_fp32.pow(2), dim=-1, keepdim=True)
 
-        # Cast back to the weight's dtype (e.g., bfloat16) before multiplication
-        return self.weight * x_normed.to(self.weight.dtype)
+        # 3. Normalize
+        x_normed = x_fp32 * torch.rsqrt(var + self.eps)
+
+        # 4. Cast back to the *input tensor's* dtype (traceable),
+        #    rather than self.weight.dtype (not traceable in Cast ops)
+        return self.weight * x_normed.to(x.dtype)
 
 
 class RotaryEmbedding(nn.Module):
@@ -54,6 +58,7 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin):
+    # Ensure cos/sin match q/k dtype (fix for Mixed Precision/ONNX)
     cos = cos.to(dtype=q.dtype)
     sin = sin.to(dtype=q.dtype)
     q_embed = (q * cos) + (rotate_half(q) * sin)
