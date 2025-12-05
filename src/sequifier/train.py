@@ -679,12 +679,20 @@ class TransformerModel(nn.Module):
 
         for col in self.real_columns:
             if col in self.real_columns_direct:
-                src_t = src[col].T.unsqueeze(2) * math.sqrt(self.initial_embedding_dim)
-            else:
-                assert col in self.real_columns_with_embedding
-                src_t = self.encoder[col](src[col].T[:, :, None]) * math.sqrt(
+                target_dtype = torch.float32
+                if len(self.categorical_columns) > 0:
+                    target_dtype = self.encoder[
+                        self.categorical_columns[0]
+                    ].weight.dtype
+
+                src_t = src[col].T.unsqueeze(2).to(dtype=target_dtype) * math.sqrt(
                     self.initial_embedding_dim
                 )
+            else:
+                assert col in self.real_columns_with_embedding
+                layer = self.encoder[col]
+                inp = src[col].T[:, :, None].to(dtype=layer.weight.dtype)
+                src_t = layer(inp) * math.sqrt(self.initial_embedding_dim)
 
             if not self.use_rope:
                 pos = (
@@ -707,8 +715,9 @@ class TransformerModel(nn.Module):
         if self.joint_embedding_layer is not None:
             src2 = self.joint_embedding_layer(src2)
 
+        mask = self.src_mask.to(dtype=src2.dtype)
         for layer in self.layers:
-            src2 = layer(src2, src_mask=self.src_mask)
+            src2 = layer(src2, src_mask=mask)
 
         src2 = self.final_norm(src2)
 
@@ -1047,8 +1056,13 @@ class TransformerModel(nn.Module):
             elif target_column_type == "real":
                 output[target_column] = output[target_column].reshape(-1)
 
+            target_tensor = targets[target_column].T.contiguous().reshape(-1)
+
+            if self.target_column_types[target_column] == "real":
+                target_tensor = target_tensor.to(dtype=output[target_column].dtype)
+
             losses[target_column] = self.criterion[target_column](
-                output[target_column], targets[target_column].T.contiguous().reshape(-1)
+                output[target_column], target_tensor
             )
         loss = None
         for target_column in targets.keys():
@@ -1360,6 +1374,7 @@ class TransformerModel(nn.Module):
             suffix: A string suffix for the filename (e.g., "best", "last-embedding").
             epoch: The current epoch number, included in the filename.
         """
+
         if self.export_onnx:
             x_cat = {
                 col: torch.randint(
@@ -1713,8 +1728,10 @@ def infer_with_embedding_model(
     outs0 = []
     with torch.no_grad():
         for x_sub in x:
+            ref_dtype = next(model.parameters()).dtype
             data_gpu = {
-                col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()
+                col: torch.from_numpy(x_).to(device, dtype=ref_dtype)
+                for col, x_ in x_sub.items()
             }
             output_gpu = model.forward(data_gpu)
             output_cpu = output_gpu.cpu().detach().numpy()
@@ -1753,8 +1770,10 @@ def infer_with_generative_model(
     outs0 = []
     with torch.no_grad():
         for x_sub in x:
+            ref_dtype = next(model.parameters()).dtype
             data_gpu = {
-                col: torch.from_numpy(x_).to(device) for col, x_ in x_sub.items()
+                col: torch.from_numpy(x_).to(device, dtype=ref_dtype)
+                for col, x_ in x_sub.items()
             }
             output_gpu = model.forward(data_gpu)
             output_cpu = {k: v.cpu().detach() for k, v in output_gpu.items()}
