@@ -833,7 +833,7 @@ class TransformerModel(nn.Module):
         if target_column in self.real_columns:
             return output
         else:
-            return self.softmax[target_column](output)
+            return self.softmax[target_column](output.float())
 
     @beartype
     def forward(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -1029,9 +1029,22 @@ class TransformerModel(nn.Module):
                 for k, v in targets.items()
                 if k in self.target_column_types
             }
-            output = self.forward_train(data)
-
-            loss, losses = self._calculate_loss(output, targets)
+            if self.hparams.training_spec.layer_autocast:
+                amp_dtype = get_torch_dtype(
+                    self.hparams.training_spec.layer_type_dtypes.get(
+                        "linear", "bfloat16"
+                    )
+                    if self.hparams.training_spec.layer_type_dtypes
+                    else "float32"
+                )
+                with torch.autocast(
+                    device_type=self.device.split(":")[0], dtype=amp_dtype
+                ):
+                    output = self.forward_train(data)
+                    loss, losses = self._calculate_loss(output, targets)
+            else:
+                output = self.forward_train(data)
+                loss, losses = self._calculate_loss(output, targets)
 
             self.scaler.scale(loss).backward()
 
@@ -1087,11 +1100,15 @@ class TransformerModel(nn.Module):
         for target_column in targets.keys():
             target_column_type = self.target_column_types[target_column]
             if target_column_type == "categorical":
-                output[target_column] = output[target_column].reshape(
-                    -1, self.n_classes[target_column]
+                output[target_column] = (
+                    output[target_column]
+                    .float()
+                    .reshape(-1, self.n_classes[target_column])
                 )
             elif target_column_type == "real":
-                output[target_column] = output[target_column].reshape(-1)
+                output[target_column] = (
+                    output[target_column].to(dtype=torch.float32).reshape(-1)
+                )
 
             target_tensor = targets[target_column].T.contiguous().reshape(-1)
 

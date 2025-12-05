@@ -60,6 +60,7 @@ training_spec:
   scheduler_step_on: epoch
   continue_training: false
   enforce_determinism: true
+  layer_autocast: false
   layer_type_dtypes:
     embedding: bfloat16
     linear: bfloat16

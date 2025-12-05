@@ -120,6 +120,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         scheduler: A list of possible scheduler configurations.
         continue_training: Flag to continue training from a checkpoint.
         layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
+        layer_autocast: Whether to use autocast
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -155,6 +156,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     num_workers: int = 0
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
+    layer_autocast: Optional[bool] = True
 
     def __init__(self, **kwargs):
         """Initialize the TrainingSpecHyperparameterSampling instance.
@@ -293,6 +295,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             num_workers=self.num_workers,
             backend=self.backend,
             layer_type_dtypes=self.layer_type_dtypes,
+            layer_autocast=self.layer_autocast,
         )
 
     def grid_sample(self, i):
@@ -358,6 +361,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             num_workers=self.num_workers,
             backend=self.backend,
             layer_type_dtypes=self.layer_type_dtypes,
+            layer_autocast=self.layer_autocast,
         )
 
     def n_combinations(self):

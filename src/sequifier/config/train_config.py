@@ -129,6 +129,7 @@ class TrainingSpecModel(BaseModel):
         num_workers: The number of worker threads for data loading.
         backend: The distributed training backend (e.g., 'nccl').
         layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
+        layer_autocast: Whether to use autocast
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -163,6 +164,7 @@ class TrainingSpecModel(BaseModel):
     num_workers: int = 0
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
+    layer_autocast: Optional[bool] = True
 
     def __init__(self, **kwargs):
         super().__init__(
