@@ -50,7 +50,3 @@ training_spec:
     gamma: 0.99
   continue_training: false
   enforce_determinism: true
-  layer_type_dtypes:
-    embedding: bfloat16
-    linear: bfloat16
-    norm: bfloat16

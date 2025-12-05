@@ -60,5 +60,10 @@ training_hyperparameter_sampling:
       gamma: 0.99
   log_interval: 5
   continue_training: false
+  layer_type_dtypes:
+    embedding: bfloat16
+    linear: bfloat16
+    norm: bfloat16
+
 
 override_input: true
