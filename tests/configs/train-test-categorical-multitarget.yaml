@@ -69,9 +69,9 @@ training_spec:
   scheduler_step_on: 'batch'
   continue_training: false
   enforce_determinism: true
-  layer_autocast: false
+  layer_autocast: true
   layer_type_dtypes:
-    embedding: bfloat16
     linear: bfloat16
-    norm: bfloat16
-    decoder: float32
+    decoder: bfloat16
+    embedding: float32
+    norm: float32

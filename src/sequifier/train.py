@@ -1227,8 +1227,22 @@ class TransformerModel(nn.Module):
                     if k in self.target_column_types
                 }
 
-                output = self.forward_train(data)
-                loss, losses = self._calculate_loss(output, targets)
+                if self.hparams.training_spec.layer_autocast:
+                    amp_dtype = get_torch_dtype(
+                        self.hparams.training_spec.layer_type_dtypes.get(
+                            "linear", "bfloat16"
+                        )
+                        if self.hparams.training_spec.layer_type_dtypes
+                        else "float32"
+                    )
+                    with torch.autocast(
+                        device_type=self.device.split(":")[0], dtype=amp_dtype
+                    ):
+                        output = self.forward_train(data)
+                        loss, losses = self._calculate_loss(output, targets)
+                else:
+                    output = self.forward_train(data)
+                    loss, losses = self._calculate_loss(output, targets)
 
                 total_loss_collect.append(loss.item())
                 for col, loss in losses.items():
