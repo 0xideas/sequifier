@@ -24,7 +24,11 @@ from torch.utils.data.distributed import DistributedSampler
 torch._dynamo.config.suppress_errors = True
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.helpers import construct_index_maps  # noqa: E402
-from sequifier.helpers import configure_determinism, configure_logger  # noqa: E402
+from sequifier.helpers import (  # noqa: E402
+    configure_determinism,
+    configure_logger,
+    get_torch_dtype,
+)
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
 )
@@ -427,6 +431,8 @@ class TransformerModel(nn.Module):
         )
 
         self._init_weights()
+        self._apply_layer_dtypes()
+
         self.optimizer = self._get_optimizer(
             **self._filter_key(hparams.training_spec.optimizer, "name")
         )
@@ -439,6 +445,33 @@ class TransformerModel(nn.Module):
         self.continue_training = hparams.training_spec.continue_training
         load_string = self._load_weights_conditional()
         self.logger.info(load_string)
+
+    @beartype
+    def _apply_layer_dtypes(self) -> None:
+        """Casts specific layer types to configured dtypes (e.g., bfloat16, float8)."""
+        layer_config = self.hparams.training_spec.layer_type_dtypes
+
+        if not layer_config:
+            return
+
+        self.logger.info(f"[INFO] Applying custom layer dtypes: {layer_config}")
+
+        # Iterate over all sub-modules and cast based on type
+        for name, module in self.named_modules():
+            # Linear Layers
+            if isinstance(module, nn.Linear) and "linear" in layer_config:
+                target_dtype = get_torch_dtype(layer_config["linear"])
+                module.to(dtype=target_dtype)
+
+            # Embeddings
+            elif isinstance(module, nn.Embedding) and "embedding" in layer_config:
+                target_dtype = get_torch_dtype(layer_config["embedding"])
+                module.to(dtype=target_dtype)
+
+            # Normalization (RMSNorm, LayerNorm)
+            elif isinstance(module, (nn.LayerNorm, RMSNorm)) and "norm" in layer_config:
+                target_dtype = get_torch_dtype(layer_config["norm"])
+                module.to(dtype=target_dtype)
 
     @beartype
     def _init_criterion(self, hparams: Any) -> dict[str, Any]:

@@ -377,3 +377,27 @@ def configure_determinism(seed: int, strict: bool = False) -> None:
 
         # 4. Set CuBLAS workspace (Required for deterministic algorithms with CUDA >= 10.2)
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
+
+@beartype
+def get_torch_dtype(dtype_str: str) -> torch.dtype:
+    """Converts a string to a torch dtype, supporting bfloat16 and fp8."""
+    dtype_map = {
+        "float32": torch.float32,
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float64": torch.float64,
+    }
+
+    # Add float8 support if available in this PyTorch version
+    if hasattr(torch, "float8_e4m3fn"):
+        dtype_map["float8_e4m3fn"] = torch.float8_e4m3fn
+    if hasattr(torch, "float8_e5m2"):
+        dtype_map["float8_e5m2"] = torch.float8_e5m2
+
+    if dtype_str not in dtype_map:
+        raise ValueError(
+            f"dtype '{dtype_str}' not supported or available. Options: {list(dtype_map.keys())}"
+        )
+
+    return dtype_map[dtype_str]

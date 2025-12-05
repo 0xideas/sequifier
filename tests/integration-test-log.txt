@@ -1,5 +1,5 @@
 sequifier preprocess --config-path tests/configs/preprocess-test-categorical.yaml --data-path tests/resources/source_data/test-data-categorical-1.csv --selected-columns None
-sequifier preprocess --config-path tests/configs/preprocess-test-real.yaml --data-path tests/resources/source_data/test-data-real-1.csv --selected-columns itemValue
+sequifier preprocess --config-path tests/configs/preprocess-test-real.yaml --data-path tests/resources/source_data/test-data-real-3.csv --selected-columns itemValue sup1 sup2
 sequifier preprocess --config-path tests/configs/preprocess-test-categorical.yaml --data-path tests/resources/source_data/test-data-categorical-3.csv --selected-columns None
 sequifier preprocess --config-path tests/configs/preprocess-test-real.yaml --data-path tests/resources/source_data/test-data-real-3.csv --selected-columns itemValue sup1 sup2
 sequifier preprocess --config-path tests/configs/preprocess-test-categorical.yaml --data-path tests/resources/source_data/test-data-categorical-5.csv --selected-columns None
