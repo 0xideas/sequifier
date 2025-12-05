@@ -15,6 +15,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from beartype import beartype
 from torch import Tensor, nn
+from torch.amp import GradScaler
 from torch.nn import ModuleDict
 from torch.nn.functional import one_hot
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -463,6 +464,13 @@ class TransformerModel(nn.Module):
 
         self.save_interval_epochs = hparams.training_spec.save_interval_epochs
         self.continue_training = hparams.training_spec.continue_training
+
+        use_scaler = False
+        if hparams.training_spec.layer_type_dtypes:
+            if "float16" in hparams.training_spec.layer_type_dtypes.values():
+                use_scaler = True
+
+        self.scaler = GradScaler(device=self.device.split(":")[0], enabled=use_scaler)
 
         self._apply_layer_dtypes()
         load_string = self._load_weights_conditional()
@@ -1025,16 +1033,17 @@ class TransformerModel(nn.Module):
 
             loss, losses = self._calculate_loss(output, targets)
 
-            loss.backward()
-
-            torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+            self.scaler.scale(loss).backward()
 
             if (
                 self.accumulation_steps is None
                 or (batch_count + 1) % self.accumulation_steps == 0
                 or (batch_count + 1) == num_batches
             ):
-                self.optimizer.step()
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
                 self.optimizer.zero_grad()
 
             total_loss += loss.item()
