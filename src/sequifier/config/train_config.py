@@ -187,21 +187,22 @@ class TrainingSpecModel(BaseModel):
             "float8_e5m2",
         ]
         bad_keys, bad_types = [], []
-        for k, vv in v.items():
-            if k not in expected_keys:
-                bad_keys.append(k)
-            if vv not in allowed_types:
-                bad_types.append(vv)
+        if v:
+            for k, vv in v.items():
+                if k not in expected_keys:
+                    bad_keys.append(k)
+                if vv not in allowed_types:
+                    bad_types.append(vv)
 
-        if len(bad_keys) > 0:
-            raise ValueError(
-                f"The following keys are invalid: {bad_keys}. Allowed keys are: {expected_keys}"
-            )
+            if len(bad_keys) > 0:
+                raise ValueError(
+                    f"The following keys are invalid: {bad_keys}. Allowed keys are: {expected_keys}"
+                )
 
-        if len(bad_types) > 0:
-            raise ValueError(
-                f"The following layer types are invalid: {bad_types}. Allowed types are: {allowed_types}"
-            )
+            if len(bad_types) > 0:
+                raise ValueError(
+                    f"The following layer types are invalid: {bad_types}. Allowed types are: {allowed_types}"
+                )
 
         return v
 
