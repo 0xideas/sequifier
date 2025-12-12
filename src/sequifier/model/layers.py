@@ -10,9 +10,18 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
-        var = torch.mean(x.to(torch.float32).pow(2), dim=-1, keepdim=True)
-        x_normed = x * torch.rsqrt(var + self.eps)
-        return self.weight * x_normed
+        # 1. Cast input to float32 once for stability
+        x_fp32 = x.to(torch.float32)
+
+        # 2. Calculate variance
+        var = torch.mean(x_fp32.pow(2), dim=-1, keepdim=True)
+
+        # 3. Normalize
+        x_normed = x_fp32 * torch.rsqrt(var + self.eps)
+
+        # 4. Cast back to the *input tensor's* dtype (traceable),
+        #    rather than self.weight.dtype (not traceable in Cast ops)
+        return (self.weight.to(x_normed.dtype) * x_normed).to(x.dtype)
 
 
 class RotaryEmbedding(nn.Module):
@@ -38,8 +47,6 @@ class RotaryEmbedding(nn.Module):
         )
 
     def forward(self, x, seq_len):
-        if int(seq_len) > self.cos_cached.shape[2]:
-            self._update_cos_sin_cache(seq_len)
         return self.cos_cached[:, :, :seq_len, ...], self.sin_cached[
             :, :, :seq_len, ...
         ]
@@ -51,6 +58,9 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin):
+    # Ensure cos/sin match q/k dtype (fix for Mixed Precision/ONNX)
+    cos = cos.to(dtype=q.dtype)
+    sin = sin.to(dtype=q.dtype)
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
@@ -75,6 +85,12 @@ class CustomFeedForward(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
+    def get_first_layer_dtype(self):
+        if self.activation_fn == "swiglu":
+            return self.w1.weight.dtype
+        else:
+            return self.linear1.weight.dtype
+
     def forward(self, x):
         if self.activation_fn == "swiglu":
             return self.w3(self.dropout(F.silu(self.w1(x)) * self.w2(x)))
@@ -90,6 +106,7 @@ class CustomSelfAttention(nn.Module):
         n_kv_heads,
         attention_type,
         dropout,
+        seq_length,
         use_rope=False,
         rope_theta=10000.0,
     ):
@@ -109,7 +126,9 @@ class CustomSelfAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         if use_rope:
-            self.rope = RotaryEmbedding(self.head_dim, theta=rope_theta)
+            self.rope = RotaryEmbedding(
+                self.head_dim, max_seq_len=seq_length, theta=rope_theta
+            )
             if self.head_dim % 2 != 0:
                 raise ValueError(f"head_dim ({self.head_dim}) must be even for RoPE")
 
@@ -157,7 +176,7 @@ class CustomSelfAttention(nn.Module):
 
 
 class SequifierEncoderLayer(nn.Module):
-    def __init__(self, config, dim_model, n_head, dim_feedforward, dropout):
+    def __init__(self, config, dim_model, n_head, dim_feedforward, dropout, seq_length):
         super().__init__()
         self.norm_first = config.norm_first
 
@@ -173,6 +192,7 @@ class SequifierEncoderLayer(nn.Module):
             n_kv_heads=config.n_kv_heads,
             attention_type=config.attention_type,
             dropout=dropout,
+            seq_length=seq_length,
             use_rope=(config.positional_encoding == "rope"),
             rope_theta=config.rope_theta,
         )

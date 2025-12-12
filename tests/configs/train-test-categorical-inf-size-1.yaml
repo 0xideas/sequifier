@@ -52,4 +52,9 @@ training_spec:
     gamma: 0.99
   scheduler_step_on: epoch
   continue_training: false
-  enforce_determinism: true
+  enforce_determinism: false
+  layer_type_dtypes:
+    embedding: bfloat16
+    linear: bfloat16
+    norm: bfloat16
+    decoder: bfloat16

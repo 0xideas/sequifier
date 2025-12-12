@@ -119,6 +119,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         optimizer: A list of possible optimizer configurations.
         scheduler: A list of possible scheduler configurations.
         continue_training: Flag to continue training from a checkpoint.
+        layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
+        layer_autocast: Whether to use autocast
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -153,6 +155,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     world_size: int = 1
     num_workers: int = 0
     backend: str = "nccl"
+    layer_type_dtypes: Optional[dict[str, str]] = None
+    layer_autocast: Optional[bool] = True
 
     def __init__(self, **kwargs):
         """Initialize the TrainingSpecHyperparameterSampling instance.
@@ -181,6 +185,38 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         self.scheduler = [
             DotDict(scheduler_config) for scheduler_config in kwargs["scheduler"]
         ]
+
+    @field_validator("layer_type_dtypes")
+    @classmethod
+    def validate_layer_type_dtypes(cls, v):
+        expected_keys = ["embedding", "linear", "norm", "decoder"]
+        allowed_types = [
+            "float32",
+            "float16",
+            "bfloat16",
+            "float64",
+            "float8_e4m3fn",
+            "float8_e5m2",
+        ]
+        bad_keys, bad_types = [], []
+        if v:
+            for k, vv in v.items():
+                if k not in expected_keys:
+                    bad_keys.append(k)
+                if vv not in allowed_types:
+                    bad_types.append(vv)
+
+            if len(bad_keys) > 0:
+                raise ValueError(
+                    f"The following keys are invalid: {bad_keys}. Allowed keys are: {expected_keys}"
+                )
+
+            if len(bad_types) > 0:
+                raise ValueError(
+                    f"The following layer types are invalid: {bad_types}. Allowed types are: {allowed_types}"
+                )
+
+        return v
 
     @field_validator("learning_rate")
     @classmethod
@@ -258,6 +294,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             world_size=self.world_size,
             num_workers=self.num_workers,
             backend=self.backend,
+            layer_type_dtypes=self.layer_type_dtypes,
+            layer_autocast=self.layer_autocast,
         )
 
     def grid_sample(self, i):
@@ -322,6 +360,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             world_size=self.world_size,
             num_workers=self.num_workers,
             backend=self.backend,
+            layer_type_dtypes=self.layer_type_dtypes,
+            layer_autocast=self.layer_autocast,
         )
 
     def n_combinations(self):
