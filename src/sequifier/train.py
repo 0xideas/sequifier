@@ -540,6 +540,12 @@ class TransformerModel(nn.Module):
                 criterion_kwargs["weight"] = Tensor(
                     hparams.training_spec.class_weights[target_column]
                 ).to(self.device)
+
+            if self.target_column_types[target_column] == "categorical":
+                criterion_kwargs["ignore_index"] = 0
+            elif self.target_column_types[target_column] == "real":
+                criterion_kwargs["reduction"] = "none"
+
             criterion[target_column] = criterion_class(**criterion_kwargs)
         return criterion
 
@@ -1117,9 +1123,17 @@ class TransformerModel(nn.Module):
             if self.target_column_types[target_column] == "real":
                 target_tensor = target_tensor.to(dtype=output[target_column].dtype)
 
-            losses[target_column] = self.criterion[target_column](
+            raw_loss = self.criterion[target_column](
                 output[target_column], target_tensor
             )
+
+            if self.target_column_types[target_column] == "real":
+                seq_mask_2d = (targets[target_column] != 0.0).long().cumsum(dim=1) > 0
+
+                mask = seq_mask_2d.T.contiguous().reshape(-1)
+                losses[target_column] = (raw_loss * mask).sum() / (mask.sum() + 1e-9)
+            else:
+                losses[target_column] = raw_loss
         loss = None
         for target_column in targets.keys():
             losses[target_column] = losses[target_column] * (
