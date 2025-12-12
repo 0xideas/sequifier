@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/api.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>Preprocessing Config - sequifier v1.0.0.3 documentation</title>
+        <title>Preprocessing Config - sequifier v1.0.0.4 documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="index.html"><div class="brand">sequifier v1.0.0.3 documentation</div></a>
+      <a href="index.html"><div class="brand">sequifier v1.0.0.4 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.0.0.3 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.0.0.4 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -810,7 +810,7 @@ The sum of proportions must be 1.0.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="sequifier.config.train_config.TrainingSpecModel">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.config.train_config.</span></span><span class="sig-name descname"><span class="pre">TrainingSpecModel</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">*,</span> <span class="pre">device:</span> <span class="pre">str,</span> <span class="pre">device_max_concat_length:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">12,</span> <span class="pre">epochs:</span> <span class="pre">int,</span> <span class="pre">log_interval:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">10,</span> <span class="pre">class_share_log_columns:</span> <span class="pre">list[str]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">early_stopping_epochs:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">save_interval_epochs:</span> <span class="pre">int,</span> <span class="pre">batch_size:</span> <span class="pre">int,</span> <span class="pre">learning_rate:</span> <span class="pre">float,</span> <span class="pre">criterion:</span> <span class="pre">dict[str,</span> <span class="pre">str],</span> <span class="pre">class_weights:</span> <span class="pre">dict[str,</span> <span class="pre">list[float]]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">accumulation_steps:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">dropout:</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">0.0,</span> <span class="pre">loss_weights:</span> <span class="pre">dict[str,</span> <span class="pre">float]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">optimizer:</span> <span class="pre">~sequifier.config.train_config.DotDict</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">scheduler:</span> <span class="pre">~sequifier.config.train_config.DotDict</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">scheduler_step_on:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'epoch',</span> <span class="pre">continue_training:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">enforce_determinism:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">distributed:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">load_full_data_to_ram:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">max_ram_gb:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">16,</span> <span class="pre">world_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">1,</span> <span class="pre">num_workers:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0,</span> <span class="pre">backend:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'nccl'</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/train_config.html#TrainingSpecModel"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.train_config.TrainingSpecModel" title="Link to this definition">¶</a></dt>
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.config.train_config.</span></span><span class="sig-name descname"><span class="pre">TrainingSpecModel</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">*,</span> <span class="pre">device:</span> <span class="pre">str,</span> <span class="pre">device_max_concat_length:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">12,</span> <span class="pre">epochs:</span> <span class="pre">int,</span> <span class="pre">log_interval:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">10,</span> <span class="pre">class_share_log_columns:</span> <span class="pre">list[str]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">early_stopping_epochs:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">save_interval_epochs:</span> <span class="pre">int,</span> <span class="pre">batch_size:</span> <span class="pre">int,</span> <span class="pre">learning_rate:</span> <span class="pre">float,</span> <span class="pre">criterion:</span> <span class="pre">dict[str,</span> <span class="pre">str],</span> <span class="pre">class_weights:</span> <span class="pre">dict[str,</span> <span class="pre">list[float]]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">accumulation_steps:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">dropout:</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">0.0,</span> <span class="pre">loss_weights:</span> <span class="pre">dict[str,</span> <span class="pre">float]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">optimizer:</span> <span class="pre">~sequifier.config.train_config.DotDict</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">scheduler:</span> <span class="pre">~sequifier.config.train_config.DotDict</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">scheduler_step_on:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'epoch',</span> <span class="pre">continue_training:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">enforce_determinism:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">distributed:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">load_full_data_to_ram:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">max_ram_gb:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">16,</span> <span class="pre">world_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">1,</span> <span class="pre">num_workers:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0,</span> <span class="pre">backend:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'nccl',</span> <span class="pre">layer_type_dtypes:</span> <span class="pre">dict[str,</span> <span class="pre">str]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">layer_autocast:</span> <span class="pre">bool</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">True</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/train_config.html#TrainingSpecModel"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.train_config.TrainingSpecModel" title="Link to this definition">¶</a></dt>
 <dd><p>Pydantic model for training specifications.</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="sequifier.config.train_config.TrainingSpecModel.device">
@@ -1061,6 +1061,28 @@ The sum of proportions must be 1.0.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
 <dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.config.train_config.TrainingSpecModel.layer_type_dtypes">
+<span class="sig-name descname"><span class="pre">layer_type_dtypes</span></span><a class="headerlink" href="#sequifier.config.train_config.TrainingSpecModel.layer_type_dtypes" title="Link to this definition">¶</a></dt>
+<dd><p>Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>dict[str, str] | None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.config.train_config.TrainingSpecModel.layer_autocast">
+<span class="sig-name descname"><span class="pre">layer_autocast</span></span><a class="headerlink" href="#sequifier.config.train_config.TrainingSpecModel.layer_autocast" title="Link to this definition">¶</a></dt>
+<dd><p>Whether to use autocast</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>bool | None</p>
 </dd>
 </dl>
 </dd></dl>
@@ -1877,7 +1899,7 @@ hyperparameters.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.config.hyperparameter_search_config.</span></span><span class="sig-name descname"><span class="pre">TrainingSpecHyperparameterSampling</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">*,</span> <span class="pre">device:</span> <span class="pre">str,</span> <span class="pre">epochs:</span> <span class="pre">list[int],</span> <span class="pre">log_interval:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">10,</span> <span class="pre">class_share_log_columns:</span> <span class="pre">list[str]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">early_stopping_epochs:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">save_interval_epochs:</span> <span class="pre">int,</span> <span class="pre">batch_size:</span> <span class="pre">list[int],</span> <span class="pre">learning_rate:</span> <span class="pre">list[float],</span> <span class="pre">criterion:</span> <span class="pre">dict[str,</span> <span class="pre">str],</span> <span class="pre">class_weights:</span> <span class="pre">dict[str,</span> <span class="pre">list[float]]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">accumulation_steps:</span> <span class="pre">list[int],</span> <span class="pre">dropout:</span> <span class="pre">list[float]</span> <span class="pre">=</span> <span class="pre">[0.0],</span> <span class="pre">loss_weights:</span> <span class="pre">dict[str,</span> <span class="pre">float]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">optimizer:</span> <span class="pre">list[~sequifier.config.train_config.DotDict]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">scheduler:</span> <span class="pre">list[~sequifier.config.train_config.DotDict]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">continue_training:</span> <span class="pre">bool,</span> <span class="pre">scheduler_step_on:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'epoch',</span> <span class="pre">distributed:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">load_full_data_to_ram:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">max_ram_gb:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">16,</span> <span class="pre">device_max_concat_length:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">12,</span> <span class="pre">world_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">1,</span> <span class="pre">num_workers:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0,</span> <span class="pre">backend:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'nccl'</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#TrainingSpecHyperparameterSampling"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling" title="Link to this definition">¶</a></dt>
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.config.hyperparameter_search_config.</span></span><span class="sig-name descname"><span class="pre">TrainingSpecHyperparameterSampling</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">*,</span> <span class="pre">device:</span> <span class="pre">str,</span> <span class="pre">epochs:</span> <span class="pre">list[int],</span> <span class="pre">log_interval:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">10,</span> <span class="pre">class_share_log_columns:</span> <span class="pre">list[str]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">early_stopping_epochs:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">save_interval_epochs:</span> <span class="pre">int,</span> <span class="pre">batch_size:</span> <span class="pre">list[int],</span> <span class="pre">learning_rate:</span> <span class="pre">list[float],</span> <span class="pre">criterion:</span> <span class="pre">dict[str,</span> <span class="pre">str],</span> <span class="pre">class_weights:</span> <span class="pre">dict[str,</span> <span class="pre">list[float]]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">accumulation_steps:</span> <span class="pre">list[int],</span> <span class="pre">dropout:</span> <span class="pre">list[float]</span> <span class="pre">=</span> <span class="pre">[0.0],</span> <span class="pre">loss_weights:</span> <span class="pre">dict[str,</span> <span class="pre">float]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">optimizer:</span> <span class="pre">list[~sequifier.config.train_config.DotDict]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">scheduler:</span> <span class="pre">list[~sequifier.config.train_config.DotDict]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">continue_training:</span> <span class="pre">bool,</span> <span class="pre">scheduler_step_on:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'epoch',</span> <span class="pre">distributed:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">load_full_data_to_ram:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">max_ram_gb:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">16,</span> <span class="pre">device_max_concat_length:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">12,</span> <span class="pre">world_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">1,</span> <span class="pre">num_workers:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0,</span> <span class="pre">backend:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'nccl',</span> <span class="pre">layer_type_dtypes:</span> <span class="pre">dict[str,</span> <span class="pre">str]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">layer_autocast:</span> <span class="pre">bool</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">True</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#TrainingSpecHyperparameterSampling"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling" title="Link to this definition">¶</a></dt>
 <dd><p>Pydantic model for training specification hyperparameter sampling.</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.device">
@@ -2051,6 +2073,28 @@ hyperparameters.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
 <dd class="field-odd"><p>bool</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.layer_type_dtypes">
+<span class="sig-name descname"><span class="pre">layer_type_dtypes</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.layer_type_dtypes" title="Link to this definition">¶</a></dt>
+<dd><p>Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>dict[str, str] | None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.layer_autocast">
+<span class="sig-name descname"><span class="pre">layer_autocast</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.layer_autocast" title="Link to this definition">¶</a></dt>
+<dd><p>Whether to use autocast</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>bool | None</p>
 </dd>
 </dl>
 </dd></dl>
@@ -4010,6 +4054,12 @@ is not True.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="sequifier.helpers.get_torch_dtype">
+<span class="sig-prename descclassname"><span class="pre">sequifier.helpers.</span></span><span class="sig-name descname"><span class="pre">get_torch_dtype</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dtype_str</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">dtype</span></span></span><a class="reference internal" href="_modules/sequifier/helpers.html#get_torch_dtype"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.helpers.get_torch_dtype" title="Link to this definition">¶</a></dt>
+<dd><p>Converts a string to a torch dtype, supporting bfloat16 and fp8.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="sequifier.helpers.normalize_path">
 <span class="sig-prename descclassname"><span class="pre">sequifier.helpers.</span></span><span class="sig-name descname"><span class="pre">normalize_path</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="reference internal" href="_modules/sequifier/helpers.html#normalize_path"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.helpers.normalize_path" title="Link to this definition">¶</a></dt>
 <dd><p>Normalizes a path to be relative to a project path, then joins them.</p>
@@ -4568,6 +4618,8 @@ shuffling order for each epoch.</p>
 <li><a class="reference internal" href="#sequifier.config.train_config.TrainingSpecModel.world_size"><code class="docutils literal notranslate"><span class="pre">TrainingSpecModel.world_size</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.train_config.TrainingSpecModel.num_workers"><code class="docutils literal notranslate"><span class="pre">TrainingSpecModel.num_workers</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.train_config.TrainingSpecModel.backend"><code class="docutils literal notranslate"><span class="pre">TrainingSpecModel.backend</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.train_config.TrainingSpecModel.layer_type_dtypes"><code class="docutils literal notranslate"><span class="pre">TrainingSpecModel.layer_type_dtypes</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.train_config.TrainingSpecModel.layer_autocast"><code class="docutils literal notranslate"><span class="pre">TrainingSpecModel.layer_autocast</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.train_config.TrainingSpecModel.model_config"><code class="docutils literal notranslate"><span class="pre">TrainingSpecModel.model_config</span></code></a></li>
 </ul>
 </li>
@@ -4672,6 +4724,8 @@ shuffling order for each epoch.</p>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.optimizer"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.optimizer</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.scheduler"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.scheduler</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.continue_training"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.continue_training</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.layer_type_dtypes"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.layer_type_dtypes</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.layer_autocast"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.layer_autocast</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.__init__"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.__init__()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.grid_sample"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.grid_sample()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.model_config"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.model_config</span></code></a></li>
@@ -4797,6 +4851,7 @@ shuffling order for each epoch.</p>
 <li><a class="reference internal" href="#sequifier.helpers.configure_determinism"><code class="docutils literal notranslate"><span class="pre">configure_determinism()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.configure_logger"><code class="docutils literal notranslate"><span class="pre">configure_logger()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.construct_index_maps"><code class="docutils literal notranslate"><span class="pre">construct_index_maps()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.helpers.get_torch_dtype"><code class="docutils literal notranslate"><span class="pre">get_torch_dtype()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.normalize_path"><code class="docutils literal notranslate"><span class="pre">normalize_path()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.numpy_to_pytorch"><code class="docutils literal notranslate"><span class="pre">numpy_to_pytorch()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.read_data"><code class="docutils literal notranslate"><span class="pre">read_data()</span></code></a></li>
@@ -4846,7 +4901,7 @@ shuffling order for each epoch.</p>
       
     </aside>
   </div>
-</div><script src="_static/documentation_options.js?v=3fe90bda"></script>
+</div><script src="_static/documentation_options.js?v=f4609b17"></script>
     <script src="_static/doctools.js?v=9bcbadda"></script>
     <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>

@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/train.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.train - sequifier v1.0.0.3 documentation</title>
+        <title>sequifier.train - sequifier v1.0.0.4 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v1.0.0.3 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v1.0.0.4 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.0.0.3 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.0.0.4 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -270,6 +270,7 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch.multiprocessing</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">mp</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">beartype</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">nn</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">torch.amp</span><span class="w"> </span><span class="kn">import</span> <span class="n">GradScaler</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch.nn</span><span class="w"> </span><span class="kn">import</span> <span class="n">ModuleDict</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch.nn.functional</span><span class="w"> </span><span class="kn">import</span> <span class="n">one_hot</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch.nn.parallel</span><span class="w"> </span><span class="kn">import</span> <span class="n">DistributedDataParallel</span> <span class="k">as</span> <span class="n">DDP</span>
@@ -279,7 +280,11 @@
 <span class="n">torch</span><span class="o">.</span><span class="n">_dynamo</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">suppress_errors</span> <span class="o">=</span> <span class="kc">True</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModel</span><span class="p">,</span> <span class="n">load_train_config</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">construct_index_maps</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">configure_determinism</span><span class="p">,</span> <span class="n">configure_logger</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
+    <span class="n">configure_determinism</span><span class="p">,</span>
+    <span class="n">configure_logger</span><span class="p">,</span>
+    <span class="n">get_torch_dtype</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.sequifier_dataset_from_file</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
     <span class="n">SequifierDatasetFromFile</span><span class="p">,</span>
 <span class="p">)</span>
@@ -510,6 +515,26 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transformer_model</span><span class="o">.</span><span class="n">logger</span></div>
 
 
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_copy_model</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Copies the model.</span>
+
+<span class="sd">        This creates a deep copy of the model, typically for saving the</span>
+<span class="sd">        &quot;best model&quot;. It temporarily removes the `log_file` attribute</span>
+<span class="sd">        before copying to avoid errors, then re-initializes it.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            A deep copy of the current TransformerModel instance.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">logger_ref</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transformer_model</span><span class="o">.</span><span class="n">logger</span>
+        <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">transformer_model</span><span class="o">.</span><span class="n">logger</span>
+        <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">logger</span>
+        <span class="n">model_copy</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">model_copy</span><span class="o">.</span><span class="n">transformer_model</span><span class="o">.</span><span class="n">_initialize_log_file</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transformer_model</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logger_ref</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transformer_model</span><span class="o">.</span><span class="n">logger</span>
+        <span class="k">return</span> <span class="n">model_copy</span>
+
 <div class="viewcode-block" id="TransformerEmbeddingModel.forward">
 <a class="viewcode-back" href="../../api.html#sequifier.train.TransformerEmbeddingModel.forward">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">src</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]):</span>
@@ -658,6 +683,7 @@
                     <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">n_head</span><span class="p">,</span>
                     <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">dim_feedforward</span><span class="p">,</span>
                     <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">dropout</span><span class="p">,</span>
+                    <span class="n">hparams</span><span class="o">.</span><span class="n">seq_length</span><span class="p">,</span>
                 <span class="p">)</span>
                 <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">num_layers</span><span class="p">)</span>
             <span class="p">]</span>
@@ -710,6 +736,7 @@
         <span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_init_weights</span><span class="p">()</span>
+
         <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_optimizer</span><span class="p">(</span>
             <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_filter_key</span><span class="p">(</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">optimizer</span><span class="p">,</span> <span class="s2">&quot;name&quot;</span><span class="p">)</span>
         <span class="p">)</span>
@@ -720,9 +747,55 @@
 
         <span class="bp">self</span><span class="o">.</span><span class="n">save_interval_epochs</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">save_interval_epochs</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">continue_training</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">continue_training</span>
-        <span class="n">load_string</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_load_weights_conditional</span><span class="p">()</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">load_string</span><span class="p">)</span></div>
 
+        <span class="n">use_scaler</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="p">:</span>
+            <span class="k">if</span> <span class="s2">&quot;float16&quot;</span> <span class="ow">in</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+                <span class="n">use_scaler</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span> <span class="o">=</span> <span class="n">GradScaler</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;:&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span> <span class="n">enabled</span><span class="o">=</span><span class="n">use_scaler</span><span class="p">)</span>
+
+        <span class="n">load_string</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_load_weights_conditional</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">load_string</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_apply_layer_dtypes</span><span class="p">()</span></div>
+
+
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_apply_layer_dtypes</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Casts specific layer types to configured dtypes (e.g., bfloat16, float8).&quot;&quot;&quot;</span>
+        <span class="n">layer_config</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">layer_config</span><span class="p">:</span>
+            <span class="k">return</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] Applying custom layer dtypes: </span><span class="si">{</span><span class="n">layer_config</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Iterate over all sub-modules and cast based on type</span>
+        <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">module</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">named_modules</span><span class="p">():</span>
+            <span class="c1"># Linear Layers</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">):</span>
+                <span class="n">is_decoder</span> <span class="o">=</span> <span class="nb">any</span><span class="p">(</span><span class="n">module</span> <span class="ow">is</span> <span class="n">m</span> <span class="k">for</span> <span class="n">m</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">values</span><span class="p">())</span>
+                <span class="k">if</span> <span class="n">is_decoder</span> <span class="ow">and</span> <span class="s2">&quot;decoder&quot;</span> <span class="ow">in</span> <span class="n">layer_config</span><span class="p">:</span>
+                    <span class="n">module</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">get_torch_dtype</span><span class="p">(</span><span class="n">layer_config</span><span class="p">[</span><span class="s2">&quot;decoder&quot;</span><span class="p">]))</span>
+                <span class="k">elif</span> <span class="s2">&quot;linear&quot;</span> <span class="ow">in</span> <span class="n">layer_config</span><span class="p">:</span>
+                    <span class="n">module</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">get_torch_dtype</span><span class="p">(</span><span class="n">layer_config</span><span class="p">[</span><span class="s2">&quot;linear&quot;</span><span class="p">]))</span>
+
+            <span class="c1"># Embeddings</span>
+            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="n">nn</span><span class="o">.</span><span class="n">Embedding</span><span class="p">)</span> <span class="ow">and</span> <span class="s2">&quot;embedding&quot;</span> <span class="ow">in</span> <span class="n">layer_config</span><span class="p">:</span>
+                <span class="n">target_dtype</span> <span class="o">=</span> <span class="n">get_torch_dtype</span><span class="p">(</span><span class="n">layer_config</span><span class="p">[</span><span class="s2">&quot;embedding&quot;</span><span class="p">])</span>
+                <span class="n">module</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">target_dtype</span><span class="p">)</span>
+
+            <span class="c1"># Normalization (RMSNorm, LayerNorm)</span>
+            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">LayerNorm</span><span class="p">,</span> <span class="n">RMSNorm</span><span class="p">))</span> <span class="ow">and</span> <span class="s2">&quot;norm&quot;</span> <span class="ow">in</span> <span class="n">layer_config</span><span class="p">:</span>
+                <span class="n">target_dtype</span> <span class="o">=</span> <span class="n">get_torch_dtype</span><span class="p">(</span><span class="n">layer_config</span><span class="p">[</span><span class="s2">&quot;norm&quot;</span><span class="p">])</span>
+                <span class="n">module</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">target_dtype</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="s2">&quot;linear&quot;</span> <span class="ow">in</span> <span class="n">layer_config</span><span class="p">:</span>
+            <span class="n">target_dtype</span> <span class="o">=</span> <span class="n">get_torch_dtype</span><span class="p">(</span><span class="n">layer_config</span><span class="p">[</span><span class="s2">&quot;linear&quot;</span><span class="p">])</span>
+            <span class="k">for</span> <span class="n">criterion</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">criterion</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+                <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">criterion</span><span class="p">,</span> <span class="s2">&quot;weight&quot;</span><span class="p">)</span> <span class="ow">and</span> <span class="n">criterion</span><span class="o">.</span><span class="n">weight</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">criterion</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="n">criterion</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">target_dtype</span><span class="p">)</span>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_init_criterion</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hparams</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
@@ -932,12 +1005,15 @@
 
         <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns_direct</span><span class="p">:</span>
-                <span class="n">src_t</span> <span class="o">=</span> <span class="n">src</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span><span class="p">)</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="k">assert</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns_with_embedding</span>
-                <span class="n">src_t</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span><span class="p">[</span><span class="n">col</span><span class="p">](</span><span class="n">src</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="p">[:,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">])</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span>
+                <span class="n">target_dtype</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">ff</span><span class="o">.</span><span class="n">get_first_layer_dtype</span><span class="p">()</span>
+                <span class="n">src_t</span> <span class="o">=</span> <span class="n">src</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">target_dtype</span><span class="p">)</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span>
                 <span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">assert</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns_with_embedding</span>
+                <span class="n">layer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span><span class="p">[</span><span class="n">col</span><span class="p">]</span>
+                <span class="n">inp</span> <span class="o">=</span> <span class="n">src</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="p">[:,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">layer</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+                <span class="n">src_t</span> <span class="o">=</span> <span class="n">layer</span><span class="p">(</span><span class="n">inp</span><span class="p">)</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span><span class="p">)</span>
 
             <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_rope</span><span class="p">:</span>
                 <span class="n">pos</span> <span class="o">=</span> <span class="p">(</span>
@@ -960,8 +1036,9 @@
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_layer</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_layer</span><span class="p">(</span><span class="n">src2</span><span class="p">)</span>
 
+        <span class="n">mask</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">src_mask</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">src2</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">layer</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">:</span>
-            <span class="n">src2</span> <span class="o">=</span> <span class="n">layer</span><span class="p">(</span><span class="n">src2</span><span class="p">,</span> <span class="n">src_mask</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">src_mask</span><span class="p">)</span>
+            <span class="n">src2</span> <span class="o">=</span> <span class="n">layer</span><span class="p">(</span><span class="n">src2</span><span class="p">,</span> <span class="n">src_mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
 
         <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">final_norm</span><span class="p">(</span><span class="n">src2</span><span class="p">)</span>
 
@@ -1030,7 +1107,10 @@
 <span class="sd">            The decoded output (logits or real value) for the target column</span>
 <span class="sd">            (seq_length, batch_size, n_classes/1).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">decoded</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="p">[</span><span class="n">target_column</span><span class="p">](</span><span class="n">output</span><span class="p">)</span>
+
+        <span class="n">target_dtype</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">dtype</span>
+        <span class="n">decoded</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="p">[</span><span class="n">target_column</span><span class="p">](</span><span class="n">output</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">target_dtype</span><span class="p">))</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
         <span class="k">return</span> <span class="n">decoded</span></div>
 
 
@@ -1053,7 +1133,7 @@
         <span class="k">if</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">output</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">softmax</span><span class="p">[</span><span class="n">target_column</span><span class="p">](</span><span class="n">output</span><span class="p">)</span></div>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">softmax</span><span class="p">[</span><span class="n">target_column</span><span class="p">](</span><span class="n">output</span><span class="o">.</span><span class="n">float</span><span class="p">())</span></div>
 
 
 <div class="viewcode-block" id="TransformerModel.forward">
@@ -1256,20 +1336,34 @@
                 <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">targets</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
                 <span class="k">if</span> <span class="n">k</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span>
             <span class="p">}</span>
-            <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">forward_train</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_autocast</span><span class="p">:</span>
+                <span class="n">amp_dtype</span> <span class="o">=</span> <span class="n">get_torch_dtype</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+                        <span class="s2">&quot;linear&quot;</span><span class="p">,</span> <span class="s2">&quot;bfloat16&quot;</span>
+                    <span class="p">)</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span>
+                    <span class="k">else</span> <span class="s2">&quot;float32&quot;</span>
+                <span class="p">)</span>
+                <span class="k">with</span> <span class="n">torch</span><span class="o">.</span><span class="n">autocast</span><span class="p">(</span>
+                    <span class="n">device_type</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;:&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">amp_dtype</span>
+                <span class="p">):</span>
+                    <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">forward_train</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+                    <span class="n">loss</span><span class="p">,</span> <span class="n">losses</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">targets</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">forward_train</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+                <span class="n">loss</span><span class="p">,</span> <span class="n">losses</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">targets</span><span class="p">)</span>
 
-            <span class="n">loss</span><span class="p">,</span> <span class="n">losses</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">targets</span><span class="p">)</span>
-
-            <span class="n">loss</span><span class="o">.</span><span class="n">backward</span><span class="p">()</span>
-
-            <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">clip_grad_norm_</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">parameters</span><span class="p">(),</span> <span class="mf">0.5</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">scale</span><span class="p">(</span><span class="n">loss</span><span class="p">)</span><span class="o">.</span><span class="n">backward</span><span class="p">()</span>
 
             <span class="k">if</span> <span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span> <span class="ow">is</span> <span class="kc">None</span>
                 <span class="ow">or</span> <span class="p">(</span><span class="n">batch_count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span> <span class="o">==</span> <span class="mi">0</span>
                 <span class="ow">or</span> <span class="p">(</span><span class="n">batch_count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="n">num_batches</span>
             <span class="p">):</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">unscale_</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">)</span>
+                <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">clip_grad_norm_</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">parameters</span><span class="p">(),</span> <span class="mf">0.5</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">update</span><span class="p">()</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">zero_grad</span><span class="p">()</span>
 
             <span class="n">total_loss</span> <span class="o">+=</span> <span class="n">loss</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
@@ -1313,14 +1407,23 @@
         <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">targets</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
             <span class="n">target_column_type</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span>
             <span class="k">if</span> <span class="n">target_column_type</span> <span class="o">==</span> <span class="s2">&quot;categorical&quot;</span><span class="p">:</span>
-                <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
-                    <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span>
+                <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span>
+                    <span class="o">.</span><span class="n">float</span><span class="p">()</span>
+                    <span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">target_column</span><span class="p">])</span>
                 <span class="p">)</span>
             <span class="k">elif</span> <span class="n">target_column_type</span> <span class="o">==</span> <span class="s2">&quot;real&quot;</span><span class="p">:</span>
-                <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+                <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+                <span class="p">)</span>
+
+            <span class="n">target_tensor</span> <span class="o">=</span> <span class="n">targets</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;real&quot;</span><span class="p">:</span>
+                <span class="n">target_tensor</span> <span class="o">=</span> <span class="n">target_tensor</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
 
             <span class="n">losses</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">criterion</span><span class="p">[</span><span class="n">target_column</span><span class="p">](</span>
-                <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">],</span> <span class="n">targets</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+                <span class="n">output</span><span class="p">[</span><span class="n">target_column</span><span class="p">],</span> <span class="n">target_tensor</span>
             <span class="p">)</span>
         <span class="n">loss</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">targets</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
@@ -1376,10 +1479,11 @@
 <span class="sd">            (e.g., one-hot encoded).</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;categorical&quot;</span><span class="p">:</span>
+            <span class="n">target_dtype</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">dtype</span>
             <span class="k">return</span> <span class="p">(</span>
                 <span class="n">one_hot</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">col</span><span class="p">])</span>
                 <span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">col</span><span class="p">])</span>
-                <span class="o">.</span><span class="n">float</span><span class="p">()</span>
+                <span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">target_dtype</span><span class="p">)</span>
             <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">!=</span> <span class="s2">&quot;real&quot;</span><span class="p">:</span>
@@ -1428,8 +1532,22 @@
                     <span class="k">if</span> <span class="n">k</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span>
                 <span class="p">}</span>
 
-                <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">forward_train</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
-                <span class="n">loss</span><span class="p">,</span> <span class="n">losses</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">targets</span><span class="p">)</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_autocast</span><span class="p">:</span>
+                    <span class="n">amp_dtype</span> <span class="o">=</span> <span class="n">get_torch_dtype</span><span class="p">(</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+                            <span class="s2">&quot;linear&quot;</span><span class="p">,</span> <span class="s2">&quot;bfloat16&quot;</span>
+                        <span class="p">)</span>
+                        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span>
+                        <span class="k">else</span> <span class="s2">&quot;float32&quot;</span>
+                    <span class="p">)</span>
+                    <span class="k">with</span> <span class="n">torch</span><span class="o">.</span><span class="n">autocast</span><span class="p">(</span>
+                        <span class="n">device_type</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;:&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">amp_dtype</span>
+                    <span class="p">):</span>
+                        <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">forward_train</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+                        <span class="n">loss</span><span class="p">,</span> <span class="n">losses</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">targets</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">forward_train</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+                    <span class="n">loss</span><span class="p">,</span> <span class="n">losses</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">targets</span><span class="p">)</span>
 
                 <span class="n">total_loss_collect</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">loss</span><span class="o">.</span><span class="n">item</span><span class="p">())</span>
                 <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">loss</span> <span class="ow">in</span> <span class="n">losses</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
@@ -1616,6 +1734,7 @@
             <span class="n">suffix</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">-embedding&quot;</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">_export_model</span><span class="p">(</span><span class="n">model2</span><span class="p">,</span> <span class="n">suffix</span><span class="p">,</span> <span class="n">epoch</span><span class="p">)</span>
 
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_export_model</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">model</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="s2">&quot;TransformerModel&quot;</span><span class="p">,</span> <span class="s2">&quot;TransformerEmbeddingModel&quot;</span><span class="p">],</span>
@@ -1633,6 +1752,18 @@
 <span class="sd">            epoch: The current epoch number, included in the filename.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">export_onnx</span><span class="p">:</span>
+            <span class="n">is_different_type</span> <span class="o">=</span> <span class="nb">any</span><span class="p">(</span>
+                <span class="n">p</span><span class="o">.</span><span class="n">dtype</span> <span class="ow">in</span> <span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">float64</span><span class="p">]</span>
+                <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">model</span><span class="o">.</span><span class="n">parameters</span><span class="p">()</span>
+            <span class="p">)</span>
+            <span class="n">model_to_export</span> <span class="o">=</span> <span class="n">model</span>
+
+            <span class="k">if</span> <span class="n">is_different_type</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                    <span class="s2">&quot;[INFO] Casting model to float32 for ONNX export compatibility...&quot;</span>
+                <span class="p">)</span>
+                <span class="n">model_to_export</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">_copy_model</span><span class="p">()</span><span class="o">.</span><span class="n">float</span><span class="p">()</span>
+
             <span class="n">x_cat</span> <span class="o">=</span> <span class="p">{</span>
                 <span class="n">col</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span>
                     <span class="mi">0</span><span class="p">,</span>
@@ -1641,9 +1772,11 @@
                 <span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">non_blocking</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
                 <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span>
             <span class="p">}</span>
+
+            <span class="n">dtype_real</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span> <span class="k">if</span> <span class="n">is_different_type</span> <span class="k">else</span> <span class="kc">None</span>
             <span class="n">x_real</span> <span class="o">=</span> <span class="p">{</span>
                 <span class="n">col</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">inference_batch_size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">seq_length</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">non_blocking</span><span class="o">=</span><span class="kc">True</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">non_blocking</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype_real</span>
                 <span class="p">)</span>
                 <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span>
             <span class="p">}</span>
@@ -1663,16 +1796,16 @@
             <span class="p">)</span>
             <span class="n">constant_folding</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">export_with_dropout</span> <span class="o">==</span> <span class="kc">False</span>  <span class="c1"># noqa: E712</span>
             <span class="n">torch</span><span class="o">.</span><span class="n">onnx</span><span class="o">.</span><span class="n">export</span><span class="p">(</span>
-                <span class="n">model</span><span class="p">,</span>  <span class="c1"># model being run</span>
+                <span class="n">model_to_export</span><span class="p">,</span>
                 <span class="n">x</span><span class="p">,</span>  <span class="c1"># model input (or a tuple for multiple inputs)</span>
-                <span class="n">export_path</span><span class="p">,</span>  <span class="c1"># where to save the model (can be a file or file-like object)</span>
-                <span class="n">export_params</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>  <span class="c1"># store the trained parameter weights inside the model file</span>
-                <span class="n">opset_version</span><span class="o">=</span><span class="mi">14</span><span class="p">,</span>  <span class="c1"># the ONNX version to export the model to</span>
-                <span class="n">do_constant_folding</span><span class="o">=</span><span class="n">constant_folding</span><span class="p">,</span>  <span class="c1"># whether to execute constant folding for optimization</span>
-                <span class="n">input_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;input&quot;</span><span class="p">],</span>  <span class="c1"># the model&#39;s input names</span>
-                <span class="n">output_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;output&quot;</span><span class="p">],</span>  <span class="c1"># the model&#39;s output names</span>
+                <span class="n">export_path</span><span class="p">,</span>  <span class="c1"># where to save the model</span>
+                <span class="n">export_params</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>  <span class="c1"># store the trained parameter weights</span>
+                <span class="n">opset_version</span><span class="o">=</span><span class="mi">14</span><span class="p">,</span>  <span class="c1"># the ONNX version</span>
+                <span class="n">do_constant_folding</span><span class="o">=</span><span class="n">constant_folding</span><span class="p">,</span>
+                <span class="n">input_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;input&quot;</span><span class="p">],</span>
+                <span class="n">output_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;output&quot;</span><span class="p">],</span>
                 <span class="n">dynamic_axes</span><span class="o">=</span><span class="p">{</span>
-                    <span class="s2">&quot;input&quot;</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="s2">&quot;batch_size&quot;</span><span class="p">},</span>  <span class="c1"># variable length axes</span>
+                    <span class="s2">&quot;input&quot;</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="s2">&quot;batch_size&quot;</span><span class="p">},</span>
                     <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="s2">&quot;batch_size&quot;</span><span class="p">},</span>
                 <span class="p">},</span>
                 <span class="n">training</span><span class="o">=</span><span class="n">training_mode</span><span class="p">,</span>
@@ -1989,13 +2122,25 @@
 <span class="sd">        A NumPy array containing the concatenated embeddings from all batches.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">outs0</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="n">categorical_cols</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">transformer_model</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">)</span>
+
     <span class="k">with</span> <span class="n">torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">():</span>
         <span class="k">for</span> <span class="n">x_sub</span> <span class="ow">in</span> <span class="n">x</span><span class="p">:</span>
-            <span class="n">data_gpu</span> <span class="o">=</span> <span class="p">{</span>
-                <span class="n">col</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">x_</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span> <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">x_</span> <span class="ow">in</span> <span class="n">x_sub</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-            <span class="p">}</span>
+            <span class="n">layer_types</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">model</span><span class="o">.</span><span class="n">transformer_model</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span> <span class="ow">or</span> <span class="p">{}</span>
+            <span class="p">)</span>
+            <span class="n">dtype_str</span> <span class="o">=</span> <span class="n">layer_types</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;linear&quot;</span><span class="p">,</span> <span class="s2">&quot;float32&quot;</span><span class="p">)</span>
+            <span class="n">ref_dtype</span> <span class="o">=</span> <span class="n">get_torch_dtype</span><span class="p">(</span><span class="n">dtype_str</span><span class="p">)</span>
+            <span class="n">data_gpu</span> <span class="o">=</span> <span class="p">{}</span>
+            <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">x_</span> <span class="ow">in</span> <span class="n">x_sub</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">categorical_cols</span><span class="p">:</span>
+                    <span class="n">data_gpu</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">x_</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">data_gpu</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">x_</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ref_dtype</span><span class="p">)</span>
+
             <span class="n">output_gpu</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">forward</span><span class="p">(</span><span class="n">data_gpu</span><span class="p">)</span>
-            <span class="n">output_cpu</span> <span class="o">=</span> <span class="n">output_gpu</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+            <span class="n">output_cpu</span> <span class="o">=</span> <span class="n">output_gpu</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">float</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
             <span class="n">output_cpu</span> <span class="o">=</span> <span class="n">output_cpu</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
                 <span class="n">output_cpu</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">output_cpu</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">output_cpu</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
             <span class="p">)</span>
@@ -2032,11 +2177,21 @@
 <span class="sd">        output NumPy arrays, trimmed to `size`.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">outs0</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="n">categorical_cols</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">)</span>
+
     <span class="k">with</span> <span class="n">torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">():</span>
         <span class="k">for</span> <span class="n">x_sub</span> <span class="ow">in</span> <span class="n">x</span><span class="p">:</span>
-            <span class="n">data_gpu</span> <span class="o">=</span> <span class="p">{</span>
-                <span class="n">col</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">x_</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span> <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">x_</span> <span class="ow">in</span> <span class="n">x_sub</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-            <span class="p">}</span>
+            <span class="n">layer_types</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span> <span class="ow">or</span> <span class="p">{}</span>
+            <span class="n">dtype_str</span> <span class="o">=</span> <span class="n">layer_types</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;linear&quot;</span><span class="p">,</span> <span class="s2">&quot;float32&quot;</span><span class="p">)</span>
+            <span class="n">ref_dtype</span> <span class="o">=</span> <span class="n">get_torch_dtype</span><span class="p">(</span><span class="n">dtype_str</span><span class="p">)</span>
+            <span class="n">data_gpu</span> <span class="o">=</span> <span class="p">{}</span>
+            <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">x_</span> <span class="ow">in</span> <span class="n">x_sub</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">categorical_cols</span><span class="p">:</span>
+                    <span class="n">data_gpu</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">x_</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">data_gpu</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">x_</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ref_dtype</span><span class="p">)</span>
+
             <span class="n">output_gpu</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">forward</span><span class="p">(</span><span class="n">data_gpu</span><span class="p">)</span>
             <span class="n">output_cpu</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">output_gpu</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
             <span class="n">outs0</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">output_cpu</span><span class="p">)</span>
@@ -2047,6 +2202,7 @@
         <span class="n">target_column</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span>
             <span class="p">[</span>
                 <span class="n">o</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span>
+                <span class="o">.</span><span class="n">float</span><span class="p">()</span>
                 <span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
                 <span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
                 <span class="o">.</span><span class="n">reshape</span><span class="p">(</span>
@@ -2094,7 +2250,7 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=3fe90bda"></script>
+</div><script src="../../_static/documentation_options.js?v=f4609b17"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
