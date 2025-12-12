@@ -1101,31 +1101,20 @@ class TransformerModel(nn.Module):
             - A dictionary of individual (unweighted) loss Tensors for each
               target column.
         """
-        # 1. Compute the Mask ONCE
-        # We prefer to compute the mask from a categorical column if possible,
-        # because '0' in categorical data is strictly reserved for padding.
-        # In real-valued data, '0.0' could technically be a valid value (the mean).
         mask_col = next(
             (
                 col
                 for col in targets.keys()
                 if self.target_column_types[col] == "categorical"
             ),
-            list(targets.keys())[
-                0
-            ],  # Fallback to first column (likely real) if no categorical
+            list(targets.keys())[0],
         )
 
-        # Compute 2D mask (Batch, Seq_Len)
         if self.target_column_types[mask_col] == "real":
-            # Use cumsum heuristic for real values to handle potential 0.0 data vs padding
             seq_mask_2d = (targets[mask_col] != 0.0).long().cumsum(dim=1) > 0
         else:
-            # Simple check for categorical
             seq_mask_2d = targets[mask_col] != 0
 
-        # Align mask with the flattened Time-Major structure used below
-        # (targets.T -> [Seq_Len, Batch] -> Flatten)
         mask = seq_mask_2d.T.contiguous().reshape(-1)
 
         losses = {}
@@ -1147,16 +1136,12 @@ class TransformerModel(nn.Module):
             if self.target_column_types[target_column] == "real":
                 target_tensor = target_tensor.to(dtype=output[target_column].dtype)
 
-            # 2. Calculate Loss
             raw_loss = self.criterion[target_column](
                 output[target_column], target_tensor
             )
 
-            # 3. Apply the pre-computed mask
-            # Cast mask to match this specific loss tensor's dtype (e.g. bfloat16 compatibility)
             current_mask = mask.to(dtype=raw_loss.dtype)
 
-            # Calculate mean over VALID tokens only
             losses[target_column] = (raw_loss * current_mask).sum() / (
                 current_mask.sum() + 1e-9
             )
