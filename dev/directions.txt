@@ -3,7 +3,7 @@ Inference scope:
  - implement kv_cache (adapt specifically for learned positional embeddings)
 Add encoder module with more data types and architectures, for e.g. images
 Add "folding"/patching functionality to preprocessing
-Add attention sink token option
+Add attention sink token option at beginning of sequence
 Add different configurable decoder modules, e.g. mlp (current), transformer, diffusion
 Hyperparameter optimization:
  - Add hyperparameter optimization instead of just hyperparameter sampling: bandits/gaussian processes
@@ -18,3 +18,10 @@ Other LLM roadmap:
  - enable loss masking
  - enable validation set scoring within epochs
 Lower/mixed precision training and inference
+Add top_k and top_p sampling
+Add autoregressive inference until specific values are reached for specific variables
+Add total weights and weight distribution tool
+Option to leave "target" empty in preprocessing, no offset necessary (for inference on test sets)
+num_workers for GPU satutaration in inference
+within epoch checkpointing and checkpoint loading
+inference resumption
