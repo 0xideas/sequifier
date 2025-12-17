@@ -81,7 +81,7 @@ class SequifierDatasetFromFolderLazy(Dataset):
 
         logger.info(
             f"[INFO] Initialized lazy dataset from {self.data_dir}. "
-            f"Total samples: {self.n_samples}. RAM threshold in GB: {self.max_ram_gb}%"
+            f"Total samples: {self.n_samples}. RAM threshold in GB: {self.max_ram_gb}"
         )
 
     def __len__(self) -> int:
