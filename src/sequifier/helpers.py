@@ -26,6 +26,14 @@ PANDAS_TO_TORCH_TYPES = {
     "int16": torch.int16,
     "Int8": torch.int8,
     "int8": torch.int8,
+    "UInt64": torch.int64,
+    "uint64": torch.int64,
+    "UInt32": torch.int64,
+    "uint32": torch.int64,
+    "UInt16": torch.int32,
+    "uint16": torch.int32,
+    "UInt8": torch.int16,
+    "uint8": torch.int16,
 }
 
 

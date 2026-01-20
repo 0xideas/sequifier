@@ -25,3 +25,8 @@ Option to leave "target" empty in preprocessing, no offset necessary (for infere
 num_workers for GPU satutaration in inference
 within epoch checkpointing and checkpoint loading
 inference resumption
+tokenize text into a configurable number of "output" variables during preprocessing
+use configurable (external or also sequifier) embedding model to embed text into fixed number of dimensions during preprocessing
+"deembedding model export"
+if sequifier embedding model used during preprocessing, support deembedding model during inference for generative inference
+trajectory transformer: rewrite sequifier/infer.py to optionally implement beam search and integrate a reward-maximization objective.

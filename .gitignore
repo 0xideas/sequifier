@@ -153,6 +153,7 @@ venv.bak/
 # mkdocs documentation
 /site
 
+design/
 
 documentation/demos/configs
 
