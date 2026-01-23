@@ -906,51 +906,48 @@ def _get_column_statistics(
             string, integer, nor float).
     """
     for data_col in data_columns:
-        if data_col not in precomputed_id_maps:
-            dtype = data.schema[data_col]
-            if isinstance(
-                dtype, (pl.String, pl.Utf8, pl.Object, pl.Categorical, pl.Boolean)
-            ) or isinstance(
-                dtype,
-                (
-                    pl.Int8,
-                    pl.Int16,
-                    pl.Int32,
-                    pl.Int64,
-                    pl.UInt8,
-                    pl.UInt16,
-                    pl.UInt32,
-                    pl.UInt64,
-                ),
-            ):
-                if data_col not in precomputed_id_maps:
-                    new_id_map = create_id_map(data, column=data_col)
-                    id_maps[data_col] = combine_maps(
-                        new_id_map, id_maps.get(data_col, {})
-                    )
-                else:
-                    logger.info(f"Applying precomputed map for {data_col}")
-            elif isinstance(dtype, (pl.Float32, pl.Float64)):
-                if data_col in precomputed_id_maps:
-                    raise ValueError(
-                        f"Column {data_col} is not categorical, precomputed map is invalid."
-                    )
-
-                combined_mean, combined_std = get_combined_statistics(
-                    data.shape[0],
-                    data.get_column(data_col).mean(),
-                    data.get_column(data_col).std(),
-                    n_rows_running_count,
-                    selected_columns_statistics.get(data_col, {"mean": 0.0})["mean"],
-                    selected_columns_statistics.get(data_col, {"std": 0.0})["std"],
+        dtype = data.schema[data_col]
+        if isinstance(
+            dtype, (pl.String, pl.Utf8, pl.Object, pl.Categorical, pl.Boolean)
+        ) or isinstance(
+            dtype,
+            (
+                pl.Int8,
+                pl.Int16,
+                pl.Int32,
+                pl.Int64,
+                pl.UInt8,
+                pl.UInt16,
+                pl.UInt32,
+                pl.UInt64,
+            ),
+        ):
+            if data_col not in precomputed_id_maps:
+                new_id_map = create_id_map(data, column=data_col)
+                id_maps[data_col] = combine_maps(new_id_map, id_maps.get(data_col, {}))
+            else:
+                logger.info(f"Applying precomputed map for {data_col}")
+        elif isinstance(dtype, (pl.Float32, pl.Float64)):
+            if data_col in precomputed_id_maps:
+                raise ValueError(
+                    f"Column {data_col} is not categorical, precomputed map is invalid."
                 )
 
-                selected_columns_statistics[data_col] = {
-                    "std": combined_std,
-                    "mean": combined_mean,
-                }
-            else:
-                raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
+            combined_mean, combined_std = get_combined_statistics(
+                data.shape[0],
+                data.get_column(data_col).mean(),
+                data.get_column(data_col).std(),
+                n_rows_running_count,
+                selected_columns_statistics.get(data_col, {"mean": 0.0})["mean"],
+                selected_columns_statistics.get(data_col, {"std": 0.0})["std"],
+            )
+
+            selected_columns_statistics[data_col] = {
+                "std": combined_std,
+                "mean": combined_mean,
+            }
+        else:
+            raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
 
     return id_maps, selected_columns_statistics
 
