@@ -86,3 +86,26 @@ After running `preprocess`, the following are generated:
 2.  **Metadata Config:** Located in `configs/metadata_configs/[NAME].json`.
       * **Crucial:** This file contains the integer mappings for categorical variables (`id_maps`) and normalization stats for real variables (`selected_columns_statistics`).
       * **Next Step:** You must link this file path in your `train.yaml` and `infer.yaml` under `metadata_config_path`.
+
+
+## 5\. Advanced: Custom ID Mapping
+
+By default, Sequifier automatically generates integer IDs for categorical columns starting from index 2 (indices 0 and 1 are reserved for system use, such as "unknown" values).
+
+If you need to enforce specific integer mappings (e.g., to maintain consistency across different training runs or datasets), you can provide **precomputed ID maps**.
+
+1.  Create a folder named `id_maps` inside your configs directory: `configs/id_maps/`.
+2.  Create a JSON file named exactly after the column you want to map (e.g., `my_column_name.json`).
+3.  The JSON file must contain a key-value dictionary where keys are the raw values and values are the integer IDs.
+
+**Constraints:**
+* Integer IDs must start at **2** or higher.
+* IDs **0** and **1** are reserved.
+
+**Example `configs/id_maps/category_col.json`:**
+```json
+{
+  "cat": 2,
+  "dog": 3,
+  "mouse": 4
+}
