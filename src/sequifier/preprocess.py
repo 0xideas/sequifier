@@ -130,9 +130,21 @@ class Preprocessor:
                 col for col in data.columns if col not in ["sequenceId", "itemPosition"]
             ]
             id_maps, selected_columns_statistics = {}, {}
-            id_maps, selected_columns_statistics = _get_column_statistics(
-                data, data_columns, id_maps, selected_columns_statistics, 0
+
+            precomputed_id_maps = load_precomputed_id_maps(
+                self.project_root, data_columns
             )
+
+            id_maps, selected_columns_statistics = _get_column_statistics(
+                data,
+                data_columns,
+                id_maps,
+                selected_columns_statistics,
+                0,
+                precomputed_id_maps,
+            )
+
+            id_maps = id_maps | precomputed_id_maps
 
             data, n_classes, col_types = _apply_column_statistics(
                 data, data_columns, id_maps, selected_columns_statistics
@@ -319,9 +331,14 @@ class Preprocessor:
                 - data_columns (list[str]): List of all processed data
                   column names.
         """
+
         n_rows_running_count = 0
         id_maps, selected_columns_statistics = {}, {}
+
         col_types, data_columns = None, None
+
+        precomputed_id_maps = load_precomputed_id_maps(self.project_root, data_columns)
+
         files_to_process = []
         logger.info(f"Data path: {data_path}")
         for root, dirs, files in os.walk(data_path):
@@ -354,6 +371,12 @@ class Preprocessor:
                     if col_types is None:
                         data_columns = current_file_cols
                         col_types = {col: str(data.schema[col]) for col in data_columns}
+
+                        for col in precomputed_id_maps.keys():
+                            if col not in data_columns:
+                                raise ValueError(
+                                    f"Precomputed column {col} not found in {file}"
+                                )
                     else:
                         if set(current_file_cols) != set(col_types.keys()):
                             missing = set(col_types.keys()) - set(current_file_cols)
@@ -382,8 +405,11 @@ class Preprocessor:
                         id_maps,
                         selected_columns_statistics,
                         n_rows_running_count,
+                        precomputed_id_maps,
                     )
                     n_rows_running_count += data.shape[0]
+
+        id_maps = id_maps | precomputed_id_maps
 
         if data_columns is None:
             raise RuntimeError("data_columns was not initialized correctly.")
@@ -792,7 +818,7 @@ def _apply_column_statistics(
 
     for col in data_columns:
         if col in id_maps:
-            data = data.with_columns(pl.col(col).replace(id_maps[col]))
+            data = data.with_columns(pl.col(col).replace(id_maps[col], default=1))
             col_types[col] = "Int64"
         elif col in selected_columns_statistics:
             data = data.with_columns(
@@ -806,12 +832,45 @@ def _apply_column_statistics(
 
 
 @beartype
+def load_precomputed_id_maps(
+    project_root: str, data_columns: Optional[list[str]]
+) -> dict[str, dict[Union[str, int], int]]:
+    """Loads custom ID maps from configs/id_maps if the folder exists."""
+    custom_maps = {}
+    path = os.path.join(project_root, "configs", "id_maps")
+
+    if os.path.exists(path):
+        for file in os.listdir(path):
+            if file.endswith(".json"):
+                col_name = os.path.splitext(file)[0]
+                if data_columns is not None and col_name not in data_columns:
+                    raise ValueError(
+                        f"{file} does not correspond to any column in the data"
+                    )
+
+                with open(os.path.join(path, file), "r") as f:
+                    # Load and ensure values are integers
+                    m = {k: int(v) for k, v in json.load(f).items()}
+
+                    if not len(m) > 0:
+                        raise ValueError(f"map in {file} does not contain any values")
+                    min_val = min(m.values())
+                    if min_val != 2:
+                        raise ValueError(
+                            f"minimum value in map {file} is {min_val}, must be 2."
+                        )
+                    custom_maps[col_name] = m
+    return custom_maps
+
+
+@beartype
 def _get_column_statistics(
     data: pl.DataFrame,
     data_columns: list[str],
     id_maps: dict[str, dict[Union[str, int], int]],
     selected_columns_statistics: dict[str, dict[str, float]],
     n_rows_running_count: int,
+    precomputed_id_maps: dict[str, dict[Union[str, int], int]],
 ) -> tuple[
     dict[str, dict[Union[str, int], int]],
     dict[str, dict[str, float]],
@@ -847,40 +906,41 @@ def _get_column_statistics(
             string, integer, nor float).
     """
     for data_col in data_columns:
-        dtype = data.schema[data_col]
-        if isinstance(
-            dtype, (pl.String, pl.Utf8, pl.Object, pl.Categorical, pl.Boolean)
-        ) or isinstance(
-            dtype,
-            (
-                pl.Int8,
-                pl.Int16,
-                pl.Int32,
-                pl.Int64,
-                pl.UInt8,
-                pl.UInt16,
-                pl.UInt32,
-                pl.UInt64,
-            ),
-        ):
-            new_id_map = create_id_map(data, column=data_col)
-            id_maps[data_col] = combine_maps(new_id_map, id_maps.get(data_col, {}))
-        elif isinstance(dtype, (pl.Float32, pl.Float64)):
-            combined_mean, combined_std = get_combined_statistics(
-                data.shape[0],
-                data.get_column(data_col).mean(),
-                data.get_column(data_col).std(),
-                n_rows_running_count,
-                selected_columns_statistics.get(data_col, {"mean": 0.0})["mean"],
-                selected_columns_statistics.get(data_col, {"std": 0.0})["std"],
-            )
+        if data_col not in precomputed_id_maps:
+            dtype = data.schema[data_col]
+            if isinstance(
+                dtype, (pl.String, pl.Utf8, pl.Object, pl.Categorical, pl.Boolean)
+            ) or isinstance(
+                dtype,
+                (
+                    pl.Int8,
+                    pl.Int16,
+                    pl.Int32,
+                    pl.Int64,
+                    pl.UInt8,
+                    pl.UInt16,
+                    pl.UInt32,
+                    pl.UInt64,
+                ),
+            ):
+                new_id_map = create_id_map(data, column=data_col)
+                id_maps[data_col] = combine_maps(new_id_map, id_maps.get(data_col, {}))
+            elif isinstance(dtype, (pl.Float32, pl.Float64)):
+                combined_mean, combined_std = get_combined_statistics(
+                    data.shape[0],
+                    data.get_column(data_col).mean(),
+                    data.get_column(data_col).std(),
+                    n_rows_running_count,
+                    selected_columns_statistics.get(data_col, {"mean": 0.0})["mean"],
+                    selected_columns_statistics.get(data_col, {"std": 0.0})["std"],
+                )
 
-            selected_columns_statistics[data_col] = {
-                "std": combined_std,
-                "mean": combined_mean,
-            }
-        else:
-            raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
+                selected_columns_statistics[data_col] = {
+                    "std": combined_std,
+                    "mean": combined_mean,
+                }
+            else:
+                raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
 
     return id_maps, selected_columns_statistics
 
@@ -1262,7 +1322,7 @@ def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]
     ids = sorted(
         [int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]
     )  # type: ignore
-    id_map = {id_: i + 1 for i, id_ in enumerate(ids)}
+    id_map = {id_: i + 2 for i, id_ in enumerate(ids)}
     return dict(id_map)
 
 
