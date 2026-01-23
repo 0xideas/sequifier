@@ -194,7 +194,7 @@ Please cite with:
   title = {sequifier - causal transformer models for multivariate sequence modelling},
   year = {2025},
   publisher = {GitHub},
-  version = {v1.0.0.6},
+  version = {v1.1.0.0},
   url = {https://github.com/0xideas/sequifier}
 }
 ```
