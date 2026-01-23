@@ -1,7 +1,7 @@
 project_root: tests/project_folder
-data_path: tests/resources/source_data/test-data-categorical-3-equal.csv
+data_path: tests/resources/source_data/test-data-categorical-3-equal.parquet
 merge_output: false
-read_format: csv
+read_format: parquet
 write_format: pt
 selected_columns: null
 
