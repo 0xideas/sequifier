@@ -835,7 +835,16 @@ def _apply_column_statistics(
 def load_precomputed_id_maps(
     project_root: str, data_columns: Optional[list[str]]
 ) -> dict[str, dict[Union[str, int], int]]:
-    """Loads custom ID maps from configs/id_maps if the folder exists."""
+    """Loads custom ID maps from configs/id_maps if the folder exists.
+
+    Args:
+        project_root: The path to the project root directory.
+        data_columns: Optional list of columns present in the data to validate
+            against the found map files.
+
+    Returns:
+        A dictionary mapping column names to their ID maps.
+    """
     custom_maps = {}
     path = os.path.join(project_root, "configs", "id_maps")
 
@@ -896,6 +905,8 @@ def _get_column_statistics(
             statistics to be updated.
         n_rows_running_count: The total number of rows processed *before*
             this chunk, used for weighting statistics.
+        precomputed_id_maps: A dictionary of pre-loaded ID maps that should
+            be applied and not re-computed.
 
     Returns:
         A tuple `(id_maps, selected_columns_statistics)` containing the

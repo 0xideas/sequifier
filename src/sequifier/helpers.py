@@ -73,7 +73,9 @@ def construct_index_maps(
 
     A special mapping for index 0 is added:
     - If original IDs are strings, 0 maps to "unknown".
-    - If original IDs are integers, 0 maps to (minimum original ID) - 1.
+    - If original IDs are strings, 1 maps to "other".
+    - If original IDs are integers, 0 maps to (minimum original ID) - 2.
+    - If original IDs are integers, 1 maps to (minimum original ID) - 1.
 
     Args:
         id_maps: A nested dictionary mapping column names to their
