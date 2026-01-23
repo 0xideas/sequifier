@@ -256,7 +256,9 @@ class Preprocessor:
         else:
             if not np.all(
                 [
-                    type_.lower().startswith("int") or type_.lower().startswith("float")
+                    type_.lower().startswith("int")
+                    or type_.lower().startswith("uint")
+                    or type_.lower().startswith("float")
                     for type_ in col_types.values()
                 ]
             ):
@@ -848,7 +850,19 @@ def _get_column_statistics(
         dtype = data.schema[data_col]
         if isinstance(
             dtype, (pl.String, pl.Utf8, pl.Object, pl.Categorical, pl.Boolean)
-        ) or isinstance(dtype, (pl.Int8, pl.Int16, pl.Int32, pl.Int64)):
+        ) or isinstance(
+            dtype,
+            (
+                pl.Int8,
+                pl.Int16,
+                pl.Int32,
+                pl.Int64,
+                pl.UInt8,
+                pl.UInt16,
+                pl.UInt32,
+                pl.UInt64,
+            ),
+        ):
             new_id_map = create_id_map(data, column=data_col)
             id_maps[data_col] = combine_maps(new_id_map, id_maps.get(data_col, {}))
         elif isinstance(dtype, (pl.Float32, pl.Float64)):
