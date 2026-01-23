@@ -413,7 +413,7 @@ class Preprocessor:
 
         if data_columns is None:
             raise RuntimeError("data_columns was not initialized correctly.")
-        n_classes = {col: len(id_maps[col]) + 1 for col in id_maps}
+        n_classes = {col: len(id_maps[col]) + 2 for col in id_maps}
 
         if col_types is None:
             raise RuntimeError("col_types was not initialized correctly.")
@@ -811,7 +811,7 @@ def _apply_column_statistics(
             - `col_types`: The (potentially computed) column type dictionary.
     """
     if n_classes is None:
-        n_classes = {col: len(id_maps[col]) + 1 for col in id_maps}
+        n_classes = {col: len(id_maps[col]) + 2 for col in id_maps}
 
     if col_types is None:
         col_types = {col: str(data.schema[col]) for col in data_columns}
@@ -1390,7 +1390,7 @@ def combine_maps(
         A new, combined, and re-indexed ID map.
     """
     combined_keys = sorted(list(set(list(map1.keys())).union(list(set(map2.keys())))))
-    id_map = {id_: i + 1 for i, id_ in enumerate(combined_keys)}
+    id_map = {id_: i + 2 for i, id_ in enumerate(combined_keys)}
     return id_map
 
 

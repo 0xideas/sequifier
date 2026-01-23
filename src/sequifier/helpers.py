@@ -105,10 +105,13 @@ def construct_index_maps(
             val = next(iter(map_.values()))
             if isinstance(val, str):
                 map_[0] = "unknown"
+                map_[1] = "other"
             else:
                 if not isinstance(val, int):
                     raise TypeError(f"Expected integer ID in map, got {type(val)}")
-                map_[0] = min(map_.values()) - 1  # type: ignore
+                min_id = int(min(map_.values()))
+                map_[0] = min_id - 2  # type: ignore
+                map_[1] = min_id - 1
             index_map[target_column] = map_
     return index_map
 
