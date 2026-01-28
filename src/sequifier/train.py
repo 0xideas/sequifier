@@ -106,12 +106,20 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
     if from_folder:
         if config.training_spec.distributed:
             # 2. Use the new distributed sampler for the multi-GPU case
-            train_sampler = DistributedGroupedRandomSampler(
-                train_dataset, num_replicas=world_size, rank=rank
-            )
-            valid_sampler = DistributedGroupedRandomSampler(
-                valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
-            )
+            if config.training_spec.load_full_data_to_ram:
+                train_sampler = DistributedSampler(
+                    train_dataset, num_replicas=world_size, rank=rank, shuffle=True
+                )
+                valid_sampler = DistributedSampler(
+                    valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+                )
+            else:
+                train_sampler = DistributedGroupedRandomSampler(
+                    train_dataset, num_replicas=world_size, rank=rank
+                )
+                valid_sampler = DistributedGroupedRandomSampler(
+                    valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+                )
         else:
             # Use the simple grouped sampler for the single-GPU case
             train_sampler = RandomSampler(train_dataset)
