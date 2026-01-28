@@ -2,9 +2,11 @@ import argparse
 import json
 import os
 import sys
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple  # Added List
 
 import torch
+
+# ... [unpack_dataset_tuple and pack_dataset_tuple remain unchanged] ...
 
 
 def unpack_dataset_tuple(data_tuple: Tuple) -> Dict[str, Any]:
@@ -34,32 +36,42 @@ def pack_dataset_tuple(data_dict: Dict[str, Any]) -> Tuple:
     )
 
 
-def concat_datasets(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
+def concat_dataset_list(data_list: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Concatenates two dataset dictionaries along the batch dimension (dim 0).
+    Concatenates a list of dataset dictionaries along dim 0.
+    OPTIMIZED: Uses torch.cat on a list of tensors (O(N)) instead of iterative pairwise concat (O(N^2)).
     """
+    if not data_list:
+        return {}
+
+    # If only one item, just return it (avoid copy)
+    if len(data_list) == 1:
+        return data_list[0]
+
     combined = {}
+    first = data_list[0]
 
     # Concatenate sequence dicts
     combined["sequences"] = {
-        k: torch.cat([left["sequences"][k], right["sequences"][k]], dim=0)
-        for k in left["sequences"]
+        k: torch.cat([d["sequences"][k] for d in data_list], dim=0)
+        for k in first["sequences"]
     }
 
     # Concatenate target dicts
     combined["targets"] = {
-        k: torch.cat([left["targets"][k], right["targets"][k]], dim=0)
-        for k in left["targets"]
+        k: torch.cat([d["targets"][k] for d in data_list], dim=0)
+        for k in first["targets"]
     }
 
     # Concatenate metadata tensors
-    combined["seq_ids"] = torch.cat([left["seq_ids"], right["seq_ids"]], dim=0)
-    combined["sub_ids"] = torch.cat([left["sub_ids"], right["sub_ids"]], dim=0)
-    combined["start_pos"] = torch.cat([left["start_pos"], right["start_pos"]], dim=0)
+    combined["seq_ids"] = torch.cat([d["seq_ids"] for d in data_list], dim=0)
+    combined["sub_ids"] = torch.cat([d["sub_ids"] for d in data_list], dim=0)
+    combined["start_pos"] = torch.cat([d["start_pos"] for d in data_list], dim=0)
 
     return combined
 
 
+# ... [slice_dataset, clone_dataset, get_row_size_bytes remain unchanged] ...
 def slice_dataset(data: Dict[str, Any], start: int, end: int) -> Dict[str, Any]:
     """
     Slices a dataset dictionary from start to end index.
@@ -132,92 +144,102 @@ def process_split(
         )
 
     # State variables
-    remainder_data = None
+    data_buffer: List[Dict[str, Any]] = []
+    buffer_row_count = 0
+
     output_batch_idx = 0
     new_batch_files_metadata = []
     total_samples_processed = 0
 
     target_bytes = target_size_mb * 1024 * 1024
+    target_rows = None  # Calculated dynamically on first load
 
     print(f"Processing {input_dir} -> {output_dir}")
 
-    # 2. Iterate Files (Vectorized)
+    # 2. Iterate Files
     for file_name in input_files:
         file_path = os.path.join(input_dir, file_name)
         if not os.path.exists(file_path):
             continue
 
         try:
-            # Load full file into RAM
+            # Load file
             loaded_tuple = torch.load(file_path, map_location="cpu", weights_only=False)
             current_data = unpack_dataset_tuple(loaded_tuple)
 
-            # Concatenate with remainder from previous file (if any)
-            if remainder_data is not None:  # pyright: ignore
-                full_data = concat_datasets(remainder_data, current_data)  # pyright: ignore
-                # Free memory
-                del remainder_data  # pyright: ignore
-                del current_data
-            else:
-                full_data = current_data
-
-            num_rows = full_data["seq_ids"].shape[0]
-            if num_rows == 0:
+            current_rows = current_data["seq_ids"].shape[0]
+            if current_rows == 0:
                 continue
 
-            # Calculate slice size (Rows per output file)
-            bytes_per_row = get_row_size_bytes(full_data)
-            target_rows = max(1, int(target_bytes / bytes_per_row))
+            # Calculate target_rows if not yet set (once per split)
+            if target_rows is None:
+                bytes_per_row = get_row_size_bytes(current_data)
+                target_rows = max(1, int(target_bytes / bytes_per_row))
 
-            # Slice and Save Loop
-            start_idx = 0
-            while start_idx + target_rows <= num_rows:
-                end_idx = start_idx + target_rows
+            # Add to buffer
+            data_buffer.append(current_data)
+            buffer_row_count += current_rows
 
-                # Create slice view
-                chunk_data = slice_dataset(full_data, start_idx, end_idx)
+            # 3. Flush Buffer if we have enough data
+            if buffer_row_count >= target_rows:
+                # O(N) Merge
+                full_data = concat_dataset_list(data_buffer)
 
-                # Save
-                fname = f"{dataset_name}-{split_suffix}-{output_batch_idx}.pt"
-                out_path = os.path.join(output_dir, fname)
-                torch.save(pack_dataset_tuple(chunk_data), out_path)
+                # Clear buffer references immediately
+                data_buffer = []
+                buffer_row_count = 0
 
-                # Update Metadata
-                chunk_len = end_idx - start_idx
-                new_batch_files_metadata.append({"path": fname, "samples": chunk_len})
-                total_samples_processed += chunk_len
-                output_batch_idx += 1
+                num_rows = full_data["seq_ids"].shape[0]
 
-                start_idx = end_idx
+                # Slice and Save Loop
+                start_idx = 0
+                while start_idx + target_rows <= num_rows:
+                    end_idx = start_idx + target_rows
 
-            # Handle Remainder
-            if start_idx < num_rows:
-                # We have leftovers. We must CLONE them so we can drop the reference
-                # to the massive `full_data` tensor, freeing RAM for the next file load.
-                remainder_data = clone_dataset(
-                    slice_dataset(full_data, start_idx, num_rows)
-                )
-            else:
-                remainder_data = None
+                    chunk_data = slice_dataset(full_data, start_idx, end_idx)
 
-            # Explicitly free full_data to be safe
-            del full_data
+                    fname = f"{dataset_name}-{split_suffix}-{output_batch_idx}.pt"
+                    out_path = os.path.join(output_dir, fname)
+                    torch.save(pack_dataset_tuple(chunk_data), out_path)
+
+                    chunk_len = end_idx - start_idx
+                    new_batch_files_metadata.append(
+                        {"path": fname, "samples": chunk_len}
+                    )
+                    total_samples_processed += chunk_len
+                    output_batch_idx += 1
+
+                    start_idx = end_idx
+
+                # Handle Remainder
+                if start_idx < num_rows:
+                    # Clone remainder to free the massive full_data tensor
+                    remainder_data = clone_dataset(
+                        slice_dataset(full_data, start_idx, num_rows)
+                    )
+                    # Start new buffer with remainder
+                    data_buffer = [remainder_data]
+                    buffer_row_count = remainder_data["seq_ids"].shape[0]
+
+                # Explicitly free full_data
+                del full_data
 
         except Exception as e:
             print(f"Error processing {file_path}: {e}")
             sys.exit(1)
 
-    # 3. Flush final remainder
-    if remainder_data is not None:  # pyright: ignore
+    # 4. Flush final remainder
+    if buffer_row_count > 0:
+        full_data = concat_dataset_list(data_buffer)
         fname = f"{dataset_name}-{split_suffix}-{output_batch_idx}.pt"
         out_path = os.path.join(output_dir, fname)
-        torch.save(pack_dataset_tuple(remainder_data), out_path)  # pyright: ignore
+        torch.save(pack_dataset_tuple(full_data), out_path)
 
-        chunk_len = remainder_data["seq_ids"].shape[0]  # pyright: ignore
+        chunk_len = full_data["seq_ids"].shape[0]
         new_batch_files_metadata.append({"path": fname, "samples": chunk_len})
         total_samples_processed += chunk_len
 
-    # 4. Write New Metadata
+    # 5. Write New Metadata
     new_metadata = {
         "total_samples": total_samples_processed,
         "batch_files": new_batch_files_metadata,
@@ -225,7 +247,7 @@ def process_split(
     with open(os.path.join(output_dir, "metadata.json"), "w") as f:
         json.dump(new_metadata, f, indent=4)
 
-    # 5. Validation
+    # 6. Validation
     if (
         expected_total_samples is not None
         and total_samples_processed != expected_total_samples
@@ -239,6 +261,7 @@ def process_split(
         )
 
 
+# ... [main function remains unchanged] ...
 def main():
     parser = argparse.ArgumentParser(
         description="Fast Rechunker for Sequifier Datasets"
