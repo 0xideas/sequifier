@@ -1,14 +1,14 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="../../../">
+<html class="no-js" lang="en" data-content_root="">
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../../genindex.html"><link rel="search" title="Search" href="../../../search.html">
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/io/sequifier_dataset_from_folder_lazy.html">
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
+    <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
         <title>sequifier.io.sequifier_dataset_from_folder_lazy - sequifier v1.0.0.1 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=580074bf" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
@@ -224,6 +224,8 @@
       <li><a href="../../../../v1.0.0.3/index.html">v1.0.0.3</a></li>
       <li><a href="../../../../v1.0.0.4/index.html">v1.0.0.4</a></li>
       <li><a href="../../../../v1.0.0.5/index.html">v1.0.0.5</a></li>
+      <li><a href="../../../../v1.0.0.6/index.html">v1.0.0.6</a></li>
+      <li><a href="../../../../v1.1.0.0/index.html">v1.1.0.0</a></li>
   </ul>
 </div>
 </div>
@@ -270,9 +272,7 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">normalize_path</span>
 
 
-<div class="viewcode-block" id="SequifierDatasetFromFolderLazy">
-<a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">SequifierDatasetFromFolderLazy</span><span class="p">(</span><span class="n">Dataset</span><span class="p">):</span>
+<div class="viewcode-block" id="SequifierDatasetFromFolderLazy"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">SequifierDatasetFromFolderLazy</span><span class="p">(</span><span class="n">Dataset</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    An efficient PyTorch Dataset for datasets that do not fit into RAM.</span>
 
@@ -287,9 +287,7 @@
 <span class="sd">    for training on datasets larger than the available system memory.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-<div class="viewcode-block" id="SequifierDatasetFromFolderLazy.__init__">
-<a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__init__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">):</span>
+<div class="viewcode-block" id="SequifierDatasetFromFolderLazy.__init__"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__init__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Initializes the dataset by reading metadata and setting up the cache.</span>
 <span class="sd">        Each .pt file is expected to contain a tuple:</span>
@@ -345,13 +343,9 @@
             <span class="sa">f</span><span class="s2">&quot;Total samples: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2">. RAM threshold in GB: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_ram_gb</span><span class="si">}</span><span class="s2">%&quot;</span>
         <span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="SequifierDatasetFromFolderLazy.__len__">
-<a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__len__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<div class="viewcode-block" id="SequifierDatasetFromFolderLazy.__len__"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__len__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Returns the total number of samples in the dataset.&quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span></div>
-
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_find_file_for_index</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
@@ -396,9 +390,7 @@
             <span class="c1"># was first inserted, effectively implementing the LRU policy.</span>
             <span class="n">evicted_path</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="o">.</span><span class="n">popitem</span><span class="p">(</span><span class="n">last</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 
-<div class="viewcode-block" id="SequifierDatasetFromFolderLazy.__getitem__">
-<a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__getitem__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__getitem__</span><span class="p">(</span>
+<div class="viewcode-block" id="SequifierDatasetFromFolderLazy.__getitem__"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__getitem__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__getitem__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">:</span> <span class="nb">int</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
@@ -478,9 +470,7 @@
             <span class="nb">int</span><span class="p">(</span><span class="n">sequence_id_tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">]),</span>
             <span class="nb">int</span><span class="p">(</span><span class="n">subsequence_id_tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">]),</span>
             <span class="nb">int</span><span class="p">(</span><span class="n">start_item_positions_tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">]),</span>
-        <span class="p">)</span></div>
-</div>
-
+        <span class="p">)</span></div></div>
 </pre></div>
         </article>
       </div>
@@ -513,9 +503,9 @@
       
     </aside>
   </div>
-</div><script src="../../../_static/documentation_options.js?v=ac6905a9"></script>
-    <script src="../../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b5522348"></script>
+    <script src="../../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>

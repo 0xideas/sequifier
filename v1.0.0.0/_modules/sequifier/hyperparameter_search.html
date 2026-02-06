@@ -1,14 +1,14 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="../../">
+<html class="no-js" lang="en" data-content_root="">
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html">
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/hyperparameter_search.html">
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
+    <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
         <title>sequifier.hyperparameter_search - sequifier v1.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
-    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
@@ -224,6 +224,8 @@
       <li><a href="../../../v1.0.0.3/index.html">v1.0.0.3</a></li>
       <li><a href="../../../v1.0.0.4/index.html">v1.0.0.4</a></li>
       <li><a href="../../../v1.0.0.5/index.html">v1.0.0.5</a></li>
+      <li><a href="../../../v1.0.0.6/index.html">v1.0.0.6</a></li>
+      <li><a href="../../../v1.1.0.0/index.html">v1.1.0.0</a></li>
   </ul>
 </div>
 </div>
@@ -277,9 +279,7 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.yaml</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModelDumper</span>  <span class="c1"># noqa: E402</span>
 
 
-<div class="viewcode-block" id="hyperparameter_search">
-<a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.hyperparameter_search">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="hyperparameter_search"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.hyperparameter_search">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">hyperparameter_search</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">skip_metadata</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Main function for initiating a hyperparameter search process.</span>
 
@@ -304,10 +304,7 @@
     <span class="n">hyperparameter_searcher</span><span class="o">.</span><span class="n">hyperparameter_search</span><span class="p">()</span></div>
 
 
-
-<div class="viewcode-block" id="HyperparameterSearcher">
-<a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.HyperparameterSearcher">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">HyperparameterSearcher</span><span class="p">:</span>
+<div class="viewcode-block" id="HyperparameterSearcher"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.HyperparameterSearcher">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">HyperparameterSearcher</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;A class for performing hyperparameter search.</span>
 
 <span class="sd">    Manages the hyperparameter search process based on a given configuration.</span>
@@ -315,9 +312,7 @@
 <span class="sd">    launching training subprocesses, and logging results.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-<div class="viewcode-block" id="HyperparameterSearcher.__init__">
-<a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.HyperparameterSearcher.__init__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hyperparameter_search_config</span><span class="p">):</span>
+<div class="viewcode-block" id="HyperparameterSearcher.__init__"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.HyperparameterSearcher.__init__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hyperparameter_search_config</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initializes the HyperparameterSearcher instance.</span>
 
 <span class="sd">        Args:</span>
@@ -335,7 +330,6 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_n_samples</span><span class="p">(</span>
             <span class="n">hyperparameter_search_config</span><span class="o">.</span><span class="n">override_input</span>
         <span class="p">)</span></div>
-
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_get_start_run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
@@ -502,9 +496,7 @@
                     <span class="sa">f</span><span class="s2">&quot;ERROR: Run </span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2"> failed with exit code </span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">returncode</span><span class="si">}</span><span class="s2">. Stopping run </span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span>
                 <span class="p">)</span>
 
-<div class="viewcode-block" id="HyperparameterSearcher.hyperparameter_search">
-<a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.HyperparameterSearcher.hyperparameter_search">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="HyperparameterSearcher.hyperparameter_search"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.HyperparameterSearcher.hyperparameter_search">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">hyperparameter_search</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Performs the hyperparameter search loop.</span>
 
@@ -518,9 +510,7 @@
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">start_run</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="p">):</span>
             <span class="n">seed</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="o">.</span><span class="n">timestamp</span><span class="p">()</span> <span class="o">*</span> <span class="mf">1e6</span><span class="p">)</span> <span class="o">%</span> <span class="p">(</span><span class="mi">2</span><span class="o">**</span><span class="mi">32</span><span class="p">)</span>
             <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">seed</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_create_config_and_run</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">)</span></div>
-</div>
-
+            <span class="bp">self</span><span class="o">.</span><span class="n">_create_config_and_run</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">)</span></div></div>
 </pre></div>
         </article>
       </div>
@@ -553,9 +543,9 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=081181b0"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=112aa751"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>

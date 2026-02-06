@@ -1,14 +1,14 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="../../../">
+<html class="no-js" lang="en" data-content_root="">
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../../genindex.html"><link rel="search" title="Search" href="../../../search.html">
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/samplers/distributed_grouped_random_sampler.html">
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.samplers.distributed_grouped_random_sampler - sequifier v1.0.0.5 documentation</title>
+    <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
+        <title>sequifier.samplers.distributed_grouped_random_sampler - sequifier v1.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=580074bf" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v1.0.0.5 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v1.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.0.0.5 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -224,6 +224,8 @@
       <li><a href="../../../../v1.0.0.3/index.html">v1.0.0.3</a></li>
       <li><a href="../../../../v1.0.0.4/index.html">v1.0.0.4</a></li>
       <li><a href="../../../../v1.0.0.5/index.html">v1.0.0.5</a></li>
+      <li><a href="../../../../v1.0.0.6/index.html">v1.0.0.6</a></li>
+      <li><a href="../../../../v1.1.0.0/index.html">v1.1.0.0</a></li>
   </ul>
 </div>
 </div>
@@ -266,9 +268,7 @@
 <span class="p">)</span>
 
 
-<div class="viewcode-block" id="DistributedGroupedRandomSampler">
-<a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">DistributedGroupedRandomSampler</span><span class="p">(</span><span class="n">Sampler</span><span class="p">[</span><span class="nb">int</span><span class="p">]):</span>
+<div class="viewcode-block" id="DistributedGroupedRandomSampler"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">DistributedGroupedRandomSampler</span><span class="p">(</span><span class="n">Sampler</span><span class="p">[</span><span class="nb">int</span><span class="p">]):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    A distributed sampler that groups samples by file to improve cache efficiency.</span>
 
@@ -281,9 +281,7 @@
 <span class="sd">    lazy-loading datasets.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-<div class="viewcode-block" id="DistributedGroupedRandomSampler.__init__">
-<a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__init__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+<div class="viewcode-block" id="DistributedGroupedRandomSampler.__init__"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__init__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">data_source</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">SequifierDatasetFromFolder</span><span class="p">,</span> <span class="n">SequifierDatasetFromFolderLazy</span><span class="p">],</span>
         <span class="n">num_replicas</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -327,10 +325,7 @@
             <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">index_groups</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">files_for_this_rank</span>
         <span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="DistributedGroupedRandomSampler.__iter__">
-<a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__iter__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__iter__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+<div class="viewcode-block" id="DistributedGroupedRandomSampler.__iter__"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__iter__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__iter__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Returns an iterator over indices for the current rank.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
@@ -361,26 +356,18 @@
 
         <span class="k">return</span> <span class="nb">iter</span><span class="p">(</span><span class="n">final_indices</span><span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="DistributedGroupedRandomSampler.__len__">
-<a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__len__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<div class="viewcode-block" id="DistributedGroupedRandomSampler.__len__"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__len__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Returns the number of samples for the current rank, not the total.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_samples</span></div>
 
-
-<div class="viewcode-block" id="DistributedGroupedRandomSampler.set_epoch">
-<a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.set_epoch">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">set_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">epoch</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="viewcode-block" id="DistributedGroupedRandomSampler.set_epoch"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.set_epoch">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">epoch</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">        Sets the epoch for this sampler. This is used to create a different</span>
 <span class="sd">        shuffling order for each epoch.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span> <span class="o">=</span> <span class="n">epoch</span></div>
-</div>
-
+        <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span> <span class="o">=</span> <span class="n">epoch</span></div></div>
 </pre></div>
         </article>
       </div>
@@ -413,9 +400,9 @@
       
     </aside>
   </div>
-</div><script src="../../../_static/documentation_options.js?v=50181f0e"></script>
-    <script src="../../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=ec5a9817"></script>
+    <script src="../../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>

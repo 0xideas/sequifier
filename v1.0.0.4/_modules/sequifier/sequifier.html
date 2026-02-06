@@ -1,14 +1,14 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="../../">
+<html class="no-js" lang="en" data-content_root="">
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html">
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/sequifier.html">
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
+    <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
         <title>sequifier.sequifier - sequifier v1.0.0.4 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
-    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
@@ -224,6 +224,8 @@
       <li><a href="../../../v1.0.0.3/index.html">v1.0.0.3</a></li>
       <li><a href="sequifier.html">v1.0.0.4</a></li>
       <li><a href="../../../v1.0.0.5/index.html">v1.0.0.5</a></li>
+      <li><a href="../../../v1.0.0.6/index.html">v1.0.0.6</a></li>
+      <li><a href="../../../v1.1.0.0/index.html">v1.1.0.0</a></li>
   </ul>
 </div>
 </div>
@@ -268,9 +270,7 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.train</span><span class="w"> </span><span class="kn">import</span> <span class="n">train</span>
 
 
-<div class="viewcode-block" id="build_args_config">
-<a class="viewcode-back" href="../../api.html#sequifier.sequifier.build_args_config">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="build_args_config"><a class="viewcode-back" href="../../api.html#sequifier.sequifier.build_args_config">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">build_args_config</span><span class="p">(</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Build configuration dictionary from command-line arguments.</span>
@@ -311,10 +311,7 @@
     <span class="k">return</span> <span class="n">args_config</span></div>
 
 
-
-<div class="viewcode-block" id="setup_parser">
-<a class="viewcode-back" href="../../api.html#sequifier.sequifier.setup_parser">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="setup_parser"><a class="viewcode-back" href="../../api.html#sequifier.sequifier.setup_parser">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">setup_parser</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">ArgumentParser</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Set up the argument parser for the command-line interface.</span>
@@ -380,10 +377,7 @@
     <span class="k">return</span> <span class="n">parser</span></div>
 
 
-
-<div class="viewcode-block" id="main">
-<a class="viewcode-back" href="../../api.html#sequifier.sequifier.main">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<div class="viewcode-block" id="main"><a class="viewcode-back" href="../../api.html#sequifier.sequifier.main">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Main function to run the Sequifier CLI.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
@@ -403,7 +397,6 @@
             <span class="n">infer</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">args_config</span><span class="p">)</span>
     <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">==</span> <span class="s2">&quot;hyperparameter-search&quot;</span><span class="p">:</span>
         <span class="n">hyperparameter_search</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">config_path</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">skip_metadata</span><span class="p">)</span></div>
-
 
 
 <span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
@@ -440,9 +433,9 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=f4609b17"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=ed5bbdf6"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>

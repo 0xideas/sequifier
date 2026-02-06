@@ -1,14 +1,14 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="../../">
+<html class="no-js" lang="en" data-content_root="">
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html">
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/infer.html">
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
+    <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
         <title>sequifier.infer - sequifier v1.0.0.3 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
-    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
@@ -224,6 +224,8 @@
       <li><a href="infer.html">v1.0.0.3</a></li>
       <li><a href="../../../v1.0.0.4/index.html">v1.0.0.4</a></li>
       <li><a href="../../../v1.0.0.5/index.html">v1.0.0.5</a></li>
+      <li><a href="../../../v1.0.0.6/index.html">v1.0.0.6</a></li>
+      <li><a href="../../../v1.1.0.0/index.html">v1.1.0.0</a></li>
   </ul>
 </div>
 </div>
@@ -287,9 +289,7 @@
 <span class="p">)</span>
 
 
-<div class="viewcode-block" id="infer">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.infer">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="infer"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">infer</span><span class="p">(</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">args_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Runs the main inference pipeline.</span>
 
@@ -337,10 +337,7 @@
     <span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="load_pt_dataset">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.load_pt_dataset">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="load_pt_dataset"><a class="viewcode-back" href="../../api.html#sequifier.infer.load_pt_dataset">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">load_pt_dataset</span><span class="p">(</span><span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">start_pct</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">end_pct</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Any</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Lazily loads and yields data from .pt files in a directory.</span>
 
@@ -373,10 +370,7 @@
         <span class="k">yield</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">pt_file</span><span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="infer_worker">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.infer_worker">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="infer_worker"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer_worker">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">infer_worker</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">args_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
@@ -471,10 +465,7 @@
     <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;--- Inference Complete ---&quot;</span><span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="infer_embedding">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.infer_embedding">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="infer_embedding"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer_embedding">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">infer_embedding</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="s2">&quot;InfererModel&quot;</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
@@ -612,10 +603,7 @@
         <span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="infer_generative">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.infer_generative">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">infer_generative</span><span class="p">(</span>
+<div class="viewcode-block" id="infer_generative"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer_generative">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">infer_generative</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="s2">&quot;InfererModel&quot;</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
     <span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
@@ -850,10 +838,7 @@
         <span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="expand_data_by_autoregression">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.expand_data_by_autoregression">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="expand_data_by_autoregression"><a class="viewcode-back" href="../../api.html#sequifier.infer.expand_data_by_autoregression">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">expand_data_by_autoregression</span><span class="p">(</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">autoregression_extra_steps</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">seq_length</span><span class="p">:</span> <span class="nb">int</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
@@ -936,10 +921,7 @@
     <span class="k">return</span> <span class="n">final_lazy</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span></div>
 
 
-
-<div class="viewcode-block" id="get_embeddings_pt">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.get_embeddings_pt">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="get_embeddings_pt"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_embeddings_pt">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_embeddings_pt</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
@@ -968,10 +950,7 @@
     <span class="k">return</span> <span class="n">embeddings</span></div>
 
 
-
-<div class="viewcode-block" id="get_probs_preds_pt">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_pt">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="get_probs_preds_pt"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_pt">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds_pt</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
@@ -1067,10 +1046,7 @@
     <span class="k">return</span> <span class="p">(</span><span class="n">final_probs</span><span class="p">,</span> <span class="n">final_preds</span><span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="get_embeddings">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.get_embeddings">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="get_embeddings"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_embeddings">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_embeddings</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
@@ -1103,10 +1079,7 @@
     <span class="k">return</span> <span class="n">embeddings</span></div>
 
 
-
-<div class="viewcode-block" id="get_probs_preds">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="get_probs_preds"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
@@ -1151,10 +1124,7 @@
     <span class="k">return</span> <span class="p">(</span><span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="fill_in_predictions_pl">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.fill_in_predictions_pl">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="fill_in_predictions_pl"><a class="viewcode-back" href="../../api.html#sequifier.infer.fill_in_predictions_pl">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">fill_in_predictions_pl</span><span class="p">(</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">preds</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span>
@@ -1254,10 +1224,7 @@
     <span class="k">return</span> <span class="n">updated_data</span></div>
 
 
-
-<div class="viewcode-block" id="fill_number">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.fill_number">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="fill_number"><a class="viewcode-back" href="../../api.html#sequifier.infer.fill_number">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">fill_number</span><span class="p">(</span><span class="n">number</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">max_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Pads a number with leading zeros to a specified string length.</span>
 
@@ -1274,10 +1241,7 @@
     <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">&#39;0&#39;</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="n">max_length</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="n">number_str</span><span class="p">))</span><span class="si">}{</span><span class="n">number_str</span><span class="si">}</span><span class="s2">&quot;</span></div>
 
 
-
-<div class="viewcode-block" id="verify_variable_order">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.verify_variable_order">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="verify_variable_order"><a class="viewcode-back" href="../../api.html#sequifier.infer.verify_variable_order">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">verify_variable_order</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Verifies that the DataFrame is correctly sorted for autoregression.</span>
 
@@ -1317,10 +1281,7 @@
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;subsequenceId must be sorted within sequenceId groups&quot;</span><span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="format_delta">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.format_delta">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="format_delta"><a class="viewcode-back" href="../../api.html#sequifier.infer.format_delta">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">format_delta</span><span class="p">(</span><span class="n">time_delta</span><span class="p">:</span> <span class="n">timedelta</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Formats a `timedelta` object into a human-readable string (seconds).</span>
 
@@ -1335,10 +1296,7 @@
     <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="p">(</span><span class="n">seconds</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">(</span><span class="n">microseconds</span><span class="o">/</span><span class="mf">1e6</span><span class="p">))</span><span class="si">:</span><span class="s2">.3</span><span class="si">}</span><span class="s2">&quot;</span></div>
 
 
-
-<div class="viewcode-block" id="get_probs_preds_autoregression">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_autoregression">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="get_probs_preds_autoregression"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_autoregression">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds_autoregression</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
@@ -1477,10 +1435,7 @@
     <span class="k">return</span> <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span></div>
 
 
-
-<div class="viewcode-block" id="Inferer">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">Inferer</span><span class="p">:</span>
+<div class="viewcode-block" id="Inferer"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">Inferer</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;A class for performing inference with a trained sequifier model.</span>
 
 <span class="sd">    This class encapsulates the model (either ONNX session or PyTorch model),</span>
@@ -1502,9 +1457,7 @@
 <span class="sd">        inference_model: The loaded PyTorch model if using &#39;pt&#39;.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-<div class="viewcode-block" id="Inferer.__init__">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.__init__">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="Inferer.__init__"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.__init__">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
@@ -1599,10 +1552,7 @@
                 <span class="bp">self</span><span class="o">.</span><span class="n">infer_with_dropout</span><span class="p">,</span>
             <span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="Inferer.invert_normalization">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.invert_normalization">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="Inferer.invert_normalization"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.invert_normalization">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">invert_normalization</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">values</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">target_column</span><span class="p">:</span> <span class="nb">str</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
@@ -1623,10 +1573,7 @@
         <span class="n">mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">selected_columns_statistics</span><span class="p">[</span><span class="n">target_column</span><span class="p">][</span><span class="s2">&quot;mean&quot;</span><span class="p">]</span>
         <span class="k">return</span> <span class="p">(</span><span class="n">values</span> <span class="o">*</span> <span class="p">(</span><span class="n">std</span> <span class="o">-</span> <span class="mf">1e-9</span><span class="p">))</span> <span class="o">+</span> <span class="n">mean</span></div>
 
-
-<div class="viewcode-block" id="Inferer.infer_embedding">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.infer_embedding">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="Inferer.infer_embedding"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.infer_embedding">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">infer_embedding</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">x</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span>
@@ -1650,10 +1597,7 @@
 
         <span class="k">return</span> <span class="n">embedding</span></div>
 
-
-<div class="viewcode-block" id="Inferer.infer_generative">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.infer_generative">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="Inferer.infer_generative"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.infer_generative">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">infer_generative</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">x</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]],</span>
@@ -1739,10 +1683,7 @@
 
         <span class="k">return</span> <span class="n">outs</span></div>
 
-
-<div class="viewcode-block" id="Inferer.adjust_and_infer_embedding">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.adjust_and_infer_embedding">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="Inferer.adjust_and_infer_embedding"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.adjust_and_infer_embedding">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">adjust_and_infer_embedding</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="n">size</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Handles batching and backend-specific calls for embedding inference.</span>
 
@@ -1778,10 +1719,7 @@
             <span class="k">assert</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;not possible&quot;</span>
         <span class="k">return</span> <span class="n">embeddings</span></div>
 
-
-<div class="viewcode-block" id="Inferer.adjust_and_infer_generative">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.adjust_and_infer_generative">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="Inferer.adjust_and_infer_generative"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.adjust_and_infer_generative">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">adjust_and_infer_generative</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="n">size</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Handles batching and backend-specific calls for generative inference.</span>
 
@@ -1828,10 +1766,7 @@
 
         <span class="k">return</span> <span class="n">outs</span></div>
 
-
-<div class="viewcode-block" id="Inferer.prepare_inference_batches">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.prepare_inference_batches">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="Inferer.prepare_inference_batches"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.prepare_inference_batches">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">prepare_inference_batches</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="n">pad_to_batch_size</span><span class="p">:</span> <span class="nb">bool</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]]:</span>
@@ -1876,10 +1811,7 @@
             <span class="p">]</span>
             <span class="k">return</span> <span class="n">xs</span></div>
 
-
-<div class="viewcode-block" id="Inferer.infer_pure">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.infer_pure">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="Inferer.infer_pure"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.infer_pure">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">infer_pure</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Performs a single inference pass using the ONNX session.</span>
 
@@ -1908,10 +1840,7 @@
             <span class="k">for</span> <span class="n">oo</span> <span class="ow">in</span> <span class="n">ort_outs</span>
         <span class="p">]</span></div>
 
-
-<div class="viewcode-block" id="Inferer.expand_to_batch_size">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.expand_to_batch_size">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="Inferer.expand_to_batch_size"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.expand_to_batch_size">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">expand_to_batch_size</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Pads a NumPy array to match `self.inference_batch_size`.</span>
 
@@ -1927,14 +1856,10 @@
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="n">repetitions</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_batch_size</span> <span class="o">//</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
         <span class="n">filler</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_batch_size</span> <span class="o">%</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(([</span><span class="n">x</span><span class="p">]</span> <span class="o">*</span> <span class="n">repetitions</span><span class="p">)</span> <span class="o">+</span> <span class="p">[</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="n">filler</span><span class="p">,</span> <span class="p">:]],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span></div>
-</div>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(([</span><span class="n">x</span><span class="p">]</span> <span class="o">*</span> <span class="n">repetitions</span><span class="p">)</span> <span class="o">+</span> <span class="p">[</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="n">filler</span><span class="p">,</span> <span class="p">:]],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span></div></div>
 
 
-
-<div class="viewcode-block" id="normalize">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.normalize">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="normalize"><a class="viewcode-back" href="../../api.html#sequifier.infer.normalize">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">normalize</span><span class="p">(</span><span class="n">outs</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Applies the softmax function to a dictionary of logits.</span>
 
@@ -1962,10 +1887,7 @@
     <span class="k">return</span> <span class="n">probs</span></div>
 
 
-
-<div class="viewcode-block" id="sample_with_cumsum">
-<a class="viewcode-back" href="../../api.html#sequifier.infer.sample_with_cumsum">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="sample_with_cumsum"><a class="viewcode-back" href="../../api.html#sequifier.infer.sample_with_cumsum">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">sample_with_cumsum</span><span class="p">(</span><span class="n">probs</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Samples from a probability distribution using the inverse CDF method.</span>
 
@@ -1985,7 +1907,6 @@
     <span class="n">random_threshold</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">cumulative_probs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">1</span><span class="p">)</span>
     <span class="n">random_threshold</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">random_threshold</span><span class="p">,</span> <span class="n">probs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
     <span class="k">return</span> <span class="p">(</span><span class="n">random_threshold</span> <span class="o">&lt;</span> <span class="n">cumulative_probs</span><span class="p">)</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></div>
-
 </pre></div>
         </article>
       </div>
@@ -2018,9 +1939,9 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=3fe90bda"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=26d22d3b"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>

@@ -1,14 +1,14 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="../../">
+<html class="no-js" lang="en" data-content_root="">
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html">
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/helpers.html">
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
-        <title>sequifier.helpers - sequifier v1.0.0.5 documentation</title>
+    <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
+        <title>sequifier.helpers - sequifier v1.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
-    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v1.0.0.5 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v1.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.0.0.5 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -224,6 +224,8 @@
       <li><a href="../../../v1.0.0.3/index.html">v1.0.0.3</a></li>
       <li><a href="../../../v1.0.0.4/index.html">v1.0.0.4</a></li>
       <li><a href="../../../v1.0.0.5/index.html">v1.0.0.5</a></li>
+      <li><a href="../../../v1.0.0.6/index.html">v1.0.0.6</a></li>
+      <li><a href="../../../v1.1.0.0/index.html">v1.1.0.0</a></li>
   </ul>
 </div>
 </div>
@@ -283,6 +285,14 @@
     <span class="s2">&quot;int16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int16</span><span class="p">,</span>
     <span class="s2">&quot;Int8&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int8</span><span class="p">,</span>
     <span class="s2">&quot;int8&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int8</span><span class="p">,</span>
+    <span class="s2">&quot;UInt64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
+    <span class="s2">&quot;uint64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
+    <span class="s2">&quot;UInt32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
+    <span class="s2">&quot;uint32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
+    <span class="s2">&quot;UInt16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span>
+    <span class="s2">&quot;uint16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span>
+    <span class="s2">&quot;UInt8&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int16</span><span class="p">,</span>
+    <span class="s2">&quot;uint8&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int16</span><span class="p">,</span>
 <span class="p">}</span>
 
 
@@ -308,9 +318,7 @@
         <span class="k">raise</span> <span class="n">e</span>
 
 
-<div class="viewcode-block" id="construct_index_maps">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.construct_index_maps">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="construct_index_maps"><a class="viewcode-back" href="../../api.html#sequifier.helpers.construct_index_maps">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">construct_index_maps</span><span class="p">(</span>
     <span class="n">id_maps</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="nb">int</span><span class="p">]]],</span>
     <span class="n">target_columns_index_map</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
@@ -324,7 +332,9 @@
 
 <span class="sd">    A special mapping for index 0 is added:</span>
 <span class="sd">    - If original IDs are strings, 0 maps to &quot;unknown&quot;.</span>
-<span class="sd">    - If original IDs are integers, 0 maps to (minimum original ID) - 1.</span>
+<span class="sd">    - If original IDs are strings, 1 maps to &quot;other&quot;.</span>
+<span class="sd">    - If original IDs are integers, 0 maps to (minimum original ID) - 2.</span>
+<span class="sd">    - If original IDs are integers, 1 maps to (minimum original ID) - 1.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        id_maps: A nested dictionary mapping column names to their</span>
@@ -356,18 +366,18 @@
             <span class="n">val</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">map_</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
             <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
                 <span class="n">map_</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;unknown&quot;</span>
+                <span class="n">map_</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;other&quot;</span>
             <span class="k">else</span><span class="p">:</span>
                 <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
                     <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Expected integer ID in map, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">val</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-                <span class="n">map_</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">map_</span><span class="o">.</span><span class="n">values</span><span class="p">())</span> <span class="o">-</span> <span class="mi">1</span>  <span class="c1"># type: ignore</span>
+                <span class="n">min_id</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">map_</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
+                <span class="n">map_</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">min_id</span> <span class="o">-</span> <span class="mi">2</span>  <span class="c1"># type: ignore</span>
+                <span class="n">map_</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">min_id</span> <span class="o">-</span> <span class="mi">1</span>
             <span class="n">index_map</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">map_</span>
     <span class="k">return</span> <span class="n">index_map</span></div>
 
 
-
-<div class="viewcode-block" id="read_data">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.read_data">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="read_data"><a class="viewcode-back" href="../../api.html#sequifier.helpers.read_data">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">read_data</span><span class="p">(</span>
     <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
@@ -393,10 +403,7 @@
     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported read format: </span><span class="si">{</span><span class="n">read_format</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="write_data">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.write_data">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="write_data"><a class="viewcode-back" href="../../api.html#sequifier.helpers.write_data">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">write_data</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">write_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Writes a Polars (or Pandas) DataFrame to a CSV or Parquet file.</span>
 
@@ -443,10 +450,7 @@
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported write format: </span><span class="si">{</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="subset_to_input_columns">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.subset_to_input_columns">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="subset_to_input_columns"><a class="viewcode-back" href="../../api.html#sequifier.helpers.subset_to_input_columns">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">subset_to_input_columns</span><span class="p">(</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">LazyFrame</span><span class="p">],</span> <span class="n">input_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">LazyFrame</span><span class="p">]:</span>
@@ -481,10 +485,7 @@
     <span class="k">return</span> <span class="n">data</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">filter_</span><span class="p">,</span> <span class="p">:]</span></div>
 
 
-
-<div class="viewcode-block" id="numpy_to_pytorch">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.numpy_to_pytorch">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="numpy_to_pytorch"><a class="viewcode-back" href="../../api.html#sequifier.helpers.numpy_to_pytorch">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">numpy_to_pytorch</span><span class="p">(</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
@@ -552,10 +553,7 @@
     <span class="k">return</span> <span class="n">unified_tensors</span></div>
 
 
-
-<div class="viewcode-block" id="normalize_path">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.normalize_path">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="normalize_path"><a class="viewcode-back" href="../../api.html#sequifier.helpers.normalize_path">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">normalize_path</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Normalizes a path to be relative to a project path, then joins them.</span>
 
@@ -580,10 +578,7 @@
     <span class="k">return</span> <span class="n">path2</span></div>
 
 
-
-<div class="viewcode-block" id="configure_logger">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.configure_logger">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="configure_logger"><a class="viewcode-back" href="../../api.html#sequifier.helpers.configure_logger">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">configure_logger</span><span class="p">(</span><span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">rank</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Configures Loguru to replicate the legacy LogFile behavior.</span>
 
@@ -634,10 +629,7 @@
     <span class="k">return</span> <span class="n">logger</span></div>
 
 
-
-<div class="viewcode-block" id="configure_determinism">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.configure_determinism">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="configure_determinism"><a class="viewcode-back" href="../../api.html#sequifier.helpers.configure_determinism">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">configure_determinism</span><span class="p">(</span><span class="n">seed</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">strict</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Enforces deterministic execution for reproducibility.&quot;&quot;&quot;</span>
     <span class="c1"># 1. Set standard seeds</span>
@@ -659,10 +651,7 @@
         <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;CUBLAS_WORKSPACE_CONFIG&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;:4096:8&quot;</span></div>
 
 
-
-<div class="viewcode-block" id="get_torch_dtype">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.get_torch_dtype">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="get_torch_dtype"><a class="viewcode-back" href="../../api.html#sequifier.helpers.get_torch_dtype">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_torch_dtype</span><span class="p">(</span><span class="n">dtype_str</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Converts a string to a torch dtype, supporting bfloat16 and fp8.&quot;&quot;&quot;</span>
     <span class="n">dtype_map</span> <span class="o">=</span> <span class="p">{</span>
@@ -684,7 +673,6 @@
         <span class="p">)</span>
 
     <span class="k">return</span> <span class="n">dtype_map</span><span class="p">[</span><span class="n">dtype_str</span><span class="p">]</span></div>
-
 </pre></div>
         </article>
       </div>
@@ -717,9 +705,9 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=50181f0e"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=ec5a9817"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>

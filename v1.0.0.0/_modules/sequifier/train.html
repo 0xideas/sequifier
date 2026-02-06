@@ -1,14 +1,14 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="../../">
+<html class="no-js" lang="en" data-content_root="">
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html">
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/train.html">
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
+    <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
         <title>sequifier.train - sequifier v1.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
-    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
@@ -224,6 +224,8 @@
       <li><a href="../../../v1.0.0.3/index.html">v1.0.0.3</a></li>
       <li><a href="../../../v1.0.0.4/index.html">v1.0.0.4</a></li>
       <li><a href="../../../v1.0.0.5/index.html">v1.0.0.5</a></li>
+      <li><a href="../../../v1.0.0.6/index.html">v1.0.0.6</a></li>
+      <li><a href="../../../v1.1.0.0/index.html">v1.1.0.0</a></li>
   </ul>
 </div>
 </div>
@@ -298,9 +300,7 @@
 <span class="p">)</span>
 
 
-<div class="viewcode-block" id="setup">
-<a class="viewcode-back" href="../../api.html#sequifier.train.setup">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="setup"><a class="viewcode-back" href="../../api.html#sequifier.train.setup">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">setup</span><span class="p">(</span><span class="n">rank</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">world_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">backend</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;nccl&quot;</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Sets up the distributed training environment.</span>
 
@@ -314,18 +314,12 @@
     <span class="n">dist</span><span class="o">.</span><span class="n">init_process_group</span><span class="p">(</span><span class="n">backend</span><span class="p">,</span> <span class="n">rank</span><span class="o">=</span><span class="n">rank</span><span class="p">,</span> <span class="n">world_size</span><span class="o">=</span><span class="n">world_size</span><span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="cleanup">
-<a class="viewcode-back" href="../../api.html#sequifier.train.cleanup">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">cleanup</span><span class="p">():</span>
+<div class="viewcode-block" id="cleanup"><a class="viewcode-back" href="../../api.html#sequifier.train.cleanup">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">cleanup</span><span class="p">():</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Cleans up the distributed training environment.&quot;&quot;&quot;</span>
     <span class="n">dist</span><span class="o">.</span><span class="n">destroy_process_group</span><span class="p">()</span></div>
 
 
-
-<div class="viewcode-block" id="train_worker">
-<a class="viewcode-back" href="../../api.html#sequifier.train.train_worker">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="train_worker"><a class="viewcode-back" href="../../api.html#sequifier.train.train_worker">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">train_worker</span><span class="p">(</span><span class="n">rank</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">world_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">,</span> <span class="n">from_folder</span><span class="p">:</span> <span class="nb">bool</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;The worker function for distributed training.</span>
 
@@ -440,10 +434,7 @@
         <span class="n">cleanup</span><span class="p">()</span></div>
 
 
-
-<div class="viewcode-block" id="train">
-<a class="viewcode-back" href="../../api.html#sequifier.train.train">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="train"><a class="viewcode-back" href="../../api.html#sequifier.train.train">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">train</span><span class="p">(</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">args_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;The main training function.</span>
 
@@ -469,10 +460,7 @@
         <span class="n">train_worker</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">world_size</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">from_folder</span><span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="format_number">
-<a class="viewcode-back" href="../../api.html#sequifier.train.format_number">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="format_number"><a class="viewcode-back" href="../../api.html#sequifier.train.format_number">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">format_number</span><span class="p">(</span><span class="n">number</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Format a number for display.</span>
 
@@ -493,15 +481,10 @@
     <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">number_adjusted</span><span class="si">:</span><span class="s2">5.2f</span><span class="si">}</span><span class="s2">e</span><span class="si">{</span><span class="n">order_of_magnitude</span><span class="si">}</span><span class="s2">&quot;</span></div>
 
 
-
-<div class="viewcode-block" id="TransformerEmbeddingModel">
-<a class="viewcode-back" href="../../api.html#sequifier.train.TransformerEmbeddingModel">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">TransformerEmbeddingModel</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+<div class="viewcode-block" id="TransformerEmbeddingModel"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerEmbeddingModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TransformerEmbeddingModel</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;A wrapper around the TransformerModel to expose the embedding functionality.&quot;&quot;&quot;</span>
 
-<div class="viewcode-block" id="TransformerEmbeddingModel.__init__">
-<a class="viewcode-back" href="../../api.html#sequifier.train.TransformerEmbeddingModel.__init__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">transformer_model</span><span class="p">:</span> <span class="s2">&quot;TransformerModel&quot;</span><span class="p">):</span>
+<div class="viewcode-block" id="TransformerEmbeddingModel.__init__"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerEmbeddingModel.__init__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">transformer_model</span><span class="p">:</span> <span class="s2">&quot;TransformerModel&quot;</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initializes the TransformerEmbeddingModel.</span>
 
 <span class="sd">        Args:</span>
@@ -511,10 +494,7 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">transformer_model</span> <span class="o">=</span> <span class="n">transformer_model</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transformer_model</span><span class="o">.</span><span class="n">logger</span></div>
 
-
-<div class="viewcode-block" id="TransformerEmbeddingModel.forward">
-<a class="viewcode-back" href="../../api.html#sequifier.train.TransformerEmbeddingModel.forward">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">src</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]):</span>
+<div class="viewcode-block" id="TransformerEmbeddingModel.forward"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerEmbeddingModel.forward">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">src</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Forward pass for the embedding model.</span>
 
 <span class="sd">        Args:</span>
@@ -523,23 +503,17 @@
 <span class="sd">        Returns:</span>
 <span class="sd">            The embedded output.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">transformer_model</span><span class="o">.</span><span class="n">forward_embed</span><span class="p">(</span><span class="n">src</span><span class="p">)</span></div>
-</div>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">transformer_model</span><span class="o">.</span><span class="n">forward_embed</span><span class="p">(</span><span class="n">src</span><span class="p">)</span></div></div>
 
 
-
-<div class="viewcode-block" id="TransformerModel">
-<a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">TransformerModel</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+<div class="viewcode-block" id="TransformerModel"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TransformerModel</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;The main Transformer model for the sequifier.</span>
 
 <span class="sd">    This class implements the Transformer model, including the training and</span>
 <span class="sd">    evaluation loops, as well as the export functionality.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-<div class="viewcode-block" id="TransformerModel.__init__">
-<a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.__init__">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="TransformerModel.__init__"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.__init__">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hparams</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">rank</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initializes the TransformerModel.</span>
 
@@ -725,7 +699,6 @@
         <span class="n">load_string</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_load_weights_conditional</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">load_string</span><span class="p">)</span></div>
 
-
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_init_criterion</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hparams</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initializes the criterion (loss function) for each target column.</span>
@@ -893,9 +866,7 @@
                 <span class="n">srcs_inner</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">src</span><span class="p">)</span>
             <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_recursive_concat</span><span class="p">(</span><span class="n">srcs_inner</span><span class="p">)</span>
 
-<div class="viewcode-block" id="TransformerModel.forward_inner">
-<a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.forward_inner">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="TransformerModel.forward_inner"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.forward_inner">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">forward_inner</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">src</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;The inner forward pass of the model.</span>
 
@@ -969,10 +940,7 @@
 
         <span class="k">return</span> <span class="n">src2</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="TransformerModel.forward_embed">
-<a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.forward_embed">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="TransformerModel.forward_embed"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.forward_embed">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">forward_embed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">src</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Forward pass for the embedding model.</span>
 
@@ -988,10 +956,7 @@
 <span class="sd">        &quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">forward_inner</span><span class="p">(</span><span class="n">src</span><span class="p">)[</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="p">:,</span> <span class="p">:,</span> <span class="p">:]</span></div>
 
-
-<div class="viewcode-block" id="TransformerModel.forward_train">
-<a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.forward_train">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="TransformerModel.forward_train"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.forward_train">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">forward_train</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">src</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Forward pass for training.</span>
 
@@ -1014,10 +979,7 @@
 
         <span class="k">return</span> <span class="n">output</span></div>
 
-
-<div class="viewcode-block" id="TransformerModel.decode">
-<a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.decode">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="TransformerModel.decode"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.decode">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">decode</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_column</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">output</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Decodes the output of the transformer encoder.</span>
 
@@ -1035,10 +997,7 @@
         <span class="n">decoded</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="p">[</span><span class="n">target_column</span><span class="p">](</span><span class="n">output</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">decoded</span></div>
 
-
-<div class="viewcode-block" id="TransformerModel.apply_softmax">
-<a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.apply_softmax">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="TransformerModel.apply_softmax"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.apply_softmax">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">apply_softmax</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_column</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">output</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Applies softmax to the output of the decoder.</span>
 
@@ -1057,10 +1016,7 @@
         <span class="k">else</span><span class="p">:</span>
             <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">softmax</span><span class="p">[</span><span class="n">target_column</span><span class="p">](</span><span class="n">output</span><span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="TransformerModel.forward">
-<a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.forward">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="TransformerModel.forward"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.forward">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">src</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;The main forward pass of the model.</span>
 
@@ -1084,10 +1040,7 @@
             <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">out</span> <span class="ow">in</span> <span class="n">output</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
         <span class="p">}</span></div>
 
-
-<div class="viewcode-block" id="TransformerModel.train_model">
-<a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.train_model">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="TransformerModel.train_model"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.train_model">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">train_model</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">train_loader</span><span class="p">:</span> <span class="n">DataLoader</span><span class="p">,</span>
@@ -1222,7 +1175,6 @@
             <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;last&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="n">best_model</span><span class="p">,</span> <span class="s2">&quot;best&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;--- Training Complete ---&quot;</span><span class="p">)</span></div>
-
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_train_epoch</span><span class="p">(</span>
@@ -1892,10 +1844,7 @@
             <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;-&quot;</span> <span class="o">*</span> <span class="mi">89</span><span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="load_inference_model">
-<a class="viewcode-back" href="../../api.html#sequifier.train.load_inference_model">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="load_inference_model"><a class="viewcode-back" href="../../api.html#sequifier.train.load_inference_model">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">load_inference_model</span><span class="p">(</span>
     <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">model_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
@@ -1962,10 +1911,7 @@
     <span class="k">return</span> <span class="n">model</span></div>
 
 
-
-<div class="viewcode-block" id="infer_with_embedding_model">
-<a class="viewcode-back" href="../../api.html#sequifier.train.infer_with_embedding_model">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="infer_with_embedding_model"><a class="viewcode-back" href="../../api.html#sequifier.train.infer_with_embedding_model">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">infer_with_embedding_model</span><span class="p">(</span>
     <span class="n">model</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span>
     <span class="n">x</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]],</span>
@@ -2004,10 +1950,7 @@
     <span class="k">return</span> <span class="n">outs</span></div>
 
 
-
-<div class="viewcode-block" id="infer_with_generative_model">
-<a class="viewcode-back" href="../../api.html#sequifier.train.infer_with_generative_model">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="infer_with_generative_model"><a class="viewcode-back" href="../../api.html#sequifier.train.infer_with_generative_model">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">infer_with_generative_model</span><span class="p">(</span>
     <span class="n">model</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">,</span>
     <span class="n">x</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]],</span>
@@ -2058,7 +2001,6 @@
     <span class="p">}</span>
 
     <span class="k">return</span> <span class="n">outs</span></div>
-
 </pre></div>
         </article>
       </div>
@@ -2091,9 +2033,9 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=081181b0"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=112aa751"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>

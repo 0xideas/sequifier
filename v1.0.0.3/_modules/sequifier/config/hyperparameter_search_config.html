@@ -1,14 +1,14 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="../../../">
+<html class="no-js" lang="en" data-content_root="">
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../../genindex.html"><link rel="search" title="Search" href="../../../search.html">
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/config/hyperparameter_search_config.html">
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
+    <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
         <title>sequifier.config.hyperparameter_search_config - sequifier v1.0.0.3 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=580074bf" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
@@ -224,6 +224,8 @@
       <li><a href="hyperparameter_search_config.html">v1.0.0.3</a></li>
       <li><a href="../../../../v1.0.0.4/index.html">v1.0.0.4</a></li>
       <li><a href="../../../../v1.0.0.5/index.html">v1.0.0.5</a></li>
+      <li><a href="../../../../v1.0.0.6/index.html">v1.0.0.6</a></li>
+      <li><a href="../../../../v1.1.0.0/index.html">v1.1.0.0</a></li>
   </ul>
 </div>
 </div>
@@ -356,9 +358,7 @@
     <span class="k">return</span> <span class="n">try_catch_excess_keys</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">HyperparameterSearch</span><span class="p">,</span> <span class="n">config_values</span><span class="p">)</span>
 
 
-<div class="viewcode-block" id="TrainingSpecHyperparameterSampling">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">TrainingSpecHyperparameterSampling</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<div class="viewcode-block" id="TrainingSpecHyperparameterSampling"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TrainingSpecHyperparameterSampling</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Pydantic model for training specification hyperparameter sampling.</span>
 
 <span class="sd">    Attributes:</span>
@@ -413,9 +413,7 @@
     <span class="n">num_workers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="n">backend</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;nccl&quot;</span>
 
-<div class="viewcode-block" id="TrainingSpecHyperparameterSampling.__init__">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.__init__">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<div class="viewcode-block" id="TrainingSpecHyperparameterSampling.__init__"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.__init__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialize the TrainingSpecHyperparameterSampling instance.</span>
 
 <span class="sd">        This method initializes the Pydantic BaseModel and then processes the</span>
@@ -442,7 +440,6 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span> <span class="o">=</span> <span class="p">[</span>
             <span class="n">DotDict</span><span class="p">(</span><span class="n">scheduler_config</span><span class="p">)</span> <span class="k">for</span> <span class="n">scheduler_config</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;scheduler&quot;</span><span class="p">]</span>
         <span class="p">]</span></div>
-
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;learning_rate&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
@@ -471,9 +468,7 @@
                     <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-<div class="viewcode-block" id="TrainingSpecHyperparameterSampling.random_sample">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.random_sample">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">random_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<div class="viewcode-block" id="TrainingSpecHyperparameterSampling.random_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.random_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">random_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Randomly sample a set of training hyperparameters.</span>
 
 <span class="sd">        This method selects a random combination of hyperparameters from the</span>
@@ -524,10 +519,7 @@
             <span class="n">backend</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">backend</span><span class="p">,</span>
         <span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="TrainingSpecHyperparameterSampling.grid_sample">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.grid_sample">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">grid_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
+<div class="viewcode-block" id="TrainingSpecHyperparameterSampling.grid_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.grid_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">grid_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Select a set of training hyperparameters based on a grid search index.</span>
 
 <span class="sd">        This method generates a grid of all possible hyperparameter combinations</span>
@@ -591,10 +583,7 @@
             <span class="n">backend</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">backend</span><span class="p">,</span>
         <span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="TrainingSpecHyperparameterSampling.n_combinations">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.n_combinations">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">n_combinations</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<div class="viewcode-block" id="TrainingSpecHyperparameterSampling.n_combinations"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.n_combinations">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">n_combinations</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculate the total number of hyperparameter combinations.</span>
 
 <span class="sd">        This method computes the total number of unique hyperparameter sets that</span>
@@ -609,14 +598,10 @@
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dropout</span><span class="p">)</span>
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">)</span>
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span><span class="p">)</span>
-        <span class="p">)</span></div>
-</div>
+        <span class="p">)</span></div></div>
 
 
-
-<div class="viewcode-block" id="ModelSpecHyperparameterSampling">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">ModelSpecHyperparameterSampling</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<div class="viewcode-block" id="ModelSpecHyperparameterSampling"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">ModelSpecHyperparameterSampling</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Pydantic model for model specification hyperparameter sampling.</span>
 
 <span class="sd">    Attributes:</span>
@@ -680,9 +665,7 @@
 
         <span class="k">return</span> <span class="n">v</span>
 
-<div class="viewcode-block" id="ModelSpecHyperparameterSampling.random_sample">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.random_sample">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">random_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<div class="viewcode-block" id="ModelSpecHyperparameterSampling.random_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.random_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">random_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Randomly sample a set of model hyperparameters.</span>
 
 <span class="sd">        This method selects a random combination of model hyperparameters from the</span>
@@ -751,10 +734,7 @@
             <span class="n">prediction_length</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
         <span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="ModelSpecHyperparameterSampling.grid_sample">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.grid_sample">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">grid_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
+<div class="viewcode-block" id="ModelSpecHyperparameterSampling.grid_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.grid_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">grid_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Select a set of model hyperparameters based on a grid search index.</span>
 
 <span class="sd">        This method generates a grid of all possible model hyperparameter</span>
@@ -836,10 +816,7 @@
             <span class="n">prediction_length</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
         <span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="ModelSpecHyperparameterSampling.n_combinations">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.n_combinations">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">n_combinations</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<div class="viewcode-block" id="ModelSpecHyperparameterSampling.n_combinations"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.n_combinations">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">n_combinations</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculate the total number of model hyperparameter combinations.</span>
 
 <span class="sd">        This method computes the total number of unique model hyperparameter sets</span>
@@ -860,14 +837,10 @@
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">norm_first</span><span class="p">)</span>
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_kv_heads</span><span class="p">)</span>
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">rope_theta</span><span class="p">)</span>
-        <span class="p">)</span></div>
-</div>
+        <span class="p">)</span></div></div>
 
 
-
-<div class="viewcode-block" id="HyperparameterSearch">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">HyperparameterSearch</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<div class="viewcode-block" id="HyperparameterSearch"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">HyperparameterSearch</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Pydantic model for hyperparameter search configuration.</span>
 
 <span class="sd">    Attributes:</span>
@@ -940,9 +913,7 @@
                 <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-<div class="viewcode-block" id="HyperparameterSearch.random_sample">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch.random_sample">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">random_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
+<div class="viewcode-block" id="HyperparameterSearch.random_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch.random_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">random_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Randomly sample a full training configuration.</span>
 
 <span class="sd">        This method generates a complete training configuration by randomly</span>
@@ -987,10 +958,7 @@
             <span class="n">training_spec</span><span class="o">=</span><span class="n">training_spec</span><span class="p">,</span>
         <span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="HyperparameterSearch.grid_sample">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch.grid_sample">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">grid_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
+<div class="viewcode-block" id="HyperparameterSearch.grid_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch.grid_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">grid_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Select a full training configuration based on a grid search index.</span>
 
 <span class="sd">        This method generates a grid of all possible configurations and selects</span>
@@ -1048,10 +1016,7 @@
             <span class="n">training_spec</span><span class="o">=</span><span class="n">training_spec</span><span class="p">,</span>
         <span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="HyperparameterSearch.sample">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch.sample">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
+<div class="viewcode-block" id="HyperparameterSearch.sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch.sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Sample a configuration based on the specified search strategy.</span>
 
 <span class="sd">        This method delegates to either random_sample or grid_sample based on</span>
@@ -1073,10 +1038,7 @@
         <span class="k">else</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">search_strategy</span><span class="si">}</span><span class="s2"> invalid&quot;</span><span class="p">)</span></div>
 
-
-<div class="viewcode-block" id="HyperparameterSearch.n_combinations">
-<a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch.n_combinations">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">n_combinations</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<div class="viewcode-block" id="HyperparameterSearch.n_combinations"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch.n_combinations">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">n_combinations</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculate the total number of possible configurations.</span>
 
 <span class="sd">        This method computes the total number of unique configurations that can be</span>
@@ -1090,9 +1052,7 @@
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">seq_length</span><span class="p">)</span>
             <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_hyperparameter_sampling</span><span class="o">.</span><span class="n">n_combinations</span><span class="p">()</span>
             <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_hyperparameter_sampling</span><span class="o">.</span><span class="n">n_combinations</span><span class="p">()</span>
-        <span class="p">)</span></div>
-</div>
-
+        <span class="p">)</span></div></div>
 </pre></div>
         </article>
       </div>
@@ -1125,9 +1085,9 @@
       
     </aside>
   </div>
-</div><script src="../../../_static/documentation_options.js?v=3fe90bda"></script>
-    <script src="../../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=26d22d3b"></script>
+    <script src="../../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>

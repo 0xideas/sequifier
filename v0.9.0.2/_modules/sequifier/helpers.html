@@ -1,14 +1,14 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="../../">
+<html class="no-js" lang="en" data-content_root="">
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html">
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/helpers.html">
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2025.09.25 -->
+    <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
         <title>sequifier.helpers - sequifier v0.9.0.2 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
-    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=580074bf" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
@@ -224,6 +224,8 @@
       <li><a href="../../../v1.0.0.3/index.html">v1.0.0.3</a></li>
       <li><a href="../../../v1.0.0.4/index.html">v1.0.0.4</a></li>
       <li><a href="../../../v1.0.0.5/index.html">v1.0.0.5</a></li>
+      <li><a href="../../../v1.0.0.6/index.html">v1.0.0.6</a></li>
+      <li><a href="../../../v1.1.0.0/index.html">v1.1.0.0</a></li>
   </ul>
 </div>
 </div>
@@ -282,9 +284,7 @@
 <span class="p">}</span>
 
 
-<div class="viewcode-block" id="construct_index_maps">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.construct_index_maps">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="construct_index_maps"><a class="viewcode-back" href="../../api.html#sequifier.helpers.construct_index_maps">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">construct_index_maps</span><span class="p">(</span>
     <span class="n">id_maps</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="nb">int</span><span class="p">]]],</span>
     <span class="n">target_columns_index_map</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
@@ -336,10 +336,7 @@
     <span class="k">return</span> <span class="n">index_map</span></div>
 
 
-
-<div class="viewcode-block" id="read_data">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.read_data">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="read_data"><a class="viewcode-back" href="../../api.html#sequifier.helpers.read_data">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">read_data</span><span class="p">(</span>
     <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
@@ -365,10 +362,7 @@
     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported read format: </span><span class="si">{</span><span class="n">read_format</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="write_data">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.write_data">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="write_data"><a class="viewcode-back" href="../../api.html#sequifier.helpers.write_data">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">write_data</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">write_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Writes a Polars (or Pandas) DataFrame to a CSV or Parquet file.</span>
 
@@ -415,10 +409,7 @@
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported write format: </span><span class="si">{</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
 
 
-
-<div class="viewcode-block" id="subset_to_selected_columns">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.subset_to_selected_columns">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="subset_to_selected_columns"><a class="viewcode-back" href="../../api.html#sequifier.helpers.subset_to_selected_columns">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">subset_to_selected_columns</span><span class="p">(</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">LazyFrame</span><span class="p">],</span> <span class="n">selected_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">LazyFrame</span><span class="p">]:</span>
@@ -453,10 +444,7 @@
     <span class="k">return</span> <span class="n">data</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">filter_</span><span class="p">,</span> <span class="p">:]</span></div>
 
 
-
-<div class="viewcode-block" id="numpy_to_pytorch">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.numpy_to_pytorch">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="numpy_to_pytorch"><a class="viewcode-back" href="../../api.html#sequifier.helpers.numpy_to_pytorch">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">numpy_to_pytorch</span><span class="p">(</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
@@ -525,10 +513,7 @@
     <span class="k">return</span> <span class="n">unified_tensors</span></div>
 
 
-
-<div class="viewcode-block" id="LogFile">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.LogFile">[docs]</a>
-<span class="k">class</span><span class="w"> </span><span class="nc">LogFile</span><span class="p">:</span>
+<div class="viewcode-block" id="LogFile"><a class="viewcode-back" href="../../api.html#sequifier.helpers.LogFile">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">LogFile</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Manages logging to multiple files based on verbosity levels.</span>
 
 <span class="sd">    This class opens multiple log files based on a path template and a</span>
@@ -546,9 +531,7 @@
 <span class="sd">        _path (str): The original path template provided.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-<div class="viewcode-block" id="LogFile.__init__">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.LogFile.__init__">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="LogFile.__init__"><a class="viewcode-back" href="../../api.html#sequifier.helpers.LogFile.__init__">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">rank</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initializes the LogFile and opens log files.</span>
 
@@ -570,10 +553,7 @@
         <span class="p">}</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_path</span> <span class="o">=</span> <span class="n">path</span></div>
 
-
-<div class="viewcode-block" id="LogFile.write">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.LogFile.write">[docs]</a>
-    <span class="nd">@beartype</span>
+<div class="viewcode-block" id="LogFile.write"><a class="viewcode-back" href="../../api.html#sequifier.helpers.LogFile.write">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">write</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">string</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">level</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Writes a string to log files and potentially the console.</span>
 
@@ -596,14 +576,10 @@
                     <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">string</span><span class="si">}</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">level</span> <span class="o">&gt;=</span> <span class="mi">3</span><span class="p">:</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-                <span class="nb">print</span><span class="p">(</span><span class="n">string</span><span class="p">)</span></div>
-</div>
+                <span class="nb">print</span><span class="p">(</span><span class="n">string</span><span class="p">)</span></div></div>
 
 
-
-<div class="viewcode-block" id="normalize_path">
-<a class="viewcode-back" href="../../api.html#sequifier.helpers.normalize_path">[docs]</a>
-<span class="nd">@beartype</span>
+<div class="viewcode-block" id="normalize_path"><a class="viewcode-back" href="../../api.html#sequifier.helpers.normalize_path">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">normalize_path</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">project_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Normalizes a path to be relative to a project path, then joins them.</span>
 
@@ -626,7 +602,6 @@
     <span class="n">project_path_normalized</span> <span class="o">=</span> <span class="p">(</span><span class="n">project_path</span> <span class="o">+</span> <span class="n">os</span><span class="o">.</span><span class="n">sep</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">sep</span> <span class="o">+</span> <span class="n">os</span><span class="o">.</span><span class="n">sep</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">sep</span><span class="p">)</span>
     <span class="n">path2</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">project_path</span><span class="p">,</span> <span class="n">path</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">project_path_normalized</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
     <span class="k">return</span> <span class="n">path2</span></div>
-
 </pre></div>
         </article>
       </div>
@@ -659,9 +634,9 @@
       
     </aside>
   </div>
-</div><script src="../../_static/documentation_options.js?v=f0e16b7f"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=e9da4d9e"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
     </body>
 </html>
