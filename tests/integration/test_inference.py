@@ -20,7 +20,7 @@ def test_predictions_real(predictions):
                 assert np.all(
                     [
                         v > -10.0 and v < 10.0
-                        for v in model_predictions["sup3"].to_numpy()
+                        for v in model_predictions["supReal3"].to_numpy()
                     ]
                 ), model_predictions
 
@@ -39,11 +39,14 @@ def test_predictions_cat(predictions):
             ), model_predictions
 
             if "multitarget" in model_name:
-                valid_values_sup1 = [x for x in np.arange(0, 10)] + ["unknown"]
+                admssible_vals = [str(x) for x in np.arange(0, 10)] + [
+                    "unknown",
+                    "other",
+                ]
                 assert np.all(
                     [
-                        v in valid_values_sup1
-                        for v in model_predictions["sup1"].to_numpy()
+                        v in admssible_vals
+                        for v in model_predictions["supCat1"].to_numpy()
                     ]
                 ), model_predictions
 
@@ -79,7 +82,7 @@ def test_probabilities(probabilities):
     for model_name, model_probabilities in probabilities.items():
         if "itemId" in model_name:
             assert model_probabilities.shape[1] == 32
-        elif "sup1" in model_name:
+        elif "supCat1" in model_name:
             assert model_probabilities.shape[1] == 12
 
         np.testing.assert_almost_equal(
@@ -94,11 +97,12 @@ def test_multi_pred(predictions):
 
     assert preds.shape[0] > 0
     assert preds.shape[1] == 5
-    assert np.all(preds["sup1"].to_numpy() >= 0) and np.all(
-        preds["sup1"].to_numpy() < 10
-    )
-    assert np.all(preds["sup3"].to_numpy() > -4.0) and np.all(
-        preds["sup3"].to_numpy() < 4.0
+
+    admssible_vals = [str(x) for x in np.arange(0, 10)] + ["unknown", "other"]
+
+    assert np.all([v in admssible_vals for v in preds["supCat1"]])
+    assert np.all(preds["supReal3"].to_numpy() > -4.0) and np.all(
+        preds["supReal3"].to_numpy() < 4.0
     )
 
 

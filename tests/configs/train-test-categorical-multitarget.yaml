@@ -4,11 +4,11 @@ read_format: pt
 metadata_config_path: configs/metadata_configs/test-data-categorical-multitarget-5.json
 
 input_columns: null
-target_columns: [itemId, sup1, sup3]
+target_columns: [itemId, supCat1, supReal3]
 target_column_types:
   itemId: categorical
-  sup1: categorical
-  sup3: real
+  supCat1: categorical
+  supReal3: real
 
 seq_length: 8
 inference_batch_size: 10
@@ -19,11 +19,11 @@ export_embedding_model: true
 model_spec:
   initial_embedding_dim: 16
   feature_embedding_dims:
-    itemId: 5
-    sup1: 4
-    sup2: 2
-    sup3: 1
-    sup4: 4
+    itemId: 6
+    supCat1: 4
+    supReal2: 1
+    supReal3: 1
+    supCat4: 4
   dim_model: 16
   n_head: 2
   dim_feedforward: 10
@@ -49,12 +49,12 @@ training_spec:
   dropout: 0.3
   criterion:
     itemId: CrossEntropyLoss
-    sup1: CrossEntropyLoss
-    sup3: MSELoss
+    supCat1: CrossEntropyLoss
+    supReal3: MSELoss
   loss_weights:
     itemId: 1.0
-    sup1: 0.5
-    sup3: 0.5
+    supCat1: 0.5
+    supReal3: 0.5
   optimizer:
     name: AdamW
   scheduler:

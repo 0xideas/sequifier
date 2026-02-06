@@ -9,15 +9,15 @@ import yaml
 SELECTED_COLUMNS = {
     "categorical": {
         1: "itemId",
-        3: "itemId sup1",
-        5: "itemId sup1 sup2 sup4",
-        50: "itemId " + " ".join([f"sup{i}" for i in range(1, 50)]),
+        3: "itemId supCat1",
+        5: "itemId supCat1 supCat2 supCat4",
+        50: "itemId " + " ".join([f"supCat{i}" for i in range(1, 50)]),
     },
     "real": {
         1: "itemValue",
-        3: "itemValue sup1 sup2",
-        5: "itemValue sup1 sup2 sup3 sup4",
-        50: "itemValue " + " ".join([f"sup{i}" for i in range(1, 50)]),
+        3: "itemValue supReal1 supReal2",
+        5: "itemValue supReal1 supReal2 supReal3 supReal4",
+        50: "itemValue " + " ".join([f"supReal{i}" for i in range(1, 50)]),
     },
 }
 
@@ -502,11 +502,11 @@ def model_names_probs():
         for model_number in [1, 3, 5, 50]
     ]
     model_names_probs += [
-        f"model-categorical-multitarget-5-best-3-{col}" for col in ["itemId", "sup1"]
+        f"model-categorical-multitarget-5-best-3-{col}" for col in ["itemId", "supCat1"]
     ]
     model_names_probs += [
         f"model-categorical-3-inf-size-best-3-{col}"
-        for col in ["itemId", "sup1", "sup2"]
+        for col in ["itemId", "supCat1", "supCat2"]
     ]
     return model_names_probs
 
@@ -558,7 +558,10 @@ def targets(model_names_preds, model_names_probs, model_names_embeddings):
 
 def read_multi_file_preds(path, target_type, file_suffix=None):
     dtype = (
-        {TARGET_VARIABLE_DICT[target_type]: str}
+        {
+            **{TARGET_VARIABLE_DICT[target_type]: str},
+            **{f"supCat{i+1}": str for i in range(50)},
+        }
         if target_type == "categorical"
         else None
     )

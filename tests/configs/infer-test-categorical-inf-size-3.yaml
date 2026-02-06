@@ -7,12 +7,12 @@ data_path: tests/project_folder/data/test-data-categorical-3-split2
 read_format: pt
 write_format: csv
 
-input_columns: [itemId, sup1, sup2]
-target_columns: [itemId, sup1, sup2]
+input_columns: [itemId, supCat1, supCat2]
+target_columns: [itemId, supCat1, supCat2]
 target_column_types:
   itemId: categorical
-  sup1: categorical
-  sup2: categorical
+  supCat1: categorical
+  supCat2: categorical
 
 output_probabilities: true
 map_to_id: true
