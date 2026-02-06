@@ -10,32 +10,34 @@ from sequifier.helpers import construct_index_maps, numpy_to_pytorch
 
 def test_construct_index_maps_string():
     """Tests reversing a string-to-int map, ensuring 0 maps to 'unknown'."""
-    id_maps: dict[str, dict[str | int, int]] = {"itemId": {"apple": 1, "banana": 2}}
+    id_maps: dict[str, dict[str | int, int]] = {"itemId": {"apple": 2, "banana": 3}}
     target_cols = ["itemId"]
 
     result = construct_index_maps(id_maps, target_cols, map_to_id=True)
 
     # Check standard reversal
-    assert result["itemId"][1] == "apple"
-    assert result["itemId"][2] == "banana"
+    assert result["itemId"][2] == "apple"
+    assert result["itemId"][3] == "banana"
 
     # Check the special 0 index for strings
     assert result["itemId"][0] == "unknown"
+    assert result["itemId"][1] == "other"
 
 
 def test_construct_index_maps_integer():
     """Tests reversing an int-to-int map, ensuring 0 maps to min_id - 1."""
-    id_maps: dict[str, dict[str | int, int]] = {"storeId": {100: 1, 101: 2}}
+    id_maps: dict[str, dict[str | int, int]] = {"storeId": {100: 2, 101: 3}}
     target_cols = ["storeId"]
 
     result = construct_index_maps(id_maps, target_cols, map_to_id=True)
 
-    assert result["storeId"][1] == 100
-    assert result["storeId"][2] == 101
+    assert result["storeId"][2] == 100
+    assert result["storeId"][3] == 101
 
-    # Check the special 0 index for integers (min value - 1)
-    # Min value is 100, so 0 -> 99
-    assert result["storeId"][0] == 99
+    # Check the special 0 index for integers (min value - 2)
+    # Min value is 100, so 2 -> 98, 1 -> 99
+    assert result["storeId"][0] == 98
+    assert result["storeId"][1] == 99
 
 
 def test_construct_index_maps_flag_false():

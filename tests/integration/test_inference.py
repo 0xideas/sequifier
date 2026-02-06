@@ -78,9 +78,9 @@ def test_predictions_cat(predictions):
 def test_probabilities(probabilities):
     for model_name, model_probabilities in probabilities.items():
         if "itemId" in model_name:
-            assert model_probabilities.shape[1] == 31
+            assert model_probabilities.shape[1] == 32
         elif "sup1" in model_name:
-            assert model_probabilities.shape[1] == 11
+            assert model_probabilities.shape[1] == 12
 
         np.testing.assert_almost_equal(
             model_probabilities.sum_horizontal(),
