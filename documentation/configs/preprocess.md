@@ -23,6 +23,7 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | `merge_output` | `bool` | No | `true` | Whether to merge split files into single files or keep them sharded. |
 | `continue_preprocessing`| `bool` | No | `false` | If `true`, resumes a job that was interrupted (requires folder input). |
 
+
 > **Important Constraint on `write_format`:**
 >
 >   * If `write_format` is **`pt`** (PyTorch tensors), `merge_output` must be **`false`**. This sharded format is **required** for distributed training on large datasets.
@@ -34,6 +35,7 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | :--- | :--- | :--- | :--- | :--- |
 | `selected_columns` | `list[str]` | No | `null` | A specific list of columns to process. If `null`, all columns (except metadata) are processed. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
+| `use_precomputed_maps`| `list[str]` | No | `None` | If not `None`, enforces the use of precomputed maps for the variables in the list. |
 
 ### 3\. Sequence Logic & Splitting
 
@@ -76,6 +78,27 @@ This controls data augmentation and redundancy.
   * **`distribute` (Default):** The algorithm adjusts the start indices slightly to minimize the overlap of the final subsequence with the previous one, ensuring the data covers the full sequence length as evenly as possible. Recommended for most use cases.
   * **`exact`:** Strictly enforces the stride. If the sequence length minus the window size isn't perfectly divisible by the stride, this will raise an error. Use this only if mathematical precision of the sliding window is strictly required by your downstream application or evaluation code.
 
+### 4. Advanced: Static Vocabularies (Custom ID Maps)
+
+By default, Sequifier dynamically builds ID maps from the data found in the input file. However, in production systems, you often need a **fixed vocabulary** to ensure that ID "105" always maps to "Item_X", regardless of the daily training batch.
+
+To use a static vocabulary:
+1. Create a folder `configs/id_maps/` in your project root.
+2. Add JSON files named `{COLUMN_NAME}.json`.
+3. The format must be a dictionary mapping values to integers **starting at 2**.
+
+> **Reserved Indices:**
+> * **0**: Reserved for `unknown` (padding/missing).
+> * **1**: Reserved for `other` (unseen values not in your map).
+> * **2+**: Your data.
+
+**Example `configs/id_maps/itemId.json`:**
+```json
+{
+    "apple": 2,
+    "banana": 3,
+    "cherry": 4
+}
 -----
 
 ## Outputs

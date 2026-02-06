@@ -861,7 +861,9 @@ def _apply_column_statistics(
 
 @beartype
 def load_precomputed_id_maps(
-    project_root: str, data_columns: Optional[list[str]]
+    project_root: str,
+    data_columns: Optional[list[str]],
+    required_maps: Optional[list[str]] = None,
 ) -> dict[str, dict[Union[str, int], int]]:
     """Loads custom ID maps from configs/id_maps if the folder exists.
 
@@ -869,12 +871,18 @@ def load_precomputed_id_maps(
         project_root: The path to the project root directory.
         data_columns: Optional list of columns present in the data to validate
             against the found map files.
+        required_maps: Optional list of columns for which a precomputed id_map is required
 
     Returns:
         A dictionary mapping column names to their ID maps.
     """
     custom_maps = {}
     path = os.path.join(project_root, "configs", "id_maps")
+
+    if required_maps and not os.path.exists(path):
+        raise FileNotFoundError(
+            f"use_precomputed_maps specified {required_maps}, but 'configs/id_maps' folder does not exist."
+        )
 
     if os.path.exists(path):
         for file in os.listdir(path):
@@ -897,6 +905,14 @@ def load_precomputed_id_maps(
                             f"minimum value in map {file} is {min_val}, must be 2."
                         )
                     custom_maps[col_name] = m
+    if required_maps:
+        missing_maps = [col for col in required_maps if col not in custom_maps]
+        if missing_maps:
+            raise ValueError(
+                f"Missing precomputed maps for required columns: {missing_maps}. "
+                f"Please ensure {missing_maps[0]}.json exists in configs/id_maps/"
+            )
+
     return custom_maps
 
 
