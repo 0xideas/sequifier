@@ -265,14 +265,14 @@ def format_configs_locally(
 
 
 @pytest.fixture(scope="session")
-def copy_interrupted_data():
-    os.makedirs(os.path.join("tests", "project_folder", "data"), exist_ok=True)
+def copy_interrupted_data(project_root, remove_project_root_contents):
+    os.makedirs(os.path.join(project_root, "data"), exist_ok=True)
 
     source_path = os.path.join(
         "tests", "resources", "source_data", "test-data-categorical-1-interrupted-temp"
     )
     target_path = os.path.join(
-        "tests", "project_folder", "data", "test-data-categorical-1-interrupted-temp"
+        project_root, "data", "test-data-categorical-1-interrupted-temp"
     )
 
     shutil.copytree(source_path, target_path)
@@ -280,6 +280,7 @@ def copy_interrupted_data():
 
 @pytest.fixture(scope="session")
 def run_preprocessing(
+    project_root,
     preprocessing_config_path_cat,
     preprocessing_config_path_cat_multitarget,
     preprocessing_config_path_real,
@@ -309,9 +310,13 @@ def run_preprocessing(
             f"sequifier preprocess --config-path {preprocessing_config_path_real} --data-path {data_path_real} --selected-columns {SELECTED_COLUMNS['real'][data_number]}"
         )
 
+    source_path = os.path.join("tests", "resources", "source_configs", "id_maps")
+    target_path = os.path.join(project_root, "configs", "id_maps")
+    shutil.copytree(source_path, target_path)
     run_and_log(
         f"sequifier preprocess --config-path {preprocessing_config_path_cat_multitarget}"
     )
+    shutil.rmtree(target_path)
 
     run_and_log(
         f"sequifier preprocess --config-path {preprocessing_config_path_multi_file}"
