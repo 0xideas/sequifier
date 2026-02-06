@@ -661,6 +661,8 @@ class Preprocessor:
         Args:
             write_format: The file format of the output files (e.g., "pt").
         """
+
+        logger.info("Start cleanup")
         temp_output_path = os.path.join(self.project_root, "data", self.target_dir)
         directory = Path(temp_output_path)
 
@@ -675,6 +677,7 @@ class Preprocessor:
                         f"Folder path '{folder_path}' mismatch with split path '{split_path}'"
                     )
 
+                logger.info(f"Make path '{folder_path}'")
                 os.makedirs(folder_path, exist_ok=True)
 
                 pattern = re.compile(rf".+split{i}-\d+-\d+\.\w+")
@@ -682,6 +685,7 @@ class Preprocessor:
                 for file_path in directory.iterdir():
                     if file_path.is_file() and pattern.match(file_path.name):
                         destination = Path(folder_path) / file_path.name
+                        logger.info(f"Moving '{file_path}' to '{destination}'")
                         shutil.move(str(file_path), str(destination))
 
                 self._create_metadata_for_folder(folder_path)
@@ -755,6 +759,7 @@ class Preprocessor:
                     folder_path: The path to the directory containing the .pt batch files
                         for a specific data split.
         """
+        logger.info(f"Creating metadata for folder '{folder_path}'")
         batch_files_metadata = []
         total_samples = 0
         directory = Path(folder_path)
