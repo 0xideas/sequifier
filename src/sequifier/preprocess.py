@@ -78,6 +78,7 @@ class Preprocessor:
         batches_per_file: int,
         process_by_file: bool,
         subsequence_start_mode: str,
+        use_precomputed_maps: Optional[list[str]],
     ):
         """Initializes the Preprocessor with the given parameters.
 
@@ -96,6 +97,8 @@ class Preprocessor:
             n_cores: The number of CPU cores to use for parallel processing.
             batches_per_file: The number of batches to process per file.
             process_by_file: A flag to indicate if processing should be done file by file.
+            use_precomputed_maps: An optional list of columns for which to enforce precomputed maps
+
         """
         self.project_root = project_root
         self.batches_per_file = batches_per_file
@@ -111,6 +114,7 @@ class Preprocessor:
                 )
             self.target_dir = f"{self.data_name_root}-temp"
 
+        self.use_precomputed_maps = use_precomputed_maps
         self.seed = seed
         np.random.seed(seed)
         self.n_cores = n_cores or multiprocessing.cpu_count()
@@ -155,7 +159,7 @@ class Preprocessor:
             id_maps, selected_columns_statistics = {}, {}
 
             precomputed_id_maps = load_precomputed_id_maps(
-                self.project_root, data_columns
+                self.project_root, data_columns, self.use_precomputed_maps
             )
 
             id_maps, selected_columns_statistics = _get_column_statistics(
@@ -360,7 +364,9 @@ class Preprocessor:
 
         col_types, data_columns = None, None
 
-        precomputed_id_maps = load_precomputed_id_maps(self.project_root, data_columns)
+        precomputed_id_maps = load_precomputed_id_maps(
+            self.project_root, data_columns, self.use_precomputed_maps
+        )
 
         files_to_process = []
         logger.info(f"Data path: {data_path}")
