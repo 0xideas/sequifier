@@ -122,6 +122,29 @@ class Preprocessor:
 
         self._setup_split_paths(write_format, len(split_ratios))
 
+        if self.continue_preprocessing:
+            # 1. Determine what paths indicate "completion"
+            if self.merge_output:
+                # If merging, check for the final files (e.g., "data/mydata-split0.pt")
+                paths_to_check = self.split_paths
+            else:
+                # If not merging, check for the output folders (e.g., "data/mydata-split0")
+                paths_to_check = [
+                    os.path.join(
+                        self.project_root, "data", f"{self.data_name_root}-split{i}"
+                    )
+                    for i in range(len(split_ratios))
+                ]
+
+            # 2. If any target exists, skip processing and jump to cleanup
+            if any(os.path.exists(p) for p in paths_to_check):
+                logger.info(
+                    "Existing split paths found with continue_preprocessing=True. "
+                    "Skipping processing and running cleanup."
+                )
+                self._cleanup(write_format)
+                return
+
         if os.path.isfile(data_path):
             data = _load_and_preprocess_data(
                 data_path, read_format, selected_columns, max_rows
