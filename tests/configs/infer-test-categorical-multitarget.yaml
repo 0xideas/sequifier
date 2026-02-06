@@ -8,11 +8,11 @@ read_format: pt
 write_format: csv
 
 input_columns: null
-target_columns: [itemId, sup1, sup3]
+target_columns: [itemId, supCat1, supReal3]
 target_column_types:
   itemId: categorical
-  sup1: categorical
-  sup3: real
+  supCat1: categorical
+  supReal3: real
 
 output_probabilities: true
 map_to_id: true

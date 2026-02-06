@@ -100,12 +100,14 @@ These fields determine the size and complexity of the Transformer.
 
 ### 1\. Data Loading Strategy (`load_full_data_to_ram`)
 
-  * **`true` (Default):** Loads the entire dataset into system RAM at the start.
-      * *Pros:* Fastest training speed (no I/O overhead during epochs).
+* **`true` (Default):** Loads the entire dataset into system RAM.
+      * *Mechanism:* Uses a `DistributedSampler` (global shuffling) which is statistically ideal for training.
+      * *Pros:* Fastest training speed.
       * *Cons:* Limited by physical RAM. If the dataset is 64GB and you have 32GB RAM, this will crash.
   * **`false` (Lazy Loading):** Loads individual files on-demand during training.
       * *Requirements:* `read_format` must be `pt`.
-      * *Pros:* Can train on datasets significantly larger than RAM. Uses an LRU cache (limit set by `max_ram_gb`) to optimize repeated access.
+      * *Mechanism:* Uses a `DistributedGroupedRandomSampler` to minimize disk seeking by processing data in file-contiguous groups.
+      * *Pros:* Can train on datasets larger than RAM.
       * *Cons:* Slight I/O overhead depending on disk speed. Increase `num_workers` to mitigate this.
 
 ### 2\. Attention Mechanism (`attention_type` & `n_kv_heads`)

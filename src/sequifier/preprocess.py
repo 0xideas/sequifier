@@ -78,6 +78,7 @@ class Preprocessor:
         batches_per_file: int,
         process_by_file: bool,
         subsequence_start_mode: str,
+        use_precomputed_maps: Optional[list[str]],
     ):
         """Initializes the Preprocessor with the given parameters.
 
@@ -96,6 +97,8 @@ class Preprocessor:
             n_cores: The number of CPU cores to use for parallel processing.
             batches_per_file: The number of batches to process per file.
             process_by_file: A flag to indicate if processing should be done file by file.
+            use_precomputed_maps: An optional list of columns for which to enforce precomputed maps
+
         """
         self.project_root = project_root
         self.batches_per_file = batches_per_file
@@ -111,6 +114,7 @@ class Preprocessor:
                 )
             self.target_dir = f"{self.data_name_root}-temp"
 
+        self.use_precomputed_maps = use_precomputed_maps
         self.seed = seed
         np.random.seed(seed)
         self.n_cores = n_cores or multiprocessing.cpu_count()
@@ -122,6 +126,29 @@ class Preprocessor:
 
         self._setup_split_paths(write_format, len(split_ratios))
 
+        if self.continue_preprocessing:
+            # 1. Determine what paths indicate "completion"
+            if self.merge_output:
+                # If merging, check for the final files (e.g., "data/mydata-split0.pt")
+                paths_to_check = self.split_paths
+            else:
+                # If not merging, check for the output folders (e.g., "data/mydata-split0")
+                paths_to_check = [
+                    os.path.join(
+                        self.project_root, "data", f"{self.data_name_root}-split{i}"
+                    )
+                    for i in range(len(split_ratios))
+                ]
+
+            # 2. If any target exists, skip processing and jump to cleanup
+            if any(os.path.exists(p) for p in paths_to_check):
+                logger.info(
+                    "Existing split paths found with continue_preprocessing=True. "
+                    "Skipping processing and running cleanup."
+                )
+                self._cleanup(write_format)
+                return
+
         if os.path.isfile(data_path):
             data = _load_and_preprocess_data(
                 data_path, read_format, selected_columns, max_rows
@@ -130,9 +157,21 @@ class Preprocessor:
                 col for col in data.columns if col not in ["sequenceId", "itemPosition"]
             ]
             id_maps, selected_columns_statistics = {}, {}
-            id_maps, selected_columns_statistics = _get_column_statistics(
-                data, data_columns, id_maps, selected_columns_statistics, 0
+
+            precomputed_id_maps = load_precomputed_id_maps(
+                self.project_root, data_columns, self.use_precomputed_maps
             )
+
+            id_maps, selected_columns_statistics = _get_column_statistics(
+                data,
+                data_columns,
+                id_maps,
+                selected_columns_statistics,
+                0,
+                precomputed_id_maps,
+            )
+
+            id_maps = id_maps | precomputed_id_maps
 
             data, n_classes, col_types = _apply_column_statistics(
                 data, data_columns, id_maps, selected_columns_statistics
@@ -319,9 +358,16 @@ class Preprocessor:
                 - data_columns (list[str]): List of all processed data
                   column names.
         """
+
         n_rows_running_count = 0
         id_maps, selected_columns_statistics = {}, {}
+
         col_types, data_columns = None, None
+
+        precomputed_id_maps = load_precomputed_id_maps(
+            self.project_root, data_columns, self.use_precomputed_maps
+        )
+
         files_to_process = []
         logger.info(f"Data path: {data_path}")
         for root, dirs, files in os.walk(data_path):
@@ -354,6 +400,12 @@ class Preprocessor:
                     if col_types is None:
                         data_columns = current_file_cols
                         col_types = {col: str(data.schema[col]) for col in data_columns}
+
+                        for col in precomputed_id_maps.keys():
+                            if col not in data_columns:
+                                raise ValueError(
+                                    f"Precomputed column {col} not found in {file}"
+                                )
                     else:
                         if set(current_file_cols) != set(col_types.keys()):
                             missing = set(col_types.keys()) - set(current_file_cols)
@@ -382,12 +434,15 @@ class Preprocessor:
                         id_maps,
                         selected_columns_statistics,
                         n_rows_running_count,
+                        precomputed_id_maps,
                     )
                     n_rows_running_count += data.shape[0]
 
+        id_maps = id_maps | precomputed_id_maps
+
         if data_columns is None:
             raise RuntimeError("data_columns was not initialized correctly.")
-        n_classes = {col: len(id_maps[col]) + 1 for col in id_maps}
+        n_classes = {col: max(id_maps[col].values()) + 1 for col in id_maps}
 
         if col_types is None:
             raise RuntimeError("col_types was not initialized correctly.")
@@ -612,6 +667,8 @@ class Preprocessor:
         Args:
             write_format: The file format of the output files (e.g., "pt").
         """
+
+        logger.info("Start cleanup")
         temp_output_path = os.path.join(self.project_root, "data", self.target_dir)
         directory = Path(temp_output_path)
 
@@ -626,6 +683,7 @@ class Preprocessor:
                         f"Folder path '{folder_path}' mismatch with split path '{split_path}'"
                     )
 
+                logger.info(f"Make path '{folder_path}'")
                 os.makedirs(folder_path, exist_ok=True)
 
                 pattern = re.compile(rf".+split{i}-\d+-\d+\.\w+")
@@ -633,6 +691,7 @@ class Preprocessor:
                 for file_path in directory.iterdir():
                     if file_path.is_file() and pattern.match(file_path.name):
                         destination = Path(folder_path) / file_path.name
+                        logger.info(f"Moving '{file_path}' to '{destination}'")
                         shutil.move(str(file_path), str(destination))
 
                 self._create_metadata_for_folder(folder_path)
@@ -706,6 +765,7 @@ class Preprocessor:
                     folder_path: The path to the directory containing the .pt batch files
                         for a specific data split.
         """
+        logger.info(f"Creating metadata for folder '{folder_path}'")
         batch_files_metadata = []
         total_samples = 0
         directory = Path(folder_path)
@@ -785,14 +845,14 @@ def _apply_column_statistics(
             - `col_types`: The (potentially computed) column type dictionary.
     """
     if n_classes is None:
-        n_classes = {col: len(id_maps[col]) + 1 for col in id_maps}
+        n_classes = {col: max(id_maps[col].values()) + 1 for col in id_maps}
 
     if col_types is None:
         col_types = {col: str(data.schema[col]) for col in data_columns}
 
     for col in data_columns:
         if col in id_maps:
-            data = data.with_columns(pl.col(col).replace(id_maps[col]))
+            data = data.with_columns(pl.col(col).replace(id_maps[col], default=1))
             col_types[col] = "Int64"
         elif col in selected_columns_statistics:
             data = data.with_columns(
@@ -806,12 +866,70 @@ def _apply_column_statistics(
 
 
 @beartype
+def load_precomputed_id_maps(
+    project_root: str,
+    data_columns: Optional[list[str]],
+    required_maps: Optional[list[str]] = None,
+) -> dict[str, dict[Union[str, int], int]]:
+    """Loads custom ID maps from configs/id_maps if the folder exists.
+
+    Args:
+        project_root: The path to the project root directory.
+        data_columns: Optional list of columns present in the data to validate
+            against the found map files.
+        required_maps: Optional list of columns for which a precomputed id_map is required
+
+    Returns:
+        A dictionary mapping column names to their ID maps.
+    """
+    custom_maps = {}
+    path = os.path.join(project_root, "configs", "id_maps")
+
+    if required_maps and not os.path.exists(path):
+        raise FileNotFoundError(
+            f"use_precomputed_maps specified {required_maps}, but 'configs/id_maps' folder does not exist."
+        )
+
+    if os.path.exists(path):
+        for file in os.listdir(path):
+            if file.endswith(".json"):
+                col_name = os.path.splitext(file)[0]
+                if data_columns is not None and col_name not in data_columns:
+                    raise ValueError(
+                        f"{file} does not correspond to any column in the data"
+                    )
+
+                with open(os.path.join(path, file), "r") as f:
+                    # Load and ensure values are integers
+                    m = {k: int(v) for k, v in json.load(f).items()}
+
+                    if not len(m) > 0:
+                        raise ValueError(f"map in {file} does not contain any values")
+                    min_val = min(m.values())
+                    if min_val != 2:
+                        raise ValueError(
+                            f"minimum value in map {file} is {min_val}, must be 2."
+                        )
+                    custom_maps[col_name] = m
+    if required_maps:
+        missing_maps = [col for col in required_maps if col not in custom_maps]
+        if missing_maps:
+            raise ValueError(
+                f"Missing precomputed maps for required columns: {missing_maps}. "
+                f"Please ensure {missing_maps[0]}.json exists in configs/id_maps/"
+            )
+
+    return custom_maps
+
+
+@beartype
 def _get_column_statistics(
     data: pl.DataFrame,
     data_columns: list[str],
     id_maps: dict[str, dict[Union[str, int], int]],
     selected_columns_statistics: dict[str, dict[str, float]],
     n_rows_running_count: int,
+    precomputed_id_maps: dict[str, dict[Union[str, int], int]],
 ) -> tuple[
     dict[str, dict[Union[str, int], int]],
     dict[str, dict[str, float]],
@@ -837,6 +955,8 @@ def _get_column_statistics(
             statistics to be updated.
         n_rows_running_count: The total number of rows processed *before*
             this chunk, used for weighting statistics.
+        precomputed_id_maps: A dictionary of pre-loaded ID maps that should
+            be applied and not re-computed.
 
     Returns:
         A tuple `(id_maps, selected_columns_statistics)` containing the
@@ -863,9 +983,17 @@ def _get_column_statistics(
                 pl.UInt64,
             ),
         ):
-            new_id_map = create_id_map(data, column=data_col)
-            id_maps[data_col] = combine_maps(new_id_map, id_maps.get(data_col, {}))
+            if data_col not in precomputed_id_maps:
+                new_id_map = create_id_map(data, column=data_col)
+                id_maps[data_col] = combine_maps(new_id_map, id_maps.get(data_col, {}))
+            else:
+                logger.info(f"Applying precomputed map for {data_col}")
         elif isinstance(dtype, (pl.Float32, pl.Float64)):
+            if data_col in precomputed_id_maps:
+                raise ValueError(
+                    f"Column {data_col} is not categorical, precomputed map is invalid."
+                )
+
             combined_mean, combined_std = get_combined_statistics(
                 data.shape[0],
                 data.get_column(data_col).mean(),
@@ -1262,7 +1390,7 @@ def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]
     ids = sorted(
         [int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]
     )  # type: ignore
-    id_map = {id_: i + 1 for i, id_ in enumerate(ids)}
+    id_map = {id_: i + 2 for i, id_ in enumerate(ids)}
     return dict(id_map)
 
 
@@ -1330,7 +1458,7 @@ def combine_maps(
         A new, combined, and re-indexed ID map.
     """
     combined_keys = sorted(list(set(list(map1.keys())).union(list(set(map2.keys())))))
-    id_map = {id_: i + 1 for i, id_ in enumerate(combined_keys)}
+    id_map = {id_: i + 2 for i, id_ in enumerate(combined_keys)}
     return id_map
 
 

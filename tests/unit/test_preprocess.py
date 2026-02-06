@@ -170,13 +170,13 @@ def test_get_column_statistics_state_accumulation():
 
     # Pass 1
     id_maps, stats = _get_column_statistics(
-        chunk1, ["cat_col", "num_col"], id_maps, stats, running_count
+        chunk1, ["cat_col", "num_col"], id_maps, stats, running_count, {}
     )
     running_count += len(chunk1)
 
     # Pass 2
     id_maps, stats = _get_column_statistics(
-        chunk2, ["cat_col", "num_col"], id_maps, stats, running_count
+        chunk2, ["cat_col", "num_col"], id_maps, stats, running_count, {}
     )
 
     # Validations
@@ -197,7 +197,7 @@ def test_create_id_map():
     df = pl.DataFrame({"A": ["z", "x", "y", "x"]})
     mapping = create_id_map(df, "A")
 
-    # Sorted unique values: x, y, z -> 1, 2, 3
-    assert mapping["x"] == 1
-    assert mapping["y"] == 2
-    assert mapping["z"] == 3
+    # Sorted unique values: x, y, z -> 2, 3, 4
+    assert mapping["x"] == 2
+    assert mapping["y"] == 3
+    assert mapping["z"] == 4

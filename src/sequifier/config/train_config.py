@@ -100,6 +100,12 @@ class DotDict(dict):
     def __deepcopy__(self, memo=None):
         return DotDict(copy.deepcopy(dict(self), memo=memo))
 
+    def __getstate__(self):
+        return dict(self)
+
+    def __setstate__(self, state):
+        self.update(state)
+
 
 class TrainingSpecModel(BaseModel):
     """Pydantic model for training specifications.

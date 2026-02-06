@@ -73,7 +73,9 @@ def construct_index_maps(
 
     A special mapping for index 0 is added:
     - If original IDs are strings, 0 maps to "unknown".
-    - If original IDs are integers, 0 maps to (minimum original ID) - 1.
+    - If original IDs are strings, 1 maps to "other".
+    - If original IDs are integers, 0 maps to (minimum original ID) - 2.
+    - If original IDs are integers, 1 maps to (minimum original ID) - 1.
 
     Args:
         id_maps: A nested dictionary mapping column names to their
@@ -105,10 +107,13 @@ def construct_index_maps(
             val = next(iter(map_.values()))
             if isinstance(val, str):
                 map_[0] = "unknown"
+                map_[1] = "other"
             else:
                 if not isinstance(val, int):
                     raise TypeError(f"Expected integer ID in map, got {type(val)}")
-                map_[0] = min(map_.values()) - 1  # type: ignore
+                min_id = int(min(map_.values()))
+                map_[0] = min_id - 2  # type: ignore
+                map_[1] = min_id - 1
             index_map[target_column] = map_
     return index_map
 
