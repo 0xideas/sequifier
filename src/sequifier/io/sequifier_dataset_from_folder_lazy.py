@@ -79,9 +79,11 @@ class SequifierDatasetFromFolderLazy(Dataset):
             ],
         ] = collections.OrderedDict()
 
+        self.max_cache_files = 2
+
         logger.info(
             f"[INFO] Initialized lazy dataset from {self.data_dir}. "
-            f"Total samples: {self.n_samples}. RAM threshold in GB: {self.max_ram_gb}"
+            f"Total samples: {self.n_samples}. RAM threshold in GB: {self.max_ram_gb}, max cache files: {self.max_cache_files}"
         )
 
     def __len__(self) -> int:
@@ -171,46 +173,36 @@ class SequifierDatasetFromFolderLazy(Dataset):
             raise IndexError(
                 f"Index {idx} is out of range for dataset with {self.n_samples} samples."
             )
-
         local_index, file_path = self._find_file_for_index(idx)
 
-        # Acquire lock to ensure atomic cache operations
-        # 1. Check for a cache hit
+        # 1. Check if file is already in cache
         if file_path in self.cache:
-            # Mark as recently used by moving it to the end of the OrderedDict.
             self.cache.move_to_end(file_path)
-            (
-                sequences_batch,
-                targets_batch,
-                sequence_id_tensor,
-                subsequence_id_tensor,
-                start_item_positions_tensor,
-            ) = self.cache[file_path]
-
-        # 2. Handle a cache miss
+            data_tuple = self.cache[file_path]
         else:
-            # Load the data from the .pt file from disk.
-            (
-                sequences_batch,
-                targets_batch,
-                sequence_id_tensor,
-                subsequence_id_tensor,
-                start_item_positions_tensor,
-            ) = torch.load(file_path, map_location="cpu")
+            # 2. PRE-EVICTION: Make space BEFORE loading
+            # If adding this file would exceed the limit, evict the oldest one first.
+            while len(self.cache) >= self.max_cache_files:
+                # remove oldest item (FIFO)
+                evicted_path, _ = self.cache.popitem(last=False)
+                # Optional: Force garbage collection if memory is tight,
+                # though .clone() usually makes this automatic.
+                # import gc; gc.collect()
 
-            # Add the newly loaded data to the cache.
-            self.cache[file_path] = (
-                sequences_batch,
-                targets_batch,
-                sequence_id_tensor,
-                subsequence_id_tensor,
-                start_item_positions_tensor,
-            )
+            # 3. Load from disk (Safe now, as we made space)
+            data_tuple = torch.load(file_path, map_location="cpu")
+            self.cache[file_path] = data_tuple
 
-            # After adding, check memory and evict old items if necessary.
-            self._evict_lru_items()
+        # Unpack
+        (
+            sequences_batch,
+            targets_batch,
+            sequence_id_tensor,
+            subsequence_id_tensor,
+            start_item_positions_tensor,
+        ) = data_tuple
 
-        # 3. Retrieve the specific sample from the (now cached) batch tensors.
+        # 4. CRITICAL: Use .clone() to sever the link to the cached file
         train_seq_len = self.config.seq_length
         sequence = {
             key: tensor[local_index, -train_seq_len:].clone()
@@ -220,6 +212,7 @@ class SequifierDatasetFromFolderLazy(Dataset):
             key: tensor[local_index, -train_seq_len:].clone()
             for key, tensor in targets_batch.items()
         }
+
         return (
             sequence,
             targets,
