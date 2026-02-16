@@ -1,3 +1,4 @@
+import math
 from typing import Dict, Iterator, Tuple
 
 import torch
@@ -72,7 +73,7 @@ class SequifierDatasetFromFile(IterableDataset):
 
     def __len__(self) -> int:
         """Returns the total number of samples in the dataset."""
-        return self.n_samples
+        return math.ceil(self.n_samples / self.batch_size)
 
     def __iter__(
         self,

@@ -77,7 +77,7 @@ target_column_types:
   EXAMPLE_TARGET_COLUMN_NAME: real
 
 output_probabilities: false
-map_to_id: false
+map_to_id: true
 device: cpu
 seq_length: 48
 inference_batch_size: 10
