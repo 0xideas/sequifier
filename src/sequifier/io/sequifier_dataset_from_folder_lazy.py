@@ -116,20 +116,35 @@ class SequifierDatasetFromFolderLazy(Dataset):
 
         return local_index, file_path
 
-    def _evict_lru_items(self):
-        """
-        Checks system memory and evicts least recently used items from the cache
-        until usage is below the threshold. This method must be called from
-        within a locked context.
-        """
-        while psutil.virtual_memory().used > self.max_ram_bytes:
-            if not self.cache:
-                # Cache is empty, but memory is still high. Nothing to evict.
-                break
+    def _get_memory_usage_percent(self):
+        # Try cgroup v2
+        if os.path.exists("/sys/fs/cgroup/memory.current"):
+            with open("/sys/fs/cgroup/memory.current", "r") as f:
+                used = int(f.read())
+            with open("/sys/fs/cgroup/memory.max", "r") as f:
+                limit_str = f.read().strip()
+                # Handle 'max' which means no limit
+                limit = int(limit_str) if limit_str != "max" else self.max_ram_bytes
+            return used / limit if limit > 0 else 0
 
-            # popitem(last=False) removes and returns the (key, value) pair that
-            # was first inserted, effectively implementing the LRU policy.
-            evicted_path, _ = self.cache.popitem(last=False)
+        # Try cgroup v1
+        elif os.path.exists("/sys/fs/cgroup/memory/memory.usage_in_bytes"):
+            with open("/sys/fs/cgroup/memory/memory.usage_in_bytes", "r") as f:
+                used = int(f.read())
+            with open("/sys/fs/cgroup/memory/memory.limit_in_bytes", "r") as f:
+                limit = int(f.read())
+            return used / limit if limit > 0 else 0
+
+        # Fallback to psutil (host memory)
+        else:
+            return psutil.virtual_memory().percent / 100.0
+
+    def _evict_lru_items(self):
+        # Evict if usage > 90% of limit (safety buffer)
+        while self._get_memory_usage_percent() > 0.90:
+            if not self.cache:
+                break
+            self.cache.popitem(last=False)
 
     def __getitem__(
         self, idx: int
@@ -198,11 +213,11 @@ class SequifierDatasetFromFolderLazy(Dataset):
         # 3. Retrieve the specific sample from the (now cached) batch tensors.
         train_seq_len = self.config.seq_length
         sequence = {
-            key: tensor[local_index, -train_seq_len:]
+            key: tensor[local_index, -train_seq_len:].clone()
             for key, tensor in sequences_batch.items()
         }
         targets = {
-            key: tensor[local_index, -train_seq_len:]
+            key: tensor[local_index, -train_seq_len:].clone()
             for key, tensor in targets_batch.items()
         }
         return (
