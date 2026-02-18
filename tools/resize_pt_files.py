@@ -6,8 +6,6 @@ from typing import Any, Dict, List, Tuple  # Added List
 
 import torch
 
-# ... [unpack_dataset_tuple and pack_dataset_tuple remain unchanged] ...
-
 
 def unpack_dataset_tuple(data_tuple: Tuple) -> Dict[str, Any]:
     """
@@ -283,6 +281,7 @@ def main():
         if f.startswith(f"{args.dataset_name}-split")
         and os.path.isdir(os.path.join(args.data_folder, f))
     ]
+    print(f"{split_folders = }")
 
     if not split_folders:
         print("No matching split folders found.")

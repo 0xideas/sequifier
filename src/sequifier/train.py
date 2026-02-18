@@ -1287,11 +1287,16 @@ class TransformerModel(nn.Module):
                 if self.device == "cuda":
                     torch.cuda.empty_cache()
 
-        # 1. Sum the losses calculated on this GPU process
-        total_loss_local = np.sum(total_loss_collect)
-        total_losses_local = {
-            col: np.sum(loss_list) for col, loss_list in total_losses_collect.items()
-        }
+        if len(total_loss_collect) > 0:
+            total_loss_local = np.mean(total_loss_collect)
+            total_losses_local = {
+                col: np.mean(loss_list)
+                for col, loss_list in total_losses_collect.items()
+            }
+        else:
+            # Handle empty validation set case
+            total_loss_local = -1.0
+            total_losses_local = {col: -1.0 for col in self.target_columns}
 
         # 2. Aggregate losses across all GPUs if in distributed mode
         if self.hparams.training_spec.distributed:
@@ -1306,6 +1311,10 @@ class TransformerModel(nn.Module):
             # Sum losses from all processes. The result is broadcast back to all processes.
             dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
             dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
+
+            world_size = dist.get_world_size()
+            total_loss_tensor /= world_size
+            losses_tensor /= world_size
 
             # Update local variables with the aggregated global results
             total_loss_global = total_loss_tensor.cpu().numpy()
@@ -1351,9 +1360,9 @@ class TransformerModel(nn.Module):
 
                 # Sum the losses for the local shard
             if len(baseline_loss_local_collect):
-                baseline_loss_local = np.sum(baseline_loss_local_collect)
+                baseline_loss_local = np.mean(baseline_loss_local_collect)
                 baseline_losses_local = {
-                    col: np.sum(loss_list)
+                    col: np.mean(loss_list)
                     for col, loss_list in baseline_losses_local_collect.items()
                 }
             else:
@@ -1366,13 +1375,16 @@ class TransformerModel(nn.Module):
                     baseline_loss_local, device=self.device
                 )
                 dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
-                self.baseline_loss = total_loss_tensor.item()
-
                 loss_keys = sorted(baseline_losses_local.keys())
                 losses_values = [baseline_losses_local[k] for k in loss_keys]
                 losses_tensor = torch.tensor(losses_values, device=self.device)
                 dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
 
+                world_size = dist.get_world_size()
+                total_loss_tensor /= world_size
+                losses_tensor /= world_size
+
+                self.baseline_loss = total_loss_tensor.item()
                 self.baseline_losses = dict(zip(loss_keys, losses_tensor.cpu().numpy()))
             else:
                 # If not distributed, local is global
