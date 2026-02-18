@@ -101,7 +101,7 @@ def adapt_configs(config_strings):
             infer_config_string.replace(
                 "project_root: .", f"project_root: {test_project_name}"
             )
-            .replace("model_type: PLEASE_FILL", "model_type: generative")
+            .replace("model_type: PLEASE FILL", "model_type: generative")
             .replace(
                 "metadata_config_path: PLEASE FILL",
                 f"metadata_config_path: {test_project_name}/configs/metadata_configs/test-data-categorical-1.json",

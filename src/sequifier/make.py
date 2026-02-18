@@ -67,7 +67,7 @@ training_spec:
 
 infer_config_string = """project_root: .
 metadata_config_path: PLEASE FILL
-model_type: PLEASE_FILL # generative or embedding
+model_type: PLEASE FILL # generative or embedding
 model_path: PLEASE FILL
 data_path: PLEASE FILL
 
