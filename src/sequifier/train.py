@@ -1287,11 +1287,16 @@ class TransformerModel(nn.Module):
                 if self.device == "cuda":
                     torch.cuda.empty_cache()
 
-        # 1. Sum the losses calculated on this GPU process
-        total_loss_local = np.mean(total_loss_collect)
-        total_losses_local = {
-            col: np.mean(loss_list) for col, loss_list in total_losses_collect.items()
-        }
+        if len(total_loss_collect) > 0:
+            total_loss_local = np.mean(total_loss_collect)
+            total_losses_local = {
+                col: np.mean(loss_list)
+                for col, loss_list in total_losses_collect.items()
+            }
+        else:
+            # Handle empty validation set case
+            total_loss_local = -1.0
+            total_losses_local = {col: -1.0 for col in self.target_columns}
 
         # 2. Aggregate losses across all GPUs if in distributed mode
         if self.hparams.training_spec.distributed:
