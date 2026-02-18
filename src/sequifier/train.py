@@ -1352,7 +1352,9 @@ class TransformerModel(nn.Module):
                 targets_for_baseline = {}
                 for col in self.target_columns:
                     if col in data:
-                        pseudo_output[col] = self._transform_val(col, data[col])
+                        pseudo_output[col] = self._transform_val(
+                            col, data[col].transpose(0, 1)
+                        )
                         targets_for_baseline[col] = targets[col]
 
                 if len(pseudo_output) > 0:
