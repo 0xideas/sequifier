@@ -903,6 +903,11 @@ class TransformerModel(nn.Module):
         last_epoch = None
         best_model = None
         try:
+            if self.start_epoch == 1:
+                total_loss, total_losses, output = self._evaluate(valid_loader)
+                elapsed = 0.0
+
+                self._log_epoch_results(0, elapsed, total_loss, total_losses, output)
             for epoch in range(self.start_epoch, self.hparams.training_spec.epochs + 1):
                 if (
                     self.early_stopping_epochs is None
