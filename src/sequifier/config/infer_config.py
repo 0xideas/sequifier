@@ -49,13 +49,14 @@ def load_inferer_config(
         config_values["categorical_columns"] = [
             col
             for col, type_ in metadata_config["column_types"].items()
-            if "int64" in type_.lower() and col in config_values["input_columns"]
+            if "int" in type_.lower() and col in config_values["input_columns"]
         ]
         config_values["real_columns"] = [
             col
             for col, type_ in metadata_config["column_types"].items()
-            if "float64" in type_.lower() and col in config_values["input_columns"]
+            if "float" in type_.lower() and col in config_values["input_columns"]
         ]
+
         if not (
             len(config_values["real_columns"] + config_values["categorical_columns"])
             > 0
