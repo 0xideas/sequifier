@@ -1307,6 +1307,10 @@ class TransformerModel(nn.Module):
             dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
             dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
 
+            world_size = dist.get_world_size()
+            total_loss_tensor /= world_size
+            losses_tensor /= world_size
+
             # Update local variables with the aggregated global results
             total_loss_global = total_loss_tensor.cpu().numpy()
             losses_global_values = losses_tensor.cpu().numpy()
@@ -1366,13 +1370,16 @@ class TransformerModel(nn.Module):
                     baseline_loss_local, device=self.device
                 )
                 dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
-                self.baseline_loss = total_loss_tensor.item()
-
                 loss_keys = sorted(baseline_losses_local.keys())
                 losses_values = [baseline_losses_local[k] for k in loss_keys]
                 losses_tensor = torch.tensor(losses_values, device=self.device)
                 dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
 
+                world_size = dist.get_world_size()
+                total_loss_tensor /= world_size
+                losses_tensor /= world_size
+
+                self.baseline_loss = total_loss_tensor.item()
                 self.baseline_losses = dict(zip(loss_keys, losses_tensor.cpu().numpy()))
             else:
                 # If not distributed, local is global
