@@ -119,7 +119,6 @@ def adapt_configs(config_strings):
             .replace("seq_length: 48", "seq_length: 10")
             .replace("autoregression: true", "autoregression: false")
             .replace("EXAMPLE_TARGET_COLUMN_NAME: real", "itemId: categorical")
-            .replace("map_to_id: false", "map_to_id: true")
         )
 
     with open(infer_config_path, "w") as f:
