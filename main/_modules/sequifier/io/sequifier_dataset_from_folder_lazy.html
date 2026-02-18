@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/io/sequifier_dataset_from_folder_lazy.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.io.sequifier_dataset_from_folder_lazy - sequifier v1.1.0.0 documentation</title>
+        <title>sequifier.io.sequifier_dataset_from_folder_lazy - sequifier v1.1.0.1 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v1.1.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v1.1.0.1 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.1.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.1.0.1 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -338,9 +338,11 @@
             <span class="p">],</span>
         <span class="p">]</span> <span class="o">=</span> <span class="n">collections</span><span class="o">.</span><span class="n">OrderedDict</span><span class="p">()</span>
 
+        <span class="bp">self</span><span class="o">.</span><span class="n">max_cache_files</span> <span class="o">=</span> <span class="mi">2</span>
+
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">&quot;[INFO] Initialized lazy dataset from </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="si">}</span><span class="s2">. &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;Total samples: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2">. RAM threshold in GB: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_ram_gb</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;Total samples: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2">. RAM threshold in GB: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_ram_gb</span><span class="si">}</span><span class="s2">, max cache files: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_cache_files</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="p">)</span></div>
 
 <div class="viewcode-block" id="SequifierDatasetFromFolderLazy.__len__"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__len__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
@@ -375,20 +377,35 @@
 
         <span class="k">return</span> <span class="n">local_index</span><span class="p">,</span> <span class="n">file_path</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">_evict_lru_items</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Checks system memory and evicts least recently used items from the cache</span>
-<span class="sd">        until usage is below the threshold. This method must be called from</span>
-<span class="sd">        within a locked context.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">while</span> <span class="n">psutil</span><span class="o">.</span><span class="n">virtual_memory</span><span class="p">()</span><span class="o">.</span><span class="n">used</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_ram_bytes</span><span class="p">:</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">:</span>
-                <span class="c1"># Cache is empty, but memory is still high. Nothing to evict.</span>
-                <span class="k">break</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_get_memory_usage_percent</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># Try cgroup v2</span>
+        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="s2">&quot;/sys/fs/cgroup/memory.current&quot;</span><span class="p">):</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">&quot;/sys/fs/cgroup/memory.current&quot;</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">used</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">())</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">&quot;/sys/fs/cgroup/memory.max&quot;</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">limit_str</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+                <span class="c1"># Handle &#39;max&#39; which means no limit</span>
+                <span class="n">limit</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">limit_str</span><span class="p">)</span> <span class="k">if</span> <span class="n">limit_str</span> <span class="o">!=</span> <span class="s2">&quot;max&quot;</span> <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_ram_bytes</span>
+            <span class="k">return</span> <span class="n">used</span> <span class="o">/</span> <span class="n">limit</span> <span class="k">if</span> <span class="n">limit</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">0</span>
 
-            <span class="c1"># popitem(last=False) removes and returns the (key, value) pair that</span>
-            <span class="c1"># was first inserted, effectively implementing the LRU policy.</span>
-            <span class="n">evicted_path</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="o">.</span><span class="n">popitem</span><span class="p">(</span><span class="n">last</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="c1"># Try cgroup v1</span>
+        <span class="k">elif</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="s2">&quot;/sys/fs/cgroup/memory/memory.usage_in_bytes&quot;</span><span class="p">):</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">&quot;/sys/fs/cgroup/memory/memory.usage_in_bytes&quot;</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">used</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">())</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">&quot;/sys/fs/cgroup/memory/memory.limit_in_bytes&quot;</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">limit</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">())</span>
+            <span class="k">return</span> <span class="n">used</span> <span class="o">/</span> <span class="n">limit</span> <span class="k">if</span> <span class="n">limit</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">0</span>
+
+        <span class="c1"># Fallback to psutil (host memory)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">psutil</span><span class="o">.</span><span class="n">virtual_memory</span><span class="p">()</span><span class="o">.</span><span class="n">percent</span> <span class="o">/</span> <span class="mf">100.0</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_evict_lru_items</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># Evict if usage &gt; 90% of limit (safety buffer)</span>
+        <span class="k">while</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_memory_usage_percent</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mf">0.90</span><span class="p">:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">:</span>
+                <span class="k">break</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="o">.</span><span class="n">popitem</span><span class="p">(</span><span class="n">last</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 
 <div class="viewcode-block" id="SequifierDatasetFromFolderLazy.__getitem__"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__getitem__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__getitem__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">:</span> <span class="nb">int</span>
@@ -415,55 +432,46 @@
             <span class="k">raise</span> <span class="ne">IndexError</span><span class="p">(</span>
                 <span class="sa">f</span><span class="s2">&quot;Index </span><span class="si">{</span><span class="n">idx</span><span class="si">}</span><span class="s2"> is out of range for dataset with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2"> samples.&quot;</span>
             <span class="p">)</span>
-
         <span class="n">local_index</span><span class="p">,</span> <span class="n">file_path</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_find_file_for_index</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
 
-        <span class="c1"># Acquire lock to ensure atomic cache operations</span>
-        <span class="c1"># 1. Check for a cache hit</span>
+        <span class="c1"># 1. Check if file is already in cache</span>
         <span class="k">if</span> <span class="n">file_path</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">:</span>
-            <span class="c1"># Mark as recently used by moving it to the end of the OrderedDict.</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="o">.</span><span class="n">move_to_end</span><span class="p">(</span><span class="n">file_path</span><span class="p">)</span>
-            <span class="p">(</span>
-                <span class="n">sequences_batch</span><span class="p">,</span>
-                <span class="n">targets_batch</span><span class="p">,</span>
-                <span class="n">sequence_id_tensor</span><span class="p">,</span>
-                <span class="n">subsequence_id_tensor</span><span class="p">,</span>
-                <span class="n">start_item_positions_tensor</span><span class="p">,</span>
-            <span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">[</span><span class="n">file_path</span><span class="p">]</span>
-
-        <span class="c1"># 2. Handle a cache miss</span>
+            <span class="n">data_tuple</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">[</span><span class="n">file_path</span><span class="p">]</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="c1"># Load the data from the .pt file from disk.</span>
-            <span class="p">(</span>
-                <span class="n">sequences_batch</span><span class="p">,</span>
-                <span class="n">targets_batch</span><span class="p">,</span>
-                <span class="n">sequence_id_tensor</span><span class="p">,</span>
-                <span class="n">subsequence_id_tensor</span><span class="p">,</span>
-                <span class="n">start_item_positions_tensor</span><span class="p">,</span>
-            <span class="p">)</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">file_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">)</span>
+            <span class="c1"># 2. PRE-EVICTION: Make space BEFORE loading</span>
+            <span class="c1"># If adding this file would exceed the limit, evict the oldest one first.</span>
+            <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_cache_files</span><span class="p">:</span>
+                <span class="c1"># remove oldest item (FIFO)</span>
+                <span class="n">evicted_path</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="o">.</span><span class="n">popitem</span><span class="p">(</span><span class="n">last</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+                <span class="c1"># Optional: Force garbage collection if memory is tight,</span>
+                <span class="c1"># though .clone() usually makes this automatic.</span>
+                <span class="c1"># import gc; gc.collect()</span>
 
-            <span class="c1"># Add the newly loaded data to the cache.</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">[</span><span class="n">file_path</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">sequences_batch</span><span class="p">,</span>
-                <span class="n">targets_batch</span><span class="p">,</span>
-                <span class="n">sequence_id_tensor</span><span class="p">,</span>
-                <span class="n">subsequence_id_tensor</span><span class="p">,</span>
-                <span class="n">start_item_positions_tensor</span><span class="p">,</span>
-            <span class="p">)</span>
+            <span class="c1"># 3. Load from disk (Safe now, as we made space)</span>
+            <span class="n">data_tuple</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">file_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">[</span><span class="n">file_path</span><span class="p">]</span> <span class="o">=</span> <span class="n">data_tuple</span>
 
-            <span class="c1"># After adding, check memory and evict old items if necessary.</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_evict_lru_items</span><span class="p">()</span>
+        <span class="c1"># Unpack</span>
+        <span class="p">(</span>
+            <span class="n">sequences_batch</span><span class="p">,</span>
+            <span class="n">targets_batch</span><span class="p">,</span>
+            <span class="n">sequence_id_tensor</span><span class="p">,</span>
+            <span class="n">subsequence_id_tensor</span><span class="p">,</span>
+            <span class="n">start_item_positions_tensor</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="n">data_tuple</span>
 
-        <span class="c1"># 3. Retrieve the specific sample from the (now cached) batch tensors.</span>
+        <span class="c1"># 4. CRITICAL: Use .clone() to sever the link to the cached file</span>
         <span class="n">train_seq_len</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
         <span class="n">sequence</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">,</span> <span class="o">-</span><span class="n">train_seq_len</span><span class="p">:]</span>
+            <span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">,</span> <span class="o">-</span><span class="n">train_seq_len</span><span class="p">:]</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
             <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">sequences_batch</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
         <span class="p">}</span>
         <span class="n">targets</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">,</span> <span class="o">-</span><span class="n">train_seq_len</span><span class="p">:]</span>
+            <span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">,</span> <span class="o">-</span><span class="n">train_seq_len</span><span class="p">:]</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
             <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">targets_batch</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
         <span class="p">}</span>
+
         <span class="k">return</span> <span class="p">(</span>
             <span class="n">sequence</span><span class="p">,</span>
             <span class="n">targets</span><span class="p">,</span>
@@ -503,7 +511,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=ec5a9817"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=48221c0e"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
