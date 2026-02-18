@@ -1288,9 +1288,9 @@ class TransformerModel(nn.Module):
                     torch.cuda.empty_cache()
 
         # 1. Sum the losses calculated on this GPU process
-        total_loss_local = np.sum(total_loss_collect)
+        total_loss_local = np.mean(total_loss_collect)
         total_losses_local = {
-            col: np.sum(loss_list) for col, loss_list in total_losses_collect.items()
+            col: np.mean(loss_list) for col, loss_list in total_losses_collect.items()
         }
 
         # 2. Aggregate losses across all GPUs if in distributed mode
@@ -1351,9 +1351,9 @@ class TransformerModel(nn.Module):
 
                 # Sum the losses for the local shard
             if len(baseline_loss_local_collect):
-                baseline_loss_local = np.sum(baseline_loss_local_collect)
+                baseline_loss_local = np.mean(baseline_loss_local_collect)
                 baseline_losses_local = {
-                    col: np.sum(loss_list)
+                    col: np.mean(loss_list)
                     for col, loss_list in baseline_losses_local_collect.items()
                 }
             else:
