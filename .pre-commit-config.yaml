@@ -55,3 +55,13 @@ repos:
         files: ^(pyproject\.toml|.github/workflows/docs.yml)$
         pass_filenames: false
         additional_dependencies: [tomli]
+
+  - repo: local
+    hooks:
+      - id: consolidate-docs
+        name: Consolidate configuration documentation
+        entry: python hooks/consolidate_docs.py
+        language: python
+        # Only trigger if the README or the specific config files change
+        files: ^(README\.md|documentation/configs/.*\.md)$
+        pass_filenames: false
