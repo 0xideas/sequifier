@@ -22,10 +22,10 @@ def visualize_training(args):
     # 2. Extract logs per model
     all_data = {}
     for model in models:
-        log_pattern = os.path.join("logs", f"sequifier-{model}-rank0-3.txt")
+        log_pattern = os.path.join("logs", f"sequifier-{model}-rank*-3.txt")
         log_files = glob.glob(log_pattern)
         if not log_files:
-            log_pattern = os.path.join("logs", f"sequifier-{model}-rank0-2.txt")
+            log_pattern = os.path.join("logs", f"sequifier-{model}-rank*-2.txt")
             log_files = glob.glob(log_pattern)
         if not log_files:
             raise FileNotFoundError(f"No log files found for model {model}")
@@ -120,10 +120,37 @@ def visualize_training(args):
 
         train_x = []
         train_y = []
+        bucket_batches = getattr(args, "bucket_training_batches", None)
+
         for epoch in sorted(list(train_losses.keys())):
-            for batch, num_batches, loss in train_losses[epoch]:
-                train_x.append(epoch - 1 + batch / num_batches)
-                train_y.append(loss)
+            epoch_data = train_losses[epoch]
+            if not epoch_data:
+                continue
+
+            if bucket_batches is not None:
+                if len(epoch_data) > 1:
+                    log_interval = epoch_data[1][0] - epoch_data[0][0]
+                else:
+                    log_interval = epoch_data[0][0]
+
+                if log_interval == 0:
+                    log_interval = 1
+                if bucket_batches % log_interval != 0:
+                    raise ValueError(
+                        f"Model {model} Epoch {epoch}: --bucket-training-batches ({bucket_batches}) must be a multiple of the logged batch interval ({log_interval})."
+                    )
+
+                chunk_size = bucket_batches // log_interval
+                for i in range(0, len(epoch_data), chunk_size):
+                    chunk = epoch_data[i : i + chunk_size]
+                    avg_loss = sum(c[2] for c in chunk) / len(chunk)
+                    last_batch, num_batches = chunk[-1][0], chunk[-1][1]
+                    train_x.append(epoch - 1 + last_batch / num_batches)
+                    train_y.append(avg_loss)
+            else:
+                for batch, num_batches, loss in epoch_data:
+                    train_x.append(epoch - 1 + batch / num_batches)
+                    train_y.append(loss)
 
         all_data[model] = {
             "val_x": val_x,
@@ -164,8 +191,14 @@ def visualize_training(args):
                 )
             )
         fig1.update_layout(
-            title=f"Global Losses: {model}", xaxis_title="Epoch", yaxis_title="Loss"
+            title=f"Global Losses: {model}",
+            xaxis_title="Epoch",
+            yaxis_title="Loss",
+            xaxis=dict(dtick=1),
         )
+
+        if getattr(args, "log_scale", False):
+            fig1.update_yaxes(type="log")
 
         for var, epoch_dict in data["var_losses"].items():
             epochs = sorted(list(epoch_dict.keys()))
@@ -183,7 +216,11 @@ def visualize_training(args):
             title="Normalized Variable Validation Losses",
             xaxis_title="Epoch",
             yaxis_title="Loss / Epoch 0 Loss",
+            xaxis=dict(dtick=1),
         )
+
+        if getattr(args, "log_scale", False):
+            fig2.update_yaxes(type="log")
 
         out_path = os.path.join("outputs", f"{model}_training_visualization.html")
 
@@ -235,11 +272,22 @@ def visualize_training(args):
             )
 
         fig1.update_layout(
-            title="Validation Losses", xaxis_title="Epoch", yaxis_title="Loss"
+            title="Validation Losses",
+            xaxis_title="Epoch",
+            yaxis_title="Loss",
+            xaxis=dict(dtick=1),
         )
         fig2.update_layout(
-            title="Training Losses", xaxis_title="Epoch", yaxis_title="Loss"
+            title="Training Losses",
+            xaxis_title="Epoch",
+            yaxis_title="Loss",
+            xaxis=dict(dtick=1),
         )
+
+        if getattr(args, "log_scale", False):
+            fig1.update_yaxes(type="log")
+            fig2.update_yaxes(type="log")
+
         out_path = os.path.join("outputs", "multi_model_training_visualization.html")
 
     # 4. Generate Responsive HTML using inline CSS flexbox constraints

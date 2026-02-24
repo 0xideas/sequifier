@@ -78,11 +78,6 @@ def setup_parser() -> ArgumentParser:
     parser_visualize_training = subparsers.add_parser(
         "visualize-training", help="Visualize training losses"
     )
-    parser_visualize_training.add_argument(
-        "models",
-        type=str,
-        help="Model name, comma-separated names, or path to txt file containing model names",
-    )
 
     for subparser in [
         parser_preprocess,
@@ -123,6 +118,22 @@ def setup_parser() -> ArgumentParser:
 
     parser_infer.add_argument("-mp", "--model-path", type=str)
     parser_infer.add_argument("-s", "--seed", type=int)
+
+    parser_visualize_training.add_argument(
+        "models",
+        type=str,
+        help="Model name, comma-separated names, or path to txt file containing model names",
+    )
+    parser_visualize_training.add_argument(
+        "--log-scale",
+        action="store_true",
+        help="Use a logarithmic scale on the y-axis",
+    )
+    parser_visualize_training.add_argument(
+        "--bucket-training-batches",
+        type=int,
+        help="Bucket the training batches by taking the average loss over a specified number of batches. Must be a multiple of the logged batch interval.",
+    )
 
     return parser
 
