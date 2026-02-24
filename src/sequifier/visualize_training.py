@@ -47,7 +47,7 @@ def visualize_training(args):
 
         for line in lines:
             val_match = re.search(
-                r"Validation\s+\|\s*Epoch:\s+(\d+)\s+\|\s*Loss:\s*([^\s\|]+)\s+\|\s*Baseline Loss:\s*([^\s\|]+)",
+                r"Validation\s+\|\s*Epoch:\s*(\d+)\s+\|\s*Loss:\s*([\d\.e+-]+)\s+\|\s*Baseline Loss:\s*([\d\.e+-]+)",
                 line,
             )
             if val_match:
@@ -84,7 +84,7 @@ def visualize_training(args):
                 continue
 
             train_match = re.search(
-                r"Epoch\s+(\d+)\s+\|\s*Batch\s+(\d+)/\s*(\d+)\s+\|\s*Loss:\s*([^\s\|]+)",
+                r"Epoch\s*(\d+)\s+\|\s*Batch\s*(\d+)/\s*(\d+)\s+\|\s*Loss:\s*([\d\.e+-]+)",
                 line,
             )
             if train_match:
@@ -173,11 +173,11 @@ def visualize_training(args):
                     chunk = epoch_data[i : i + chunk_size]
                     avg_loss = sum(c[2] for c in chunk) / len(chunk)
                     last_batch, num_batches = chunk[-1][0], chunk[-1][1]
-                    train_x.append(epoch - 1 + last_batch / num_batches)
+                    train_x.append(round(epoch - 1 + last_batch / num_batches, 8))
                     train_y.append(avg_loss)
             else:
                 for batch, num_batches, loss in epoch_data:
-                    train_x.append(epoch - 1 + batch / num_batches)
+                    train_x.append(round(epoch - 1 + batch / num_batches, 8))
                     train_y.append(loss)
 
         if not train_x:
@@ -337,17 +337,24 @@ def visualize_training(args):
 <head>
     <title>Training Visualization</title>
     <style>
-        body {{ font-family: sans-serif; margin: 0; padding: 0; }}
+        body {{ font-family: sans-serif; margin: 0; padding: 0; overflow-x: hidden; }}
         .container {{ display: flex; flex-wrap: wrap; width: 100%; }}
-        .plot {{ flex: 1 1 50%; min-width: 400px; box-sizing: border-box; padding: 10px; }}
-        @media (max-width: 800px) {{ .plot {{ flex: 1 1 100%; }} }}
+        /* Added max-width to strictly constrain Plotly's initial canvas calculation */
+        .plot {{ flex: 1 1 50%; min-width: 400px; max-width: 50%; box-sizing: border-box; padding: 10px; }}
+        /* Reset max-width for mobile stacking */
+        @media (max-width: 800px) {{ .plot {{ flex: 1 1 100%; max-width: 100%; }} }}
     </style>
 </head>
 <body>
     <div class="container"><div class="plot">{html1}</div><div class="plot">{html2}</div></div>
+
+    <script>
+        window.addEventListener('load', function() {{
+            window.dispatchEvent(new Event('resize'));
+        }});
+    </script>
 </body>
 </html>"""
-
     with open(out_path, "w") as f:
         f.write(html_template)
     print(f"Visualization HTML generated and saved successfully to {out_path}")
