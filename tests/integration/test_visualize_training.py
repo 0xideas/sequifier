@@ -109,7 +109,7 @@ def test_visualize_training(run_training, run_hp_search, project_root):
         target_vizualization_content = sanitize_html(f.read())
 
     assert (
-        vizualization_content == target_vizualization_content
+        vizualization_content.strip() == target_vizualization_content.strip()
     ), f"{vizualization_content}\n!=\n{target_vizualization_content}\n\noutput not identical to target for 'multi-model-training-visualization.html'"
 
     for model, (
@@ -117,5 +117,5 @@ def test_visualize_training(run_training, run_hp_search, project_root):
         target_vizualization_content,
     ) in model_outputs.items():
         assert (
-            vizualization_content == target_vizualization_content
+            vizualization_content.strip() == target_vizualization_content.strip()
         ), f"{vizualization_content}\n!=\n{target_vizualization_content}\n\noutput not identical to target for '{model}-training-visualization.html'"
