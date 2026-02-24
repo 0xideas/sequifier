@@ -47,7 +47,7 @@ def test_visualize_training(run_training, run_hp_search, project_root):
     assert len(hp_models_grid) > 0, "No hp grid models found in logs directory"
 
     # 1. Test running visualize-training for each model individually
-    model_outputs = {}
+    # model_outputs = {}
     for model in single_models:
         # visualize_training.py expects to find "logs/" relative to the working directory
         command = f"sequifier visualize-training {model} --project-root {project_root}"
@@ -63,20 +63,20 @@ def test_visualize_training(run_training, run_hp_search, project_root):
             output_path
         ), f"Visualization output not found for {model}"
 
-        with open(output_path, "r") as f:
-            vizualization_content = sanitize_html(f.read())
+        # with open(output_path, "r") as f:
+        #    vizualization_content = sanitize_html(f.read())
 
-        target_output_path = os.path.join(
-            "tests",
-            "resources",
-            "target_outputs",
-            "visualization",
-            f"{model}-training-visualization.html",
-        )
-        with open(target_output_path, "r") as f:
-            target_vizualization_content = sanitize_html(f.read())
+        # target_output_path = os.path.join(
+        #    "tests",
+        #    "resources",
+        #    "target_outputs",
+        #    "visualization",
+        #    f"{model}-training-visualization.html",
+        # )
+        # with open(target_output_path, "r") as f:
+        #    target_vizualization_content = sanitize_html(f.read())
 
-        model_outputs[model] = (vizualization_content, target_vizualization_content)
+        # model_outputs[model] = (vizualization_content, target_vizualization_content)
 
     # 2. Test running visualize-training for all models jointly
     models_str = ",".join(hp_models_grid)
@@ -94,19 +94,19 @@ def test_visualize_training(run_training, run_hp_search, project_root):
 
     assert os.path.exists(output_path_joint), "Joint visualization output not found"
 
-    with open(output_path_joint, "r") as f:
-        vizualization_content = sanitize_html(f.read())
+    # with open(output_path_joint, "r") as f:
+    #    vizualization_content = sanitize_html(f.read())
 
-    target_output_path = os.path.join(
-        "tests",
-        "resources",
-        "target_outputs",
-        "visualization",
-        "multi-model-training-visualization.html",
-    )
+    # target_output_path = os.path.join(
+    #    "tests",
+    #    "resources",
+    #    "target_outputs",
+    #    "visualization",
+    #    "multi-model-training-visualization.html",
+    # )
 
-    with open(target_output_path, "r") as f:
-        target_vizualization_content = sanitize_html(f.read())
+    # with open(target_output_path, "r") as f:
+    #    target_vizualization_content = sanitize_html(f.read())
 
     # assert (
     #    vizualization_content.strip() == target_vizualization_content.strip()
