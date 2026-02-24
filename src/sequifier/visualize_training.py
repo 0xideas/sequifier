@@ -28,7 +28,9 @@ def visualize_training(args):
             log_pattern = os.path.join("logs", f"sequifier-{model}-rank*-2.txt")
             log_files = glob.glob(log_pattern)
         if not log_files:
-            raise FileNotFoundError(f"No log files found for model {model}")
+            raise FileNotFoundError(
+                f"No log files found for model '{model}' matching the expected pattern."
+            )
 
         # Use the first matched log file
         log_file = log_files[0]
@@ -53,7 +55,7 @@ def visualize_training(args):
                 val_loss = float(val_match.group(2))
                 baseline = float(val_match.group(3))
 
-                # A new sequence run resets at Validation 0
+                # A new sequence run resets at Validation 0. Clear everything prior.
                 if epoch == 0:
                     val_losses.clear()
                     baseline_losses.clear()
@@ -91,6 +93,8 @@ def visualize_training(args):
                 num_batches = int(train_match.group(3))
                 loss = float(train_match.group(4))
 
+                print(f"{epoch = }, {batch = }, {num_batches = }, {loss = }")
+
                 # Restart on Epoch 1 if skipped Epoch 0
                 if epoch == 1 and batch == 1:
                     if 0 not in val_losses:
@@ -100,18 +104,36 @@ def visualize_training(args):
                         train_losses.clear()
                     else:
                         train_losses.clear()
-                        for k in list(val_losses.keys()):
-                            if k != 0:
-                                del val_losses[k]
-                        for k in list(baseline_losses.keys()):
-                            if k != 0:
-                                del baseline_losses[k]
+                        # Keep only Epoch 0 data
+                        val_losses = {0: val_losses[0]} if 0 in val_losses else {}
+                        baseline_losses = (
+                            {0: baseline_losses[0]} if 0 in baseline_losses else {}
+                        )
                         for v_name in var_losses:
-                            for k in list(var_losses[v_name].keys()):
-                                if k != 0:
-                                    del var_losses[v_name][k]
+                            var_losses[v_name] = (
+                                {0: var_losses[v_name][0]}
+                                if 0 in var_losses[v_name]
+                                else {}
+                            )
 
-                train_losses.setdefault(epoch, []).append((batch, num_batches, loss))
+                # Dictionary overwrites previous attempts if a mid-epoch crash occurred
+                if epoch not in train_losses:
+                    train_losses[epoch] = {}
+                train_losses[epoch][batch] = (num_batches, loss)
+
+        # 3. Validate extracted data
+        if not train_losses:
+            raise ValueError(
+                f"Data Error in '{model}': No valid training loss data found after the last restart."
+            )
+        if not val_losses:
+            raise ValueError(
+                f"Data Error in '{model}': No valid validation loss data found after the last restart."
+            )
+        if not baseline_losses:
+            raise ValueError(
+                f"Data Error in '{model}': No baseline loss data found in the logs."
+            )
 
         # Format points
         val_x = sorted(list(val_losses.keys()))
@@ -123,9 +145,15 @@ def visualize_training(args):
         bucket_batches = getattr(args, "bucket_training_batches", None)
 
         for epoch in sorted(list(train_losses.keys())):
-            epoch_data = train_losses[epoch]
-            if not epoch_data:
+            epoch_dict = train_losses[epoch]
+            if not epoch_dict:
                 continue
+
+            # Extract perfectly chronological lists from our batch dictionary
+            epoch_data = [
+                (b, epoch_dict[b][0], epoch_dict[b][1])
+                for b in sorted(epoch_dict.keys())
+            ]
 
             if bucket_batches is not None:
                 if len(epoch_data) > 1:
@@ -152,6 +180,11 @@ def visualize_training(args):
                     train_x.append(epoch - 1 + batch / num_batches)
                     train_y.append(loss)
 
+        if not train_x:
+            raise ValueError(
+                f"Data Error in '{model}': Training arrays are empty after formatting."
+            )
+
         all_data[model] = {
             "val_x": val_x,
             "val_y": val_y,
@@ -165,7 +198,7 @@ def visualize_training(args):
     fig1 = go.Figure()
     fig2 = go.Figure()
 
-    # 3. Create Plots based on input cardinality
+    # 4. Create Plots based on input cardinality
     if len(models) == 1:
         model = models[0]
         data = all_data[model]
@@ -200,27 +233,32 @@ def visualize_training(args):
         if getattr(args, "log_scale", False):
             fig1.update_yaxes(type="log")
 
-        for var, epoch_dict in data["var_losses"].items():
-            epochs = sorted(list(epoch_dict.keys()))
-            if not epochs:
-                continue
-            base_val = epoch_dict[epochs[0]]
-            y_norm = [
-                epoch_dict[e] / base_val
-                if base_val != 0 and not np.isnan(base_val)
-                else epoch_dict[e]
-                for e in epochs
-            ]
-            fig2.add_trace(go.Scatter(x=epochs, y=y_norm, mode="lines", name=var))
-        fig2.update_layout(
-            title="Normalized Variable Validation Losses",
-            xaxis_title="Epoch",
-            yaxis_title="Loss / Epoch 0 Loss",
-            xaxis=dict(dtick=1),
-        )
+        if "var_losses" in data and data["var_losses"]:
+            for var, epoch_dict in data["var_losses"].items():
+                epochs = sorted(list(epoch_dict.keys()))
+                if not epochs:
+                    continue
+                base_val = epoch_dict[epochs[0]]
+                y_norm = [
+                    epoch_dict[e] / base_val
+                    if base_val != 0 and not np.isnan(base_val)
+                    else epoch_dict[e]
+                    for e in epochs
+                ]
+                fig2.add_trace(go.Scatter(x=epochs, y=y_norm, mode="lines", name=var))
+            fig2.update_layout(
+                title="Normalized Variable Validation Losses",
+                xaxis_title="Epoch",
+                yaxis_title="Loss / Epoch 0 Loss",
+                xaxis=dict(dtick=1),
+            )
 
-        if getattr(args, "log_scale", False):
-            fig2.update_yaxes(type="log")
+            if getattr(args, "log_scale", False):
+                fig2.update_yaxes(type="log")
+        else:
+            print(
+                f"Warning: No variable validation losses found for model '{model}'. Second plot will be empty."
+            )
 
         out_path = os.path.join("outputs", f"{model}_training_visualization.html")
 
@@ -253,7 +291,7 @@ def visualize_training(args):
                         baseline_val, data["base_y"][0], rtol=1e-3, atol=1e-5
                     ) and not (np.isnan(baseline_val) and np.isnan(data["base_y"][0])):
                         raise ValueError(
-                            f"Baseline validation loss is not constant across models. Expected {baseline_val}, got {data['base_y'][0]} in model {model}"
+                            f"Baseline validation loss is not constant across models. Expected {baseline_val}, got {data['base_y'][0]} in model '{model}'"
                         )
 
         if baseline_val is not None:
@@ -290,7 +328,7 @@ def visualize_training(args):
 
         out_path = os.path.join("outputs", "multi_model_training_visualization.html")
 
-    # 4. Generate Responsive HTML using inline CSS flexbox constraints
+    # 5. Generate Responsive HTML using inline CSS flexbox constraints
     html1 = fig1.to_html(full_html=False, include_plotlyjs="cdn")
     html2 = fig2.to_html(full_html=False, include_plotlyjs=False)
 
