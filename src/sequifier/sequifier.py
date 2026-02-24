@@ -135,6 +135,13 @@ def setup_parser() -> ArgumentParser:
         help="Bucket the training batches by taking the average loss over a specified number of batches. Must be a multiple of the logged batch interval.",
     )
 
+    parser_visualize_training.add_argument(
+        "--project-root",
+        type=str,
+        default=".",
+        help="Path to the project root directory.",
+    )
+
     return parser
 
 

@@ -22,10 +22,14 @@ def visualize_training(args):
     # 2. Extract logs per model
     all_data = {}
     for model in models:
-        log_pattern = os.path.join("logs", f"sequifier-{model}-rank0-3.txt")
+        log_pattern = os.path.join(
+            args.project_root, "logs", f"sequifier-{model}-rank0-3.txt"
+        )
         log_files = glob.glob(log_pattern)
         if not log_files:
-            log_pattern = os.path.join("logs", f"sequifier-{model}-rank0-2.txt")
+            log_pattern = os.path.join(
+                args.project_root, "logs", f"sequifier-{model}-rank0-2.txt"
+            )
             log_files = glob.glob(log_pattern)
         if not log_files:
             raise FileNotFoundError(
@@ -198,6 +202,9 @@ def visualize_training(args):
     fig1 = go.Figure()
     fig2 = go.Figure()
 
+    os.makedirs(
+        os.path.join(args.project_root, "outputs", "visualization"), exist_ok=True
+    )
     # 4. Create Plots based on input cardinality
     if len(models) == 1:
         model = models[0]
@@ -260,7 +267,12 @@ def visualize_training(args):
                 f"Warning: No variable validation losses found for model '{model}'. Second plot will be empty."
             )
 
-        out_path = os.path.join("outputs", f"{model}_training_visualization.html")
+        out_path = os.path.join(
+            args.project_root,
+            "outputs",
+            "visualization",
+            f"{model}-training-visualization.html",
+        )
 
     else:
         baseline_val = None
@@ -326,7 +338,12 @@ def visualize_training(args):
             fig1.update_yaxes(type="log")
             fig2.update_yaxes(type="log")
 
-        out_path = os.path.join("outputs", "multi_model_training_visualization.html")
+        out_path = os.path.join(
+            args.project_root,
+            "outputs",
+            "visualization",
+            "multi-model-training-visualization.html",
+        )
 
     # 5. Generate Responsive HTML using inline CSS flexbox constraints
     html1 = fig1.to_html(full_html=False, include_plotlyjs="cdn")
