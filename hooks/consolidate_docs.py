@@ -27,7 +27,7 @@ def main():
         consolidated_content.append(path.read_text(encoding="utf-8"))
 
     # 3. Join with newlines to preserve markdown structure between files
-    final_content = "\n\n".join(consolidated_content) + "\n"
+    final_content = "\n\n".join(consolidated_content)
 
     output_path = Path(OUTPUT_FILE)
 
