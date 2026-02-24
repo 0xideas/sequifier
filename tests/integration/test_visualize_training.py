@@ -1,7 +1,30 @@
 import glob
 import os
+import re
 
 from conftest import run_and_log
+
+
+def sanitize_html(text):
+    """
+    Sanitizes dynamic content from Plotly HTML outputs to allow structural testing.
+    """
+    # 1. Strip standard 36-character UUIDs (Plotly container IDs)
+    text = re.sub(
+        r"(?i)[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", "CONTAINER_UUID", text
+    )
+
+    # 2. Strip 8-character Plotly trace UIDs
+    text = re.sub(r'(?i)"uid":\s*"[0-9a-f]{8}"', '"uid": "TRACE_UID"', text)
+
+    # 3. Strip CDN script integrity hashes (e.g., sha256-...)
+    text = re.sub(r'integrity="[^"]+"', 'integrity="STRIPPED_HASH"', text)
+
+    # 4. Strip specific plotted numbers in x and y data arrays
+    # This finds "x": [...] or "y": [...] and empties the flat arrays to just []
+    text = re.sub(r'("[xy]":\s*)\[[^\]\[\{\}]*\]', r"\1[]", text)
+
+    return text
 
 
 def test_visualize_training(run_training, run_hp_search, project_root):
@@ -24,6 +47,7 @@ def test_visualize_training(run_training, run_hp_search, project_root):
     assert len(hp_models_grid) > 0, "No hp grid models found in logs directory"
 
     # 1. Test running visualize-training for each model individually
+    model_outputs = {}
     for model in single_models:
         # visualize_training.py expects to find "logs/" relative to the working directory
         command = f"sequifier visualize-training {model} --project-root {project_root}"
@@ -39,6 +63,21 @@ def test_visualize_training(run_training, run_hp_search, project_root):
             output_path
         ), f"Visualization output not found for {model}"
 
+        with open(output_path, "r") as f:
+            vizualization_content = sanitize_html(f.read())
+
+        target_output_path = os.path.join(
+            "tests",
+            "resources",
+            "target_outputs",
+            "visualization",
+            f"{model}-training-visualization.html",
+        )
+        with open(target_output_path, "r") as f:
+            target_vizualization_content = sanitize_html(f.read())
+
+        model_outputs[model] = (vizualization_content, target_vizualization_content)
+
     # 2. Test running visualize-training for all models jointly
     models_str = ",".join(hp_models_grid)
     command_joint = (
@@ -52,4 +91,31 @@ def test_visualize_training(run_training, run_hp_search, project_root):
         "visualization",
         "multi-model-training-visualization.html",
     )
+
     assert os.path.exists(output_path_joint), "Joint visualization output not found"
+
+    with open(output_path_joint, "r") as f:
+        vizualization_content = sanitize_html(f.read())
+
+    target_output_path = os.path.join(
+        "tests",
+        "resources",
+        "target_outputs",
+        "visualization",
+        "multi-model-training-visualization.html",
+    )
+
+    with open(target_output_path, "r") as f:
+        target_vizualization_content = sanitize_html(f.read())
+
+    assert (
+        vizualization_content == target_vizualization_content
+    ), f"{vizualization_content}\n!=\n{target_vizualization_content}\n\noutput not identical to target for 'multi-model-training-visualization.html'"
+
+    for model, (
+        vizualization_content,
+        target_vizualization_content,
+    ) in model_outputs.items():
+        assert (
+            vizualization_content == target_vizualization_content
+        ), f"{vizualization_content}\n!=\n{target_vizualization_content}\n\noutput not identical to target for '{model}-training-visualization.html'"
