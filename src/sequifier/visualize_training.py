@@ -22,10 +22,10 @@ def visualize_training(args):
     # 2. Extract logs per model
     all_data = {}
     for model in models:
-        log_pattern = os.path.join("logs", f"sequifier-{model}-rank*-3.txt")
+        log_pattern = os.path.join("logs", f"sequifier-{model}-rank0-3.txt")
         log_files = glob.glob(log_pattern)
         if not log_files:
-            log_pattern = os.path.join("logs", f"sequifier-{model}-rank*-2.txt")
+            log_pattern = os.path.join("logs", f"sequifier-{model}-rank0-2.txt")
             log_files = glob.glob(log_pattern)
         if not log_files:
             raise FileNotFoundError(
@@ -93,7 +93,7 @@ def visualize_training(args):
                 num_batches = int(train_match.group(3))
                 loss = float(train_match.group(4))
 
-                print(f"{epoch = }, {batch = }, {num_batches = }, {loss = }")
+                # print(f"{epoch = }, {batch = }, {num_batches = }, {loss = }")
 
                 # Restart on Epoch 1 if skipped Epoch 0
                 if epoch == 1 and batch == 1:
