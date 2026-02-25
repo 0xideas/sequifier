@@ -3,7 +3,7 @@ import glob
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 import plotly.graph_objects as go
@@ -45,10 +45,10 @@ class DataContinuityError(Exception):
 class TrainingMetrics:
     """Encapsulates all extracted metrics to avoid returning massive generic tuples."""
 
-    val_losses: Dict[int, float] = field(default_factory=dict)
-    baseline_losses: Dict[int, float] = field(default_factory=dict)
-    var_losses: Dict[str, Dict[Optional[int], float]] = field(default_factory=dict)
-    train_losses: Dict[int, Dict[int, Tuple[int, float]]] = field(default_factory=dict)
+    val_losses: dict[int, float] = field(default_factory=dict)
+    baseline_losses: dict[int, float] = field(default_factory=dict)
+    var_losses: dict[str, dict[Optional[int], float]] = field(default_factory=dict)
+    train_losses: dict[int, dict[int, tuple[int, float]]] = field(default_factory=dict)
 
     def clear_state(self) -> None:
         """Clears all metrics; used when a sequence run restarts."""
@@ -225,7 +225,7 @@ def parse_number(val: str) -> float:
     return np.nan if val == "NaN" else float(val)
 
 
-def parse_args_to_models(args: argparse.Namespace) -> List[str]:
+def parse_args_to_models(args: argparse.Namespace) -> list[str]:
     """Extracts the list of models from a file or comma-separated string."""
     if os.path.isfile(args.models) and args.models.endswith(".txt"):
         with open(args.models, "r") as f:
@@ -258,7 +258,7 @@ def get_log_filepath(args: argparse.Namespace, model: str) -> str:
 
 def format_plot_data(
     metrics: TrainingMetrics, bucket_batches: Optional[int], model: str
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Formats raw parsed dataclass metrics into chronological arrays for Plotly."""
     val_x = sorted(list(metrics.val_losses.keys()))
     val_y = [metrics.val_losses[e] for e in val_x]
@@ -320,7 +320,7 @@ def format_plot_data(
 # Plotting & Reporting
 # -------------------------------------------------------------------------
 def _generate_single_model_plot(
-    model: str, data: Dict[str, Any], yaxis_type: str, out_path: str
+    model: str, data: dict[str, Any], yaxis_type: str, out_path: str
 ) -> None:
     """Handles subplot logic specifically for a single model."""
     has_var_losses = bool(data.get("var_losses"))
@@ -394,7 +394,7 @@ def _generate_single_model_plot(
 
 
 def _generate_multi_model_plot(
-    models: List[str], all_data: Dict[str, Any], yaxis_type: str, out_path: str
+    models: list[str], all_data: dict[str, Any], yaxis_type: str, out_path: str
 ) -> None:
     """Handles subplot logic for comparing multiple models side-by-side."""
     fig = make_subplots(
@@ -460,7 +460,7 @@ def _generate_multi_model_plot(
 
 
 def generate_html_report(
-    all_data: Dict[str, Any], models: List[str], args: argparse.Namespace
+    all_data: dict[str, Any], models: list[str], args: argparse.Namespace
 ) -> None:
     """Router function to generate the appropriate HTML report based on model count."""
     output_dir = os.path.join(args.project_root, "outputs", "visualization")
