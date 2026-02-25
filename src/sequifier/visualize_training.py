@@ -6,8 +6,16 @@ import numpy as np
 import plotly.graph_objects as go
 
 
+def parse_number(val: str) -> float:
+    """Strictly parse numbers, explicitly handling the 'NaN' strings from format_number."""
+    val = val.strip()
+    if val == "NaN":
+        return np.nan
+    return float(val)
+
+
 def visualize_training(args):
-    # 1. Parse Input Argument
+    # 1. Parse Input Argument strictly
     if os.path.isfile(args.models) and args.models.endswith(".txt"):
         with open(args.models, "r") as f:
             content = f.read()
@@ -16,8 +24,7 @@ def visualize_training(args):
         models = [m.strip() for m in args.models.split(",") if m.strip()]
 
     if not models:
-        print("No models provided.")
-        return
+        raise ValueError("CRITICAL: No models provided to visualize.")
 
     # 2. Extract logs per model
     all_data = {}
@@ -31,9 +38,10 @@ def visualize_training(args):
                 args.project_root, "logs", f"sequifier-{model}-rank0-2.txt"
             )
             log_files = glob.glob(log_pattern)
+
         if not log_files:
             raise FileNotFoundError(
-                f"No log files found for model '{model}' matching the expected pattern."
+                f"CRITICAL: No log files found for model '{model}' matching the expected pattern."
             )
 
         # Use the first matched log file
@@ -44,100 +52,164 @@ def visualize_training(args):
         var_losses = {}
         train_losses = {}
 
-        with open(log_file, "r") as f:
-            lines = f.readlines()
-
         expect_var_losses = None
+        current_epoch = None
+        current_batch = None
+        expected_num_batches = None
 
-        for line in lines:
-            val_match = re.search(
-                r"Validation\s+\|\s*Epoch:\s*(\d+)\s+\|\s*Loss:\s*([\d\.e+-]+)\s+\|\s*Baseline Loss:\s*([\d\.e+-]+)",
-                line,
-            )
-            if val_match:
-                epoch = int(val_match.group(1))
-                val_loss = float(val_match.group(2))
-                baseline = float(val_match.group(3))
+        with open(log_file, "r") as f:
+            for line_num, line in enumerate(f, 1):
+                # STRICT MATCH: Validation
+                if "[INFO] Validation | Epoch:" in line:
+                    val_match = re.search(
+                        r"\[INFO\] Validation\s+\|\s*Epoch:\s*(\d+)\s+\|\s*Loss:\s*([^\s\|]+)\s+\|\s*Baseline Loss:\s*([^\s\|]+)",
+                        line,
+                    )
+                    if not val_match:
+                        raise ValueError(
+                            f"CRITICAL [Line {line_num}]: Malformed Validation log -> '{line.strip()}'"
+                        )
 
-                # A new sequence run resets at Validation 0. Clear everything prior.
-                if epoch == 0:
-                    val_losses.clear()
-                    baseline_losses.clear()
-                    var_losses.clear()
-                    train_losses.clear()
+                    epoch = int(val_match.group(1))
+                    val_loss = parse_number(val_match.group(2))
+                    baseline = parse_number(val_match.group(3))
 
-                val_losses[epoch] = val_loss
-                baseline_losses[epoch] = baseline
-                expect_var_losses = epoch
-                continue
-
-            if expect_var_losses is not None:
-                var_match = re.search(r"\[INFO\]\s+-\s+(.*)", line)
-                if var_match:
-                    content = var_match.group(1)
-                    parts = content.split(",")
-                    for p in parts:
-                        if ":" in p:
-                            var_name, v_loss = p.split(":")
-                            var_name = var_name.strip().replace("_loss", "")
-                            v_loss = float(v_loss.strip())
-                            var_losses.setdefault(var_name, {})[expect_var_losses] = (
-                                v_loss
-                            )
-                expect_var_losses = None
-                continue
-
-            train_match = re.search(
-                r"Epoch\s*(\d+)\s+\|\s*Batch\s*(\d+)/\s*(\d+)\s+\|\s*Loss:\s*([\d\.e+-]+)",
-                line,
-            )
-            if train_match:
-                epoch = int(train_match.group(1))
-                batch = int(train_match.group(2))
-                num_batches = int(train_match.group(3))
-                loss = float(train_match.group(4))
-
-                # print(f"{epoch = }, {batch = }, {num_batches = }, {loss = }")
-
-                # Restart on Epoch 1 if skipped Epoch 0
-                if epoch == 1 and batch == 1:
-                    if 0 not in val_losses:
+                    # A new sequence run resets at Validation 0. Clear everything prior.
+                    if epoch == 0 or (
+                        current_epoch is not None and epoch < current_epoch
+                    ):
                         val_losses.clear()
                         baseline_losses.clear()
                         var_losses.clear()
                         train_losses.clear()
-                    else:
-                        train_losses.clear()
-                        # Keep only Epoch 0 data
-                        val_losses = {0: val_losses[0]} if 0 in val_losses else {}
-                        baseline_losses = (
-                            {0: baseline_losses[0]} if 0 in baseline_losses else {}
-                        )
-                        for v_name in var_losses:
-                            var_losses[v_name] = (
-                                {0: var_losses[v_name][0]}
-                                if 0 in var_losses[v_name]
-                                else {}
+                        current_epoch = None
+                        current_batch = None
+                        expected_num_batches = None
+
+                    val_losses[epoch] = val_loss
+                    baseline_losses[epoch] = baseline
+                    expect_var_losses = epoch
+                    continue
+
+                # STRICT MATCH: Variable Losses (Expected immediately after validation if targets > 1)
+                if expect_var_losses is not None:
+                    if "[INFO]  - " in line:
+                        var_match = re.search(r"\[INFO\]\s+-\s+(.*)", line)
+                        if not var_match:
+                            raise ValueError(
+                                f"CRITICAL [Line {line_num}]: Malformed Variable Loss log -> '{line.strip()}'"
                             )
 
-                # Dictionary overwrites previous attempts if a mid-epoch crash occurred
-                if epoch not in train_losses:
-                    train_losses[epoch] = {}
-                train_losses[epoch][batch] = (num_batches, loss)
+                        content = var_match.group(1)
+                        parts = content.split(",")
+                        for p in parts:
+                            if ":" not in p:
+                                raise ValueError(
+                                    f"CRITICAL [Line {line_num}]: Missing ':' in variable loss pair -> '{p.strip()}'"
+                                )
 
-        # 3. Validate extracted data
+                            var_name, v_loss = p.split(":", 1)
+                            var_name = var_name.strip().replace("_loss", "")
+                            v_loss = parse_number(v_loss)
+                            var_losses.setdefault(var_name, {})[expect_var_losses] = (
+                                v_loss
+                            )
+
+                        expect_var_losses = None
+                        continue
+                    elif "[INFO] Epoch" in line or "[INFO] Validation" in line:
+                        # Found structural logs meaning no variable losses existed for this validation step
+                        expect_var_losses = None
+                    else:
+                        # Non-structural logs (e.g., class shares) can pass, keep expecting var losses if relevant
+                        pass
+
+                # STRICT MATCH: Training Batches
+                if "[INFO] Epoch" in line and "| Batch" in line:
+                    train_match = re.search(
+                        r"\[INFO\] Epoch\s*(\d+)\s+\|\s*Batch\s*(\d+)/\s*(\d+)\s+\|\s*Loss:\s*([^\s\|]+)",
+                        line,
+                    )
+                    if not train_match:
+                        raise ValueError(
+                            f"CRITICAL [Line {line_num}]: Malformed Training Batch log -> '{line.strip()}'"
+                        )
+
+                    epoch = int(train_match.group(1))
+                    batch = int(train_match.group(2))
+                    num_batches = int(train_match.group(3))
+                    loss = parse_number(train_match.group(4))
+
+                    # Strict Chronological Validation
+                    if current_epoch is not None and current_batch is not None:
+                        if epoch == current_epoch:
+                            if batch <= current_batch:
+                                raise ValueError(
+                                    f"CRITICAL [Line {line_num}]: Batch monotonicity violated (was {current_batch}, now {batch})."
+                                )
+                        elif epoch == current_epoch + 1:
+                            pass  # Valid transition
+                        elif epoch == 1 and batch <= num_batches:
+                            pass  # Valid restart
+                        else:
+                            raise ValueError(
+                                f"CRITICAL [Line {line_num}]: Epoch transition violated (was {current_epoch}, now {epoch})."
+                            )
+
+                    if (
+                        expected_num_batches is not None
+                        and num_batches != expected_num_batches
+                    ):
+                        # The very last batch could theoretically change if datasets change dynamically, but standard sequifier shouldn't
+                        if epoch == current_epoch:
+                            raise ValueError(
+                                f"CRITICAL [Line {line_num}]: Inconsistent num_batches mid-epoch (was {expected_num_batches}, now {num_batches})."
+                            )
+
+                    current_epoch = epoch
+                    current_batch = batch
+                    expected_num_batches = num_batches
+
+                    # Restart on Epoch 1 if skipped Epoch 0
+                    if epoch == 1 and batch == 1 and 0 not in train_losses:
+                        if 0 not in val_losses:
+                            val_losses.clear()
+                            baseline_losses.clear()
+                            var_losses.clear()
+                            train_losses.clear()
+                        else:
+                            train_losses.clear()
+                            # Keep only Epoch 0 data
+                            val_losses = {0: val_losses[0]} if 0 in val_losses else {}
+                            baseline_losses = (
+                                {0: baseline_losses[0]} if 0 in baseline_losses else {}
+                            )
+                            for v_name in var_losses:
+                                var_losses[v_name] = (
+                                    {0: var_losses[v_name][0]}
+                                    if 0 in var_losses[v_name]
+                                    else {}
+                                )
+
+                    if epoch not in train_losses:
+                        train_losses[epoch] = {}
+
+                    if batch in train_losses[epoch]:
+                        raise ValueError(
+                            f"CRITICAL [Line {line_num}]: Duplicate batch {batch} recorded for Epoch {epoch}."
+                        )
+
+                    train_losses[epoch][batch] = (num_batches, loss)
+
+        # 3. Validate extracted data (Fail immediately if missing)
         if not train_losses:
-            raise ValueError(
-                f"Data Error in '{model}': No valid training loss data found after the last restart."
-            )
+            raise ValueError(f"CRITICAL [{model}]: No valid training loss data found.")
         if not val_losses:
             raise ValueError(
-                f"Data Error in '{model}': No valid validation loss data found after the last restart."
+                f"CRITICAL [{model}]: No valid validation loss data found."
             )
         if not baseline_losses:
-            raise ValueError(
-                f"Data Error in '{model}': No baseline loss data found in the logs."
-            )
+            raise ValueError(f"CRITICAL [{model}]: No baseline loss data found.")
 
         # Format points
         val_x = sorted(list(val_losses.keys()))
@@ -153,7 +225,7 @@ def visualize_training(args):
             if not epoch_dict:
                 continue
 
-            # Extract perfectly chronological lists from our batch dictionary
+            # Extract perfectly chronological lists
             epoch_data = [
                 (b, epoch_dict[b][0], epoch_dict[b][1])
                 for b in sorted(epoch_dict.keys())
@@ -167,9 +239,11 @@ def visualize_training(args):
 
                 if log_interval == 0:
                     log_interval = 1
+
+                # Strict Bucketing Check
                 if bucket_batches % log_interval != 0:
                     raise ValueError(
-                        f"Model {model} Epoch {epoch}: --bucket-training-batches ({bucket_batches}) must be a multiple of the logged batch interval ({log_interval})."
+                        f"CRITICAL [{model} Epoch {epoch}]: --bucket-training-batches ({bucket_batches}) MUST be an exact multiple of the logged batch interval ({log_interval})."
                     )
 
                 chunk_size = bucket_batches // log_interval
@@ -186,7 +260,7 @@ def visualize_training(args):
 
         if not train_x:
             raise ValueError(
-                f"Data Error in '{model}': Training arrays are empty after formatting."
+                f"CRITICAL [{model}]: Training arrays ended up empty after formatting."
             )
 
         all_data[model] = {
@@ -205,6 +279,7 @@ def visualize_training(args):
     os.makedirs(
         os.path.join(args.project_root, "outputs", "visualization"), exist_ok=True
     )
+
     # 4. Create Plots based on input cardinality
     if len(models) == 1:
         model = models[0]
@@ -262,10 +337,6 @@ def visualize_training(args):
 
             if getattr(args, "log_scale", False):
                 fig2.update_yaxes(type="log")
-        else:
-            print(
-                f"Warning: No variable validation losses found for model '{model}'. Second plot will be empty."
-            )
 
         out_path = os.path.join(
             args.project_root,
@@ -299,11 +370,12 @@ def visualize_training(args):
                 if baseline_val is None:
                     baseline_val = data["base_y"][0]
                 else:
+                    # Strict validation across multiple models
                     if not np.isclose(
                         baseline_val, data["base_y"][0], rtol=1e-3, atol=1e-5
                     ) and not (np.isnan(baseline_val) and np.isnan(data["base_y"][0])):
                         raise ValueError(
-                            f"Baseline validation loss is not constant across models. Expected {baseline_val}, got {data['base_y'][0]} in model '{model}'"
+                            f"CRITICAL: Baseline validation loss is not constant across models. Expected {baseline_val}, got {data['base_y'][0]} in model '{model}'"
                         )
 
         if baseline_val is not None:
@@ -356,9 +428,7 @@ def visualize_training(args):
     <style>
         body {{ font-family: sans-serif; margin: 0; padding: 0; overflow-x: hidden; }}
         .container {{ display: flex; flex-wrap: wrap; width: 100%; }}
-        /* Added max-width to strictly constrain Plotly's initial canvas calculation */
         .plot {{ flex: 1 1 50%; min-width: 400px; max-width: 50%; box-sizing: border-box; padding: 10px; }}
-        /* Reset max-width for mobile stacking */
         @media (max-width: 800px) {{ .plot {{ flex: 1 1 100%; max-width: 100%; }} }}
     </style>
 </head>
