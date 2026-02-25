@@ -8,6 +8,7 @@ FILES_TO_READ = [
     "documentation/configs/preprocess.md",
     "documentation/configs/train.md",
     "documentation/configs/infer.md",
+    "documentation/commands/visualize-training.md",
     "documentation/configs/hyperparameter-search.md",
 ]
 
