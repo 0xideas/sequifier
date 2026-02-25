@@ -42,9 +42,7 @@ def test_visualize_training(run_training, run_hp_search, project_root):
 
     # 2. Test running visualize-training for all models jointly
     models_str = ",".join(hp_models_grid)
-    command_joint = (
-        f"sequifier visualize-training {models_str} --project-root {project_root}"
-    )
+    command_joint = f"sequifier visualize-training {models_str} --project-root {project_root} --log-scale --bucket-training-batches 5"
     run_and_log(command_joint)
 
     output_path_joint = os.path.join(
