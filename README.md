@@ -31,9 +31,11 @@ The only requirement is having sequifier installed, and having input data in the
 
 
 
-### The Five Commands
+### The Six Commands
 
-There are five standalone commands within sequifier: `make`, `preprocess`, `train`, `infer` and `hyperparameter-search`. `make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, and `hyperparameter-search` executes multiple training runs to find optimal configurations.
+There are six standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, and `visualize-training`.
+
+`make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, `hyperparameter-search` executes multiple training runs to find optimal configurations, and `visualize-training` parses training logs to generate interactive HTML plots of your loss curves.
 
 There are documentation pages for each command, except make:
 
@@ -41,6 +43,7 @@ There are documentation pages for each command, except make:
  - [train documentation](./documentation/configs/train.md)
  - [infer documentation](./documentation/configs/infer.md)
  - [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
+ - [visualize-training documentation](./documentation/commands/visualize-training.md)
 
 
 
@@ -68,6 +71,10 @@ YOUR_PROJECT_NAME/
 ├── data/
 │   └── (Place your CSV/Parquet files here)
 ├── outputs/
+│   ├── embeddings(?)
+│   ├── predictions(?)
+│   ├── probabilities(?)
+│   └── visualization/
 └── logs/
 ```
 
@@ -194,7 +201,7 @@ Please cite with:
   title = {sequifier - causal transformer models for multivariate sequence modelling},
   year = {2025},
   publisher = {GitHub},
-  version = {v1.1.0.3},
+  version = {v1.1.0.4},
   url = {https://github.com/0xideas/sequifier}
 }
 ```

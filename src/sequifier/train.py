@@ -1081,8 +1081,9 @@ class TransformerModel(nn.Module):
             if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
                 learning_rate = self.scheduler.get_last_lr()[0]
                 s_per_batch = (time.time() - start_time) / self.log_interval
+                avg_train_loss = total_loss / self.log_interval
                 self.logger.info(
-                    f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(total_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
+                    f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
                 )
                 total_loss = 0.0
                 start_time = time.time()

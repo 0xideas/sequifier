@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sequifier"
-version = "v1.1.0.3"
+version = "v1.1.0.4"
 authors = [
     { name = "Leon Luithlen", email = "leontimnaluithlen@gmail.com" },
 ]
@@ -48,7 +48,8 @@ sequifier = "sequifier.sequifier:main"
 
 [project.optional-dependencies]
 test = [
-    "pytest>=7.2,<8.0"
+    "pytest>=7.2,<8.0",
+    "plotly>=6.0,<7.0"
 ]
 
 [tool.pytest.ini_options]

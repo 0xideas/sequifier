@@ -42,7 +42,7 @@ training_spec:
   epochs: 3
   save_interval_epochs: 1
   batch_size: 5
-  log_interval: 200
+  log_interval: 1
   class_share_log_columns: ["itemId"]
   learning_rate: 0.003
   accumulation_steps: 2

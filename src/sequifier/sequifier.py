@@ -9,6 +9,7 @@ from sequifier.infer import infer
 from sequifier.make import make
 from sequifier.preprocess import preprocess
 from sequifier.train import train
+from sequifier.visualize_training import visualize_training
 
 
 @beartype
@@ -28,7 +29,7 @@ def build_args_config(args: Any) -> dict[str, Any]:
         for k, v in vars(args).items()
         if v is not None and k not in ["randomize", "command", "config_path"]
     }
-    if args.command != "make":
+    if args.command not in ["make", "visualize-training"]:
         if args.randomize:
             seed = np.random.choice(np.arange(int(1e9)))
             args_config["seed"] = seed
@@ -74,6 +75,9 @@ def setup_parser() -> ArgumentParser:
     parser_hyperparameter_search = subparsers.add_parser(
         "hyperparameter-search", help="Run hyperparamter search"
     )
+    parser_visualize_training = subparsers.add_parser(
+        "visualize-training", help="Visualize training losses"
+    )
 
     for subparser in [
         parser_preprocess,
@@ -115,6 +119,29 @@ def setup_parser() -> ArgumentParser:
     parser_infer.add_argument("-mp", "--model-path", type=str)
     parser_infer.add_argument("-s", "--seed", type=int)
 
+    parser_visualize_training.add_argument(
+        "models",
+        type=str,
+        help="Model name, comma-separated names, or path to txt file containing model names",
+    )
+    parser_visualize_training.add_argument(
+        "--log-scale",
+        action="store_true",
+        help="Use a logarithmic scale on the y-axis",
+    )
+    parser_visualize_training.add_argument(
+        "--bucket-training-batches",
+        type=int,
+        help="Bucket the training batches by taking the average loss over a specified number of batches. Must be a multiple of the logged batch interval.",
+    )
+
+    parser_visualize_training.add_argument(
+        "--project-root",
+        type=str,
+        default=".",
+        help="Path to the project root directory.",
+    )
+
     return parser
 
 
@@ -136,6 +163,8 @@ def main() -> None:
             train(args, args_config)
         elif args.command == "infer":
             infer(args, args_config)
+        elif args.command == "visualize-training":
+            visualize_training(args)
     elif args.command == "hyperparameter-search":
         hyperparameter_search(args.config_path, args.skip_metadata)
 

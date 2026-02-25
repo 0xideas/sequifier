@@ -36,7 +36,7 @@ training_spec:
   epochs: 3
   save_interval_epochs: 1
   batch_size: 20
-  log_interval: 200
+  log_interval: 1
   learning_rate: 0.003
   accumulation_steps: null
   dropout: 0.3

@@ -8,6 +8,7 @@ FILES_TO_READ = [
     "documentation/configs/preprocess.md",
     "documentation/configs/train.md",
     "documentation/configs/infer.md",
+    "documentation/commands/visualize-training.md",
     "documentation/configs/hyperparameter-search.md",
 ]
 
@@ -27,7 +28,7 @@ def main():
         consolidated_content.append(path.read_text(encoding="utf-8"))
 
     # 3. Join with newlines to preserve markdown structure between files
-    final_content = "\n\n".join(consolidated_content) + "\n"
+    final_content = "\n\n".join(consolidated_content)
 
     output_path = Path(OUTPUT_FILE)
 
