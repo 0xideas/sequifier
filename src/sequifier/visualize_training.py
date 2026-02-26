@@ -335,14 +335,22 @@ def _generate_single_model_plot(
 
     fig.add_trace(
         go.Scatter(
-            x=data["val_x"], y=data["val_y"], mode="lines", name="Validation Loss"
+            x=data["val_x"],
+            y=data["val_y"],
+            mode="lines",
+            name="Validation Loss",
+            hovertemplate=f"<b>{model}</b><br>Val Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
         ),
         row=1,
         col=1,
     )
     fig.add_trace(
         go.Scatter(
-            x=data["train_x"], y=data["train_y"], mode="lines", name="Training Loss"
+            x=data["train_x"],
+            y=data["train_y"],
+            mode="lines",
+            name="Training Loss",
+            hovertemplate=f"<b>{model}</b><br>Train Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
         ),
         row=1,
         col=1,
@@ -356,6 +364,7 @@ def _generate_single_model_plot(
                 mode="lines",
                 name="Baseline Loss",
                 line=dict(dash="dash"),
+                hovertemplate=f"<b>{model}</b><br>Baseline Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
             ),
             row=1,
             col=1,
@@ -377,7 +386,15 @@ def _generate_single_model_plot(
                 for e in epochs
             ]
             fig.add_trace(
-                go.Scatter(x=epochs, y=y_norm, mode="lines", name=var), row=1, col=2
+                go.Scatter(
+                    x=epochs,
+                    y=y_norm,
+                    mode="lines",
+                    name=var,
+                    hovertemplate=f"<b>{model}</b><br>{var}: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+                ),
+                row=1,
+                col=2,
             )
 
         fig.update_xaxes(title_text="Epoch", dtick=1, row=1, col=2)
