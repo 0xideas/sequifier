@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import numpy as np
+import plotly.colors as pc  # Added to fetch consistent colors
 import plotly.graph_objects as go
 
 # Import Loguru and your custom logger config
@@ -401,22 +402,39 @@ def _generate_multi_model_plot(
         rows=1, cols=2, subplot_titles=("Validation Losses", "Training Losses")
     )
     baseline_val = None
+    colors = pc.qualitative.Plotly  # Load Plotly's default distinct color array
 
-    for model in models:
+    for i, model in enumerate(models):
         data = all_data[model]
+        color = colors[i % len(colors)]  # Cycle colors if models exceed palette limit
+
+        # Validation trace
         fig.add_trace(
             go.Scatter(
-                x=data["val_x"], y=data["val_y"], mode="lines", name=f"{model} Val Loss"
+                x=data["val_x"],
+                y=data["val_y"],
+                mode="lines",
+                name=model,
+                legendgroup=model,
+                line=dict(color=color),
+                showlegend=True,  # Only show validation trace in legend to prevent duplicates
+                hovertemplate=f"<b>{model}</b><br>Val Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
             ),
             row=1,
             col=1,
         )
+
+        # Training trace
         fig.add_trace(
             go.Scatter(
                 x=data["train_x"],
                 y=data["train_y"],
                 mode="lines",
-                name=f"{model} Train Loss",
+                name=model,
+                legendgroup=model,
+                line=dict(color=color),
+                showlegend=False,  # Hidden from legend, but linked via legendgroup
+                hovertemplate=f"<b>{model}</b><br>Train Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
             ),
             row=1,
             col=2,
@@ -433,20 +451,20 @@ def _generate_multi_model_plot(
                 )
 
     if baseline_val is not None:
-        max_x = max(
-            [max(all_data[m]["train_x"]) for m in models if all_data[m]["train_x"]]
-            + [0]
+        # Plot baseline on the Validation subplot (col=1)
+        max_val_x = max(
+            [max(all_data[m]["val_x"]) for m in models if all_data[m]["val_x"]] + [0]
         )
         fig.add_trace(
             go.Scatter(
-                x=[0, max_x],
+                x=[0, max_val_x],
                 y=[baseline_val, baseline_val],
                 mode="lines",
                 name="Baseline Loss",
-                line=dict(dash="dash"),
+                line=dict(dash="dash", color="black"),
             ),
             row=1,
-            col=2,
+            col=1,
         )
 
     fig.update_xaxes(title_text="Epoch", dtick=1, row=1, col=1)
