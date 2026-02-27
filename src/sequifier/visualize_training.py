@@ -391,7 +391,7 @@ def _generate_single_model_plot(
                     y=y_norm,
                     mode="lines",
                     name=var,
-                    hovertemplate=f"<b>{model}</b><br>{var}: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
+                    hovertemplate=f"<b>{var}</b>: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
                 ),
                 row=1,
                 col=2,
