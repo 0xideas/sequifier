@@ -8,6 +8,7 @@ from typing import Any, Optional
 import numpy as np
 import plotly.colors as pc  # Added to fetch consistent colors
 import plotly.graph_objects as go
+from beartype import beartype
 
 # Import Loguru and your custom logger config
 from loguru import logger
@@ -73,6 +74,7 @@ class LogParser:
         self.expected_num_batches: Optional[int] = None
         self.pending_var_loss_epoch: Optional[int] = None
 
+    @beartype
     def parse_file(self, log_file: str) -> TrainingMetrics:
         with open(log_file, "r") as f:
             for line_num, line in enumerate(f, 1):
@@ -84,6 +86,7 @@ class LogParser:
         self._validate_final_metrics()
         return self.metrics
 
+    @beartype
     def _process_line(self, line: str) -> None:
         """Routes the line to the appropriate sub-parser based on strict string matching."""
         if "[INFO] Validation | Epoch:" in line:
@@ -95,6 +98,7 @@ class LogParser:
         elif "[INFO] Epoch" in line or "[INFO] Validation" in line:
             self.pending_var_loss_epoch = None
 
+    @beartype
     def _process_validation(self, line: str) -> None:
         match = VAL_PATTERN.search(line)
         if not match:
@@ -116,6 +120,7 @@ class LogParser:
         self.metrics.baseline_losses[epoch] = baseline
         self.pending_var_loss_epoch = epoch
 
+    @beartype
     def _process_var_loss(self, line: str) -> None:
         match = VAR_PATTERN.search(line)
         if not match:
@@ -139,6 +144,7 @@ class LogParser:
 
         self.pending_var_loss_epoch = None
 
+    @beartype
     def _process_training(self, line: str) -> None:
         match = TRAIN_PATTERN.search(line)
         if not match:
@@ -166,6 +172,7 @@ class LogParser:
 
         self.metrics.train_losses[epoch][batch] = (num_batches, loss)
 
+    @beartype
     def _validate_chronology(self, epoch: int, batch: int, num_batches: int) -> None:
         if self.current_epoch is not None and self.current_batch is not None:
             if epoch == self.current_epoch and batch <= self.current_batch:
@@ -220,12 +227,14 @@ class LogParser:
 # -------------------------------------------------------------------------
 # Utility Functions
 # -------------------------------------------------------------------------
+@beartype
 def parse_number(val: str) -> float:
     """Strictly parse numbers, explicitly handling the 'NaN' strings."""
     val = val.strip()
     return np.nan if val == "NaN" else float(val)
 
 
+@beartype
 def parse_args_to_models(args: argparse.Namespace) -> list[str]:
     """Extracts the list of models from a file or comma-separated string."""
     if os.path.isfile(args.models) and args.models.endswith(".txt"):
@@ -236,6 +245,7 @@ def parse_args_to_models(args: argparse.Namespace) -> list[str]:
     return [m.strip() for m in args.models.split(",") if m.strip()]
 
 
+@beartype
 def get_log_filepath(args: argparse.Namespace, model: str) -> str:
     """Finds the appropriate log file for a given model."""
     log_pattern = os.path.join(
@@ -257,6 +267,7 @@ def get_log_filepath(args: argparse.Namespace, model: str) -> str:
     return log_files[0]
 
 
+@beartype
 def format_plot_data(
     metrics: TrainingMetrics, bucket_batches: Optional[int], model: str
 ) -> dict[str, Any]:
@@ -320,6 +331,7 @@ def format_plot_data(
 # -------------------------------------------------------------------------
 # Plotting & Reporting
 # -------------------------------------------------------------------------
+@beartype
 def _generate_single_model_plot(
     model: str, data: dict[str, Any], yaxis_type: str, out_path: str
 ) -> None:
@@ -411,6 +423,7 @@ def _generate_single_model_plot(
     logger.info(f"Visualization HTML generated and saved successfully to {out_path}")
 
 
+@beartype
 def _generate_multi_model_plot(
     models: list[str], all_data: dict[str, Any], yaxis_type: str, out_path: str
 ) -> None:
@@ -494,6 +507,7 @@ def _generate_multi_model_plot(
     logger.info(f"Visualization HTML generated and saved successfully to {out_path}")
 
 
+@beartype
 def generate_html_report(
     all_data: dict[str, Any], models: list[str], args: argparse.Namespace
 ) -> None:
@@ -515,6 +529,7 @@ def generate_html_report(
 # -------------------------------------------------------------------------
 # Orchestrator
 # -------------------------------------------------------------------------
+@beartype
 def visualize_training(args: argparse.Namespace) -> None:
     """Main orchestrator function."""
     models = parse_args_to_models(args)
