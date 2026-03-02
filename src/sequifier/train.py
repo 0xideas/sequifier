@@ -1,3 +1,4 @@
+import contextlib
 import copy
 import glob
 import math
@@ -16,6 +17,7 @@ import torch.multiprocessing as mp
 from beartype import beartype
 from torch import Tensor, nn
 from torch.amp import GradScaler
+from torch.distributed.algorithms.join import Join
 from torch.nn import ModuleDict
 from torch.nn.functional import one_hot
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -57,6 +59,9 @@ def setup(rank: int, world_size: int, backend: str = "nccl"):
     """
     os.environ["MASTER_ADDR"] = os.getenv("MASTER_ADDR", "localhost")
     os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
+
+    os.environ["NCCL_DEBUG"] = "INFO"
+    os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
     if not dist.is_initialized():
         dist.init_process_group(backend, rank=rank, world_size=world_size)
 
@@ -171,6 +176,8 @@ def train_worker(
             batch_size=config.training_spec.batch_size,
             sampler=valid_sampler,
             shuffle=False,
+            num_workers=config.training_spec.num_workers,
+            pin_memory=config.training_spec.device not in ["mps", "cpu"],
         )
     else:
         train_loader = DataLoader(
@@ -182,7 +189,13 @@ def train_worker(
             persistent_workers=(config.training_spec.num_workers > 0),
         )
         valid_loader = DataLoader(
-            valid_dataset, batch_size=None, sampler=None, shuffle=False
+            valid_dataset,
+            batch_size=None,
+            sampler=None,
+            shuffle=False,
+            num_workers=config.training_spec.num_workers,
+            pin_memory=False,
+            persistent_workers=(config.training_spec.num_workers > 0),
         )
 
     configure_determinism(config.seed, config.training_spec.enforce_determinism)
@@ -202,7 +215,13 @@ def train_worker(
 
     # 3. Start training
     original_model = model.module if config.training_spec.distributed else model
-    original_model.train_model(train_loader, valid_loader, train_sampler, valid_sampler)
+    original_model.train_model(
+        train_loader,
+        valid_loader,
+        train_sampler,
+        valid_sampler,
+        ddp_model=model if config.training_spec.distributed else None,
+    )
 
     if config.training_spec.distributed:
         cleanup()
@@ -924,6 +943,7 @@ class TransformerModel(nn.Module):
         valid_sampler: Optional[
             Union[RandomSampler, DistributedSampler, DistributedGroupedRandomSampler]
         ],
+        ddp_model: Optional[nn.Module] = None,
     ) -> None:
         """Trains the model.
 
@@ -937,6 +957,7 @@ class TransformerModel(nn.Module):
                            the epoch in distributed training.
             valid_sampler: Sampler for the validation DataLoader, used to set
                            the epoch in distributed training.
+            ddp_model:
         """
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
@@ -962,7 +983,7 @@ class TransformerModel(nn.Module):
 
                     if train_sampler and not isinstance(train_sampler, RandomSampler):
                         train_sampler.set_epoch(epoch)
-                    self._train_epoch(train_loader, epoch)
+                    self._train_epoch(train_loader, epoch, ddp_model)
 
                     if valid_sampler and not isinstance(valid_sampler, RandomSampler):
                         valid_sampler.set_epoch(epoch)
@@ -1059,6 +1080,7 @@ class TransformerModel(nn.Module):
         self,
         train_loader: DataLoader,
         epoch: int,
+        ddp_model: Optional[nn.Module] = None,
     ) -> None:
         """Trains the model for one epoch.
 
@@ -1077,62 +1099,67 @@ class TransformerModel(nn.Module):
         start_time = time.time()
         num_batches = len(train_loader)
 
-        for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
-            data = {
-                k: v.to(self.device, non_blocking=True)
-                for k, v in data.items()
-                if k in self.input_columns
-            }
-            targets = {
-                k: v.to(self.device, non_blocking=True)
-                for k, v in targets.items()
-                if k in self.target_column_types
-            }
-            if self.hparams.training_spec.layer_autocast:
-                amp_dtype = get_torch_dtype(
-                    self.hparams.training_spec.layer_type_dtypes.get(
-                        "linear", "bfloat16"
+        context = (
+            Join([ddp_model]) if ddp_model is not None else contextlib.nullcontext()
+        )
+
+        with context:
+            for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
+                data = {
+                    k: v.to(self.device, non_blocking=True)
+                    for k, v in data.items()
+                    if k in self.input_columns
+                }
+                targets = {
+                    k: v.to(self.device, non_blocking=True)
+                    for k, v in targets.items()
+                    if k in self.target_column_types
+                }
+                if self.hparams.training_spec.layer_autocast:
+                    amp_dtype = get_torch_dtype(
+                        self.hparams.training_spec.layer_type_dtypes.get(
+                            "linear", "bfloat16"
+                        )
+                        if self.hparams.training_spec.layer_type_dtypes
+                        else "float32"
                     )
-                    if self.hparams.training_spec.layer_type_dtypes
-                    else "float32"
-                )
-                with torch.autocast(
-                    device_type=self.device.split(":")[0], dtype=amp_dtype
-                ):
+                    with torch.autocast(
+                        device_type=self.device.split(":")[0], dtype=amp_dtype
+                    ):
+                        output = self.forward_train(data)
+                        loss, losses = self._calculate_loss(output, targets)
+                else:
                     output = self.forward_train(data)
                     loss, losses = self._calculate_loss(output, targets)
-            else:
-                output = self.forward_train(data)
-                loss, losses = self._calculate_loss(output, targets)
 
-            self.scaler.scale(loss).backward()
+                self.scaler.scale(loss).backward()
 
-            if (
-                self.accumulation_steps is None
-                or (batch_count + 1) % self.accumulation_steps == 0
-                or (batch_count + 1) == num_batches
-            ):
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-                self.optimizer.zero_grad()
+                if (
+                    self.accumulation_steps is None
+                    or (batch_count + 1) % self.accumulation_steps == 0
+                    or (batch_count + 1) == num_batches
+                ):
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                    self.optimizer.zero_grad()
 
-            total_loss += loss.item()
-            if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
-                learning_rate = self.scheduler.get_last_lr()[0]
-                s_per_batch = (time.time() - start_time) / self.log_interval
-                avg_train_loss = total_loss / self.log_interval
-                self.logger.info(
-                    f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
-                )
-                total_loss = 0.0
-                start_time = time.time()
+                total_loss += loss.item()
+                if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
+                    learning_rate = self.scheduler.get_last_lr()[0]
+                    s_per_batch = (time.time() - start_time) / self.log_interval
+                    avg_train_loss = total_loss / self.log_interval
+                    self.logger.info(
+                        f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
+                    )
+                    total_loss = 0.0
+                    start_time = time.time()
 
-            del data, targets, output, loss, losses
+                del data, targets, output, loss, losses
 
-            if self.scheduler_step_on == "batch":
-                self.scheduler.step()
+                if self.scheduler_step_on == "batch":
+                    self.scheduler.step()
 
     @beartype
     def _calculate_loss(
