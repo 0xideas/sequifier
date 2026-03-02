@@ -57,7 +57,8 @@ def setup(rank: int, world_size: int, backend: str = "nccl"):
     """
     os.environ["MASTER_ADDR"] = os.getenv("MASTER_ADDR", "localhost")
     os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
-    dist.init_process_group(backend, rank=rank, world_size=world_size)
+    if not dist.is_initialized():
+        dist.init_process_group(backend, rank=rank, world_size=world_size)
 
 
 def cleanup():
@@ -66,7 +67,13 @@ def cleanup():
 
 
 @beartype
-def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bool):
+def train_worker(
+    local_rank: int,
+    world_size: int,
+    config: TrainModel,
+    from_folder: bool,
+    global_rank: int,
+):
     """The worker function for distributed training.
 
     Args:
@@ -75,9 +82,12 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
         config: The training configuration.
         from_folder: Whether to load data from a folder (e.g., preprocessed .pt files)
                      or a single file (e.g., .parquet).
+        global_rank: The global rank
     """
     if config.training_spec.distributed:
-        setup(rank, world_size, config.training_spec.backend)
+        setup(global_rank, world_size, config.training_spec.backend)
+        if config.training_spec.device.startswith("cuda"):
+            torch.cuda.set_device(local_rank)
 
     # 1. Create Datasets and DataLoaders with DistributedSampler
     if from_folder:
@@ -108,31 +118,40 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
             # 2. Use the new distributed sampler for the multi-GPU case
             if config.training_spec.load_full_data_to_ram:
                 train_sampler = DistributedSampler(
-                    train_dataset, num_replicas=world_size, rank=rank, shuffle=True
+                    train_dataset,
+                    num_replicas=world_size,
+                    rank=global_rank,
+                    shuffle=True,
                 )
                 valid_sampler = DistributedSampler(
-                    valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+                    valid_dataset,
+                    num_replicas=world_size,
+                    rank=global_rank,
+                    shuffle=False,
                 )
             else:
                 train_sampler = DistributedGroupedRandomSampler(
-                    train_dataset, num_replicas=world_size, rank=rank
+                    train_dataset, num_replicas=world_size, rank=global_rank
                 )
                 valid_sampler = DistributedGroupedRandomSampler(
-                    valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+                    valid_dataset,
+                    num_replicas=world_size,
+                    rank=global_rank,
+                    shuffle=False,
                 )
         else:
-            # Use the simple grouped sampler for the single-GPU case
             train_sampler = RandomSampler(train_dataset)
             valid_sampler = None
     else:
+        assert not from_folder
         train_sampler = (
-            DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+            DistributedSampler(train_dataset, num_replicas=world_size, rank=global_rank)
             if config.training_spec.distributed
             else None
         )
         valid_sampler = (
             DistributedSampler(
-                valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+                valid_dataset, num_replicas=world_size, rank=global_rank, shuffle=False
             )
             if config.training_spec.distributed
             else None
@@ -143,12 +162,10 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
             train_dataset,
             batch_size=config.training_spec.batch_size,
             sampler=train_sampler,
-            shuffle=False,  # Shuffle only if not using sampler
-            num_workers=config.training_spec.num_workers,  # Use multiple workers for data loading
+            shuffle=False,
+            num_workers=config.training_spec.num_workers,
             pin_memory=config.training_spec.device not in ["mps", "cpu"],
         )
-
-        # For validation, it's often fine to just run it on the main process
         valid_loader = DataLoader(
             valid_dataset,
             batch_size=config.training_spec.batch_size,
@@ -156,7 +173,6 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
             shuffle=False,
         )
     else:
-        assert not from_folder
         train_loader = DataLoader(
             train_dataset,
             batch_size=None,
@@ -171,21 +187,32 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
 
     configure_determinism(config.seed, config.training_spec.enforce_determinism)
 
-    model = TransformerModel(config, rank)
+    # Note the change: we pass both global_rank and local_rank
+    model = TransformerModel(config, rank=global_rank, local_rank=local_rank)
 
     if config.training_spec.distributed:
-        model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+        # Note the change: Use local_rank specifically to bind DDP device safely
+        device_ids = (
+            [local_rank] if config.training_spec.device.startswith("cuda") else None
+        )
+        model = DDP(model, device_ids=device_ids, find_unused_parameters=True)
 
     if config.training_spec.device.startswith("cuda"):
         model = torch.compile(model)
 
     # 3. Start training
-    # When using DDP, the original model is accessed via the .module attribute
     original_model = model.module if config.training_spec.distributed else model
     original_model.train_model(train_loader, valid_loader, train_sampler, valid_sampler)
 
     if config.training_spec.distributed:
         cleanup()
+
+
+@beartype
+def _mp_train_worker_wrapper(
+    local_rank: int, world_size: int, config: TrainModel, from_folder: bool
+):
+    train_worker(local_rank, world_size, config, from_folder, global_rank=local_rank)
 
 
 @beartype
@@ -200,18 +227,25 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
     config = load_train_config(config_path, args_config, args.skip_metadata)
 
     world_size = config.training_spec.world_size
-
     from_folder = config.read_format == "pt"
+
     if config.training_spec.distributed:
-        mp.spawn(
-            train_worker,
-            args=(world_size, config, from_folder),
-            nprocs=world_size,
-            join=True,
-        )
+        if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+            # Launched via torchrun / srun for multi-node distributed training
+            global_rank = int(os.environ["RANK"])
+            world_size = int(os.environ["WORLD_SIZE"])
+            local_rank = int(os.environ.get("LOCAL_RANK", 0))
+            train_worker(local_rank, world_size, config, from_folder, global_rank)
+        else:
+            # Single-node multi-GPU fallback using mp.spawn
+            mp.spawn(
+                _mp_train_worker_wrapper,
+                args=(world_size, config, from_folder),
+                nprocs=world_size,
+                join=True,
+            )
     else:
-        # Fallback to single-GPU/CPU training
-        train_worker(0, world_size, config, from_folder)
+        train_worker(0, 1, config, from_folder, 0)
 
 
 @beartype
@@ -288,7 +322,9 @@ class TransformerModel(nn.Module):
     """
 
     @beartype
-    def __init__(self, hparams: Any, rank: Optional[int] = None):
+    def __init__(
+        self, hparams: Any, rank: Optional[int] = None, local_rank: Optional[int] = None
+    ):
         """Initializes the TransformerModel.
 
         Based on the hyperparameters, this initializes:
@@ -445,8 +481,13 @@ class TransformerModel(nn.Module):
         self.device = hparams.training_spec.device
         self.device_max_concat_length = hparams.training_spec.device_max_concat_length
 
-        if hparams.training_spec.device == "cuda" and self.rank is not None:
-            self.device = f"cuda:{self.rank}"
+        if hparams.training_spec.device.startswith("cuda"):
+            if local_rank is not None:
+                self.device = f"cuda:{local_rank}"
+            elif self.rank is not None:  # Backwards compatibility
+                self.device = f"cuda:{self.rank}"
+            else:
+                self.device = hparams.training_spec.device
         else:
             self.device = hparams.training_spec.device
 
