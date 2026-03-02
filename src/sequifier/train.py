@@ -72,6 +72,20 @@ def cleanup():
 
 
 @beartype
+def create_dummy_data(
+    config: TrainModel, local_rank: int
+) -> dict[str, Union[int, float]]:
+    dummy_data = {}
+    for col in config.input_columns:
+        dtype = torch.int64 if col in config.categorical_columns else torch.float32
+        dummy_data[col] = torch.ones(
+            (2, config.seq_length), dtype=dtype, device=local_rank
+        )
+
+    return dummy_data
+
+
+@beartype
 def train_worker(
     local_rank: int,
     world_size: int,
@@ -212,6 +226,17 @@ def train_worker(
 
     if config.training_spec.device.startswith("cuda"):
         model = torch.compile(model)
+
+        dummy_data = create_dummy_data(config, local_rank)
+        with torch.no_grad(), torch.autocast(
+            device_type="cuda",
+            dtype=torch.bfloat16,
+            enabled=config.training_spec.layer_autocast,
+        ):
+            _ = model(dummy_data, False)
+
+        if config.training_spec.distributed:
+            dist.barrier()
 
     # 3. Start training
     original_model = model.module if config.training_spec.distributed else model
@@ -909,7 +934,9 @@ class TransformerModel(nn.Module):
             return self.softmax[target_column](output.float())
 
     @beartype
-    def forward(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
+    def forward(
+        self, src: dict[str, Tensor], return_logits: Union[bool, Tensor] = False
+    ) -> dict[str, Tensor]:
         """The main forward pass of the model.
 
         This is typically used for inference/evaluation, returning the
@@ -918,6 +945,7 @@ class TransformerModel(nn.Module):
         Args:
             src: A dictionary mapping column names to input tensors
                  (batch_size, seq_length).
+            return_logits: Return logits
 
         Returns:
             A dictionary mapping target column names to their final
@@ -925,6 +953,8 @@ class TransformerModel(nn.Module):
             last token (batch_size, n_classes/1).
         """
         output = self.forward_train(src)
+        if return_logits:
+            return output
         return {
             target_column: self.apply_softmax(
                 target_column, out[-self.prediction_length :, :, :]
@@ -1115,6 +1145,8 @@ class TransformerModel(nn.Module):
                     for k, v in targets.items()
                     if k in self.target_column_types
                 }
+                model_to_call = ddp_model if ddp_model is not None else self
+
                 if self.hparams.training_spec.layer_autocast:
                     amp_dtype = get_torch_dtype(
                         self.hparams.training_spec.layer_type_dtypes.get(
@@ -1126,10 +1158,10 @@ class TransformerModel(nn.Module):
                     with torch.autocast(
                         device_type=self.device.split(":")[0], dtype=amp_dtype
                     ):
-                        output = self.forward_train(data)
+                        output = model_to_call(data, True)
                         loss, losses = self._calculate_loss(output, targets)
                 else:
-                    output = self.forward_train(data)
+                    output = model_to_call(data, True)
                     loss, losses = self._calculate_loss(output, targets)
 
                 self.scaler.scale(loss).backward()
@@ -1346,10 +1378,10 @@ class TransformerModel(nn.Module):
                     with torch.autocast(
                         device_type=self.device.split(":")[0], dtype=amp_dtype
                     ):
-                        output = self.forward_train(data)
+                        output = self(data, True)
                         loss, losses = self._calculate_loss(output, targets)
                 else:
-                    output = self.forward_train(data)
+                    output = self(data, True)
                     loss, losses = self._calculate_loss(output, targets)
 
                 total_loss_collect.append(loss.item())
@@ -1369,18 +1401,22 @@ class TransformerModel(nn.Module):
             }
         else:
             # Handle empty validation set case
-            total_loss_local = -1.0
-            total_losses_local = {col: -1.0 for col in self.target_columns}
+            total_loss_local = 0.0
+            total_losses_local = {col: 0.0 for col in self.target_columns}
 
         # 2. Aggregate losses across all GPUs if in distributed mode
         if self.hparams.training_spec.distributed:
             # Put local losses into tensors for reduction
-            total_loss_tensor = torch.tensor(total_loss_local, device=self.device)
+            total_loss_tensor = torch.tensor(
+                total_loss_local, device=self.device, dtype=torch.float32
+            )
 
             # Ensure consistent order for the losses tensor
             loss_keys = sorted(total_losses_local.keys())
             losses_values = [total_losses_local[k] for k in loss_keys]
-            losses_tensor = torch.tensor(losses_values, device=self.device)
+            losses_tensor = torch.tensor(
+                losses_values, device=self.device, dtype=torch.float32
+            )
 
             # Sum losses from all processes. The result is broadcast back to all processes.
             dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
@@ -1448,12 +1484,14 @@ class TransformerModel(nn.Module):
             # Broadcast the baseline values from the main process to all others
             if self.hparams.training_spec.distributed:
                 total_loss_tensor = torch.tensor(
-                    baseline_loss_local, device=self.device
+                    baseline_loss_local, device=self.device, dtype=torch.float32
                 )
                 dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
                 loss_keys = sorted(baseline_losses_local.keys())
                 losses_values = [baseline_losses_local[k] for k in loss_keys]
-                losses_tensor = torch.tensor(losses_values, device=self.device)
+                losses_tensor = torch.tensor(
+                    losses_values, device=self.device, dtype=torch.float32
+                )
                 dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
 
                 world_size = dist.get_world_size()
