@@ -10,4 +10,4 @@ git push origin v[VERSION]
 
 python -m build
 
-python -m twine upload dist/*
+python -m twine upload dist/sequifier-[VERSION]-py3-none-any.whl
