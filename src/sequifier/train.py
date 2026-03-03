@@ -72,9 +72,7 @@ def cleanup():
 
 
 @beartype
-def create_dummy_data(
-    config: TrainModel, local_rank: int
-) -> dict[str, Union[int, float]]:
+def create_dummy_data(config: TrainModel, local_rank: int) -> dict[str, Tensor]:
     dummy_data = {}
     for col in config.input_columns:
         dtype = torch.int64 if col in config.categorical_columns else torch.float32

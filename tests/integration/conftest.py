@@ -105,6 +105,11 @@ def training_config_path_cat_inf_size_3():
 
 
 @pytest.fixture(scope="session")
+def training_config_path_distributed():
+    return os.path.join("tests", "configs", "train-test-distributed.yaml")
+
+
+@pytest.fixture(scope="session")
 def inference_config_path_cat():
     return os.path.join("tests", "configs", "infer-test-categorical.yaml")
 
@@ -154,6 +159,11 @@ def inference_config_path_cat_inf_size_3_embedding():
 
 
 @pytest.fixture(scope="session")
+def inference_config_path_distributed():
+    return os.path.join("tests", "configs", "infer-test-distributed.yaml")
+
+
+@pytest.fixture(scope="session")
 def remove_project_root_contents(project_root):
     if os.path.exists(project_root):
         shutil.rmtree(project_root)
@@ -196,6 +206,7 @@ def format_configs_locally(
     training_config_path_real,
     training_config_path_cat_inf_size_1,
     training_config_path_cat_inf_size_3,
+    training_config_path_distributed,
     inference_config_path_cat,
     inference_config_path_cat_multitarget,
     inference_config_path_real,
@@ -203,6 +214,7 @@ def format_configs_locally(
     inference_config_path_categorical_autoregression,
     inference_config_path_cat_inf_size_1,
     inference_config_path_cat_inf_size_3,
+    inference_config_path_distributed,
     hp_search_configs,
 ):
     from sys import platform
@@ -219,6 +231,7 @@ def format_configs_locally(
             training_config_path_real,
             training_config_path_cat_inf_size_1,
             training_config_path_cat_inf_size_3,
+            training_config_path_distributed,
             inference_config_path_cat,
             inference_config_path_cat_multitarget,
             inference_config_path_real,
@@ -226,6 +239,7 @@ def format_configs_locally(
             inference_config_path_categorical_autoregression,
             inference_config_path_cat_inf_size_1,
             inference_config_path_cat_inf_size_3,
+            inference_config_path_distributed,
             hp_search_configs["grid"],
             hp_search_configs["sample"],
         ]
@@ -354,6 +368,7 @@ def run_training(
     training_config_path_real,
     training_config_path_cat_inf_size_1,
     training_config_path_cat_inf_size_3,
+    training_config_path_distributed,
     training_config_path_cat_multitarget,
 ):
     for model_number in [1, 3, 5, 50]:
@@ -378,6 +393,8 @@ def run_training(
     run_and_log(f"sequifier train --config-path {training_config_path_cat_inf_size_3}")
 
     run_and_log(f"sequifier train --config-path {training_config_path_cat_multitarget}")
+
+    run_and_log(f"sequifier train --config-path {training_config_path_distributed}")
 
     source_path = os.path.join(
         project_root, "models", "sequifier-model-real-1-best-3.pt"
@@ -428,6 +445,7 @@ def run_inference(
     inference_config_path_embedding,
     inference_config_path_cat_inf_size_1,
     inference_config_path_cat_inf_size_3,
+    inference_config_path_distributed,
     inference_config_path_cat_inf_size_3_embedding,
 ):
     for model_number in [1, 3, 5, 50]:
@@ -469,6 +487,8 @@ def run_inference(
 
     run_and_log(f"sequifier infer --config-path {inference_config_path_cat_inf_size_3}")
 
+    run_and_log(f"sequifier infer --config-path {inference_config_path_distributed}")
+
     run_and_log(
         f"sequifier infer --config-path {inference_config_path_categorical_autoregression}  --input-columns itemId"
     )
@@ -495,6 +515,7 @@ def model_names_preds():
         "model-categorical-1-best-3-autoregression",
         "model-categorical-1-inf-size-best-3",
         "model-categorical-3-inf-size-best-3",
+        "model-categorical-distributed-best-3",
     ]
 
     return model_names_preds

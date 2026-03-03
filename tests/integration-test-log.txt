@@ -24,6 +24,7 @@ sequifier train --config-path tests/configs/train-test-real.yaml --metadata-conf
 sequifier train --config-path tests/configs/train-test-categorical-inf-size-1.yaml
 sequifier train --config-path tests/configs/train-test-categorical-inf-size-3.yaml
 sequifier train --config-path tests/configs/train-test-categorical-multitarget.yaml
+sequifier train --config-path tests/configs/train-test-distributed.yaml
 sequifier infer --config-path tests/configs/infer-test-categorical.yaml --metadata-config-path configs/metadata_configs/test-data-categorical-1.json --model-path models/sequifier-model-categorical-1-best-3.onnx --data-path data/test-data-categorical-1-split2 --input-columns itemId
 sequifier infer --config-path tests/configs/infer-test-real.yaml --metadata-config-path configs/metadata_configs/test-data-real-1.json --model-path models/sequifier-model-real-1-best-3.pt --data-path data/test-data-real-1-split1.parquet --input-columns None
 sequifier infer --config-path tests/configs/infer-test-categorical.yaml --metadata-config-path configs/metadata_configs/test-data-categorical-3.json --model-path models/sequifier-model-categorical-3-best-3.onnx --data-path data/test-data-categorical-3-split2 --input-columns itemId supCat1
@@ -36,6 +37,7 @@ sequifier infer --config-path tests/configs/infer-test-categorical-multitarget.y
 sequifier infer --config-path tests/configs/infer-test-real-autoregression.yaml --input-columns itemValue --randomize
 sequifier infer --config-path tests/configs/infer-test-categorical-inf-size-1.yaml
 sequifier infer --config-path tests/configs/infer-test-categorical-inf-size-3.yaml
+sequifier infer --config-path tests/configs/infer-test-distributed.yaml
 sequifier infer --config-path tests/configs/infer-test-categorical-autoregression.yaml  --input-columns itemId
 sequifier infer --config-path tests/configs/infer-test-categorical-embedding.yaml  --input-columns itemId
 sequifier infer --config-path tests/configs/infer-test-categorical-inf-size-3-embedding.yaml
@@ -47,6 +49,7 @@ sequifier visualize-training model-categorical-3 --project-root tests/project_fo
 sequifier visualize-training model-categorical-3-inf-size --project-root tests/project_folder
 sequifier visualize-training model-categorical-5 --project-root tests/project_folder
 sequifier visualize-training model-categorical-50 --project-root tests/project_folder
+sequifier visualize-training model-categorical-distributed --project-root tests/project_folder
 sequifier visualize-training model-categorical-multitarget-5 --project-root tests/project_folder
 sequifier visualize-training model-real-1 --project-root tests/project_folder
 sequifier visualize-training model-real-3 --project-root tests/project_folder
