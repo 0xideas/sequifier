@@ -108,7 +108,7 @@ def load_pt_dataset(data_path: str, start_pct: float, end_pct: float) -> Iterato
 
     # Lazily load and yield data from files in range
     for pt_file in pt_files[start_idx:end_idx]:
-        yield torch.load(pt_file)
+        yield torch.load(pt_file, weights_only=False)
 
 
 @beartype

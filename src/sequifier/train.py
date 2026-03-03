@@ -1089,11 +1089,8 @@ class TransformerModel(nn.Module):
         if self.hparams.training_spec.distributed:
             dist.barrier()
 
-        # Only rank 0 should perform the final export
         if self.rank == 0:
-            if (
-                best_model is None
-            ):  # <-- MODIFICATION: Handle case where no improvement was ever made
+            if best_model is None:
                 self.logger.info(
                     "[INFO] No validation improvement during training. Saving last model as 'best'."
                 )
@@ -1102,6 +1099,9 @@ class TransformerModel(nn.Module):
             self._export(self, "last", last_epoch)  # type: ignore
             self._export(best_model, "best", last_epoch)  # type: ignore
             self.logger.info("--- Training Complete ---")
+
+        if self.hparams.training_spec.distributed:
+            dist.barrier()
 
     @beartype
     def _train_epoch(

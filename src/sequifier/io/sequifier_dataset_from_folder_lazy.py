@@ -190,7 +190,7 @@ class SequifierDatasetFromFolderLazy(Dataset):
                 # import gc; gc.collect()
 
             # 3. Load from disk (Safe now, as we made space)
-            data_tuple = torch.load(file_path, map_location="cpu")
+            data_tuple = torch.load(file_path, map_location="cpu", weights_only=False)
             self.cache[file_path] = data_tuple
 
         # Unpack
