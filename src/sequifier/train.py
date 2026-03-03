@@ -220,7 +220,7 @@ def train_worker(
         device_ids = (
             [local_rank] if config.training_spec.device.startswith("cuda") else None
         )
-        model = DDP(model, device_ids=device_ids, find_unused_parameters=True)
+        model = DDP(model, device_ids=device_ids, find_unused_parameters=False)
 
     if config.training_spec.device.startswith("cuda"):
         model = torch.compile(model)
