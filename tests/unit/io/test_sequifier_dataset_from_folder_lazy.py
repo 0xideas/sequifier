@@ -50,7 +50,7 @@ def mock_torch_load():
     """Mocks torch.load to return dummy tensors."""
     with patch("torch.load") as mock_load:
         # Define a side effect to return different dummy data based on filename
-        def side_effect(path, map_location):
+        def side_effect(path, map_location, weights_only):
             # Create dummy return tuple:
             # (sequences, targets, seq_ids, subseq_ids, positions)
             # Tensors size: (10 samples, sequence length 5)
