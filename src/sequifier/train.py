@@ -148,7 +148,10 @@ def train_worker(
                 )
             else:
                 train_sampler = DistributedGroupedRandomSampler(
-                    train_dataset, num_replicas=world_size, rank=global_rank
+                    train_dataset,
+                    num_replicas=world_size,
+                    rank=global_rank,
+                    sampling_strategy=config.training_spec.sampling_strategy,
                 )
                 valid_sampler = DistributedGroupedRandomSampler(
                     valid_dataset,
@@ -169,11 +172,7 @@ def train_worker(
         )
         valid_sampler = (
             DistributedSampler(
-                valid_dataset,
-                num_replicas=world_size,
-                rank=global_rank,
-                shuffle=False,
-                sampling_strategy=config.training_spec.sampling_strategy,
+                valid_dataset, num_replicas=world_size, rank=global_rank, shuffle=False
             )
             if config.training_spec.distributed
             else None
