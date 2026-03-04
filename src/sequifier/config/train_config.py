@@ -136,6 +136,7 @@ class TrainingSpecModel(BaseModel):
         backend: The distributed training backend (e.g., 'nccl').
         layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
         layer_autocast: Whether to use autocast
+        sampling_strategy: how to equalize data between GPUs
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -171,6 +172,7 @@ class TrainingSpecModel(BaseModel):
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: Optional[bool] = True
+    sampling_strategy: str = "exact"
 
     def __init__(self, **kwargs):
         super().__init__(
@@ -260,6 +262,15 @@ class TrainingSpecModel(BaseModel):
         if v not in ["epoch", "batch"]:
             raise ValueError(
                 f"scheduler_step_on must be in ['epoch', 'batch'], {v} isn't"
+            )
+        return v
+
+    @field_validator("sampling_strategy")
+    @classmethod
+    def validate_sampling_strategy(cls, v):
+        if v not in ["exact", "oversampling", "undersampling"]:
+            raise ValueError(
+                f"sampling_strategy must be 'exact', 'oversampling', or 'undersampling', got '{v}'"
             )
         return v
 
@@ -501,6 +512,23 @@ class TrainModel(BaseModel):
                 raise ValueError(
                     "If distributed is set to 'true', the format has to be 'pt'"
                 )
+
+        if v.sampling_strategy in ["oversampling", "undersampling"]:
+            if v.world_size <= 1:
+                raise ValueError(
+                    f"sampling_strategy '{v.sampling_strategy}' is only admissible if world_size > 1"
+                )
+            if info.data.get("read_format") != "pt":
+                raise ValueError(
+                    f"sampling_strategy '{v.sampling_strategy}' is only admissible if training data is a folder (read_format='pt')"
+                )
+
+        if v.world_size > 1 and v.sampling_strategy == "exact":
+            if info.data.get("read_format") != "pt":
+                raise ValueError(
+                    "If world_size > 1 and sampling_strategy == 'exact', the input data must be a folder (read_format='pt')."
+                )
+
         return v
 
     @field_validator("column_types")

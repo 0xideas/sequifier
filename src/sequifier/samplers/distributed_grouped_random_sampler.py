@@ -29,6 +29,7 @@ class DistributedGroupedRandomSampler(Sampler[int]):
         rank: int,
         shuffle: bool = True,
         seed: int = 0,
+        sampling_strategy: str = "exact",
     ):
         """
         Args:
@@ -38,6 +39,7 @@ class DistributedGroupedRandomSampler(Sampler[int]):
             rank: Rank of the current process.
             shuffle: If True, shuffles the order of files and samples within files.
             seed: Random seed used to create the permutation.
+            sampling_strategy: str = How to distribute data between GPUs
         """
         super().__init__(None)
         self.data_source = data_source
@@ -62,9 +64,31 @@ class DistributedGroupedRandomSampler(Sampler[int]):
             self.rank :: self.num_replicas
         ]
 
-        self.num_samples = sum(
-            len(self.index_groups[i]) for i in self.files_for_this_rank
-        )
+        if self.sampling_strategy == "exact":
+            if self.num_files % self.num_replicas != 0:
+                raise ValueError(
+                    f"Number of input files ({self.num_files}) must be divisible by "
+                    f"world_size ({self.num_replicas}) when using 'exact' sampling strategy."
+                )
+            self.num_samples = sum(
+                len(self.index_groups[i]) for i in self.files_for_this_rank
+            )
+
+        elif self.sampling_strategy == "oversampling":
+            max_samples = 0
+            for r in range(self.num_replicas):
+                files_for_r = list(range(self.num_files))[r :: self.num_replicas]
+                samples_for_r = sum(len(self.index_groups[i]) for i in files_for_r)
+                max_samples = max(max_samples, samples_for_r)
+            self.num_samples = max_samples
+
+        elif self.sampling_strategy == "undersampling":
+            min_samples = float("inf")
+            for r in range(self.num_replicas):
+                files_for_r = list(range(self.num_files))[r :: self.num_replicas]
+                samples_for_r = sum(len(self.index_groups[i]) for i in files_for_r)
+                min_samples = min(min_samples, samples_for_r)
+            self.num_samples = int(min_samples)
 
     def __iter__(self) -> Iterator[int]:
         """
@@ -94,6 +118,13 @@ class DistributedGroupedRandomSampler(Sampler[int]):
                 group = [group[i] for i in perm]
 
             final_indices.extend(group)
+
+        if self.sampling_strategy == "oversampling":
+            if len(final_indices) < self.num_samples:
+                padding_size = self.num_samples - len(final_indices)
+                final_indices.extend(final_indices[:padding_size])
+        elif self.sampling_strategy == "undersampling":
+            final_indices = final_indices[: self.num_samples]
 
         return iter(final_indices)
 
