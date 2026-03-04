@@ -48,6 +48,7 @@ class DistributedGroupedRandomSampler(Sampler[int]):
         self.epoch = 0
         self.shuffle = shuffle
         self.seed = seed
+        self.sampling_strategy = sampling_strategy
 
         # Pre-compute the global indices for each file, same as before
         self.index_groups = []
