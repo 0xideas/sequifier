@@ -1,4 +1,3 @@
-import contextlib
 import copy
 import glob
 import math
@@ -6,6 +5,7 @@ import os
 import time
 import uuid
 import warnings
+from datetime import timedelta
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -17,7 +17,6 @@ import torch.multiprocessing as mp
 from beartype import beartype
 from torch import Tensor, nn
 from torch.amp import GradScaler
-from torch.distributed.algorithms.join import Join
 from torch.nn import ModuleDict
 from torch.nn.functional import one_hot
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -63,7 +62,13 @@ def setup(rank: int, world_size: int, backend: str = "nccl"):
     os.environ["NCCL_DEBUG"] = "INFO"
     os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
     if not dist.is_initialized():
-        dist.init_process_group(backend, rank=rank, world_size=world_size)
+        timeout_sec = int(os.environ.get("NCCL_TIMEOUT", 1800))
+        dist.init_process_group(
+            backend,
+            rank=rank,
+            world_size=world_size,
+            timeout=timedelta(seconds=timeout_sec),
+        )
 
 
 def cleanup():
@@ -101,6 +106,8 @@ def train_worker(
                      or a single file (e.g., .parquet).
         global_rank: The global rank
     """
+    logger = configure_logger(config.project_root, config.model_name, global_rank)
+
     if config.training_spec.distributed:
         setup(global_rank, world_size, config.training_spec.backend)
         if config.training_spec.device.startswith("cuda"):
@@ -151,12 +158,14 @@ def train_worker(
                     train_dataset,
                     num_replicas=world_size,
                     rank=global_rank,
+                    logger=logger,
                     sampling_strategy=config.training_spec.sampling_strategy,
                 )
                 valid_sampler = DistributedGroupedRandomSampler(
                     valid_dataset,
                     num_replicas=world_size,
                     rank=global_rank,
+                    logger=logger,
                     shuffle=False,
                     sampling_strategy=config.training_spec.sampling_strategy,
                 )
@@ -1131,69 +1140,64 @@ class TransformerModel(nn.Module):
         start_time = time.time()
         num_batches = len(train_loader)
 
-        context = (
-            Join([ddp_model]) if ddp_model is not None else contextlib.nullcontext()
-        )
+        for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
+            data = {
+                k: v.to(self.device, non_blocking=True)
+                for k, v in data.items()
+                if k in self.input_columns
+            }
+            targets = {
+                k: v.to(self.device, non_blocking=True)
+                for k, v in targets.items()
+                if k in self.target_column_types
+            }
+            model_to_call = ddp_model if ddp_model is not None else self
 
-        with context:
-            for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
-                data = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in data.items()
-                    if k in self.input_columns
-                }
-                targets = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in targets.items()
-                    if k in self.target_column_types
-                }
-                model_to_call = ddp_model if ddp_model is not None else self
-
-                if self.hparams.training_spec.layer_autocast:
-                    amp_dtype = get_torch_dtype(
-                        self.hparams.training_spec.layer_type_dtypes.get(
-                            "linear", "bfloat16"
-                        )
-                        if self.hparams.training_spec.layer_type_dtypes
-                        else "float32"
+            if self.hparams.training_spec.layer_autocast:
+                amp_dtype = get_torch_dtype(
+                    self.hparams.training_spec.layer_type_dtypes.get(
+                        "linear", "bfloat16"
                     )
-                    with torch.autocast(
-                        device_type=self.device.split(":")[0], dtype=amp_dtype
-                    ):
-                        output = model_to_call(data, True)
-                        loss, losses = self._calculate_loss(output, targets)
-                else:
+                    if self.hparams.training_spec.layer_type_dtypes
+                    else "float32"
+                )
+                with torch.autocast(
+                    device_type=self.device.split(":")[0], dtype=amp_dtype
+                ):
                     output = model_to_call(data, True)
                     loss, losses = self._calculate_loss(output, targets)
+            else:
+                output = model_to_call(data, True)
+                loss, losses = self._calculate_loss(output, targets)
 
-                self.scaler.scale(loss).backward()
+            self.scaler.scale(loss).backward()
 
-                if (
-                    self.accumulation_steps is None
-                    or (batch_count + 1) % self.accumulation_steps == 0
-                    or (batch_count + 1) == num_batches
-                ):
-                    self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                    self.optimizer.zero_grad()
+            if (
+                self.accumulation_steps is None
+                or (batch_count + 1) % self.accumulation_steps == 0
+                or (batch_count + 1) == num_batches
+            ):
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                self.optimizer.zero_grad()
 
-                total_loss += loss.item()
-                if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
-                    learning_rate = self.scheduler.get_last_lr()[0]
-                    s_per_batch = (time.time() - start_time) / self.log_interval
-                    avg_train_loss = total_loss / self.log_interval
-                    self.logger.info(
-                        f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
-                    )
-                    total_loss = 0.0
-                    start_time = time.time()
+            total_loss += loss.item()
+            if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
+                learning_rate = self.scheduler.get_last_lr()[0]
+                s_per_batch = (time.time() - start_time) / self.log_interval
+                avg_train_loss = total_loss / self.log_interval
+                self.logger.info(
+                    f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
+                )
+                total_loss = 0.0
+                start_time = time.time()
 
-                del data, targets, output, loss, losses
+            del data, targets, output, loss, losses
 
-                if self.scheduler_step_on == "batch":
-                    self.scheduler.step()
+            if self.scheduler_step_on == "batch":
+                self.scheduler.step()
 
     @beartype
     def _calculate_loss(

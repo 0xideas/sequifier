@@ -1,5 +1,7 @@
+from logging import Logger
 from typing import Iterator, Union
 
+import numpy as np
 import torch
 from torch.utils.data import Sampler
 
@@ -27,6 +29,7 @@ class DistributedGroupedRandomSampler(Sampler[int]):
         data_source: Union[SequifierDatasetFromFolder, SequifierDatasetFromFolderLazy],
         num_replicas: int,
         rank: int,
+        logger: Logger,
         shuffle: bool = True,
         seed: int = 0,
         sampling_strategy: str = "exact",
@@ -45,6 +48,7 @@ class DistributedGroupedRandomSampler(Sampler[int]):
         self.data_source = data_source
         self.num_replicas = num_replicas
         self.rank = rank
+        self.logger = logger
         self.epoch = 0
         self.shuffle = shuffle
         self.seed = seed
@@ -61,9 +65,20 @@ class DistributedGroupedRandomSampler(Sampler[int]):
 
         # Determine the number of files and samples this rank will process
         self.num_files = len(self.index_groups)
-        self.files_for_this_rank = list(range(self.num_files))[
+        files_for_this_rank = list(range(self.num_files))[
             self.rank :: self.num_replicas
         ]
+
+        if len(files_for_this_rank) == 0:
+            if self.sampling_strategy == "oversampling":
+                random_viable_rank = np.random.randint(self.num_files)
+                files_for_this_rank = list(range(self.num_files))[
+                    random_viable_rank :: self.num_replicas
+                ]
+            else:
+                raise Exception(
+                    f"No file found for GPU rank {self.rank}. Total number of files found: {self.num_files}. Please adapt your data or use 'oversampling'"
+                )
 
         if self.sampling_strategy == "exact":
             if self.num_files % self.num_replicas != 0:
@@ -72,7 +87,7 @@ class DistributedGroupedRandomSampler(Sampler[int]):
                     f"world_size ({self.num_replicas}) when using 'exact' sampling strategy."
                 )
             self.num_samples = sum(
-                len(self.index_groups[i]) for i in self.files_for_this_rank
+                len(self.index_groups[i]) for i in files_for_this_rank
             )
 
         elif self.sampling_strategy == "oversampling":
@@ -107,6 +122,12 @@ class DistributedGroupedRandomSampler(Sampler[int]):
 
         # 2. Assign a unique, non-overlapping subset of shuffled files to this rank
         files_for_this_rank = all_files_order[self.rank :: self.num_replicas]
+
+        if len(files_for_this_rank) == 0 and self.sampling_strategy == "oversampling":
+            # Borrow the first file from the shuffled list so final_indices won't be empty
+            files_for_this_rank = [all_files_order[0]]
+
+        self.logger.info(f"Files for rank {self.rank}: {files_for_this_rank}")
 
         # 3. Create the final list of indices for this rank
         final_indices = []
