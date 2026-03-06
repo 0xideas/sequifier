@@ -30,8 +30,7 @@ from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.nn import ModuleDict
 from torch.nn.functional import one_hot
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader, RandomSampler
-from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data import DataLoader
 
 torch._dynamo.config.suppress_errors = True
 
@@ -53,9 +52,6 @@ from sequifier.io.sequifier_dataset_from_folder_lazy import (  # noqa: E402
 )
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
-from sequifier.samplers.distributed_grouped_random_sampler import (  # noqa: E402
-    DistributedGroupedRandomSampler,
-)
 
 
 @beartype
@@ -148,80 +144,25 @@ def train_worker(
         train_dataset = SequifierDatasetFromFile(config.training_data_path, config)
         valid_dataset = SequifierDatasetFromFile(config.validation_data_path, config)
 
-    if from_folder:
-        if config.training_spec.distributed:
-            # 2. Use the new distributed sampler for the multi-GPU case
-            if config.training_spec.load_full_data_to_ram:
-                train_sampler = DistributedSampler(
-                    train_dataset,
-                    num_replicas=world_size,
-                    rank=global_rank,
-                    shuffle=True,
-                )
-                valid_sampler = DistributedSampler(
-                    valid_dataset,
-                    num_replicas=world_size,
-                    rank=global_rank,
-                    shuffle=False,
-                )
-            else:
-                train_sampler = DistributedGroupedRandomSampler(
-                    train_dataset,
-                    num_replicas=world_size,
-                    rank=global_rank,
-                    logger=logger,
-                    sampling_strategy=config.training_spec.sampling_strategy,
-                )
-                valid_sampler = DistributedGroupedRandomSampler(
-                    valid_dataset,
-                    num_replicas=world_size,
-                    rank=global_rank,
-                    logger=logger,
-                    shuffle=False,
-                    sampling_strategy=config.training_spec.sampling_strategy,
-                )
-        else:
-            train_sampler = RandomSampler(train_dataset)
-            valid_sampler = None
-    else:
-        train_sampler = None
-        valid_sampler = None
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=None,  # Batching is handled natively by the IterableDataset
+        sampler=None,  # Sharding is handled natively by the IterableDataset
+        num_workers=config.training_spec.num_workers,
+        pin_memory=config.training_spec.device not in ["mps", "cpu"],
+        prefetch_factor=4 if config.training_spec.num_workers > 0 else None,
+        persistent_workers=(config.training_spec.num_workers > 0),
+    )
 
-    if from_folder:
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=config.training_spec.batch_size,
-            sampler=train_sampler,
-            shuffle=False,
-            num_workers=config.training_spec.num_workers,
-            pin_memory=config.training_spec.device not in ["mps", "cpu"],
-        )
-        valid_loader = DataLoader(
-            valid_dataset,
-            batch_size=config.training_spec.batch_size,
-            sampler=valid_sampler,
-            shuffle=False,
-            num_workers=config.training_spec.num_workers,
-            pin_memory=config.training_spec.device not in ["mps", "cpu"],
-        )
-    else:
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=None,
-            sampler=None,
-            num_workers=config.training_spec.num_workers,
-            pin_memory=False,
-            persistent_workers=(config.training_spec.num_workers > 0),
-        )
-        valid_loader = DataLoader(
-            valid_dataset,
-            batch_size=None,
-            sampler=None,
-            shuffle=False,
-            num_workers=config.training_spec.num_workers,
-            pin_memory=False,
-            persistent_workers=(config.training_spec.num_workers > 0),
-        )
+    valid_loader = DataLoader(
+        valid_dataset,
+        batch_size=None,
+        sampler=None,
+        num_workers=config.training_spec.num_workers,
+        pin_memory=config.training_spec.device not in ["mps", "cpu"],
+        prefetch_factor=4 if config.training_spec.num_workers > 0 else None,
+        persistent_workers=(config.training_spec.num_workers > 0),
+    )
 
     configure_determinism(config.seed, config.training_spec.enforce_determinism)
 
@@ -382,8 +323,6 @@ def train_worker(
     unwrapped_model.train_model(
         train_loader,
         valid_loader,
-        train_sampler,
-        valid_sampler,
         ddp_model=model if config.training_spec.distributed else None,
     )
 
@@ -1134,12 +1073,6 @@ class TransformerModel(nn.Module):
         self,
         train_loader: DataLoader,
         valid_loader: DataLoader,
-        train_sampler: Optional[
-            Union[RandomSampler, DistributedSampler, DistributedGroupedRandomSampler]
-        ],
-        valid_sampler: Optional[
-            Union[RandomSampler, DistributedSampler, DistributedGroupedRandomSampler]
-        ],
         ddp_model: Optional[nn.Module] = None,
     ) -> None:
         """Trains the model.
@@ -1150,10 +1083,6 @@ class TransformerModel(nn.Module):
         Args:
             train_loader: DataLoader for the training dataset.
             valid_loader: DataLoader for the validation dataset.
-            train_sampler: Sampler for the training DataLoader, used to set
-                           the epoch in distributed training.
-            valid_sampler: Sampler for the validation DataLoader, used to set
-                           the epoch in distributed training.
             ddp_model: ddp model
         """
         best_val_loss = float("inf")
@@ -1180,12 +1109,10 @@ class TransformerModel(nn.Module):
                 ):
                     epoch_start_time = time.time()
 
-                    if train_sampler and not isinstance(train_sampler, RandomSampler):
-                        train_sampler.set_epoch(epoch)
-                    self._train_epoch(train_loader, epoch, ddp_model)
+                    train_loader.dataset.set_epoch(epoch)
+                    valid_loader.dataset.set_epoch(epoch)
 
-                    if valid_sampler and not isinstance(valid_sampler, RandomSampler):
-                        valid_sampler.set_epoch(epoch)
+                    self._train_epoch(train_loader, epoch, ddp_model)
 
                     total_loss, total_losses, output = self._evaluate(
                         valid_loader, ddp_model

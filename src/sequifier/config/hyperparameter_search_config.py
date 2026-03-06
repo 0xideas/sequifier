@@ -1,5 +1,4 @@
 import json
-import random
 from itertools import product
 from typing import Optional, Union
 
@@ -494,7 +493,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         else:
             # Use random.choice because valid_kv_heads might contain None
             # and np.random.choice behaves weirdly with mixed None types.
-            n_kv_heads = random.choice(valid_kv_heads)
+            n_kv_heads = np.random.choice(np.array(valid_kv_heads))
 
         logger.info(
             f"{initial_embedding_dim} - {joint_embedding_dim = } - {dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
