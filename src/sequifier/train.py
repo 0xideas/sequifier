@@ -5,6 +5,7 @@ import os
 import time
 import uuid
 import warnings
+from datetime import timedelta
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -57,7 +58,17 @@ def setup(rank: int, world_size: int, backend: str = "nccl"):
     """
     os.environ["MASTER_ADDR"] = os.getenv("MASTER_ADDR", "localhost")
     os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
-    dist.init_process_group(backend, rank=rank, world_size=world_size)
+
+    os.environ["NCCL_DEBUG"] = "INFO"
+    os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
+    if not dist.is_initialized():
+        timeout_sec = int(os.environ.get("NCCL_TIMEOUT", 1800))
+        dist.init_process_group(
+            backend,
+            rank=rank,
+            world_size=world_size,
+            timeout=timedelta(seconds=timeout_sec),
+        )
 
 
 def cleanup():
@@ -66,7 +77,25 @@ def cleanup():
 
 
 @beartype
-def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bool):
+def create_dummy_data(config: TrainModel, local_rank: int) -> dict[str, Tensor]:
+    dummy_data = {}
+    for col in config.input_columns:
+        dtype = torch.int64 if col in config.categorical_columns else torch.float32
+        dummy_data[col] = torch.ones(
+            (2, config.seq_length), dtype=dtype, device=local_rank
+        )
+
+    return dummy_data
+
+
+@beartype
+def train_worker(
+    local_rank: int,
+    world_size: int,
+    config: TrainModel,
+    from_folder: bool,
+    global_rank: int,
+):
     """The worker function for distributed training.
 
     Args:
@@ -75,9 +104,14 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
         config: The training configuration.
         from_folder: Whether to load data from a folder (e.g., preprocessed .pt files)
                      or a single file (e.g., .parquet).
+        global_rank: The global rank
     """
+    logger = configure_logger(config.project_root, config.model_name, global_rank)
+
     if config.training_spec.distributed:
-        setup(rank, world_size, config.training_spec.backend)
+        setup(global_rank, world_size, config.training_spec.backend)
+        if config.training_spec.device.startswith("cuda"):
+            torch.cuda.set_device(local_rank)
 
     # 1. Create Datasets and DataLoaders with DistributedSampler
     if from_folder:
@@ -108,31 +142,46 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
             # 2. Use the new distributed sampler for the multi-GPU case
             if config.training_spec.load_full_data_to_ram:
                 train_sampler = DistributedSampler(
-                    train_dataset, num_replicas=world_size, rank=rank, shuffle=True
+                    train_dataset,
+                    num_replicas=world_size,
+                    rank=global_rank,
+                    shuffle=True,
                 )
                 valid_sampler = DistributedSampler(
-                    valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+                    valid_dataset,
+                    num_replicas=world_size,
+                    rank=global_rank,
+                    shuffle=False,
                 )
             else:
                 train_sampler = DistributedGroupedRandomSampler(
-                    train_dataset, num_replicas=world_size, rank=rank
+                    train_dataset,
+                    num_replicas=world_size,
+                    rank=global_rank,
+                    logger=logger,
+                    sampling_strategy=config.training_spec.sampling_strategy,
                 )
                 valid_sampler = DistributedGroupedRandomSampler(
-                    valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+                    valid_dataset,
+                    num_replicas=world_size,
+                    rank=global_rank,
+                    logger=logger,
+                    shuffle=False,
+                    sampling_strategy=config.training_spec.sampling_strategy,
                 )
         else:
-            # Use the simple grouped sampler for the single-GPU case
             train_sampler = RandomSampler(train_dataset)
             valid_sampler = None
     else:
+        assert not from_folder
         train_sampler = (
-            DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
+            DistributedSampler(train_dataset, num_replicas=world_size, rank=global_rank)
             if config.training_spec.distributed
             else None
         )
         valid_sampler = (
             DistributedSampler(
-                valid_dataset, num_replicas=world_size, rank=rank, shuffle=False
+                valid_dataset, num_replicas=world_size, rank=global_rank, shuffle=False
             )
             if config.training_spec.distributed
             else None
@@ -143,20 +192,19 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
             train_dataset,
             batch_size=config.training_spec.batch_size,
             sampler=train_sampler,
-            shuffle=False,  # Shuffle only if not using sampler
-            num_workers=config.training_spec.num_workers,  # Use multiple workers for data loading
+            shuffle=False,
+            num_workers=config.training_spec.num_workers,
             pin_memory=config.training_spec.device not in ["mps", "cpu"],
         )
-
-        # For validation, it's often fine to just run it on the main process
         valid_loader = DataLoader(
             valid_dataset,
             batch_size=config.training_spec.batch_size,
             sampler=valid_sampler,
             shuffle=False,
+            num_workers=config.training_spec.num_workers,
+            pin_memory=config.training_spec.device not in ["mps", "cpu"],
         )
     else:
-        assert not from_folder
         train_loader = DataLoader(
             train_dataset,
             batch_size=None,
@@ -166,26 +214,60 @@ def train_worker(rank: int, world_size: int, config: TrainModel, from_folder: bo
             persistent_workers=(config.training_spec.num_workers > 0),
         )
         valid_loader = DataLoader(
-            valid_dataset, batch_size=None, sampler=None, shuffle=False
+            valid_dataset,
+            batch_size=None,
+            sampler=None,
+            shuffle=False,
+            num_workers=config.training_spec.num_workers,
+            pin_memory=False,
+            persistent_workers=(config.training_spec.num_workers > 0),
         )
 
     configure_determinism(config.seed, config.training_spec.enforce_determinism)
 
-    model = TransformerModel(config, rank)
+    # Note the change: we pass both global_rank and local_rank
+    model = TransformerModel(config, rank=global_rank, local_rank=local_rank)
 
     if config.training_spec.distributed:
-        model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+        # Note the change: Use local_rank specifically to bind DDP device safely
+        device_ids = (
+            [local_rank] if config.training_spec.device.startswith("cuda") else None
+        )
+        model = DDP(model, device_ids=device_ids, find_unused_parameters=False)
 
     if config.training_spec.device.startswith("cuda"):
         model = torch.compile(model)
 
+        dummy_data = create_dummy_data(config, local_rank)
+        with torch.no_grad(), torch.autocast(
+            device_type="cuda",
+            dtype=torch.bfloat16,
+            enabled=config.training_spec.layer_autocast,
+        ):
+            _ = model(dummy_data, False)
+
+        if config.training_spec.distributed:
+            dist.barrier()
+
     # 3. Start training
-    # When using DDP, the original model is accessed via the .module attribute
     original_model = model.module if config.training_spec.distributed else model
-    original_model.train_model(train_loader, valid_loader, train_sampler, valid_sampler)
+    original_model.train_model(
+        train_loader,
+        valid_loader,
+        train_sampler,
+        valid_sampler,
+        ddp_model=model if config.training_spec.distributed else None,
+    )
 
     if config.training_spec.distributed:
         cleanup()
+
+
+@beartype
+def _mp_train_worker_wrapper(
+    local_rank: int, world_size: int, config: TrainModel, from_folder: bool
+):
+    train_worker(local_rank, world_size, config, from_folder, global_rank=local_rank)
 
 
 @beartype
@@ -200,18 +282,25 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
     config = load_train_config(config_path, args_config, args.skip_metadata)
 
     world_size = config.training_spec.world_size
-
     from_folder = config.read_format == "pt"
+
     if config.training_spec.distributed:
-        mp.spawn(
-            train_worker,
-            args=(world_size, config, from_folder),
-            nprocs=world_size,
-            join=True,
-        )
+        if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+            # Launched via torchrun / srun for multi-node distributed training
+            global_rank = int(os.environ["RANK"])
+            world_size = int(os.environ["WORLD_SIZE"])
+            local_rank = int(os.environ.get("LOCAL_RANK", 0))
+            train_worker(local_rank, world_size, config, from_folder, global_rank)
+        else:
+            # Single-node multi-GPU fallback using mp.spawn
+            mp.spawn(
+                _mp_train_worker_wrapper,
+                args=(world_size, config, from_folder),
+                nprocs=world_size,
+                join=True,
+            )
     else:
-        # Fallback to single-GPU/CPU training
-        train_worker(0, world_size, config, from_folder)
+        train_worker(0, 1, config, from_folder, 0)
 
 
 @beartype
@@ -288,7 +377,9 @@ class TransformerModel(nn.Module):
     """
 
     @beartype
-    def __init__(self, hparams: Any, rank: Optional[int] = None):
+    def __init__(
+        self, hparams: Any, rank: Optional[int] = None, local_rank: Optional[int] = None
+    ):
         """Initializes the TransformerModel.
 
         Based on the hyperparameters, this initializes:
@@ -445,8 +536,13 @@ class TransformerModel(nn.Module):
         self.device = hparams.training_spec.device
         self.device_max_concat_length = hparams.training_spec.device_max_concat_length
 
-        if hparams.training_spec.device == "cuda" and self.rank is not None:
-            self.device = f"cuda:{self.rank}"
+        if hparams.training_spec.device.startswith("cuda"):
+            if local_rank is not None:
+                self.device = f"cuda:{local_rank}"
+            elif self.rank is not None:  # Backwards compatibility
+                self.device = f"cuda:{self.rank}"
+            else:
+                self.device = hparams.training_spec.device
         else:
             self.device = hparams.training_spec.device
 
@@ -849,7 +945,9 @@ class TransformerModel(nn.Module):
             return self.softmax[target_column](output.float())
 
     @beartype
-    def forward(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
+    def forward(
+        self, src: dict[str, Tensor], return_logits: Union[bool, Tensor] = False
+    ) -> dict[str, Tensor]:
         """The main forward pass of the model.
 
         This is typically used for inference/evaluation, returning the
@@ -858,6 +956,7 @@ class TransformerModel(nn.Module):
         Args:
             src: A dictionary mapping column names to input tensors
                  (batch_size, seq_length).
+            return_logits: Return logits
 
         Returns:
             A dictionary mapping target column names to their final
@@ -865,6 +964,8 @@ class TransformerModel(nn.Module):
             last token (batch_size, n_classes/1).
         """
         output = self.forward_train(src)
+        if return_logits:
+            return output
         return {
             target_column: self.apply_softmax(
                 target_column, out[-self.prediction_length :, :, :]
@@ -883,6 +984,7 @@ class TransformerModel(nn.Module):
         valid_sampler: Optional[
             Union[RandomSampler, DistributedSampler, DistributedGroupedRandomSampler]
         ],
+        ddp_model: Optional[nn.Module] = None,
     ) -> None:
         """Trains the model.
 
@@ -896,6 +998,7 @@ class TransformerModel(nn.Module):
                            the epoch in distributed training.
             valid_sampler: Sampler for the validation DataLoader, used to set
                            the epoch in distributed training.
+            ddp_model:
         """
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
@@ -921,7 +1024,7 @@ class TransformerModel(nn.Module):
 
                     if train_sampler and not isinstance(train_sampler, RandomSampler):
                         train_sampler.set_epoch(epoch)
-                    self._train_epoch(train_loader, epoch)
+                    self._train_epoch(train_loader, epoch, ddp_model)
 
                     if valid_sampler and not isinstance(valid_sampler, RandomSampler):
                         valid_sampler.set_epoch(epoch)
@@ -999,11 +1102,8 @@ class TransformerModel(nn.Module):
         if self.hparams.training_spec.distributed:
             dist.barrier()
 
-        # Only rank 0 should perform the final export
         if self.rank == 0:
-            if (
-                best_model is None
-            ):  # <-- MODIFICATION: Handle case where no improvement was ever made
+            if best_model is None:
                 self.logger.info(
                     "[INFO] No validation improvement during training. Saving last model as 'best'."
                 )
@@ -1013,11 +1113,15 @@ class TransformerModel(nn.Module):
             self._export(best_model, "best", last_epoch)  # type: ignore
             self.logger.info("--- Training Complete ---")
 
+        if self.hparams.training_spec.distributed:
+            dist.barrier()
+
     @beartype
     def _train_epoch(
         self,
         train_loader: DataLoader,
         epoch: int,
+        ddp_model: Optional[nn.Module] = None,
     ) -> None:
         """Trains the model for one epoch.
 
@@ -1047,6 +1151,8 @@ class TransformerModel(nn.Module):
                 for k, v in targets.items()
                 if k in self.target_column_types
             }
+            model_to_call = ddp_model if ddp_model is not None else self
+
             if self.hparams.training_spec.layer_autocast:
                 amp_dtype = get_torch_dtype(
                     self.hparams.training_spec.layer_type_dtypes.get(
@@ -1058,10 +1164,10 @@ class TransformerModel(nn.Module):
                 with torch.autocast(
                     device_type=self.device.split(":")[0], dtype=amp_dtype
                 ):
-                    output = self.forward_train(data)
+                    output = model_to_call(data, True)
                     loss, losses = self._calculate_loss(output, targets)
             else:
-                output = self.forward_train(data)
+                output = model_to_call(data, True)
                 loss, losses = self._calculate_loss(output, targets)
 
             self.scaler.scale(loss).backward()
@@ -1278,10 +1384,10 @@ class TransformerModel(nn.Module):
                     with torch.autocast(
                         device_type=self.device.split(":")[0], dtype=amp_dtype
                     ):
-                        output = self.forward_train(data)
+                        output = self(data, True)
                         loss, losses = self._calculate_loss(output, targets)
                 else:
-                    output = self.forward_train(data)
+                    output = self(data, True)
                     loss, losses = self._calculate_loss(output, targets)
 
                 total_loss_collect.append(loss.item())
@@ -1301,18 +1407,22 @@ class TransformerModel(nn.Module):
             }
         else:
             # Handle empty validation set case
-            total_loss_local = -1.0
-            total_losses_local = {col: -1.0 for col in self.target_columns}
+            total_loss_local = 0.0
+            total_losses_local = {col: 0.0 for col in self.target_columns}
 
         # 2. Aggregate losses across all GPUs if in distributed mode
         if self.hparams.training_spec.distributed:
             # Put local losses into tensors for reduction
-            total_loss_tensor = torch.tensor(total_loss_local, device=self.device)
+            total_loss_tensor = torch.tensor(
+                total_loss_local, device=self.device, dtype=torch.float32
+            )
 
             # Ensure consistent order for the losses tensor
             loss_keys = sorted(total_losses_local.keys())
             losses_values = [total_losses_local[k] for k in loss_keys]
-            losses_tensor = torch.tensor(losses_values, device=self.device)
+            losses_tensor = torch.tensor(
+                losses_values, device=self.device, dtype=torch.float32
+            )
 
             # Sum losses from all processes. The result is broadcast back to all processes.
             dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
@@ -1380,12 +1490,14 @@ class TransformerModel(nn.Module):
             # Broadcast the baseline values from the main process to all others
             if self.hparams.training_spec.distributed:
                 total_loss_tensor = torch.tensor(
-                    baseline_loss_local, device=self.device
+                    baseline_loss_local, device=self.device, dtype=torch.float32
                 )
                 dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
                 loss_keys = sorted(baseline_losses_local.keys())
                 losses_values = [baseline_losses_local[k] for k in loss_keys]
-                losses_tensor = torch.tensor(losses_values, device=self.device)
+                losses_tensor = torch.tensor(
+                    losses_values, device=self.device, dtype=torch.float32
+                )
                 dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
 
                 world_size = dist.get_world_size()

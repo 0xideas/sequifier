@@ -64,7 +64,7 @@ class SequifierDatasetFromFolder(Dataset):
                 sequence_ids,
                 subsequence_ids,
                 start_item_positions_tensor,
-            ) = torch.load(file_path, map_location="cpu")
+            ) = torch.load(file_path, map_location="cpu", weights_only=False)
 
             for col in all_sequences.keys():
                 if col in sequences_batch:

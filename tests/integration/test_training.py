@@ -21,6 +21,8 @@ def test_checkpoint_files_exists(run_training, project_root):
                 for i in range(1, 4)
             ]
             + [f"model-categorical-multitarget-5-epoch-{i}.pt" for i in range(1, 4)]
+            + [f"model-categorical-distributed-epoch-{i}.pt" for i in range(1, 4)]
+            + [f"model-categorical-lazy-epoch-{i}.pt" for i in range(1, 4)]
         )
     )
 
@@ -63,6 +65,14 @@ def test_model_files_exists(run_training, project_root):
                 "sequifier-model-categorical-3-inf-size-last-3.pt",
                 "sequifier-model-categorical-3-inf-size-best-embedding-3.pt",
                 "sequifier-model-categorical-3-inf-size-last-embedding-3.pt",
+                "sequifier-model-categorical-distributed-best-3.pt",
+                "sequifier-model-categorical-distributed-best-3.onnx",
+                "sequifier-model-categorical-distributed-last-3.pt",
+                "sequifier-model-categorical-distributed-last-3.onnx",
+                "sequifier-model-categorical-lazy-best-3.pt",
+                "sequifier-model-categorical-lazy-best-3.onnx",
+                "sequifier-model-categorical-lazy-last-3.pt",
+                "sequifier-model-categorical-lazy-last-3.onnx",
             ]
             + [
                 f"sequifier-test-hp-search-sample-run-{i}-{suffix}-1.pt"

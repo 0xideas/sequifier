@@ -1,0 +1,23 @@
+project_root: tests/project_folder
+metadata_config_path: configs/metadata_configs/test-data-categorical-3.json
+
+model_path: models/sequifier-model-categorical-lazy-best-3.onnx
+model_type: generative
+
+data_path: data/test-data-categorical-3-split2
+read_format: pt
+write_format: csv
+
+input_columns: [itemId, supCat1]
+target_columns: [itemId]
+target_column_types:
+  itemId: categorical
+
+output_probabilities: false
+map_to_id: true
+device: cpu
+seq_length: 8
+inference_batch_size: 2
+
+# --- Lazy Loading Setting ---
+load_full_data_to_ram: false

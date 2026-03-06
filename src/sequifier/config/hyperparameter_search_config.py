@@ -157,6 +157,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: Optional[bool] = True
+    sampling_strategy: str = "exact"
 
     def __init__(self, **kwargs):
         """Initialize the TrainingSpecHyperparameterSampling instance.
@@ -296,6 +297,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             backend=self.backend,
             layer_type_dtypes=self.layer_type_dtypes,
             layer_autocast=self.layer_autocast,
+            sampling_strategy=self.sampling_strategy,
         )
 
     def grid_sample(self, i):
@@ -362,6 +364,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             backend=self.backend,
             layer_type_dtypes=self.layer_type_dtypes,
             layer_autocast=self.layer_autocast,
+            sampling_strategy=self.sampling_strategy,
         )
 
     def n_combinations(self):

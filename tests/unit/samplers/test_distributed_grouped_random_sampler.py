@@ -1,3 +1,4 @@
+from logging import Logger
 from unittest.mock import MagicMock
 
 import pytest
@@ -5,6 +6,12 @@ import pytest
 from sequifier.samplers.distributed_grouped_random_sampler import (
     DistributedGroupedRandomSampler,
 )
+
+
+@pytest.fixture
+def logger():
+    logger = Logger("test")
+    return logger
 
 
 @pytest.fixture
@@ -29,7 +36,7 @@ def mock_dataset():
     return dataset
 
 
-def test_partitioning_ranks(mock_dataset):
+def test_partitioning_ranks(mock_dataset, logger):
     """
     Test that the sampler correctly partitions files across distributed ranks.
     With 4 files and 2 replicas:
@@ -43,13 +50,23 @@ def test_partitioning_ranks(mock_dataset):
 
     # Sampler for Rank 0
     sampler_r0 = DistributedGroupedRandomSampler(
-        mock_dataset, num_replicas=num_replicas, rank=0, shuffle=False, seed=seed
+        mock_dataset,
+        num_replicas=num_replicas,
+        rank=0,
+        logger=logger,
+        shuffle=False,
+        seed=seed,
     )
     indices_r0 = list(sampler_r0)
 
     # Sampler for Rank 1
     sampler_r1 = DistributedGroupedRandomSampler(
-        mock_dataset, num_replicas=num_replicas, rank=1, shuffle=False, seed=seed
+        mock_dataset,
+        num_replicas=num_replicas,
+        rank=1,
+        logger=logger,
+        shuffle=False,
+        seed=seed,
     )
     indices_r1 = list(sampler_r1)
 
@@ -75,7 +92,7 @@ def test_partitioning_ranks(mock_dataset):
     assert all(10 <= i < 20 or 30 <= i < 40 for i in indices_r1)
 
 
-def test_deterministic_shuffling(mock_dataset):
+def test_deterministic_shuffling(mock_dataset, logger):
     """
     Test that the sampler produces the same sequence when seeded identically,
     and handles file-level vs sample-level shuffling.
@@ -86,10 +103,10 @@ def test_deterministic_shuffling(mock_dataset):
 
     # Two samplers with same seed
     sampler1 = DistributedGroupedRandomSampler(
-        mock_dataset, num_replicas, rank, shuffle=True, seed=seed
+        mock_dataset, num_replicas, rank, logger, shuffle=True, seed=seed
     )
     sampler2 = DistributedGroupedRandomSampler(
-        mock_dataset, num_replicas, rank, shuffle=True, seed=seed
+        mock_dataset, num_replicas, rank, logger, shuffle=True, seed=seed
     )
 
     indices1 = list(sampler1)
@@ -103,13 +120,13 @@ def test_deterministic_shuffling(mock_dataset):
     assert indices1 != list(range(40))
 
 
-def test_epoch_determinism(mock_dataset):
+def test_epoch_determinism(mock_dataset, logger):
     """
     Test that changing the epoch changes the shuffle order deterministically.
     """
     seed = 999
     sampler = DistributedGroupedRandomSampler(
-        mock_dataset, num_replicas=1, rank=0, shuffle=True, seed=seed
+        mock_dataset, num_replicas=1, rank=0, logger=logger, shuffle=True, seed=seed
     )
 
     # Epoch 0
@@ -130,7 +147,7 @@ def test_epoch_determinism(mock_dataset):
     assert indices_epoch0 == indices_epoch0_again
 
 
-def test_grouped_sampling_structure(mock_dataset):
+def test_grouped_sampling_structure(mock_dataset, logger):
     """
     Test the specific 'grouped' logic: files are shuffled, then assigned to ranks.
     Within a rank, we process one file fully before moving to the next.
@@ -139,7 +156,7 @@ def test_grouped_sampling_structure(mock_dataset):
     # We inspect the output to ensure indices from the same file are grouped together.
     seed = 555
     sampler = DistributedGroupedRandomSampler(
-        mock_dataset, num_replicas=1, rank=0, shuffle=True, seed=seed
+        mock_dataset, num_replicas=1, rank=0, logger=logger, shuffle=True, seed=seed
     )
     indices = list(sampler)
 
@@ -182,11 +199,11 @@ def test_grouped_sampling_structure(mock_dataset):
             pass
 
 
-def test_length(mock_dataset):
+def test_length(mock_dataset, logger):
     """Test __len__ implementation."""
     # 4 files * 10 samples = 40 samples total
     # 2 replicas -> 20 samples per replica
     sampler = DistributedGroupedRandomSampler(
-        mock_dataset, num_replicas=2, rank=0, shuffle=True
+        mock_dataset, num_replicas=2, rank=0, logger=logger, shuffle=True
     )
     assert len(sampler) == 20
