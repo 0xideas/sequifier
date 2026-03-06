@@ -283,7 +283,9 @@ def train_worker(
                 sharding_strategy=sharding_strategy,
                 device_id=local_rank,
                 use_orig_params=True,
+                sync_module_states=True,
             )
+            dist.barrier()
         else:
             device_ids = (
                 [local_rank] if config.training_spec.device.startswith("cuda") else None
@@ -1080,7 +1082,7 @@ class TransformerModel(nn.Module):
     ) -> dict[str, Tensor]:
         """Safely extracts the full state dict to CPU memory, supporting FSDP."""
         model_to_extract = ddp_model if ddp_model is not None else self
-        if self.hparams.training_spec.fsdp and isinstance(model_to_extract, FSDP):
+        if self.hparams.training_spec.fsdp:
             save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
             with FSDP.state_dict_type(
                 model_to_extract, StateDictType.FULL_STATE_DICT, save_policy
@@ -1171,7 +1173,6 @@ class TransformerModel(nn.Module):
                         self._save(epoch, total_loss, ddp_model)
 
                     last_epoch = epoch
-
         except KeyboardInterrupt:
             self.logger.info("\n" + "=" * 89)
             self.logger.info("[WARNING] Training interrupted by user (Ctrl+C).")
@@ -1179,8 +1180,11 @@ class TransformerModel(nn.Module):
             if self.hparams.training_spec.distributed:
                 dist.barrier()
 
-            if self.rank == 0:  # Only ask and export on the main process
-                answer = ""
+            # 1. Use a list to hold the answer so it can be broadcasted across ranks
+            answer_list = ["n"]
+
+            # 2. Only Rank 0 prompts the user
+            if self.rank == 0:
                 try:
                     answer = (
                         input(
@@ -1189,50 +1193,63 @@ class TransformerModel(nn.Module):
                         .lower()
                         .strip()
                     )
+                    if answer == "y":
+                        answer_list[0] = "y"
                 except EOFError:  # Handle non-interactive environments
-                    answer = "n"
+                    answer_list[0] = "n"
 
-                if answer == "y":
+            # 3. Broadcast the decision to all GPUs so they stay in sync
+            if self.hparams.training_spec.distributed:
+                dist.broadcast_object_list(answer_list, src=0)
+
+            # 4. If the decision is 'y', ALL ranks must participate in state dict extraction
+            if answer_list[0] == "y":
+                if self.rank == 0:
                     self.logger.info("[INFO] User opted to export models.")
 
-                    # Export last model (current state)
-                    if last_epoch is not None and best_model_state is not None:
+                if last_epoch is not None and best_model_state is not None:
+                    if self.rank == 0:
                         self.logger.info(
                             f"[INFO] Exporting 'last' model from epoch {last_epoch}..."
                         )
-                        self._export(
-                            self._get_full_state_dict(ddp_model), "last", last_epoch
-                        )
-                        # Export best model if it exists
-                        if best_model_state is not None:
-                            self.logger.info(
-                                "[INFO] Exporting 'best' model (based on best val loss)..."
-                            )
-                            self._export(best_model_state, "best", last_epoch)
-                        else:
-                            self.logger.info(
-                                "[WARNING] No 'best' model was saved (no validation improvement yet)."
-                            )
 
+                    # ALL RANKS MUST EXECUTE THIS to prevent FSDP all_gather deadlocks
+                    last_model_state = self._get_full_state_dict(ddp_model)
+
+                    # ONLY Rank 0 executes the file I/O
+                    if self.rank == 0:
+                        self._export(last_model_state, "last", last_epoch)
+
+                        self.logger.info(
+                            "[INFO] Exporting 'best' model (based on best val loss)..."
+                        )
+                        self._export(best_model_state, "best", last_epoch)
                         self.logger.info("[INFO] Models exported.")
-                    else:
+                else:
+                    if self.rank == 0:
                         self.logger.info(
                             "[INFO] Could not export model as no epoch ran."
                         )
-                else:
+            else:
+                if self.rank == 0:
                     self.logger.info("[INFO] User opted *not* to export. Exiting.")
 
         if self.hparams.training_spec.distributed:
             dist.barrier()
 
-        if self.rank == 0:
-            if best_model_state is None:
-                self.logger.info(
-                    "[INFO] No validation improvement during training. Saving last model as 'best'."
-                )
-                best_model_state = self._get_full_state_dict(ddp_model)
+        last_model_state = self._get_full_state_dict(ddp_model)
 
-            self._export(self._get_full_state_dict(ddp_model), "last", last_epoch)  # type: ignore
+        if best_model_state is None:
+            if self.rank == 0:
+                self.logger.info(
+                    "[INFO] No validation improvement... Saving last model as 'best'."
+                )
+            best_model_state = last_model_state
+
+        # 2. Restrict the export saving to Rank 0 inside the _export method (which you already do)
+        # or guard the I/O specifically:
+        if self.rank == 0:
+            self._export(last_model_state, "last", last_epoch)  # type: ignore
             self._export(best_model_state, "best", last_epoch)  # type: ignore
             self.logger.info("--- Training Complete ---")
 
@@ -1265,7 +1282,7 @@ class TransformerModel(nn.Module):
 
         model_to_call.train()
 
-        is_fsdp = self.hparams.training_spec.fsdp and isinstance(model_to_call, FSDP)
+        is_fsdp = self.hparams.training_spec.fsdp
 
         for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
             data = {
@@ -1496,7 +1513,7 @@ class TransformerModel(nn.Module):
 
         model_to_call.eval()
 
-        is_fsdp = self.hparams.training_spec.fsdp and isinstance(model_to_call, FSDP)
+        is_fsdp = self.hparams.training_spec.fsdp
 
         with torch.no_grad():
             for data, targets, _, _, _ in valid_loader:
@@ -1792,9 +1809,7 @@ class TransformerModel(nn.Module):
             ddp_model: DDP model
         """
         model_to_extract = ddp_model if ddp_model is not None else self
-        is_fsdp = self.hparams.training_spec.fsdp and isinstance(  # fsdp default: False
-            model_to_extract, FSDP
-        )
+        is_fsdp = self.hparams.training_spec.fsdp
 
         if is_fsdp:
             save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
