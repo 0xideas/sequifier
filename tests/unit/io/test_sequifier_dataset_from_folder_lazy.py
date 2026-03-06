@@ -132,7 +132,7 @@ def test_distributed_sharding(
     assert not any("file2.pt" in f for f in loaded_files)
 
 
-@patch("torch.utils.data.get_worker_info")
+@patch("sequifier.io.sequifier_dataset_from_folder_lazy.get_worker_info")
 def test_dataloader_worker_sharding(
     mock_worker_info, mock_config, dataset_path, mock_torch_load
 ):
