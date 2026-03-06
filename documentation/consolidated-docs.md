@@ -438,6 +438,7 @@ These fields determine the size and complexity of the Transformer.
 | `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
 | `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
+| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
 
 -----
 
@@ -797,6 +798,8 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
 | `layer_type_dtypes` | `dict` | No | **Fixed.** Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
 | `layer_autocast` | `bool` | No | **Fixed.** Enable `torch.autocast` (default `true`). |
+| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
+
 -----
 
 
@@ -875,3 +878,93 @@ The hyperparameter search command includes **automatic error handling for Out of
       * Separate logs for each run, detailing the loss curves.
 3.  **Models & Checkpoints:**
       * Saved in `models/` and `checkpoints/` with filenames including the run number (e.g., `models/sequifier-my-search-run-5-best-10.onnx`).
+
+
+# Distributed and Multi-Node Training in Sequifier
+
+Sequifier natively supports multi-GPU and multi-node training using PyTorch's `DistributedDataParallel` (DDP).
+
+## 1. Prerequisites: Preprocessing for DDP
+
+To use distributed training, your data must be sharded into multiple files so that different GPUs can read different chunks simultaneously without memory bottlenecks.
+
+In your `preprocess.yaml`, you **must** set the following:
+
+```yaml
+merge_output: false
+```
+
+typically, you'd also want to set
+
+```yaml
+write_format: pt
+```
+
+*Note: Distributed training is not supported if your data is kept as a single `csv` or `parquet` file.*
+
+## 2. Configuration: `train.yaml`
+
+Once your data is preprocessed into `.pt` shards, you need to tell the Sequifier training engine to expect a distributed environment.
+
+In your `train.yaml`, update the `training_spec` block:
+
+```yaml
+training_spec:
+  distributed: true
+  world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)
+  backend: nccl        # 'nccl' is the standard and most efficient backend for NVIDIA GPUs
+  sampling_strategy: 'oversampling' # if the number of files isn't perfectly divisible by the number of GPUs, you need to choose either 'oversampling' or 'undersampling'. If it is perfectly divisible, you can set it to 'exact'
+
+```
+
+## 3. Launching the Training Job
+
+How you launch the training depends on whether you are using a single machine with multiple GPUs, or multiple machines (nodes) connected over a network.
+
+### Scenario A: Single-Node, Multi-GPU
+
+If you are running on a single machine that has multiple GPUs (e.g., an AWS EC2 instance with 4x A100s), Sequifier can handle process generation internally using `torch.multiprocessing.spawn`.
+
+You simply run the standard command:
+
+```bash
+sequifier train --config-path configs/train.yaml
+
+```
+
+Sequifier will read the `world_size` config parameter and automatically spawn that exact number of worker processes.
+
+### Scenario B: Multi-Node, Multi-GPU (HPC / Slurm)
+
+Sequifier cannot automatically spawn Python processes across physical network boundaries. For multi-node training, you must use an external cluster manager (like Slurm) combined with PyTorch's `torchrun` utility.
+
+When `sequifier` detects `torchrun` environment variables (like `RANK` and `WORLD_SIZE`), it bypasses its internal spawner and attaches to the distributed network established by the cluster.
+
+Here is a standard `sbatch` script template for launching Sequifier across multiple nodes:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=sequifier_multinode
+#SBATCH --nodes=8                  # Number of nodes
+#SBATCH --gres=gpu:4               # GPUs per node
+#SBATCH --ntasks-per-node=1        # One task per node (torchrun handles the rest)
+#SBATCH --cpus-per-task=80         # CPU cores per node
+
+# ... python env setup ...
+
+MASTER_NODE=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+
+srun torchrun \
+    --nnodes=8 \
+    --nproc_per_node=4 \
+    --rdzv_id=sequifier_job \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=$MASTER_NODE:29400 \
+    $(which sequifier) train --config-path=configs/train.yaml
+```
+
+### Important Considerations for Multi-Node
+
+* **Batch Size:** The `batch_size` in your `train.yaml` is the **per-GPU** batch size. If your `batch_size` is 100, and your `world_size` is 32, your effective global batch size is 3,200.
+* **Learning Rate:** You may need to scale your `learning_rate` up if you drastically increase your global batch size via distributed training.
+* **Data Access:** All nodes must have access to the same shared filesystem (e.g., NFS, GPFS) where the `project_root` and the `.pt` data shards are stored.

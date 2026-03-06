@@ -93,6 +93,7 @@ These fields determine the size and complexity of the Transformer.
 | `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
 | `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
+| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
 
 -----
 

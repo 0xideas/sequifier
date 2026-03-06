@@ -98,6 +98,8 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
 | `layer_type_dtypes` | `dict` | No | **Fixed.** Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
 | `layer_autocast` | `bool` | No | **Fixed.** Enable `torch.autocast` (default `true`). |
+| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
+
 -----
 
 

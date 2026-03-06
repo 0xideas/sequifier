@@ -50,7 +50,7 @@ sequifier train --config-path configs/train.yaml
 
 ```
 
-Sequifier will automatically detect the local GPUs and spawn the number of worker processes set by the 'world_size' config parameter
+Sequifier will read the `world_size` config parameter and automatically spawn that exact number of worker processes.
 
 ### Scenario B: Multi-Node, Multi-GPU (HPC / Slurm)
 
