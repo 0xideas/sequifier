@@ -1,14 +1,36 @@
 from logging import Logger
-from typing import Iterator, Union
+from typing import Iterator, Optional, Union
 
 import numpy as np
 import torch
+from beartype import beartype
 from torch.utils.data import Sampler
 
 from sequifier.io.sequifier_dataset_from_folder import SequifierDatasetFromFolder
 from sequifier.io.sequifier_dataset_from_folder_lazy import (
     SequifierDatasetFromFolderLazy,
 )
+
+
+@beartype
+def get_final_indices(
+    files_for_this_rank: list[int],
+    index_groups: list[list[int]],
+    shuffle: bool,
+    generator: Optional[torch.Generator],
+):
+    final_indices = []
+    for file_idx in files_for_this_rank:
+        # IMPORTANT: Create a copy to avoid mutating self.index_groups in-place
+        group = list(index_groups[file_idx])
+
+        if shuffle:
+            assert generator is not None
+            perm = torch.randperm(len(group), generator=generator).tolist()  # type: ignore
+            group = [group[i] for i in perm]
+
+        final_indices.extend(group)
+    return final_indices
 
 
 class DistributedGroupedRandomSampler(Sampler[int]):
@@ -65,14 +87,14 @@ class DistributedGroupedRandomSampler(Sampler[int]):
 
         # Determine the number of files and samples this rank will process
         self.num_files = len(self.index_groups)
-        files_for_this_rank = list(range(self.num_files))[
+        self.files_for_this_rank = list(range(self.num_files))[
             self.rank :: self.num_replicas
         ]
 
-        if len(files_for_this_rank) == 0:
+        if len(self.files_for_this_rank) == 0:
             if self.sampling_strategy == "oversampling":
                 random_viable_rank = np.random.randint(self.num_files)
-                files_for_this_rank = list(range(self.num_files))[
+                self.files_for_this_rank = list(range(self.num_files))[
                     random_viable_rank :: self.num_replicas
                 ]
             else:
@@ -87,7 +109,7 @@ class DistributedGroupedRandomSampler(Sampler[int]):
                     f"world_size ({self.num_replicas}) when using 'exact' sampling strategy."
                 )
             self.num_samples = sum(
-                len(self.index_groups[i]) for i in files_for_this_rank
+                len(self.index_groups[i]) for i in self.files_for_this_rank
             )
 
         elif self.sampling_strategy == "oversampling":
@@ -114,39 +136,39 @@ class DistributedGroupedRandomSampler(Sampler[int]):
         if self.shuffle:
             generator = torch.Generator()
             generator.manual_seed(self.seed + self.epoch)
-            all_files_order = torch.randperm(
-                self.num_files, generator=generator
+            files_for_this_rank_order = torch.randperm(
+                len(self.files_for_this_rank), generator=generator
             ).tolist()
         else:
-            all_files_order = list(range(self.num_files))
+            generator = None
+            files_for_this_rank_order = list(range(len(self.files_for_this_rank)))
 
         # 2. Assign a unique, non-overlapping subset of shuffled files to this rank
-        files_for_this_rank = all_files_order[self.rank :: self.num_replicas]
+        files_for_this_rank = [
+            self.files_for_this_rank[i] for i in files_for_this_rank_order
+        ]
 
-        if len(files_for_this_rank) == 0 and self.sampling_strategy == "oversampling":
-            # Borrow the first file from the shuffled list so final_indices won't be empty
-            files_for_this_rank = [all_files_order[0]]
-
-        self.logger.info(f"Files for rank {self.rank}: {files_for_this_rank}")
-
-        # 3. Create the final list of indices for this rank
-        final_indices = []
-        for file_idx in files_for_this_rank:
-            # IMPORTANT: Create a copy to avoid mutating self.index_groups in-place
-            group = list(self.index_groups[file_idx])
-
-            if self.shuffle:
-                perm = torch.randperm(len(group), generator=generator).tolist()  # type: ignore
-                group = [group[i] for i in perm]
-
-            final_indices.extend(group)
-
+        final_indices = get_final_indices(
+            files_for_this_rank, self.index_groups, self.shuffle, generator
+        )
         if self.sampling_strategy == "oversampling":
-            if len(final_indices) < self.num_samples:
-                padding_size = self.num_samples - len(final_indices)
-                final_indices.extend(final_indices[:padding_size])
+            while len(final_indices) < self.num_samples:
+                additional_file_for_this_rank = int(
+                    torch.randint(0, self.num_files, (1,), generator=generator).item()
+                )
+                additional_indices = get_final_indices(
+                    [additional_file_for_this_rank],
+                    self.index_groups,
+                    self.shuffle,
+                    generator,
+                )
+                required_additional_indices = self.num_samples - len(final_indices)
+                final_indices.extend(additional_indices[:required_additional_indices])
+                files_for_this_rank.append(additional_file_for_this_rank)
         elif self.sampling_strategy == "undersampling":
             final_indices = final_indices[: self.num_samples]
+
+        self.logger.info(f"Files for rank {self.rank}: {files_for_this_rank}")
 
         return iter(final_indices)
 
