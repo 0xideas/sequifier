@@ -10,6 +10,7 @@ FILES_TO_READ = [
     "documentation/configs/infer.md",
     "documentation/commands/visualize-training.md",
     "documentation/configs/hyperparameter-search.md",
+    "documentation/training/multi-gpu-training.md",
 ]
 
 OUTPUT_FILE = "documentation/consolidated-docs.md"
