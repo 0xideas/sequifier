@@ -18,9 +18,14 @@ import torch.multiprocessing as mp
 from beartype import beartype
 from torch import Tensor, nn
 from torch.amp import GradScaler
-from torch.distributed.fsdp import CPUOffload, FullStateDictConfig
+from torch.distributed.fsdp import (
+    CPUOffload,
+    FullOptimStateDictConfig,
+    FullStateDictConfig,
+)
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import MixedPrecision, ShardingStrategy, StateDictType
+from torch.distributed.fsdp.sharded_grad_scaler import ShardedGradScaler
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from torch.nn import ModuleDict
 from torch.nn.functional import one_hot
@@ -226,11 +231,18 @@ def train_worker(
     pytorch_total_params = sum(p.numel() for p in model.parameters())
     checkpoint = None
 
+    is_fsdp = config.training_spec.fsdp
+
     if config.training_spec.continue_training and latest_model_path:
-        checkpoint = torch.load(
-            latest_model_path, map_location="cpu", weights_only=False
-        )
-        model.start_epoch = checkpoint["epoch"] + 1
+        if not is_fsdp or global_rank == 0:
+            checkpoint = torch.load(
+                latest_model_path, map_location="cpu", weights_only=False
+            )
+
+        if is_fsdp and global_rank == 0:
+            model.load_state_dict(checkpoint["model_state_dict"])  # type: ignore
+            del checkpoint["model_state_dict"]  # type: ignore
+
         logger.info(
             f"[INFO] Resuming training from checkpoint '{latest_model_path}'. Total params: {format_number(pytorch_total_params)}"
         )
@@ -239,8 +251,6 @@ def train_worker(
         logger.info(
             f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
         )
-
-    is_fsdp = config.training_spec.fsdp  # default: False
 
     if config.training_spec.distributed:
         if is_fsdp:
@@ -296,7 +306,6 @@ def train_worker(
         model = torch.compile(model)
         dummy_data = create_dummy_data(config, local_rank)
 
-        # Bypass autocast block if FSDP natively handles mixed precision
         if config.training_spec.layer_autocast and not is_fsdp:
             with torch.no_grad(), torch.autocast(
                 device_type="cuda", dtype=torch.bfloat16
@@ -315,21 +324,43 @@ def train_worker(
     unwrapped_model.initialize_optimizer(params=params_to_optimize)
 
     # Load Optimizer and Scheduler States
-    if checkpoint is not None:
+    if config.training_spec.continue_training and latest_model_path:
         if is_fsdp:
-            load_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=False)
-            with FSDP.state_dict_type(
-                model, StateDictType.FULL_STATE_DICT, load_policy
-            ):
-                model.load_state_dict(checkpoint["model_state_dict"])
-                sharded_osd = FSDP.optim_state_dict_to_load(
-                    model, unwrapped_model.optimizer, checkpoint["optimizer_state_dict"]
+            #           # Scatter optimizer states over the network
+            full_osd = checkpoint["optimizer_state_dict"] if global_rank == 0 else None  # type: ignore
+            sharded_osd = FSDP.scatter_full_optim_state_dict(
+                full_optim_state_dict=full_osd,
+                model=model,
+                optim=unwrapped_model.optimizer,
+            )
+            unwrapped_model.optimizer.load_state_dict(sharded_osd)
+
+            # Broadcast the tiny scheduler and epoch metadata to all ranks
+            meta = (
+                [
+                    checkpoint["epoch"] + 1,  # type: ignore
+                    checkpoint["scheduler_state_dict"],  # type: ignore
+                ]
+                if global_rank == 0
+                else [None, None]
+            )
+
+            if config.training_spec.distributed:
+                dist.broadcast_object_list(meta, src=0)
+
+            model.start_epoch, sched_state = meta
+            if sched_state is not None:
+                unwrapped_model.scheduler.load_state_dict(sched_state)
+
+            if global_rank == 0:
+                del checkpoint, full_osd  # Clear remaining CPU memory
+                logger.info(
+                    f"[INFO] Resuming FSDP training from checkpoint '{latest_model_path}'. Total params: {format_number(pytorch_total_params)}"
                 )
-                unwrapped_model.optimizer.load_state_dict(sharded_osd)
         else:
-            model.load_state_dict(checkpoint["model_state_dict"])
+            model.load_state_dict(checkpoint["model_state_dict"])  # type: ignore
             unwrapped_model.optimizer.load_state_dict(
-                checkpoint["optimizer_state_dict"]
+                checkpoint["optimizer_state_dict"]  # type: ignore
             )
             # Safely cast states to device if loading non-FSDP CPU state dict
             for state in unwrapped_model.optimizer.state.values():
@@ -341,10 +372,11 @@ def train_worker(
                             else v.to(config.training_spec.device)
                         )
 
-        if "scheduler_state_dict" in checkpoint:
+        if "scheduler_state_dict" in checkpoint:  # type: ignore
             unwrapped_model.scheduler.load_state_dict(
-                checkpoint["scheduler_state_dict"]
+                checkpoint["scheduler_state_dict"]  # type: ignore
             )
+            model.start_epoch = checkpoint["epoch"] + 1  # type: ignore
 
     # Start training
     unwrapped_model.train_model(
@@ -665,9 +697,14 @@ class TransformerModel(nn.Module):
         if hparams.training_spec.layer_type_dtypes:
             if "float16" in hparams.training_spec.layer_type_dtypes.values():
                 use_scaler = True
-        self.scaler = GradScaler(device=self.device.split(":")[0], enabled=use_scaler)
+        if self.hparams.training_spec.fsdp:
+            self.scaler = ShardedGradScaler(enabled=use_scaler)
+        else:
+            self.scaler = GradScaler(
+                device=self.device.split(":")[0], enabled=use_scaler
+            )
 
-        self._apply_layer_dtypes()
+            self._apply_layer_dtypes()
 
     @beartype
     def initialize_optimizer(self, params: Any = None) -> None:
@@ -1813,13 +1850,20 @@ class TransformerModel(nn.Module):
 
         if is_fsdp:
             save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+            optim_policy = FullOptimStateDictConfig(
+                offload_to_cpu=True, rank0_only=True
+            )
             with FSDP.state_dict_type(
-                model_to_extract, StateDictType.FULL_STATE_DICT, save_policy
+                model_to_extract,
+                StateDictType.FULL_STATE_DICT,
+                save_policy,
+                optim_policy,
             ):
                 model_state_dict = model_to_extract.state_dict()
-            optim_state_dict = FSDP.full_optim_state_dict(
-                model_to_extract, self.optimizer
-            )
+                optim_state_dict = FSDP.full_optim_state_dict(
+                    model_to_extract, self.optimizer
+                )
+
         else:
             model_state_dict = self.state_dict()
             optim_state_dict = self.optimizer.state_dict()
