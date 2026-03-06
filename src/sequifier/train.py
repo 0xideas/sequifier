@@ -758,7 +758,7 @@ class TransformerModel(nn.Module):
                     criterion.weight.data = criterion.weight.data.to(dtype=target_dtype)
 
     @beartype
-    def _init_criterion(self, hparams: Any) -> dict[str, Any]:
+    def _init_criterion(self, hparams: Any) -> ModuleDict:
         """Initializes the criterion (loss function) for each target column.
 
         Args:
@@ -768,7 +768,7 @@ class TransformerModel(nn.Module):
         Returns:
             A dictionary mapping target column names to their loss function instances.
         """
-        criterion = {}
+        criterion = ModuleDict()
         for target_column in self.target_columns:
             criterion_name = hparams.training_spec.criterion[target_column]
             if hasattr(torch.nn, criterion_name):
@@ -783,7 +783,7 @@ class TransformerModel(nn.Module):
             ):
                 criterion_kwargs["weight"] = Tensor(
                     hparams.training_spec.class_weights[target_column]
-                ).to(self.device)
+                )
 
             criterion_kwargs["reduction"] = "none"
 
