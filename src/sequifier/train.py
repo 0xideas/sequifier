@@ -1079,9 +1079,10 @@ class TransformerModel(nn.Module):
             with FSDP.state_dict_type(
                 model_to_extract, StateDictType.FULL_STATE_DICT, save_policy
             ):
-                return model_to_extract.state_dict()
+                state_dict = model_to_extract.state_dict()
+                return {k: v.cpu().clone() for k, v in state_dict.items()}
         else:
-            return self.state_dict()
+            return {k: v.cpu().clone() for k, v in self.state_dict().items()}
 
     @beartype
     def train_model(
