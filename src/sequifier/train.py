@@ -230,7 +230,6 @@ def train_worker(
         checkpoint = torch.load(
             latest_model_path, map_location="cpu", weights_only=False
         )
-        model.load_state_dict(checkpoint["model_state_dict"])
         model.start_epoch = checkpoint["epoch"] + 1
         logger.info(
             f"[INFO] Resuming training from checkpoint '{latest_model_path}'. Total params: {format_number(pytorch_total_params)}"
@@ -283,7 +282,7 @@ def train_worker(
                 cpu_offload=cpu_offload,
                 sharding_strategy=sharding_strategy,
                 device_id=local_rank,
-                use_orig_params=False,
+                use_orig_params=True,
             )
         else:
             device_ids = (
@@ -316,11 +315,17 @@ def train_worker(
     # Load Optimizer and Scheduler States
     if checkpoint is not None:
         if is_fsdp:
-            sharded_osd = FSDP.optim_state_dict_to_load(
-                model, unwrapped_model.optimizer, checkpoint["optimizer_state_dict"]
-            )
-            unwrapped_model.optimizer.load_state_dict(sharded_osd)
+            load_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=False)
+            with FSDP.state_dict_type(
+                model, StateDictType.FULL_STATE_DICT, load_policy
+            ):
+                model.load_state_dict(checkpoint["model_state_dict"])
+                sharded_osd = FSDP.optim_state_dict_to_load(
+                    model, unwrapped_model.optimizer, checkpoint["optimizer_state_dict"]
+                )
+                unwrapped_model.optimizer.load_state_dict(sharded_osd)
         else:
+            model.load_state_dict(checkpoint["model_state_dict"])
             unwrapped_model.optimizer.load_state_dict(
                 checkpoint["optimizer_state_dict"]
             )
@@ -636,7 +641,8 @@ class TransformerModel(nn.Module):
         else:
             self.device = hparams.training_spec.device
 
-        self.to(self.device)
+        if not self.hparams.training_spec.fsdp:
+            self.to(self.device)
 
         self.criterion = self._init_criterion(hparams=hparams)
         self.batch_size = hparams.training_spec.batch_size
@@ -1251,12 +1257,14 @@ class TransformerModel(nn.Module):
             train_loader: DataLoader for the training dataset.
             epoch: The current epoch number (used for logging).
         """
-        self.train()
         total_loss = 0.0
         start_time = time.time()
         num_batches = len(train_loader)
 
         model_to_call = ddp_model if ddp_model is not None else self
+
+        model_to_call.train()
+
         is_fsdp = self.hparams.training_spec.fsdp and isinstance(model_to_call, FSDP)
 
         for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
@@ -1478,7 +1486,6 @@ class TransformerModel(nn.Module):
             - A dictionary of aggregated losses for each target column (dict[str, float]).
             - The output tensor dictionary from the last batch (used for class share logging).
         """
-        self.eval()  # Turn on evaluation mode
 
         total_loss_collect = []
         # Initialize a dict to hold lists of losses for each target
@@ -1486,6 +1493,9 @@ class TransformerModel(nn.Module):
         output = {}  # for type checking
 
         model_to_call = ddp_model if ddp_model is not None else self
+
+        model_to_call.eval()
+
         is_fsdp = self.hparams.training_spec.fsdp and isinstance(model_to_call, FSDP)
 
         with torch.no_grad():
