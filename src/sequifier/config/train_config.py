@@ -173,6 +173,9 @@ class TrainingSpecModel(BaseModel):
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: Optional[bool] = True
     sampling_strategy: str = "exact"
+    fsdp: bool = False
+    fsdp_sharding_strategy: str = "FULL_SHARD"
+    fsdp_cpu_offload: bool = False
 
     def __init__(self, **kwargs):
         super().__init__(
