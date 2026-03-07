@@ -107,7 +107,8 @@ class SequifierDatasetFromFolderLazy(IterableDataset):
                         f"Rank {i}: {samples_per_rank[i]} samples, files:\n\t{files_strings[i]}"
                         for i in non_max_idx
                     ]
-                    exception_detail = f":\nMost frequent sample value: {most_frequent_unique_samples_val}\n{'\n'.join(rank_details)}"
+                    rank_details = "\n".join(rank_details)
+                    exception_detail = f":\nMost frequent sample value: {most_frequent_unique_samples_val}\n{rank_details}"
                 else:
                     exception_detail = ""
 
@@ -172,7 +173,6 @@ class SequifierDatasetFromFolderLazy(IterableDataset):
             ordered_files = files_for_this_rank.copy()
 
         # 4. Extend files based on exact target requirements
-        # This naturally only loops if target_samples demands it (e.g., oversampling)
         extended_files = []
         current_samples = 0
         file_idx = 0
@@ -182,10 +182,15 @@ class SequifierDatasetFromFolderLazy(IterableDataset):
             current_samples += self.batch_files_info[f_id]["samples"]
             file_idx += 1
 
-        # 5. Stream data using precise global boundaries
+        # 5. Stream data using precise global boundaries and a CROSS-FILE BUFFER
         yielded_samples = 0
         train_seq_len = self.config.seq_length
         global_file_start_sample = 0
+
+        # Initialize cross-file buffers
+        seq_buffer: Dict[str, torch.Tensor] = {}
+        tgt_buffer: Dict[str, torch.Tensor] = {}
+        buffer_len = 0
 
         for f_id in extended_files:
             if yielded_samples >= worker_target_samples:
@@ -210,29 +215,69 @@ class SequifierDatasetFromFolderLazy(IterableDataset):
             indices = torch.arange(file_samples)
             if self.shuffle:
                 g_file = torch.Generator()
-                # Use identical seed across workers so the file is shuffled exactly the same way
                 g_file.manual_seed(self.config.seed + self.epoch + f_id + rank)
                 indices = indices[torch.randperm(file_samples, generator=g_file)]
 
             # Slice the indices to extract ONLY the portion belonging to this worker
             worker_file_start_idx = max(0, worker_start_sample - file_start)
             worker_file_end_idx = min(file_samples, worker_end_sample - file_start)
+
             worker_indices = indices[worker_file_start_idx:worker_file_end_idx]
+            num_new_samples = len(worker_indices)
 
-            # Yield batches from the worker's specific slice
-            for i in range(0, len(worker_indices), self.batch_size):
-                batch_indices = worker_indices[i : i + self.batch_size]
+            if num_new_samples == 0:
+                del sequences_batch, targets_batch
+                continue
 
-                seq_dict = {
-                    k: v[batch_indices, -train_seq_len:]
-                    for k, v in sequences_batch.items()
-                }
-                tgt_dict = {
-                    k: v[batch_indices, -train_seq_len:]
-                    for k, v in targets_batch.items()
-                }
+            # Extract the data subset for this worker (Advanced indexing copies the data)
+            new_seq = {
+                k: v[worker_indices, -train_seq_len:]
+                for k, v in sequences_batch.items()
+            }
+            new_tgt = {
+                k: v[worker_indices, -train_seq_len:] for k, v in targets_batch.items()
+            }
 
-                yield seq_dict, tgt_dict, None, None, None
-                yielded_samples += len(batch_indices)
-
+            # Free the large file immediately to keep RAM down
             del sequences_batch, targets_batch
+
+            # Append the new slice to the cross-file buffer
+            if buffer_len == 0:
+                seq_buffer = new_seq
+                tgt_buffer = new_tgt
+            else:
+                seq_buffer = {
+                    k: torch.cat([seq_buffer[k], new_seq[k]], dim=0) for k in seq_buffer
+                }
+                tgt_buffer = {
+                    k: torch.cat([tgt_buffer[k], new_tgt[k]], dim=0) for k in tgt_buffer
+                }
+
+            buffer_len += num_new_samples
+
+            # Yield batches as long as the buffer contains at least `batch_size` samples
+            while buffer_len >= self.batch_size:
+                if yielded_samples >= worker_target_samples:
+                    break
+
+                # Slice out a perfect batch from the top of the buffer
+                batch_seq = {k: v[: self.batch_size] for k, v in seq_buffer.items()}
+                batch_tgt = {k: v[: self.batch_size] for k, v in tgt_buffer.items()}
+
+                yield batch_seq, batch_tgt, None, None, None
+                yielded_samples += self.batch_size
+
+                # Keep the remainder in the buffer for the next loop/file
+                seq_buffer = {k: v[self.batch_size :] for k, v in seq_buffer.items()}
+                tgt_buffer = {k: v[self.batch_size :] for k, v in tgt_buffer.items()}
+                buffer_len -= self.batch_size
+
+        # 6. Yield the final partial batch from the buffer if any remains
+        if buffer_len > 0 and yielded_samples < worker_target_samples:
+            remaining_needed = worker_target_samples - yielded_samples
+            final_yield_size = min(buffer_len, remaining_needed)
+
+            batch_seq = {k: v[:final_yield_size] for k, v in seq_buffer.items()}
+            batch_tgt = {k: v[:final_yield_size] for k, v in tgt_buffer.items()}
+
+            yield batch_seq, batch_tgt, None, None, None
