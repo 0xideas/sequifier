@@ -6,7 +6,7 @@ from typing import Any, Optional, Union
 import numpy as np
 import polars as pl
 import torch
-from beartype import beartype
+from beartype import BeartypeConf, BeartypeStrategy, beartype
 from loguru import logger
 from pydantic import ValidationError
 from torch import Tensor
@@ -35,6 +35,15 @@ PANDAS_TO_TORCH_TYPES = {
     "UInt8": torch.int16,
     "uint8": torch.int16,
 }
+
+
+# Check an environment variable to see if we are in a testing context
+IS_TESTING = os.environ.get("SEQUIFIER_TESTING", "0") == "1"
+
+# O1 is the default type-checking strategy. O0 completely disables it.
+current_strategy = BeartypeStrategy.O1 if IS_TESTING else BeartypeStrategy.O0
+
+conditional_beartype = beartype(conf=BeartypeConf(strategy=current_strategy))
 
 
 @beartype

@@ -35,10 +35,11 @@ from torch.utils.data import DataLoader
 torch._dynamo.config.suppress_errors = True
 
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
-from sequifier.helpers import construct_index_maps  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
+    conditional_beartype,
     configure_determinism,
     configure_logger,
+    construct_index_maps,
     get_torch_dtype,
 )
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
@@ -424,6 +425,7 @@ class TransformerEmbeddingModel(nn.Module):
         self.logger = self.transformer_model.logger
         return model_copy
 
+    @conditional_beartype
     def forward(self, src: dict[str, Tensor]):
         """Forward pass for the embedding model.
 
@@ -841,7 +843,7 @@ class TransformerModel(nn.Module):
             if self.joint_embedding_layer.bias is not None:
                 self.joint_embedding_layer.bias.data.zero_()
 
-    @beartype
+    @conditional_beartype
     def _recursive_concat(self, srcs: list[Tensor]):
         """Recursively concatenates a list of tensors.
 
@@ -866,7 +868,7 @@ class TransformerModel(nn.Module):
                 srcs_inner.append(src)
             return self._recursive_concat(srcs_inner)
 
-    @beartype
+    @conditional_beartype
     def forward_inner(self, src: dict[str, Tensor]) -> Tensor:
         """The inner forward pass of the model.
 
@@ -944,7 +946,7 @@ class TransformerModel(nn.Module):
 
         return src2.transpose(0, 1)
 
-    @beartype
+    @conditional_beartype
     def forward_embed(self, src: dict[str, Tensor]) -> Tensor:
         """Forward pass for the embedding model.
 
@@ -960,7 +962,7 @@ class TransformerModel(nn.Module):
         """
         return self.forward_inner(src)[-self.prediction_length :, :, :]
 
-    @beartype
+    @conditional_beartype
     def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
         """Forward pass for training.
 
@@ -983,7 +985,7 @@ class TransformerModel(nn.Module):
 
         return output
 
-    @beartype
+    @conditional_beartype
     def decode(self, target_column: str, output: Tensor) -> Tensor:
         """Decodes the output of the transformer encoder.
 
@@ -1004,7 +1006,7 @@ class TransformerModel(nn.Module):
 
         return decoded
 
-    @beartype
+    @conditional_beartype
     def apply_softmax(self, target_column: str, output: Tensor) -> Tensor:
         """Applies softmax to the output of the decoder.
 
@@ -1023,7 +1025,7 @@ class TransformerModel(nn.Module):
         else:
             return self.softmax[target_column](output.float())
 
-    @beartype
+    @conditional_beartype
     def forward(
         self, src: dict[str, Tensor], return_logits: Union[bool, Tensor] = False
     ) -> dict[str, Tensor]:
