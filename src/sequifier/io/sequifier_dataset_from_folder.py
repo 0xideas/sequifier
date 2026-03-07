@@ -82,7 +82,24 @@ class SequifierDatasetFromFolder(IterableDataset):
         for tensor in self.targets.values():
             tensor.share_memory_()
 
-        logger.info(f"[INFO] Dataset loaded into RAM with {self.n_samples} samples.")
+        self.target_samples = self._get_target_samples()
+        self.total_batches = self._calculate_total_batches(self.target_samples)
+
+        logger.info(
+            f"[INFO] Dataset loaded into RAM with {self.target_samples} samples and {self.total_batches} batches."
+        )
+
+    def _calculate_total_batches(self, target_samples: int) -> int:
+        num_workers = self.config.training_spec.num_workers
+        num_workers_to_use = num_workers if num_workers > 0 else 1
+
+        total_batches = 0
+        for worker_id in range(num_workers_to_use):
+            worker_samples = target_samples // num_workers_to_use + (
+                1 if worker_id < target_samples % num_workers_to_use else 0
+            )
+            total_batches += math.ceil(worker_samples / self.batch_size)
+        return total_batches
 
     def set_epoch(self, epoch: int):
         """Allows the training loop to set the epoch for deterministic shuffling."""
@@ -106,8 +123,7 @@ class SequifierDatasetFromFolder(IterableDataset):
         return samples_per_rank[rank]
 
     def __len__(self) -> int:
-        """Returns the total number of batches for this rank."""
-        return math.ceil(self._get_target_samples() / self.batch_size)
+        return self.total_batches
 
     def __iter__(
         self,
@@ -132,15 +148,14 @@ class SequifierDatasetFromFolder(IterableDataset):
         indices_for_rank = indices[rank::world_size].tolist()
 
         # 3. Handle FSDP oversampling/undersampling sync requirements
-        target_samples = self._get_target_samples()
         if self.sampling_strategy == "oversampling":
             # Loop the indices to pad out the shorter ranks
-            while len(indices_for_rank) < target_samples:
+            while len(indices_for_rank) < self.target_samples:
                 indices_for_rank.extend(
-                    indices_for_rank[: target_samples - len(indices_for_rank)]
+                    indices_for_rank[: self.target_samples - len(indices_for_rank)]
                 )
         elif self.sampling_strategy == "undersampling":
-            indices_for_rank = indices_for_rank[:target_samples]
+            indices_for_rank = indices_for_rank[: self.target_samples]
 
         # 4. Distribute among CPU workers for this GPU
         indices_for_worker = indices_for_rank[worker_id::num_workers]

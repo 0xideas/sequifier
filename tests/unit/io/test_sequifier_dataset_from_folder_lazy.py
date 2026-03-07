@@ -17,6 +17,9 @@ def mock_config(tmp_path):
     config.project_root = str(tmp_path)
     config.training_spec.batch_size = 5
     config.training_spec.sampling_strategy = "exact"
+    config.training_spec.num_workers = (
+        0  # <--- Added: Prevents TypeError during __init__
+    )
     config.seed = 42
     config.seq_length = 5
     return config
@@ -143,6 +146,8 @@ def test_dataloader_worker_sharding(
     mock_info.id = 1
     mock_info.num_workers = 2
     mock_worker_info.return_value = mock_info
+
+    mock_config.training_spec.num_workers = 2  # <--- Added: Ensures calculations match
 
     dataset = SequifierDatasetFromFolderLazy(dataset_path, mock_config, shuffle=False)
 

@@ -42,10 +42,23 @@ class SequifierDatasetFromFolderLazy(IterableDataset):
         self.batch_files_info = metadata["batch_files"]
         self.sampling_strategy = config.training_spec.sampling_strategy
 
+        self.target_samples = self._get_target_samples()
+        self.total_batches = self._calculate_total_batches(self.target_samples)
         logger.info(
-            f"[INFO] Initialized lazy IterableDataset from {self.data_dir}. "
-            f"Total files: {len(self.batch_files_info)}."
+            f"[INFO] Lazy Dataset loaded into RAM with {self.target_samples} samples and {self.total_batches} batches."
         )
+
+    def _calculate_total_batches(self, target_samples: int) -> int:
+        num_workers = self.config.training_spec.num_workers
+        num_workers_to_use = num_workers if num_workers > 0 else 1
+
+        total_batches = 0
+        for worker_id in range(num_workers_to_use):
+            worker_samples = target_samples // num_workers_to_use + (
+                1 if worker_id < target_samples % num_workers_to_use else 0
+            )
+            total_batches += math.ceil(worker_samples / self.batch_size)
+        return total_batches
 
     def set_epoch(self, epoch: int):
         """Allows the training loop to set the epoch for deterministic file shuffling."""
@@ -73,9 +86,7 @@ class SequifierDatasetFromFolderLazy(IterableDataset):
         return samples_per_rank[rank]
 
     def __len__(self) -> int:
-        """Returns the estimated number of batches per rank."""
-        target_samples = self._get_target_samples()
-        return math.ceil(target_samples / self.batch_size)
+        return self.total_batches
 
     def __iter__(
         self,
@@ -99,11 +110,9 @@ class SequifierDatasetFromFolderLazy(IterableDataset):
             else:
                 raise Exception(f"No file found for GPU rank {rank}.")
 
-        target_samples = self._get_target_samples()
-
         # 2. Assign exact sample quotas to this specific DataLoader worker thread
-        base_samples_per_worker = target_samples // num_workers
-        remainder = target_samples % num_workers
+        base_samples_per_worker = self.target_samples // num_workers
+        remainder = self.target_samples % num_workers
         worker_target_samples = base_samples_per_worker + (
             1 if worker_id < remainder else 0
         )
@@ -122,7 +131,7 @@ class SequifierDatasetFromFolderLazy(IterableDataset):
         extended_files = []
         current_samples = 0
         file_idx = 0
-        while current_samples < target_samples:
+        while current_samples < self.target_samples:
             f_id = ordered_files[file_idx % len(ordered_files)]
             extended_files.append(f_id)
             current_samples += self.batch_files_info[f_id]["samples"]
