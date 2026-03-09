@@ -1097,7 +1097,7 @@ class TransformerModel(nn.Module):
         """
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
-        last_epoch = self.start_epoch
+        last_epoch = self.start_epoch - 1
         best_model_state = None
 
         try:
