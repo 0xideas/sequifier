@@ -290,7 +290,7 @@ def train_worker(
             if config.training_spec.distributed:
                 dist.broadcast_object_list(meta, src=0)
 
-            model.start_epoch, sched_state = meta
+            unwrapped_model.start_epoch, sched_state = meta
             if sched_state is not None:
                 unwrapped_model.scheduler.load_state_dict(sched_state)
 
@@ -314,11 +314,11 @@ def train_worker(
                             else v.to(config.training_spec.device)
                         )
 
-        if "scheduler_state_dict" in checkpoint:  # type: ignore
-            unwrapped_model.scheduler.load_state_dict(
-                checkpoint["scheduler_state_dict"]  # type: ignore
-            )
-            model.start_epoch = checkpoint["epoch"] + 1  # type: ignore
+            if "scheduler_state_dict" in checkpoint:  # type: ignore
+                unwrapped_model.scheduler.load_state_dict(
+                    checkpoint["scheduler_state_dict"]  # type: ignore
+                )
+                model.start_epoch = checkpoint["epoch"] + 1  # type: ignore
 
     # Start training
     unwrapped_model.train_model(
@@ -892,7 +892,7 @@ class TransformerModel(nn.Module):
             if not self.use_rope:
                 pos = (
                     torch.arange(
-                        0, self.seq_length, dtype=torch.long, device=self.device
+                        0, self.seq_length, dtype=torch.long, device=src_t.device
                     )
                     .repeat(src_t.shape[1], 1)
                     .T
@@ -920,7 +920,7 @@ class TransformerModel(nn.Module):
             if not self.use_rope:
                 pos = (
                     torch.arange(
-                        0, self.seq_length, dtype=torch.long, device=self.device
+                        0, self.seq_length, dtype=torch.long, device=src_t.device
                     )
                     .repeat(src_t.shape[1], 1)
                     .T
@@ -1095,7 +1095,7 @@ class TransformerModel(nn.Module):
         """
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
-        last_epoch = None
+        last_epoch = self.start_epoch
         best_model_state = None
 
         try:
@@ -1704,19 +1704,19 @@ class TransformerModel(nn.Module):
                 # Safe to deepcopy since `model` is already a pure CPU, unwrapped PyTorch module here.
                 model_to_export = model._copy_model().float()
 
+            export_device = next(model_to_export.parameters()).device
+
             x_cat = {
                 col: torch.randint(
-                    0,
-                    self.n_classes[col],
-                    (self.inference_batch_size, self.seq_length),
-                ).to(self.device, non_blocking=True)
+                    0, self.n_classes[col], (self.inference_batch_size, self.seq_length)
+                ).to(export_device, non_blocking=True)
                 for col in self.categorical_columns
             }
 
             dtype_real = torch.float32 if is_different_type else None
             x_real = {
                 col: torch.rand(self.inference_batch_size, self.seq_length).to(
-                    self.device, non_blocking=True, dtype=dtype_real
+                    export_device, non_blocking=True, dtype=dtype_real
                 )
                 for col in self.real_columns
             }
