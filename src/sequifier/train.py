@@ -1066,9 +1066,15 @@ class TransformerModel(nn.Module):
                 model_to_extract, StateDictType.FULL_STATE_DICT, save_policy
             ):
                 state_dict = model_to_extract.state_dict()
-                return {k: v.cpu().clone() for k, v in state_dict.items()}
+                return {
+                    k.replace("_orig_mod.", ""): v.cpu().clone()
+                    for k, v in state_dict.items()
+                }
         else:
-            return {k: v.cpu().clone() for k, v in self.state_dict().items()}
+            return {
+                k.replace("_orig_mod.", ""): v.cpu().clone()
+                for k, v in self.state_dict().items()
+            }
 
     @beartype
     def train_model(
@@ -1788,13 +1794,19 @@ class TransformerModel(nn.Module):
                 save_policy,
                 optim_policy,
             ):
-                model_state_dict = model_to_extract.state_dict()
+                model_state_dict = {
+                    k.replace("_orig_mod.", ""): v
+                    for k, v in model_to_extract.state_dict().items()
+                }
                 optim_state_dict = FSDP.full_optim_state_dict(
                     model_to_extract, self.optimizer
                 )
 
         else:
             model_state_dict = self.state_dict()
+            model_state_dict = {
+                k.replace("_orig_mod.", ""): v for k, v in self.state_dict().items()
+            }
             optim_state_dict = self.optimizer.state_dict()
 
         if self.rank != 0:
