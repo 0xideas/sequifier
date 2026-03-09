@@ -623,8 +623,10 @@ class TransformerModel(nn.Module):
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
 
-        self.src_mask = self._generate_square_subsequent_mask(self.seq_length).to(
-            self.device
+        self.register_buffer(
+            "src_mask",
+            self._generate_square_subsequent_mask(self.seq_length),
+            persistent=False,  # Optional: prevents the mask from being saved in your checkpoints
         )
 
         self._init_weights()
