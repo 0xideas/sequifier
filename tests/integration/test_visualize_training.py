@@ -4,7 +4,9 @@ import os
 from conftest import run_and_log
 
 
-def test_visualize_training(run_training, run_hp_search, project_root):
+def test_visualize_training(
+    run_training, run_training_from_checkpoint, run_hp_search, project_root
+):
     # Dynamically find all models that were trained and logged
     log_dir = os.path.join(project_root, "logs")
     log_files = glob.glob(os.path.join(log_dir, "sequifier-*-rank0-*.txt"))

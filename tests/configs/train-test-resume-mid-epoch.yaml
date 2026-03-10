@@ -1,0 +1,58 @@
+project_root: tests/project_folder
+model_name: model-real-1-from-mid-epoch-checkpoint
+read_format: parquet
+metadata_config_path: configs/metadata_configs/test-data-real-1.json
+
+input_columns: null
+target_columns: [itemValue]
+target_column_types:
+  itemValue: real
+
+seq_length: 8
+inference_batch_size: 10
+
+export_generative_model: true
+export_embedding_model: false
+export_onnx: true
+export_pt: true
+export_with_dropout: false
+
+model_spec:
+  initial_embedding_dim: 100
+  dim_model: 100
+  n_head: 2
+  dim_feedforward: 10
+  num_layers: 2
+  activation_fn: relu
+  normalization: layer_norm
+  positional_encoding: learned
+  attention_type: mha
+  norm_first: false
+  n_kv_heads: null
+  rope_theta: 10000.0
+  prediction_length: 1
+training_spec:
+  device: cpu
+  epochs: 3
+  save_interval_epochs: 1
+  save_latest_interval_minutes: null
+  save_batch_interval_minutes: null
+  batch_size: 20
+  log_interval: 1
+  learning_rate: 0.003
+  accumulation_steps: null
+  dropout: 0.3
+  criterion:
+    itemValue: MSELoss
+  optimizer:
+    name: AdEMAMix
+  scheduler:
+    name: StepLR
+    step_size: 1.0
+    gamma: 0.99
+  continue_training: true
+  enforce_determinism: true
+  layer_type_dtypes:
+    embedding: bfloat16
+    linear: bfloat16
+    norm: bfloat16

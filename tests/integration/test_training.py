@@ -3,7 +3,9 @@ import os
 import numpy as np
 
 
-def test_checkpoint_files_exists(run_training, project_root):
+def test_checkpoint_files_exists(
+    run_training, run_training_from_checkpoint, project_root
+):
     found_items = np.array(
         sorted(list(os.listdir(os.path.join(project_root, "checkpoints"))))
     )
@@ -21,6 +23,11 @@ def test_checkpoint_files_exists(run_training, project_root):
                 for i in range(1, 4)
             ]
             + [f"model-real-{j}-latest.pt" for j in [1, 3, 5, 50]]
+            + [f"model-real-1-from-epoch-checkpoint-epoch-{i}.pt" for i in range(1, 4)]
+            + [
+                f"model-real-1-from-mid-epoch-checkpoint-epoch-{i}.pt"
+                for i in range(1, 4)
+            ]
             + [
                 f"model-categorical-{j}-inf-size-epoch-{i}.pt"
                 for j in [1, 3]
@@ -40,7 +47,7 @@ def test_checkpoint_files_exists(run_training, project_root):
     ), f"{found_items = } != {expected_items = }"
 
 
-def test_model_files_exists(run_training, project_root):
+def test_model_files_exists(run_training, run_training_from_checkpoint, project_root):
     model_type_formats = {"categorical": ["onnx", "pt"], "real": ["onnx", "pt"]}
     found_items = np.array(
         sorted(list(os.listdir(os.path.join(project_root, "models"))))
@@ -55,6 +62,16 @@ def test_model_files_exists(run_training, project_root):
                 for model_type_format in model_type_formats[model_type2]
                 for j in [1, 3, 5, 50]
                 for kind in ["best", "last"]
+            ]
+            + [
+                f"sequifier-model-real-1-from-mid-epoch-checkpoint-{kind}-3.{model_type_format}"
+                for kind in ["best", "last"]
+                for model_type_format in ["pt", "onnx"]
+            ]
+            + [
+                f"sequifier-model-real-1-from-epoch-checkpoint-{kind}-embedding-3.{model_type_format}"
+                for kind in ["best", "last"]
+                for model_type_format in ["pt", "onnx"]
             ]
             + [
                 "sequifier-model-categorical-multitarget-5-best-3.onnx",
