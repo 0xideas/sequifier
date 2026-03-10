@@ -20,7 +20,7 @@ from sequifier.helpers import configure_logger
 # Configuration & Setup
 # -------------------------------------------------------------------------
 VAL_PATTERN = re.compile(
-    r"\[INFO\] Validation\s+\|\s*Epoch:\s*(\d+)\s+\|\s*Loss:\s*([^\s\|]+)\s+\|\s*Baseline Loss:\s*([^\s\|]+)"
+    r"\[INFO\] Validation\s+\|\s*Epoch:\s*(\d+)\s+\|\s*Batch:\s*(\d+)\s+\|\s*Loss:\s*([^\s\|]+)\s+\|\s*Baseline Loss:\s*([^\s\|]+)"
 )
 VAR_PATTERN = re.compile(r"\[INFO\]\s+-\s+(.*)")
 TRAIN_PATTERN = re.compile(
@@ -47,10 +47,12 @@ class DataContinuityError(Exception):
 class TrainingMetrics:
     """Encapsulates all extracted metrics to avoid returning massive generic tuples."""
 
-    val_losses: dict[int, float] = field(default_factory=dict)
-    baseline_losses: dict[int, float] = field(default_factory=dict)
-    var_losses: dict[str, dict[Optional[int], float]] = field(default_factory=dict)
-    train_losses: dict[int, dict[int, tuple[int, float]]] = field(default_factory=dict)
+    val_losses: dict[float, float] = field(default_factory=dict)
+    baseline_losses: dict[float, float] = field(default_factory=dict)
+    var_losses: dict[str, dict[Optional[float], float]] = field(default_factory=dict)
+    train_losses: dict[float, dict[int, tuple[int, float]]] = field(
+        default_factory=dict
+    )
 
     def clear_state(self) -> None:
         """Clears all metrics; used when a sequence run restarts."""
@@ -72,7 +74,7 @@ class LogParser:
         self.current_epoch: Optional[int] = None
         self.current_batch: Optional[int] = None
         self.expected_num_batches: Optional[int] = None
-        self.pending_var_loss_epoch: Optional[int] = None
+        self.pending_var_loss_epoch: Optional[float] = None
 
     @beartype
     def parse_file(self, log_file: str) -> TrainingMetrics:
@@ -105,20 +107,37 @@ class LogParser:
             raise LogParsingError(f"Malformed Validation log -> '{line.strip()}'")
 
         epoch = int(match.group(1))
-        val_loss = parse_number(match.group(2))
-        baseline = parse_number(match.group(3))
+        batch = int(match.group(2))
+        val_loss = parse_number(match.group(3))
+        baseline = parse_number(match.group(4))
 
-        if epoch == 0 or (
-            self.current_epoch is not None and epoch < self.current_epoch
+        # Check for restart (epoch 0, batch 0) or standard jump back
+        if (epoch == 0 and batch == 0) or (
+            self.current_epoch is not None and epoch < self.current_epoch and epoch != 0
         ):
             self.metrics.clear_state()
             self.current_epoch = None
             self.current_batch = None
             self.expected_num_batches = None
 
-        self.metrics.val_losses[epoch] = val_loss
-        self.metrics.baseline_losses[epoch] = baseline
-        self.pending_var_loss_epoch = epoch
+        # Determine precise x-coordinate for plotting
+        if (
+            epoch == 0
+            and batch > 0
+            and self.current_epoch is not None
+            and self.expected_num_batches is not None
+        ):
+            # Mid-epoch validation saves pass epoch as 0 in train.py
+            calc_epoch = self.current_epoch - 1 + (batch / self.expected_num_batches)
+        elif self.expected_num_batches is not None and batch > 0:
+            # End-of-epoch validation
+            calc_epoch = epoch - 1 + (batch / self.expected_num_batches)
+        else:
+            calc_epoch = float(epoch)
+
+        self.metrics.val_losses[calc_epoch] = val_loss
+        self.metrics.baseline_losses[calc_epoch] = baseline
+        self.pending_var_loss_epoch = calc_epoch
 
     @beartype
     def _process_var_loss(self, line: str) -> None:
@@ -197,16 +216,16 @@ class LogParser:
 
     def _handle_epoch_1_restart(self) -> None:
         """Handles edge cases where a sequence restarts at Epoch 1 skipping Epoch 0."""
-        if 0 not in self.metrics.val_losses:
+        if 0.0 not in self.metrics.val_losses:
             self.metrics.clear_state()
         else:
             self.metrics.train_losses.clear()
-            self.metrics.val_losses = {0: self.metrics.val_losses[0]}
-            self.metrics.baseline_losses = {0: self.metrics.baseline_losses[0]}
+            self.metrics.val_losses = {0.0: self.metrics.val_losses[0.0]}
+            self.metrics.baseline_losses = {0.0: self.metrics.baseline_losses[0.0]}
             for v_name in list(self.metrics.var_losses.keys()):
-                if 0 in self.metrics.var_losses[v_name]:
+                if 0.0 in self.metrics.var_losses[v_name]:
                     self.metrics.var_losses[v_name] = {
-                        0: self.metrics.var_losses[v_name][0]
+                        0.0: self.metrics.var_losses[v_name][0.0]
                     }
                 else:
                     self.metrics.var_losses[v_name] = {}

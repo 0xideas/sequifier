@@ -640,6 +640,9 @@ class TransformerModel(nn.Module):
         self.save_batch_interval_minutes = (
             hparams.training_spec.save_batch_interval_minutes
         )
+        self.save_batch_interval_minutes_val_loss = (
+            hparams.training_spec.save_batch_interval_minutes_val_loss
+        )
         self.continue_training = hparams.training_spec.continue_training
 
         use_scaler = False
@@ -1116,7 +1119,7 @@ class TransformerModel(nn.Module):
                 )
                 elapsed = 0.0
 
-                self._log_epoch_results(0, elapsed, total_loss, total_losses, output)
+                self._log_epoch_results(0, 0, elapsed, total_loss, total_losses, output)
             for epoch in range(self.start_epoch, self.hparams.training_spec.epochs + 1):
                 if (
                     self.early_stopping_epochs is None
@@ -1139,7 +1142,12 @@ class TransformerModel(nn.Module):
                     elapsed = time.time() - epoch_start_time
 
                     self._log_epoch_results(
-                        epoch, elapsed, total_loss, total_losses, output
+                        epoch,
+                        len(train_loader),
+                        elapsed,
+                        total_loss,
+                        total_losses,
+                        output,
                     )
 
                     if total_loss < best_val_loss:
@@ -1345,14 +1353,15 @@ class TransformerModel(nn.Module):
 
             if not self.hparams.training_spec.distributed or self.rank == 0:
                 current_time = time.time()
-                if self.save_latest_interval_minutes and (
+
+                if self.save_latest_interval_minutes is not None and (
                     current_time - self.last_latest_save_time
                 ) >= (self.save_latest_interval_minutes * 60):
                     current_time = time.time()
                     should_save_latest[0] = 1
                     self.last_latest_save_time = current_time
 
-                if self.save_batch_interval_minutes and (
+                if self.save_batch_interval_minutes is not None and (
                     current_time - self.last_batch_save_time
                 ) >= (self.save_batch_interval_minutes * 60):
                     if self.save_batch_interval_minutes_val_loss:
@@ -1361,12 +1370,13 @@ class TransformerModel(nn.Module):
                         )
                         self._log_epoch_results(
                             0,
+                            batch_count + 1,
                             (current_time - self.last_batch_save_time),
                             val_loss,
                             val_losses,
                             output,
-                            batch=batch_count,
                         )
+
                     else:
                         val_loss = np.float32(np.nan)
                     current_time = time.time()
@@ -1716,6 +1726,8 @@ class TransformerModel(nn.Module):
                 self.baseline_loss = baseline_loss_local
                 self.baseline_losses = baseline_losses_local
 
+        model_to_call.train()
+
         return (
             np.float32(total_loss_global),
             {k: np.float32(v) for k, v in total_losses_global.items()},
@@ -1990,11 +2002,11 @@ class TransformerModel(nn.Module):
     def _log_epoch_results(
         self,
         epoch: int,
+        batch: int,
         elapsed: float,
         total_loss: np.float32,
         total_losses: dict[str, np.float32],
         output: dict[str, Tensor],
-        batch: Optional[int] = None,
     ) -> None:
         """Logs the results of an epoch.
 
@@ -2014,11 +2026,8 @@ class TransformerModel(nn.Module):
         if self.rank == 0:
             learning_rate = self.optimizer.state_dict()["param_groups"][0]["lr"]
 
-            log_string = f"[INFO] Validation | Epoch: {epoch:3d} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(learning_rate)}"
-            if batch is not None:
-                log_string = log_string.replace(
-                    " | Loss:", f" | Batch: {batch} | Loss:"
-                )
+            log_string = f"[INFO] Validation | Epoch: {epoch:3d} | Batch: {batch} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(learning_rate)}"
+
             self.logger.info("-" * 89)
             self.logger.info(log_string)
 

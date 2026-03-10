@@ -16,6 +16,12 @@ def test_checkpoint_files_exists(run_training, project_root):
                 for i in range(1, 4)
             ]
             + [
+                f"model-real-{j}-epoch-{i}-batch-1.pt"
+                for j in [1, 3, 5, 50]
+                for i in range(1, 4)
+            ]
+            + [f"model-real-{j}-latest.pt" for j in [1, 3, 5, 50]]
+            + [
                 f"model-categorical-{j}-inf-size-epoch-{i}.pt"
                 for j in [1, 3]
                 for i in range(1, 4)

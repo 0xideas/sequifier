@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -521,6 +522,20 @@ class TrainModel(BaseModel):
                 raise ValueError(
                     "If distributed is set to 'true', the format has to be 'pt'"
                 )
+
+        if (
+            v.save_latest_interval_minutes is not None
+            and not os.environ["SEQUIFIER_TESTING"] == "1"
+            and v.save_latest_interval_minutes == 0
+        ):
+            raise ValueError("save_latest_interval_minutes must be larger than 0")
+
+        if (
+            v.save_batch_interval_minutes is not None
+            and not os.environ["SEQUIFIER_TESTING"] == "1"
+            and v.save_batch_interval_minutes == 0
+        ):
+            raise ValueError("save_batch_interval_minutes must be larger than 0")
 
         if v.sampling_strategy in ["oversampling", "undersampling"]:
             if v.world_size <= 1:
