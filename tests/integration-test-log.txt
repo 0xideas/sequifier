@@ -43,6 +43,8 @@ sequifier infer --config-path tests/configs/infer-test-lazy.yaml
 sequifier infer --config-path tests/configs/infer-test-categorical-autoregression.yaml  --input-columns itemId
 sequifier infer --config-path tests/configs/infer-test-categorical-embedding.yaml  --input-columns itemId
 sequifier infer --config-path tests/configs/infer-test-categorical-inf-size-3-embedding.yaml
+sequifier train --config-path tests/configs/train-test-resume-epoch.yaml
+sequifier train --config-path tests/configs/train-test-resume-mid-epoch.yaml
 sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-grid.yaml
 sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-sample.yaml
 sequifier visualize-training model-categorical-1 --project-root tests/project_folder
@@ -55,6 +57,8 @@ sequifier visualize-training model-categorical-distributed --project-root tests/
 sequifier visualize-training model-categorical-lazy --project-root tests/project_folder
 sequifier visualize-training model-categorical-multitarget-5 --project-root tests/project_folder
 sequifier visualize-training model-real-1 --project-root tests/project_folder
+sequifier visualize-training model-real-1-from-epoch-checkpoint --project-root tests/project_folder
+sequifier visualize-training model-real-1-from-mid-epoch-checkpoint --project-root tests/project_folder
 sequifier visualize-training model-real-3 --project-root tests/project_folder
 sequifier visualize-training model-real-5 --project-root tests/project_folder
 sequifier visualize-training model-real-50 --project-root tests/project_folder

@@ -108,6 +108,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         class_share_log_columns: Columns for which to log class share.
         early_stopping_epochs: Number of epochs for early stopping.
         save_interval_epochs: Interval in epochs for saving model checkpoints.
+        save_latest_interval_minutes: the time interval in which a checkpoint is written to the "latest" checkpoint path
+        save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path
+        save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving
         batch_size: A list of possible batch sizes.
         learning_rate: A list of possible learning rates.
         criterion: A dictionary mapping target columns to loss functions.
@@ -134,6 +137,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     class_share_log_columns: list[str] = Field(default_factory=list)
     early_stopping_epochs: Optional[int] = None
     save_interval_epochs: int
+    save_latest_interval_minutes: Optional[float] = None
+    save_batch_interval_minutes: Optional[float] = None
+    save_batch_interval_minutes_val_loss: bool = True
     batch_size: list[int]
     learning_rate: list[float]
     criterion: dict[str, str]
@@ -282,6 +288,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             class_share_log_columns=self.class_share_log_columns,
             early_stopping_epochs=self.early_stopping_epochs,
             save_interval_epochs=self.save_interval_epochs,
+            save_latest_interval_minutes=self.save_batch_interval_minutes,
+            save_batch_interval_minutes=self.save_batch_interval_minutes,
+            save_batch_interval_minutes_val_loss=self.save_batch_interval_minutes_val_loss,
             batch_size=batch_size,
             learning_rate=learning_rate,
             criterion=self.criterion,
@@ -352,6 +361,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             class_share_log_columns=self.class_share_log_columns,
             early_stopping_epochs=self.early_stopping_epochs,
             save_interval_epochs=self.save_interval_epochs,
+            save_latest_interval_minutes=self.save_batch_interval_minutes,
+            save_batch_interval_minutes=self.save_batch_interval_minutes,
+            save_batch_interval_minutes_val_loss=self.save_batch_interval_minutes_val_loss,
             batch_size=batch_size,
             learning_rate=learning_rate,
             criterion=self.criterion,

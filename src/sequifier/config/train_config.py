@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -118,6 +119,9 @@ class TrainingSpecModel(BaseModel):
         class_share_log_columns: A list of column names for which to log the class share of predictions.
         early_stopping_epochs: Number of epochs to wait for validation loss improvement before stopping.
         save_interval_epochs: The interval in epochs for checkpointing the model.
+        save_latest_interval_minutes: the time interval in which a checkpoint is written to the "latest" checkpoint path
+        save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path
+        save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving
         batch_size: The training batch size.
         learning_rate: The learning rate.
         criterion: A dictionary mapping each target column to a loss function.
@@ -148,6 +152,9 @@ class TrainingSpecModel(BaseModel):
     class_share_log_columns: list[str] = Field(default_factory=list)
     early_stopping_epochs: Optional[int] = None
     save_interval_epochs: int
+    save_latest_interval_minutes: Optional[float] = None
+    save_batch_interval_minutes: Optional[float] = None
+    save_batch_interval_minutes_val_loss: bool = True
     batch_size: int
     learning_rate: float
     criterion: dict[str, str]
@@ -515,6 +522,20 @@ class TrainModel(BaseModel):
                 raise ValueError(
                     "If distributed is set to 'true', the format has to be 'pt'"
                 )
+
+        if (
+            v.save_latest_interval_minutes is not None
+            and not os.environ["SEQUIFIER_TESTING"] == "1"
+            and v.save_latest_interval_minutes == 0
+        ):
+            raise ValueError("save_latest_interval_minutes must be larger than 0")
+
+        if (
+            v.save_batch_interval_minutes is not None
+            and not os.environ["SEQUIFIER_TESTING"] == "1"
+            and v.save_batch_interval_minutes == 0
+        ):
+            raise ValueError("save_batch_interval_minutes must be larger than 0")
 
         if v.sampling_strategy in ["oversampling", "undersampling"]:
             if v.world_size <= 1:

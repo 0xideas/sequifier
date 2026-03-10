@@ -119,6 +119,16 @@ def training_config_path_lazy():
 
 
 @pytest.fixture(scope="session")
+def training_config_path_resume_epoch():
+    return os.path.join("tests", "configs", "train-test-resume-epoch.yaml")
+
+
+@pytest.fixture(scope="session")
+def training_config_path_resume_mid_epoch():
+    return os.path.join("tests", "configs", "train-test-resume-mid-epoch.yaml")
+
+
+@pytest.fixture(scope="session")
 def inference_config_path_cat():
     return os.path.join("tests", "configs", "infer-test-categorical.yaml")
 
@@ -222,6 +232,8 @@ def format_configs_locally(
     training_config_path_cat_inf_size_3,
     training_config_path_distributed,
     training_config_path_lazy,
+    training_config_path_resume_epoch,
+    training_config_path_resume_mid_epoch,
     inference_config_path_cat,
     inference_config_path_cat_multitarget,
     inference_config_path_real,
@@ -249,6 +261,8 @@ def format_configs_locally(
             training_config_path_cat_inf_size_3,
             training_config_path_distributed,
             training_config_path_lazy,
+            training_config_path_resume_epoch,
+            training_config_path_resume_mid_epoch,
             inference_config_path_cat,
             inference_config_path_cat_multitarget,
             inference_config_path_real,
@@ -425,6 +439,34 @@ def run_training(
     )
 
     shutil.copy(source_path, target_path)
+
+
+@pytest.fixture(scope="session")
+def copy_checkpoints(run_training, project_root):
+    src_ckpt = os.path.join(project_root, "checkpoints", "model-real-1-epoch-1.pt")
+    dst_ckpt = os.path.join(
+        project_root, "checkpoints", "model-real-1-from-epoch-checkpoint-epoch-1.pt"
+    )
+    shutil.copy(src_ckpt, dst_ckpt)
+
+    src_ckpt = os.path.join(project_root, "checkpoints", "model-real-1-epoch-1.pt")
+    dst_ckpt = os.path.join(
+        project_root, "checkpoints", "model-real-1-from-mid-epoch-checkpoint-epoch-1.pt"
+    )
+    shutil.copy(src_ckpt, dst_ckpt)
+
+
+@pytest.fixture(scope="session")
+def run_training_from_checkpoint(
+    copy_checkpoints,
+    training_config_path_resume_epoch,
+    training_config_path_resume_mid_epoch,
+):
+    run_and_log(f"sequifier train --config-path {training_config_path_resume_epoch}")
+
+    run_and_log(
+        f"sequifier train --config-path {training_config_path_resume_mid_epoch}"
+    )
 
 
 @pytest.fixture(scope="module")

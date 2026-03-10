@@ -180,16 +180,23 @@ def train_worker(
             checkpoint = torch.load(
                 latest_model_path, map_location="cpu", weights_only=False
             )
+            epoch = checkpoint["epoch"]
+            batch = checkpoint["batch"]
+
+            time_string = f", epoch {epoch}, batch {batch}"
+        else:
+            time_string = ""
 
         if is_fsdp and global_rank == 0:
             model.load_state_dict(checkpoint["model_state_dict"])  # type: ignore
             del checkpoint["model_state_dict"]  # type: ignore
 
         logger.info(
-            f"[INFO] Resuming training from checkpoint '{latest_model_path}'. Total params: {format_number(pytorch_total_params)}"
+            f"[INFO] Resuming training from checkpoint '{latest_model_path}'{time_string}. Total params: {format_number(pytorch_total_params)}"
         )
     else:
         model.start_epoch = 1
+        model.start_batch = 0
         logger.info(
             f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
         )
@@ -278,19 +285,31 @@ def train_worker(
             unwrapped_model.optimizer.load_state_dict(sharded_osd)
 
             # Broadcast the tiny scheduler and epoch metadata to all ranks
+            if global_rank == 0:
+                if checkpoint["batch"] + 1 >= len(train_loader):  # type: ignore
+                    start_epoch = checkpoint["epoch"] + 1  # type: ignore
+                    start_batch = 0
+                else:
+                    start_epoch = checkpoint["epoch"]  # type: ignore
+                    start_batch = checkpoint["batch"] + 1  # type: ignore
+            else:
+                start_epoch = None
+                start_batch = None
+
             meta = (
                 [
-                    checkpoint["epoch"] + 1,  # type: ignore
+                    start_epoch,  # type: ignore
+                    start_batch,  # type: ignore
                     checkpoint["scheduler_state_dict"],  # type: ignore
                 ]
                 if global_rank == 0
-                else [None, None]
+                else [None, None, None]
             )
 
             if config.training_spec.distributed:
                 dist.broadcast_object_list(meta, src=0)
 
-            unwrapped_model.start_epoch, sched_state = meta
+            unwrapped_model.start_epoch, unwrapped_model.start_batch, sched_state = meta  # type: ignore
             if sched_state is not None:
                 unwrapped_model.scheduler.load_state_dict(sched_state)
 
@@ -318,7 +337,12 @@ def train_worker(
                 unwrapped_model.scheduler.load_state_dict(
                     checkpoint["scheduler_state_dict"]  # type: ignore
                 )
-                model.start_epoch = checkpoint["epoch"] + 1  # type: ignore
+            if checkpoint["batch"] + 1 >= len(train_loader):  # type: ignore
+                unwrapped_model.start_epoch = checkpoint["epoch"] + 1  # type: ignore
+                unwrapped_model.start_batch = 0
+            else:
+                unwrapped_model.start_epoch = checkpoint["epoch"]  # type: ignore
+                unwrapped_model.start_batch = checkpoint["batch"] + 1  # type: ignore
 
     # Start training
     unwrapped_model.train_model(
@@ -634,6 +658,15 @@ class TransformerModel(nn.Module):
         self.scheduler_step_on = hparams.training_spec.scheduler_step_on
 
         self.save_interval_epochs = hparams.training_spec.save_interval_epochs
+        self.save_latest_interval_minutes = (
+            hparams.training_spec.save_latest_interval_minutes
+        )
+        self.save_batch_interval_minutes = (
+            hparams.training_spec.save_batch_interval_minutes
+        )
+        self.save_batch_interval_minutes_val_loss = (
+            hparams.training_spec.save_batch_interval_minutes_val_loss
+        )
         self.continue_training = hparams.training_spec.continue_training
 
         use_scaler = False
@@ -1101,13 +1134,16 @@ class TransformerModel(nn.Module):
         best_model_state = None
 
         try:
+            self.last_latest_save_time = time.time()
+            self.last_batch_save_time = time.time()
+
             if self.start_epoch == 1:
                 total_loss, total_losses, output = self._evaluate(
                     valid_loader, ddp_model
                 )
                 elapsed = 0.0
 
-                self._log_epoch_results(0, elapsed, total_loss, total_losses, output)
+                self._log_epoch_results(0, 0, elapsed, total_loss, total_losses, output)
             for epoch in range(self.start_epoch, self.hparams.training_spec.epochs + 1):
                 if (
                     self.early_stopping_epochs is None
@@ -1122,7 +1158,7 @@ class TransformerModel(nn.Module):
                     train_loader.dataset.set_epoch(epoch)
                     valid_loader.dataset.set_epoch(epoch)
 
-                    self._train_epoch(train_loader, epoch, ddp_model)
+                    self._train_epoch(train_loader, valid_loader, epoch, ddp_model)
 
                     total_loss, total_losses, output = self._evaluate(
                         valid_loader, ddp_model
@@ -1130,7 +1166,12 @@ class TransformerModel(nn.Module):
                     elapsed = time.time() - epoch_start_time
 
                     self._log_epoch_results(
-                        epoch, elapsed, total_loss, total_losses, output
+                        epoch,
+                        len(train_loader),
+                        elapsed,
+                        total_loss,
+                        total_losses,
+                        output,
                     )
 
                     if total_loss < best_val_loss:
@@ -1144,7 +1185,13 @@ class TransformerModel(nn.Module):
                         self.scheduler.step()
 
                     if epoch % self.save_interval_epochs == 0:
-                        self._save(epoch, total_loss, ddp_model)
+                        self._save(
+                            epoch,
+                            len(train_loader) - 1,
+                            total_loss,
+                            ddp_model=ddp_model,
+                            suffix=f"epoch-{epoch}",
+                        )
 
                     last_epoch = epoch
         except KeyboardInterrupt:
@@ -1234,6 +1281,7 @@ class TransformerModel(nn.Module):
     def _train_epoch(
         self,
         train_loader: DataLoader,
+        valid_loader: DataLoader,
         epoch: int,
         ddp_model: Optional[nn.Module] = None,
     ) -> None:
@@ -1249,8 +1297,12 @@ class TransformerModel(nn.Module):
             epoch: The current epoch number (used for logging).
         """
         total_loss = 0.0
+        batches_aggregated = 0
+
         start_time = time.time()
         num_batches = len(train_loader)
+        start_batch = self.start_batch
+        self.start_batch = 0
 
         model_to_call = ddp_model if ddp_model is not None else self
 
@@ -1259,68 +1311,141 @@ class TransformerModel(nn.Module):
         is_fsdp = self.hparams.training_spec.fsdp
 
         for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
-            data = {
-                k: v.to(self.device, non_blocking=True)
-                for k, v in data.items()
-                if k in self.input_columns
-            }
-            targets = {
-                k: v.to(self.device, non_blocking=True)
-                for k, v in targets.items()
-                if k in self.target_column_types
-            }
+            if batch_count >= start_batch:
+                data = {
+                    k: v.to(self.device, non_blocking=True)
+                    for k, v in data.items()
+                    if k in self.input_columns
+                }
+                targets = {
+                    k: v.to(self.device, non_blocking=True)
+                    for k, v in targets.items()
+                    if k in self.target_column_types
+                }
 
-            # Only use standard torch.autocast if FSDP MixedPrecision is NOT handling it natively
-            if self.hparams.training_spec.layer_autocast and not is_fsdp:
-                amp_dtype = get_torch_dtype(
-                    self.hparams.training_spec.layer_type_dtypes.get(
-                        "linear", "bfloat16"
+                # Only use standard torch.autocast if FSDP MixedPrecision is NOT handling it natively
+                if self.hparams.training_spec.layer_autocast and not is_fsdp:
+                    amp_dtype = get_torch_dtype(
+                        self.hparams.training_spec.layer_type_dtypes.get(
+                            "linear", "bfloat16"
+                        )
+                        if self.hparams.training_spec.layer_type_dtypes
+                        else "float32"
                     )
-                    if self.hparams.training_spec.layer_type_dtypes
-                    else "float32"
-                )
-                with torch.autocast(
-                    device_type=self.device.split(":")[0], dtype=amp_dtype
-                ):
+                    with torch.autocast(
+                        device_type=self.device.split(":")[0], dtype=amp_dtype
+                    ):
+                        output = model_to_call(data, True)
+                        loss, losses = self._calculate_loss(output, targets)
+                else:
                     output = model_to_call(data, True)
                     loss, losses = self._calculate_loss(output, targets)
-            else:
-                output = model_to_call(data, True)
-                loss, losses = self._calculate_loss(output, targets)
 
-            self.scaler.scale(loss).backward()
+                self.scaler.scale(loss).backward()
 
-            if (
-                self.accumulation_steps is None
-                or (batch_count + 1) % self.accumulation_steps == 0
-                or (batch_count + 1) == num_batches
-            ):
-                self.scaler.unscale_(self.optimizer)
+                if (
+                    self.accumulation_steps is None
+                    or (batch_count + 1) % self.accumulation_steps == 0
+                    or (batch_count + 1) == num_batches
+                ):
+                    self.scaler.unscale_(self.optimizer)
 
-                if is_fsdp:
-                    model_to_call.clip_grad_norm_(0.5)
-                else:
-                    torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                    if is_fsdp:
+                        model_to_call.clip_grad_norm_(0.5)
+                    else:
+                        torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
 
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-                self.optimizer.zero_grad()
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                    self.optimizer.zero_grad()
 
-            total_loss += loss.item()
-            if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
-                learning_rate = self.scheduler.get_last_lr()[0]
-                s_per_batch = (time.time() - start_time) / self.log_interval
-                avg_train_loss = total_loss / self.log_interval
-                self.logger.info(
-                    f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
+                total_loss += loss.item()
+                batches_aggregated += 1
+                if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
+                    learning_rate = self.scheduler.get_last_lr()[0]
+                    s_per_batch = (time.time() - start_time) / max(
+                        1, batches_aggregated
+                    )
+                    avg_train_loss = total_loss / max(1, batches_aggregated)
+                    self.logger.info(
+                        f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
+                    )
+                    total_loss = 0.0
+                    batches_aggregated = 0
+                    self.start_batch = 0
+                    start_time = time.time()
+
+                del data, targets, output, loss, losses
+
+                if self.scheduler_step_on == "batch":
+                    self.scheduler.step()
+
+                should_save_latest = torch.tensor(
+                    [0], dtype=torch.int32, device=self.device
                 )
-                total_loss = 0.0
-                start_time = time.time()
+                should_save_batch = torch.tensor(
+                    [0], dtype=torch.int32, device=self.device
+                )
 
-            del data, targets, output, loss, losses
+                if not self.hparams.training_spec.distributed or self.rank == 0:
+                    current_time = time.time()
 
-            if self.scheduler_step_on == "batch":
-                self.scheduler.step()
+                    if self.save_latest_interval_minutes is not None and (
+                        current_time - self.last_latest_save_time
+                    ) >= (self.save_latest_interval_minutes * 60):
+                        current_time = time.time()
+                        should_save_latest[0] = 1
+                        self.last_latest_save_time = current_time
+
+                    if self.save_batch_interval_minutes is not None and (
+                        current_time - self.last_batch_save_time
+                    ) >= (self.save_batch_interval_minutes * 60):
+                        if self.save_batch_interval_minutes_val_loss:
+                            val_loss, val_losses, output = self._evaluate(
+                                valid_loader, ddp_model
+                            )
+                            self._log_epoch_results(
+                                0,
+                                batch_count + 1,
+                                (current_time - self.last_batch_save_time),
+                                val_loss,
+                                val_losses,
+                                output,
+                            )
+
+                        else:
+                            val_loss = np.float32(np.nan)
+                        current_time = time.time()
+                        should_save_batch[0] = 1
+                        self.last_batch_save_time = current_time
+
+                if self.hparams.training_spec.distributed:
+                    dist.broadcast(should_save_latest, src=0)
+                    dist.broadcast(should_save_batch, src=0)
+
+                if should_save_latest.item() == 1:
+                    self._save(
+                        epoch,
+                        batch_count,
+                        np.float32(np.nan),
+                        ddp_model,
+                        suffix="latest",
+                    )
+                    if self.rank != 0:
+                        self.last_latest_save_time = (
+                            time.time()
+                        )  # Keep ranks roughly aligned
+
+                if should_save_batch.item() == 1:
+                    self._save(
+                        epoch,
+                        batch_count,
+                        val_loss,  # type: ignore
+                        ddp_model,
+                        suffix=f"epoch-{epoch}-batch-{batch_count + 1}",
+                    )  # type: ignore
+                    if self.rank != 0:
+                        self.last_batch_save_time = time.time()
 
     @beartype
     def _calculate_loss(
@@ -1641,6 +1766,9 @@ class TransformerModel(nn.Module):
                 self.baseline_loss = baseline_loss_local
                 self.baseline_losses = baseline_losses_local
 
+        model_to_call.train()
+        torch.clear_autocast_cache()
+
         return (
             np.float32(total_loss_global),
             {k: np.float32(v) for k, v in total_losses_global.items()},
@@ -1770,7 +1898,12 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _save(
-        self, epoch: int, val_loss: np.float32, ddp_model: Optional[nn.Module] = None
+        self,
+        epoch: int,
+        batch: int,
+        val_loss: np.float32,
+        ddp_model: Optional[nn.Module] = None,
+        suffix: Optional[str] = None,
     ) -> None:
         """Saves the model checkpoint.
 
@@ -1778,9 +1911,9 @@ class TransformerModel(nn.Module):
         file in the checkpoints directory. Only runs on rank 0.
 
         Args:
-            epoch: The current epoch number.
             val_loss: The validation loss at the current epoch.
             ddp_model: DDP model
+            suffix: Checkpoint file suffix.
         """
         model_to_extract = ddp_model if ddp_model is not None else self
         is_fsdp = self.hparams.training_spec.fsdp
@@ -1816,15 +1949,18 @@ class TransformerModel(nn.Module):
 
         os.makedirs(os.path.join(self.project_root, "checkpoints"), exist_ok=True)
 
+        file_name = f"{self.model_name}-{suffix}.pt"
+
         output_path = os.path.join(
             self.project_root,
             "checkpoints",
-            f"{self.model_name}-epoch-{epoch}.pt",
+            file_name,
         )
 
         torch.save(
             {
                 "epoch": epoch,
+                "batch": batch,
                 "model_state_dict": model_state_dict,
                 "optimizer_state_dict": optim_state_dict,
                 "scheduler_state_dict": self.scheduler.state_dict(),
@@ -1907,6 +2043,7 @@ class TransformerModel(nn.Module):
     def _log_epoch_results(
         self,
         epoch: int,
+        batch: int,
         elapsed: float,
         total_loss: np.float32,
         total_losses: dict[str, np.float32],
@@ -1919,20 +2056,21 @@ class TransformerModel(nn.Module):
         Only runs on rank 0.
 
         Args:
-            epoch: The current epoch number.
+            epoch: Current epoch number.
             elapsed: Time taken for the epoch (in seconds).
             total_loss: The total aggregated validation loss.
             total_losses: A dictionary of aggregated losses for each target.
             output: The output tensor dictionary from the last validation batch,
                     used for class share logging.
+            batch: Current batch number.
         """
         if self.rank == 0:
             learning_rate = self.optimizer.state_dict()["param_groups"][0]["lr"]
 
+            log_string = f"[INFO] Validation | Epoch: {epoch:3d} | Batch: {batch} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(learning_rate)}"
+
             self.logger.info("-" * 89)
-            self.logger.info(
-                f"[INFO] Validation | Epoch: {epoch:3d} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(learning_rate)}"
-            )
+            self.logger.info(log_string)
 
             if len(total_losses) > 1:
                 loss_strs = [
