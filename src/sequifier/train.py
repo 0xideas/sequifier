@@ -613,7 +613,10 @@ class TransformerModel(nn.Module):
 
         compile_fn = (
             torch.compile
-            if self.hparams.training_spec.torch_compile == "inner"
+            if (
+                self.hparams.training_spec.torch_compile == "inner"
+                and not self.hparams.training_spec.device.startswith("mps")
+            )
             else lambda l: l  # noqa
         )
         self.layers = nn.ModuleList(
@@ -2242,7 +2245,7 @@ def load_inference_model(
                 if isinstance(module, torch.nn.Dropout):
                     module.train()
 
-        if device.startswith("cuda"):
+        if not device.startswith("mps"):
             model = torch.compile(model).to(device)
         else:
             model.to(device)
