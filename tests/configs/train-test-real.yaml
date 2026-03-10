@@ -35,8 +35,8 @@ training_spec:
   device: cpu
   epochs: 3
   save_interval_epochs: 1
-  save_latest_interval_minutes: 0
-  save_batch_interval_minutes: 0
+  save_latest_interval_minutes: 1
+  save_batch_interval_minutes: 1
   batch_size: 20
   log_interval: 1
   learning_rate: 0.003

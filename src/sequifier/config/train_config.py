@@ -525,14 +525,14 @@ class TrainModel(BaseModel):
 
         if (
             v.save_latest_interval_minutes is not None
-            and not os.environ["SEQUIFIER_TESTING"] == "1"
+            and not os.getenv("SEQUIFIER_TESTING", "0") == "1"
             and v.save_latest_interval_minutes == 0
         ):
             raise ValueError("save_latest_interval_minutes must be larger than 0")
 
         if (
             v.save_batch_interval_minutes is not None
-            and not os.environ["SEQUIFIER_TESTING"] == "1"
+            and not os.getenv("SEQUIFIER_TESTING", "0") == "1"
             and v.save_batch_interval_minutes == 0
         ):
             raise ValueError("save_batch_interval_minutes must be larger than 0")

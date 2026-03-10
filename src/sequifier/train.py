@@ -2132,6 +2132,8 @@ def load_inference_model(
         training_config_path, args_config_subset, skip_metadata
     )
 
+    training_config.training_spec.torch_compile = "none"
+
     with torch.no_grad():
         model = TransformerModel(training_config)
         if model_type == "generative":
