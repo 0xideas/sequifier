@@ -252,10 +252,15 @@ def train_worker(
             )
             model = DDP(model, device_ids=device_ids, find_unused_parameters=False)
 
+    unwrapped_model = model.module if config.training_spec.distributed else model
+
     if config.training_spec.device.startswith("cuda"):
         if torch_compile == "outer":
             model = torch.compile(model)
 
+        elif torch_compile == "inner":
+            for i in range(len(unwrapped_model.layers)):
+                unwrapped_model.layers[i] = torch.compile(unwrapped_model.layers[i])
         dummy_data = create_dummy_data(config, local_rank)
 
         if config.training_spec.layer_autocast and not is_fsdp:
@@ -271,7 +276,6 @@ def train_worker(
             dist.barrier()
 
     # Initialize Optimizer
-    unwrapped_model = model.module if config.training_spec.distributed else model
     params_to_optimize = model.parameters() if is_fsdp else unwrapped_model.parameters()
     unwrapped_model.initialize_optimizer(params=params_to_optimize)
 
@@ -611,25 +615,15 @@ class TransformerModel(nn.Module):
         else:
             self.pos_encoder = None
 
-        compile_fn = (
-            torch.compile
-            if (
-                self.hparams.training_spec.torch_compile == "inner"
-                and not self.hparams.training_spec.device.startswith("mps")
-            )
-            else lambda l: l  # noqa
-        )
         self.layers = nn.ModuleList(
             [
-                compile_fn(
-                    SequifierEncoderLayer(
-                        hparams.model_spec,
-                        self.dim_model,
-                        hparams.model_spec.n_head,
-                        hparams.model_spec.dim_feedforward,
-                        hparams.training_spec.dropout,
-                        hparams.seq_length,
-                    )
+                SequifierEncoderLayer(
+                    hparams.model_spec,
+                    self.dim_model,
+                    hparams.model_spec.n_head,
+                    hparams.model_spec.dim_feedforward,
+                    hparams.training_spec.dropout,
+                    hparams.seq_length,
                 )
                 for _ in range(hparams.model_spec.num_layers)
             ]
@@ -717,42 +711,6 @@ class TransformerModel(nn.Module):
             )
 
             self._apply_layer_dtypes()
-
-        self._register_load_state_dict_pre_hook(self._compile_key_mapping_hook)
-
-    def _compile_key_mapping_hook(
-        self,
-        state_dict,
-        prefix,
-        local_metadata,
-        strict,
-        missing_keys,
-        unexpected_keys,
-        error_msgs,
-    ):
-        """
-        Intercepts the state_dict before loading to dynamically map clean weights
-        to compiled modules. Uses 'prefix' to safely ignore FSDP/DDP nesting.
-        """
-        if getattr(self.hparams.training_spec, "torch_compile", "none") == "inner":
-            target_prefix = prefix + "layers."
-
-            # Extract keys to a list to avoid dictionary size change issues during iteration
-            keys_to_modify = list(state_dict.keys())
-
-            for k in keys_to_modify:
-                if k.startswith(target_prefix) and "_orig_mod" not in k:
-                    # Strip the prefix temporarily to isolate the layer parts
-                    local_k = k[len(target_prefix) :]
-                    parts = local_k.split(".", 1)
-
-                    if len(parts) == 2:
-                        layer_idx, remainder = parts
-                        # Reconstruct the key with _orig_mod safely injected
-                        new_k = f"{target_prefix}{layer_idx}._orig_mod.{remainder}"
-
-                        # Swap the clean key for the compiled key
-                        state_dict[new_k] = state_dict.pop(k)
 
     @beartype
     def initialize_optimizer(self, params: Any = None) -> None:
