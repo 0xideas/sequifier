@@ -103,6 +103,7 @@ def train_worker(
     config: TrainModel,
     from_folder: bool,
     global_rank: int,
+    torch_compile: str,
 ):
     """The worker function for distributed training.
 
@@ -252,7 +253,9 @@ def train_worker(
             model = DDP(model, device_ids=device_ids, find_unused_parameters=False)
 
     if config.training_spec.device.startswith("cuda"):
-        model = torch.compile(model)
+        if torch_compile == "outer":
+            model = torch.compile(model)
+
         dummy_data = create_dummy_data(config, local_rank)
 
         if config.training_spec.layer_autocast and not is_fsdp:
@@ -357,9 +360,20 @@ def train_worker(
 
 @beartype
 def _mp_train_worker_wrapper(
-    local_rank: int, world_size: int, config: TrainModel, from_folder: bool
+    local_rank: int,
+    world_size: int,
+    config: TrainModel,
+    from_folder: bool,
+    torch_compile: str,
 ):
-    train_worker(local_rank, world_size, config, from_folder, global_rank=local_rank)
+    train_worker(
+        local_rank,
+        world_size,
+        config,
+        from_folder,
+        global_rank=local_rank,
+        torch_compile=torch_compile,
+    )
 
 
 @beartype
@@ -382,17 +396,29 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
             global_rank = int(os.environ["RANK"])
             world_size = int(os.environ["WORLD_SIZE"])
             local_rank = int(os.environ.get("LOCAL_RANK", 0))
-            train_worker(local_rank, world_size, config, from_folder, global_rank)
+            train_worker(
+                local_rank,
+                world_size,
+                config,
+                from_folder,
+                global_rank,
+                config.training_spec.torch_compile,
+            )
         else:
             # Single-node multi-GPU fallback using mp.spawn
             mp.spawn(
                 _mp_train_worker_wrapper,
-                args=(world_size, config, from_folder),
+                args=(
+                    world_size,
+                    config,
+                    from_folder,
+                    config.training_spec.torch_compile,
+                ),
                 nprocs=world_size,
                 join=True,
             )
     else:
-        train_worker(0, 1, config, from_folder, 0)
+        train_worker(0, 1, config, from_folder, 0, config.training_spec.torch_compile)
 
 
 @beartype
@@ -585,15 +611,22 @@ class TransformerModel(nn.Module):
         else:
             self.pos_encoder = None
 
+        compile_fn = (
+            torch.compile
+            if self.hparams.training_spec.torch_compile == "inner"
+            else lambda l: l  # noqa
+        )
         self.layers = nn.ModuleList(
             [
-                SequifierEncoderLayer(
-                    hparams.model_spec,
-                    self.dim_model,
-                    hparams.model_spec.n_head,
-                    hparams.model_spec.dim_feedforward,
-                    hparams.training_spec.dropout,
-                    hparams.seq_length,
+                compile_fn(
+                    SequifierEncoderLayer(
+                        hparams.model_spec,
+                        self.dim_model,
+                        hparams.model_spec.n_head,
+                        hparams.model_spec.dim_feedforward,
+                        hparams.training_spec.dropout,
+                        hparams.seq_length,
+                    )
                 )
                 for _ in range(hparams.model_spec.num_layers)
             ]
@@ -681,6 +714,42 @@ class TransformerModel(nn.Module):
             )
 
             self._apply_layer_dtypes()
+
+        self._register_load_state_dict_pre_hook(self._compile_key_mapping_hook)
+
+    def _compile_key_mapping_hook(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        """
+        Intercepts the state_dict before loading to dynamically map clean weights
+        to compiled modules. Uses 'prefix' to safely ignore FSDP/DDP nesting.
+        """
+        if getattr(self.hparams.training_spec, "torch_compile", "none") == "inner":
+            target_prefix = prefix + "layers."
+
+            # Extract keys to a list to avoid dictionary size change issues during iteration
+            keys_to_modify = list(state_dict.keys())
+
+            for k in keys_to_modify:
+                if k.startswith(target_prefix) and "_orig_mod" not in k:
+                    # Strip the prefix temporarily to isolate the layer parts
+                    local_k = k[len(target_prefix) :]
+                    parts = local_k.split(".", 1)
+
+                    if len(parts) == 2:
+                        layer_idx, remainder = parts
+                        # Reconstruct the key with _orig_mod safely injected
+                        new_k = f"{target_prefix}{layer_idx}._orig_mod.{remainder}"
+
+                        # Swap the clean key for the compiled key
+                        state_dict[new_k] = state_dict.pop(k)
 
     @beartype
     def initialize_optimizer(self, params: Any = None) -> None:
@@ -1270,8 +1339,8 @@ class TransformerModel(nn.Module):
         # 2. Restrict the export saving to Rank 0 inside the _export method (which you already do)
         # or guard the I/O specifically:
         if self.rank == 0:
-            self._export(last_model_state, "last", last_epoch)  # type: ignore
-            self._export(best_model_state, "best", last_epoch)  # type: ignore
+            self._export(last_model_state, "last", last_epoch, clean=True)  # type: ignore
+            self._export(best_model_state, "best", last_epoch, clean=True)  # type: ignore
             self.logger.info("--- Training Complete ---")
 
         if self.hparams.training_spec.distributed:
@@ -1776,7 +1845,13 @@ class TransformerModel(nn.Module):
         )
 
     @beartype
-    def _export(self, state_dict: dict[str, Tensor], suffix: str, epoch: int) -> None:
+    def _export(
+        self,
+        state_dict: dict[str, Tensor],
+        suffix: str,
+        epoch: int,
+        clean: bool = False,
+    ) -> None:
         """Exports the model.
 
         This is a wrapper function that handles exporting the model (and
@@ -1791,7 +1866,13 @@ class TransformerModel(nn.Module):
             return
 
         # Instantiate a clean, decoupled CPU model for the export phase
-        export_model = TransformerModel(self.hparams)
+        if clean:
+            export_hparams = copy.deepcopy(self.hparams)
+            export_hparams.training_spec.torch_compile = "none"
+        else:
+            export_hparams = self.hparams
+
+        export_model = TransformerModel(export_hparams)
         export_model.load_state_dict(state_dict)
         export_model.eval()
 
@@ -2131,6 +2212,8 @@ def load_inference_model(
     training_config = load_train_config(
         training_config_path, args_config_subset, skip_metadata
     )
+
+    training_config.training_spec.torch_compile = "none"
 
     with torch.no_grad():
         model = TransformerModel(training_config)

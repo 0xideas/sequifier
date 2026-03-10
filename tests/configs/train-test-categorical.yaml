@@ -33,6 +33,7 @@ model_spec:
   rope_theta: 1000.0
 training_spec:
   device: cpu
+  torch_compile: "outer"
   epochs: 3
   save_interval_epochs: 1
   batch_size: 5

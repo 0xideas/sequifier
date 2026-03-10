@@ -141,6 +141,7 @@ class TrainingSpecModel(BaseModel):
         layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
         layer_autocast: Whether to use autocast
         sampling_strategy: how to equalize data between GPUs
+        torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile, alternatively 'none'
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -183,6 +184,7 @@ class TrainingSpecModel(BaseModel):
     fsdp: bool = False
     fsdp_sharding_strategy: str = "FULL_SHARD"
     fsdp_cpu_offload: bool = False
+    torch_compile: str = "inner"
 
     def __init__(self, **kwargs):
         super().__init__(
@@ -525,17 +527,22 @@ class TrainModel(BaseModel):
 
         if (
             v.save_latest_interval_minutes is not None
-            and not os.environ["SEQUIFIER_TESTING"] == "1"
+            and not os.getenv("SEQUIFIER_TESTING", "0") == "1"
             and v.save_latest_interval_minutes == 0
         ):
             raise ValueError("save_latest_interval_minutes must be larger than 0")
 
         if (
             v.save_batch_interval_minutes is not None
-            and not os.environ["SEQUIFIER_TESTING"] == "1"
+            and not os.getenv("SEQUIFIER_TESTING", "0") == "1"
             and v.save_batch_interval_minutes == 0
         ):
             raise ValueError("save_batch_interval_minutes must be larger than 0")
+
+        if v.torch_compile not in ["outer", "inner", "none"]:
+            raise ValueError(
+                f'torch_compile {v.torch_compile} invalid, must be one of ["outer", "inner", "none"]'
+            )
 
         if v.sampling_strategy in ["oversampling", "undersampling"]:
             if v.world_size <= 1:
@@ -603,7 +610,7 @@ class TrainModel(BaseModel):
             if embedding_size % n_categorical != 0:
                 raise ValueError(
                     f"If only categorical variables are included and feature_embedding_dims is not set, "
-                    f"max(dim_model, n_head) ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical})."
+                    f"max(dim_model, n_head) ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical}: {categorical_columns})."
                 )
 
         return v
