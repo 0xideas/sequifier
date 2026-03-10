@@ -15,6 +15,7 @@ import torch._dynamo
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from beartype import beartype
+from packaging import version
 from torch import Tensor, nn
 from torch.amp import GradScaler
 from torch.distributed.checkpoint.state_dict import (
@@ -24,8 +25,17 @@ from torch.distributed.checkpoint.state_dict import (
     set_optimizer_state_dict,
     set_state_dict,
 )
+
+if version.parse(torch.__version__) >= version.parse("2.6.0"):
+    from torch.distributed.fsdp import MixedPrecisionPolicy, OffloadPolicy, fully_shard
+else:
+    from torch.distributed._composable.fsdp import (
+        MixedPrecisionPolicy,
+        OffloadPolicy,
+        fully_shard,
+    )
+
 from torch.distributed.device_mesh import init_device_mesh
-from torch.distributed.fsdp import MixedPrecisionPolicy, OffloadPolicy, fully_shard
 from torch.nn import ModuleDict
 from torch.nn.functional import one_hot
 from torch.nn.parallel import DistributedDataParallel as DDP
