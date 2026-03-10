@@ -24,6 +24,7 @@ from torch.distributed.checkpoint.state_dict import (
     set_optimizer_state_dict,
     set_state_dict,
 )
+from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import MixedPrecisionPolicy, OffloadPolicy, fully_shard
 from torch.nn import ModuleDict
 from torch.nn.functional import one_hot
@@ -230,11 +231,19 @@ def train_worker(
                 OffloadPolicy() if config.training_spec.fsdp_cpu_offload else None
             )
 
+            mesh = init_device_mesh(
+                "cuda", (world_size,)
+            )  # 1D mesh for standard ZeRO-3 full sharding
+
             for layer in model.layers:
-                fully_shard(layer, mp_policy=mp_policy, offload_policy=offload_policy)
+                fully_shard(
+                    layer, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
+                )
 
             # 3. Apply fully_shard to the root model
-            fully_shard(model, mp_policy=mp_policy, offload_policy=offload_policy)
+            fully_shard(
+                model, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
+            )
             dist.barrier()
         else:
             device_ids = (
