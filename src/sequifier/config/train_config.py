@@ -610,7 +610,7 @@ class TrainModel(BaseModel):
             if embedding_size % n_categorical != 0:
                 raise ValueError(
                     f"If only categorical variables are included and feature_embedding_dims is not set, "
-                    f"max(dim_model, n_head) ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical})."
+                    f"max(dim_model, n_head) ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical}: {categorical_columns})."
                 )
 
         return v

@@ -50,6 +50,7 @@ sequifier hyperparameter-search --config-path tests/configs/hyperparameter-searc
 sequifier visualize-training model-categorical-1 --project-root tests/project_folder
 sequifier visualize-training model-categorical-1-inf-size --project-root tests/project_folder
 sequifier visualize-training model-categorical-3 --project-root tests/project_folder
+sequifier visualize-training model-categorical-3-from-mid-epoch-checkpoint --project-root tests/project_folder
 sequifier visualize-training model-categorical-3-inf-size --project-root tests/project_folder
 sequifier visualize-training model-categorical-5 --project-root tests/project_folder
 sequifier visualize-training model-categorical-50 --project-root tests/project_folder
@@ -58,3 +59,7 @@ sequifier visualize-training model-categorical-lazy --project-root tests/project
 sequifier visualize-training model-categorical-multitarget-5 --project-root tests/project_folder
 sequifier visualize-training model-real-1 --project-root tests/project_folder
 sequifier visualize-training model-real-1-from-epoch-checkpoint --project-root tests/project_folder
+sequifier visualize-training model-real-3 --project-root tests/project_folder
+sequifier visualize-training model-real-5 --project-root tests/project_folder
+sequifier visualize-training model-real-50 --project-root tests/project_folder
+sequifier visualize-training test-hp-search-grid-run-0,test-hp-search-grid-run-1,test-hp-search-grid-run-2,test-hp-search-grid-run-3 --project-root tests/project_folder --log-scale --bucket-training-batches 5

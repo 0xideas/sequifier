@@ -127,7 +127,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         fsdp: fsdp training
         fsdp_sharding_strategy: fsdp sharding strategy
         fsdp_cpu_offload: fsdp cpu offload
-        torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile
+        torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile, alternatively 'none'
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
