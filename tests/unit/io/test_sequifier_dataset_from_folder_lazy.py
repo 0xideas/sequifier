@@ -15,8 +15,10 @@ def mock_config(tmp_path):
     """Creates a mock configuration object."""
     config = MagicMock()
     config.project_root = str(tmp_path)
-    # Set a small RAM limit for testing logic, though we will mock psutil check directly
-    config.training_spec.max_ram_gb = 1.0
+    config.training_spec.batch_size = 5
+    config.training_spec.sampling_strategy = "exact"
+    config.training_spec.num_workers = 0
+    config.seed = 42
     config.seq_length = 5
     return config
 
@@ -28,163 +30,261 @@ def dataset_path(tmp_path):
     data_dir.mkdir()
 
     # Create dummy metadata.json
-    # We define 3 files with 10 samples each = 30 total samples
+    # We define 4 files with 10 samples each = 40 total samples
     metadata = {
-        "total_samples": 30,
+        "total_samples": 40,
         "batch_files": [
             {"path": "file1.pt", "samples": 10},
             {"path": "file2.pt", "samples": 10},
             {"path": "file3.pt", "samples": 10},
+            {"path": "file4.pt", "samples": 10},
         ],
     }
 
     with open(data_dir / "metadata.json", "w") as f:
         json.dump(metadata, f)
 
-    # We don't need to create actual .pt files because we will mock torch.load
     return str(data_dir)
 
 
 @pytest.fixture
 def mock_torch_load():
-    """Mocks torch.load to return dummy tensors."""
+    """Mocks torch.load to return dummy tensors matching the preprocessed format."""
     with patch("torch.load") as mock_load:
-        # Define a side effect to return different dummy data based on filename
+
         def side_effect(path, map_location, weights_only):
-            # Create dummy return tuple:
-            # (sequences, targets, seq_ids, subseq_ids, positions)
-            # Tensors size: (10 samples, sequence length 5)
-            dummy_seq = {"col1": torch.zeros((10, 5))}
-            dummy_tgt = {"tgt1": torch.zeros((10, 5))}
-            dummy_ids = torch.arange(10)
+            # Create dummy return tuple: (sequences, targets, ids, ids, pos)
+            # Tensors size: (10 samples per file, sequence length 10 to allow slicing)
+            dummy_seq = {"col1": torch.ones((10, 10))}
+            dummy_tgt = {"tgt1": torch.zeros((10, 10))}
+
             return (
                 dummy_seq,
                 dummy_tgt,
-                dummy_ids,
-                dummy_ids,
-                dummy_ids,
+                None,
+                None,
+                None,
             )
 
         mock_load.side_effect = side_effect
         yield mock_load
 
 
-@pytest.fixture
-def mock_memory():
-    """Mocks psutil.virtual_memory to control reported memory usage."""
-    with patch("psutil.virtual_memory") as mock_mem:
-        # Default: plenty of memory available
-        mock_mem.return_value.used = 0
-        yield mock_mem
-
-
 # --- Tests ---
 
 
 def test_initialization(mock_config, dataset_path):
-    """Tests that metadata is read correctly on initialization."""
+    """Tests that metadata is read correctly and __len__ calculates batches."""
     dataset = SequifierDatasetFromFolderLazy(dataset_path, mock_config)
-    assert len(dataset) == 30
-    assert len(dataset.cumulative_samples) == 3
-    assert dataset.cumulative_samples == [10, 20, 30]
+
+    # 40 total samples / batch size of 5 = 8 batches
+    assert len(dataset) == 8
+    assert len(dataset.batch_files_info) == 4
+    assert dataset.total_samples == 40
 
 
-def test_lazy_loading_and_caching(
-    mock_config, dataset_path, mock_torch_load, mock_memory
+def test_iteration_yields_correct_batches(mock_config, dataset_path, mock_torch_load):
+    """Tests that the dataset iterates over files and yields correct tensor slices."""
+    dataset = SequifierDatasetFromFolderLazy(dataset_path, mock_config, shuffle=False)
+
+    # Consume the generator
+    batches = list(dataset)
+
+    # 4 files * 10 samples = 40 total samples. 40 / 5 batch_size = 8 batches
+    assert len(batches) == 8
+
+    # Each file has 10 samples, so torch.load should be called 4 times
+    assert mock_torch_load.call_count == 4
+
+    # Verify the structure of a yielded batch
+    seq_dict, tgt_dict, _, _, _ = batches[0]
+
+    assert "col1" in seq_dict
+    assert "tgt1" in tgt_dict
+
+    # Check that batch size and sequence length truncation works properly
+    assert seq_dict["col1"].shape == (5, 5)
+    assert tgt_dict["tgt1"].shape == (5, 5)
+
+
+@patch("torch.distributed.is_initialized", return_value=True)
+@patch("torch.distributed.get_world_size", return_value=2)
+@patch("torch.distributed.get_rank", return_value=0)
+def test_distributed_sharding(
+    mock_rank, mock_ws, mock_init, mock_config, dataset_path, mock_torch_load
 ):
-    """Tests that files are loaded on demand and cached."""
-    dataset = SequifierDatasetFromFolderLazy(dataset_path, mock_config)
+    """Tests that the dataset correctly shards files across distributed GPUs."""
+    dataset = SequifierDatasetFromFolderLazy(dataset_path, mock_config, shuffle=False)
 
-    # 1. Access index 5 (belongs to file1.pt)
-    _ = dataset[5]
+    # World size = 2, Total files = 4
+    # Rank 0 gets file index 0 and 2 (file1.pt, file3.pt) -> Total 20 samples
+    # 20 samples / 5 batch_size = 4 expected batches
+    assert len(dataset) == 4
 
-    # Verify torch.load was called for file1.pt
-    args, _ = mock_torch_load.call_args
-    assert "file1.pt" in args[0]
-    # Verify cache status
-    assert any("file1.pt" in k for k in dataset.cache.keys())
-    assert len(dataset.cache) == 1
+    batches = list(dataset)
 
-    # 2. Access index 5 again (should hit cache)
-    mock_torch_load.reset_mock()
-    _ = dataset[5]
-    mock_torch_load.assert_not_called()  # Should not load from disk again
+    assert len(batches) == 4
+    assert mock_torch_load.call_count == 2
 
-
-def test_lru_eviction(mock_config, dataset_path, mock_torch_load, mock_memory):
-    """Tests that the oldest accessed file is evicted when memory is full."""
-    dataset = SequifierDatasetFromFolderLazy(dataset_path, mock_config)
-    dataset.max_ram_bytes = 1000
-
-    # 1. Load File 1 (Index 0) - Memory OK
-    mock_memory.return_value.used = 500
-    _ = dataset[0]
-    assert len(dataset.cache) == 1
-    file1_key = [k for k in dataset.cache.keys() if "file1.pt" in k][0]
-
-    # 2. Load File 2 (Index 10) - Memory OK
-    _ = dataset[10]
-    assert len(dataset.cache) == 2
-    file2_key = [k for k in dataset.cache.keys() if "file2.pt" in k][0]
-
-    assert list(dataset.cache.keys()) == [file1_key, file2_key]
-
-    # 3. Simulate Memory Pressure
-    # We need psutil.virtual_memory() to return:
-    #   1. High memory (1500) -> Triggers 1st eviction
-    #   2. Lower memory (900) -> Stops the while loop
-
-    # Create two mock objects representing the memory state
-    high_mem = MagicMock(used=1500)
-    low_mem = MagicMock(used=900)
-
-    # Apply side_effect to the mock function
-    mock_memory.side_effect = [high_mem, low_mem]
-
-    _ = dataset[20]
-
-    # Reset side_effect to avoid affecting other tests/teardown if necessary
-    mock_memory.side_effect = None
-
-    file3_key = [k for k in dataset.cache.keys() if "file3.pt" in k][0]
-
-    # Assertions
-    assert len(dataset.cache) == 2
-    assert file1_key not in dataset.cache  # Oldest (F1) evicted
-    assert file2_key in dataset.cache  # F2 kept
-    assert file3_key in dataset.cache  # Newest (F3) kept
+    # Verify it loaded the correct specific files
+    loaded_files = [call.args[0] for call in mock_torch_load.call_args_list]
+    assert any("file1.pt" in f for f in loaded_files)
+    assert any("file3.pt" in f for f in loaded_files)
+    assert not any("file2.pt" in f for f in loaded_files)
 
 
-def test_cache_access_updates_lru_order(
-    mock_config, dataset_path, mock_torch_load, mock_memory
+@patch("sequifier.io.sequifier_dataset_from_folder_lazy.get_worker_info")
+def test_dataloader_worker_sharding_continuous_boundaries(
+    mock_worker_info, mock_config, dataset_path, mock_torch_load
 ):
-    dataset = SequifierDatasetFromFolderLazy(dataset_path, mock_config)
-    dataset.max_ram_bytes = 1000
+    """Tests that continuous sample streaming assigns correct file boundaries to workers."""
 
-    # 1. Load F1, F2
-    mock_memory.return_value.used = 500
-    _ = dataset[0]
-    _ = dataset[10]
+    # Simulate being DataLoader worker ID 1 out of 2 total workers
+    mock_info = MagicMock()
+    mock_info.id = 1
+    mock_info.num_workers = 2
+    mock_worker_info.return_value = mock_info
 
-    file1_key = [k for k in dataset.cache.keys() if "file1.pt" in k][0]
-    file2_key = [k for k in dataset.cache.keys() if "file2.pt" in k][0]
-    assert list(dataset.cache.keys()) == [file1_key, file2_key]
+    mock_config.training_spec.num_workers = 2
 
-    # 2. Re-access F1 (Updates LRU)
-    _ = dataset[5]
-    assert list(dataset.cache.keys()) == [file2_key, file1_key]
+    dataset = SequifierDatasetFromFolderLazy(dataset_path, mock_config, shuffle=False)
 
-    # 3. Load F3 with Memory Pressure
-    # Simulate: High Mem -> Evict 1 item -> Low Mem -> Stop
-    high_mem = MagicMock(used=1500)
-    low_mem = MagicMock(used=900)
-    mock_memory.side_effect = [high_mem, low_mem]
+    # Consume the generator for THIS specific worker
+    batches = list(dataset)
 
-    _ = dataset[20]
+    # NEW LOGIC: Total samples = 40.
+    # Worker 0 boundary: samples 0 to 20 (overlaps file1.pt, file2.pt)
+    # Worker 1 boundary: samples 20 to 40 (overlaps file3.pt, file4.pt)
+    # Since we are testing Worker 1, it should yield 20 samples -> 4 batches
+    assert len(batches) == 4
+    assert mock_torch_load.call_count == 2
 
-    mock_memory.side_effect = None
+    loaded_files = [call.args[0] for call in mock_torch_load.call_args_list]
+    assert any("file3.pt" in f for f in loaded_files)
+    assert any("file4.pt" in f for f in loaded_files)
+    assert not any("file1.pt" in f for f in loaded_files)
 
-    # F2 was oldest, F1 was accessed recently
-    assert file2_key not in dataset.cache
-    assert file1_key in dataset.cache
-    assert any("file3.pt" in k for k in dataset.cache.keys())
+
+@patch("torch.distributed.is_initialized", return_value=True)
+@patch("torch.distributed.get_world_size", return_value=2)
+@patch("torch.distributed.get_rank", return_value=0)
+def test_exact_strategy_uneven_files_exception(
+    mock_rank, mock_ws, mock_init, mock_config, tmp_path
+):
+    """Tests that 'exact' strategy raises the detailed exception on uneven rank samples."""
+
+    data_dir = tmp_path / "data_uneven"
+    data_dir.mkdir()
+
+    # Rank 0 will get file1 (10) + file3 (10) = 20 samples
+    # Rank 1 will get file2 (10) + file4 (5) = 15 samples
+    metadata = {
+        "total_samples": 35,
+        "batch_files": [
+            {"path": "file1.pt", "samples": 10},
+            {"path": "file2.pt", "samples": 10},
+            {"path": "file3.pt", "samples": 10},
+            {"path": "file4.pt", "samples": 5},
+        ],
+    }
+    with open(data_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f)
+
+    mock_config.training_spec.sampling_strategy = "exact"
+
+    # The dataset initialization calls _get_target_samples(), which should raise the Exception
+    with pytest.raises(Exception) as exc_info:
+        SequifierDatasetFromFolderLazy(str(data_dir), mock_config)
+
+    error_msg = str(exc_info.value)
+
+    # Assert the core error text is present
+    assert "Found 2 different number of samples per rank/GPU" in error_msg
+
+
+@patch("torch.distributed.is_initialized", return_value=True)
+@patch("torch.distributed.get_world_size", return_value=2)
+@patch("torch.distributed.get_rank", return_value=1)
+def test_oversampling_strategy(
+    mock_rank, mock_ws, mock_init, mock_config, tmp_path, mock_torch_load
+):
+    """Tests that 'oversampling' pads a rank with fewer samples by looping its files."""
+    data_dir = tmp_path / "data_oversample"
+    data_dir.mkdir()
+
+    # Rank 0 gets file1 (10) + file3 (5) = 15 samples
+    # Rank 1 gets file2 (10) = 10 samples
+    metadata = {
+        "total_samples": 25,
+        "batch_files": [
+            {"path": "file1.pt", "samples": 10},
+            {"path": "file2.pt", "samples": 10},
+            {"path": "file3.pt", "samples": 5},
+        ],
+    }
+    with open(data_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f)
+
+    mock_config.training_spec.sampling_strategy = "oversampling"
+    mock_config.training_spec.batch_size = 5
+    mock_config.training_spec.num_workers = 0
+
+    dataset = SequifierDatasetFromFolderLazy(str(data_dir), mock_config, shuffle=False)
+
+    # Max samples across ranks is 15. Rank 1 must pad its 10 samples up to 15.
+    assert dataset.target_samples == 15
+    assert len(dataset) == 3  # 15 total samples / batch_size 5
+
+    batches = list(dataset)
+    assert len(batches) == 3
+
+    # Rank 1 only has file2 assigned. To get 15 samples, it must load file2,
+    # run out of data, loop back, and load file2 again.
+    assert mock_torch_load.call_count == 2
+    loaded_files = [call.args[0] for call in mock_torch_load.call_args_list]
+    assert "file2.pt" in loaded_files[0]
+    assert "file2.pt" in loaded_files[1]
+
+
+@patch("torch.distributed.is_initialized", return_value=True)
+@patch("torch.distributed.get_world_size", return_value=2)
+@patch("torch.distributed.get_rank", return_value=0)
+def test_undersampling_strategy(
+    mock_rank, mock_ws, mock_init, mock_config, tmp_path, mock_torch_load
+):
+    """Tests that 'undersampling' truncates a rank with more samples to match the lightest rank."""
+    data_dir = tmp_path / "data_undersample"
+    data_dir.mkdir()
+
+    # Rank 0 gets file1 (10) + file3 (5) = 15 samples
+    # Rank 1 gets file2 (10) = 10 samples
+    metadata = {
+        "total_samples": 25,
+        "batch_files": [
+            {"path": "file1.pt", "samples": 10},
+            {"path": "file2.pt", "samples": 10},
+            {"path": "file3.pt", "samples": 5},
+        ],
+    }
+    with open(data_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f)
+
+    mock_config.training_spec.sampling_strategy = "undersampling"
+    mock_config.training_spec.batch_size = 5
+    mock_config.training_spec.num_workers = 0
+
+    dataset = SequifierDatasetFromFolderLazy(str(data_dir), mock_config, shuffle=False)
+
+    # Min samples across ranks is 10. Rank 0 must truncate its 15 samples down to 10.
+    assert dataset.target_samples == 10
+    assert len(dataset) == 2  # 10 total samples / batch_size 5
+
+    batches = list(dataset)
+    assert len(batches) == 2
+
+    # Rank 0 should only need file1 (10 samples) to meet its truncated quota of 10.
+    # It should never attempt to load file3.
+    assert mock_torch_load.call_count == 1
+    loaded_files = [call.args[0] for call in mock_torch_load.call_args_list]
+    assert "file1.pt" in loaded_files[0]
+    assert not any("file3.pt" in f for f in loaded_files)

@@ -1,5 +1,4 @@
 import json
-import random
 from itertools import product
 from typing import Optional, Union
 
@@ -121,6 +120,10 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         continue_training: Flag to continue training from a checkpoint.
         layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
         layer_autocast: Whether to use autocast
+        sampling_strategy: data sampling in distributed training: 'exact', 'oversampling' or 'undersampling'
+        fsdp: fsdp training
+        fsdp_sharding_strategy: fsdp sharding strategy
+        fsdp_cpu_offload: fsdp cpu offload
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -158,6 +161,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: Optional[bool] = True
     sampling_strategy: str = "exact"
+    fsdp: bool = False
+    fsdp_sharding_strategy: str = "FULL_SHARD"
+    fsdp_cpu_offload: bool = False
 
     def __init__(self, **kwargs):
         """Initialize the TrainingSpecHyperparameterSampling instance.
@@ -298,6 +304,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             layer_type_dtypes=self.layer_type_dtypes,
             layer_autocast=self.layer_autocast,
             sampling_strategy=self.sampling_strategy,
+            fsdp=self.fsdp,
+            fsdp_sharding_strategy=self.fsdp_sharding_strategy,
+            fsdp_cpu_offload=self.fsdp_cpu_offload,
         )
 
     def grid_sample(self, i):
@@ -365,6 +374,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             layer_type_dtypes=self.layer_type_dtypes,
             layer_autocast=self.layer_autocast,
             sampling_strategy=self.sampling_strategy,
+            fsdp=self.fsdp,
+            fsdp_sharding_strategy=self.fsdp_sharding_strategy,
+            fsdp_cpu_offload=self.fsdp_cpu_offload,
         )
 
     def n_combinations(self):
@@ -494,7 +506,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         else:
             # Use random.choice because valid_kv_heads might contain None
             # and np.random.choice behaves weirdly with mixed None types.
-            n_kv_heads = random.choice(valid_kv_heads)
+            n_kv_heads = np.random.choice(np.array(valid_kv_heads))
 
         logger.info(
             f"{initial_embedding_dim} - {joint_embedding_dim = } - {dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "

@@ -1,50 +1,52 @@
-import bisect
-import collections
 import json
+import math
 import os
-from typing import Dict, Tuple
+from typing import Dict, Iterator, Tuple
 
-import psutil  # Dependency: pip install psutil
+import numpy as np
 import torch
+import torch.distributed as dist
 from loguru import logger
-from torch.utils.data import Dataset
+from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
 from sequifier.helpers import normalize_path
 
 
-class SequifierDatasetFromFolderLazy(Dataset):
+class SequifierDatasetFromFolderLazy(IterableDataset):
     """
-    An efficient PyTorch Dataset for datasets that do not fit into RAM.
+    An efficient, memory-safe PyTorch IterableDataset for out-of-core training.
 
-    This class loads data from individual .pt files on-demand (lazily) when an
-    item is requested via `__getitem__`. It maintains an in-memory cache of
-    recently used files to speed up access. To prevent memory exhaustion,
-    the cache is managed by a Least Recently Used (LRU) policy, which
-    evicts the oldest data chunks when the total system RAM usage exceeds a
-    configurable threshold.
+    Streams pre-processed chunked files sequentially using cross-file buffering to yield
+    exact batches, eliminating CPU cloning bottlenecks. Fully supports DDP/FSDP by
+    precisely calculating and distributing sample boundaries across GPU ranks and workers.
 
-    This strategy balances I/O overhead and memory usage, making it suitable
-    for training on datasets larger than the available system memory.
+    Args:
+        data_path (str): Path to the directory containing `.pt` chunks and `metadata.json`.
+        config (TrainModel): Training configuration (batch size, workers, sequence length, etc.).
+        shuffle (bool, optional): If True, deterministically shuffles file order and
+            sample indices per epoch. Defaults to True.
+
+    Yields:
+        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]:
+            A batch tuple containing sequence dictionaries, target dictionaries,
+            and three `None` placeholders (for API compatibility).
+
+    Raises:
+        FileNotFoundError: If `metadata.json` is missing.
+        Exception: If sample counts are uneven across ranks using the 'exact' sampling
+            strategy, or if a GPU rank is assigned no files.
     """
 
-    def __init__(self, data_path: str, config: TrainModel):
-        """
-        Initializes the dataset by reading metadata and setting up the cache.
-        Each .pt file is expected to contain a tuple:
-        (sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor).
-
-        Args:
-            data_path (str): The path to the directory containing the pre-processed
-                             .pt files and a metadata.json file.
-            config (TrainModel): The training configuration object.
-        """
+    def __init__(self, data_path: str, config: TrainModel, shuffle: bool = True):
+        super().__init__()
         self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
-        self.max_ram_gb = config.training_spec.max_ram_gb
-        self.max_ram_bytes = config.training_spec.max_ram_gb * (1024**3)
-        metadata_path = os.path.join(self.data_dir, "metadata.json")
+        self.batch_size = config.training_spec.batch_size
+        self.shuffle = shuffle
+        self.epoch = 0
 
+        metadata_path = os.path.join(self.data_dir, "metadata.json")
         if not os.path.exists(metadata_path):
             raise FileNotFoundError(
                 f"metadata.json not found in '{self.data_dir}'. "
@@ -54,169 +56,244 @@ class SequifierDatasetFromFolderLazy(Dataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
-        self.n_samples = metadata["total_samples"]
         self.batch_files_info = metadata["batch_files"]
+        self.total_samples = metadata["total_samples"]
+        self.sampling_strategy = config.training_spec.sampling_strategy
 
-        # --- Build an index for fast sample-to-file mapping ---
-        # self.cumulative_samples will store the cumulative sample count at the end
-        # of each file, e.g., [1024, 2048, 3072, ...], allowing for a fast binary search.
-        self.cumulative_samples = []
-        current_sum = 0
-        for file_info in self.batch_files_info:
-            current_sum += file_info["samples"]
-            self.cumulative_samples.append(current_sum)
-
-        # --- Initialize cache and thread-safety mechanisms ---
-        # An OrderedDict is used to implement the LRU logic.
-        self.cache: collections.OrderedDict[
-            str,
-            Tuple[
-                Dict[str, torch.Tensor],
-                Dict[str, torch.Tensor],
-                torch.Tensor,
-                torch.Tensor,
-                torch.Tensor,
-            ],
-        ] = collections.OrderedDict()
-
-        self.max_cache_files = 2
-
+        self.target_samples = self._get_target_samples()
+        self.total_batches = self._calculate_total_batches(self.target_samples)
         logger.info(
-            f"[INFO] Initialized lazy dataset from {self.data_dir}. "
-            f"Total samples: {self.n_samples}. RAM threshold in GB: {self.max_ram_gb}, max cache files: {self.max_cache_files}"
+            f"[INFO] Lazy Dataset loaded into RAM with {self.target_samples} samples and {self.total_batches} batches."
         )
+
+    def _calculate_total_batches(self, target_samples: int) -> int:
+        num_workers = self.config.training_spec.num_workers
+        num_workers_to_use = num_workers if num_workers > 0 else 1
+
+        total_batches = 0
+        for worker_id in range(num_workers_to_use):
+            worker_samples = target_samples // num_workers_to_use + (
+                1 if worker_id < target_samples % num_workers_to_use else 0
+            )
+            total_batches += math.ceil(worker_samples / self.batch_size)
+        return total_batches
+
+    def set_epoch(self, epoch: int):
+        """Allows the training loop to set the epoch for deterministic file shuffling."""
+        self.epoch = epoch
+
+    def _get_target_samples(self) -> int:
+        """Calculates exact sample count per rank to ensure FSDP syncs properly."""
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+
+        num_files = len(self.batch_files_info)
+
+        samples_per_rank = []
+        for r in range(world_size):
+            f_r = list(range(r, num_files, world_size))
+            samples_per_rank.append(
+                sum(self.batch_files_info[i]["samples"] for i in f_r) if f_r else 0
+            )
+
+        if self.sampling_strategy == "exact":
+            samples_per_rank = np.array(samples_per_rank)
+            unique_samples_per_rank, counts = np.unique(
+                samples_per_rank, return_counts=True
+            )
+            if len(unique_samples_per_rank) > 1:
+                if np.max(counts) / np.sum(counts) > 0.8:
+                    most_frequent_unique_samples_val = unique_samples_per_rank[
+                        np.argmax(counts)
+                    ]
+                    non_max_idx = np.where(
+                        samples_per_rank != most_frequent_unique_samples_val
+                    )[0]
+                    files_strings = []
+                    for i in non_max_idx:
+                        f_r = list(range(i, num_files, world_size))
+                        files_strings.append(
+                            "\n\t".join(
+                                [
+                                    f'{self.batch_files_info[j]["path"].split(os.sep)[-1]}: {self.batch_files_info[j]["samples"]}'
+                                    for j in f_r
+                                ]
+                            )
+                        )
+                    rank_details = [
+                        f"Rank {i}: {samples_per_rank[i]} samples, files:\n\t{files_strings[i]}"
+                        for i in non_max_idx
+                    ]
+                    rank_details = "\n".join(rank_details)
+                    exception_detail = f":\nMost frequent sample value: {most_frequent_unique_samples_val}\n{rank_details}"
+                else:
+                    exception_detail = ""
+
+                raise Exception(
+                    f"Found {len(unique_samples_per_rank)} different number of samples per rank/GPU: {unique_samples_per_rank}{exception_detail}"
+                )
+            return int(unique_samples_per_rank[0])
+
+        elif self.sampling_strategy == "oversampling":
+            return max(samples_per_rank)
+        else:
+            assert self.sampling_strategy == "undersampling"
+            return min(samples_per_rank)
 
     def __len__(self) -> int:
-        """Returns the total number of samples in the dataset."""
-        return self.n_samples
+        return self.total_batches
 
-    def _find_file_for_index(self, idx: int) -> Tuple[int, str]:
-        """
-        Finds which file contains the given sample index and the local index within it.
+    def __iter__(
+        self,
+    ) -> Iterator[
+        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]
+    ]:
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        rank = dist.get_rank() if dist.is_initialized() else 0
 
-        Args:
-            idx: The global sample index across all files.
+        worker_info = get_worker_info()
+        worker_id = worker_info.id if worker_info is not None else 0
+        num_workers = worker_info.num_workers if worker_info is not None else 1
 
-        Returns:
-            A tuple containing (local_index_in_file, file_path).
-        """
-        # bisect_right finds the insertion point for idx, which corresponds to the
-        # index of the file containing this sample.
-        file_index = bisect.bisect_right(self.cumulative_samples, idx)
+        # 1. Distribute files among ranks
+        num_files = len(self.batch_files_info)
+        files_for_this_rank = list(range(rank, num_files, world_size))
 
-        # Calculate the local index within the identified file.
-        # If it's the first file (index 0), the local index is just idx.
-        # Otherwise, subtract the cumulative sample count of the previous file.
-        previous_samples = (
-            self.cumulative_samples[file_index - 1] if file_index > 0 else 0
+        if not files_for_this_rank:
+            if self.sampling_strategy == "oversampling":
+                files_for_this_rank = [rank % num_files]
+            else:
+                raise Exception(f"No file found for GPU rank {rank}.")
+
+        # 2. Assign exact sample quotas and boundaries to this specific worker thread
+        base_samples_per_worker = self.target_samples // num_workers
+        remainder = self.target_samples % num_workers
+
+        # Calculate exactly where this worker's data starts and ends in the global stream
+        worker_start_sample = 0
+        for i in range(worker_id):
+            worker_start_sample += base_samples_per_worker + (1 if i < remainder else 0)
+
+        worker_target_samples = base_samples_per_worker + (
+            1 if worker_id < remainder else 0
         )
-        local_index = idx - previous_samples
+        worker_end_sample = worker_start_sample + worker_target_samples
 
-        file_path = os.path.join(
-            self.data_dir, self.batch_files_info[file_index]["path"]
-        )
+        # 3. Shuffle files deterministically
+        g = torch.Generator()
+        g.manual_seed(self.config.seed + self.epoch)
 
-        return local_index, file_path
-
-    def _get_memory_usage_percent(self):
-        # Try cgroup v2
-        if os.path.exists("/sys/fs/cgroup/memory.current"):
-            with open("/sys/fs/cgroup/memory.current", "r") as f:
-                used = int(f.read())
-            with open("/sys/fs/cgroup/memory.max", "r") as f:
-                limit_str = f.read().strip()
-                # Handle 'max' which means no limit
-                limit = int(limit_str) if limit_str != "max" else self.max_ram_bytes
-            return used / limit if limit > 0 else 0
-
-        # Try cgroup v1
-        elif os.path.exists("/sys/fs/cgroup/memory/memory.usage_in_bytes"):
-            with open("/sys/fs/cgroup/memory/memory.usage_in_bytes", "r") as f:
-                used = int(f.read())
-            with open("/sys/fs/cgroup/memory/memory.limit_in_bytes", "r") as f:
-                limit = int(f.read())
-            return used / limit if limit > 0 else 0
-
-        # Fallback to psutil (host memory)
+        if self.shuffle:
+            file_order = torch.randperm(len(files_for_this_rank), generator=g).tolist()
+            ordered_files = [files_for_this_rank[i] for i in file_order]
         else:
-            return psutil.virtual_memory().percent / 100.0
+            ordered_files = files_for_this_rank.copy()
 
-    def _evict_lru_items(self):
-        # Evict if usage > 90% of limit (safety buffer)
-        while self._get_memory_usage_percent() > 0.90:
-            if not self.cache:
-                break
-            self.cache.popitem(last=False)
+        # 4. Extend files based on exact target requirements
+        extended_files = []
+        current_samples = 0
+        file_idx = 0
+        while current_samples < self.target_samples:
+            f_id = ordered_files[file_idx % len(ordered_files)]
+            extended_files.append(f_id)
+            current_samples += self.batch_files_info[f_id]["samples"]
+            file_idx += 1
 
-    def __getitem__(
-        self, idx: int
-    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], int, int, int]:
-        """
-        Retrieves a single data sample, loading from disk if not in the cache.
-
-        This method is the core of the lazy-loading strategy. It is thread-safe
-        and manages the cache automatically.
-
-        Args:
-            idx: The index of the sample to retrieve.
-
-        Returns:
-            A tuple containing:
-                - sequence (dict): Dictionary of feature tensors for the sample.
-                - targets (dict): Dictionary of target tensors for the sample.
-                - sequence_id (int): The sequence ID of the sample.
-                - subsequence_id (int): The subsequence ID within the sequence.
-                - start_position (int): The starting item position of the subsequence
-                                        within the original full sequence.
-        """
-        if not 0 <= idx < self.n_samples:
-            raise IndexError(
-                f"Index {idx} is out of range for dataset with {self.n_samples} samples."
-            )
-        local_index, file_path = self._find_file_for_index(idx)
-
-        # 1. Check if file is already in cache
-        if file_path in self.cache:
-            self.cache.move_to_end(file_path)
-            data_tuple = self.cache[file_path]
-        else:
-            # 2. PRE-EVICTION: Make space BEFORE loading
-            # If adding this file would exceed the limit, evict the oldest one first.
-            while len(self.cache) >= self.max_cache_files:
-                # remove oldest item (FIFO)
-                evicted_path, _ = self.cache.popitem(last=False)
-                # Optional: Force garbage collection if memory is tight,
-                # though .clone() usually makes this automatic.
-                # import gc; gc.collect()
-
-            # 3. Load from disk (Safe now, as we made space)
-            data_tuple = torch.load(file_path, map_location="cpu", weights_only=False)
-            self.cache[file_path] = data_tuple
-
-        # Unpack
-        (
-            sequences_batch,
-            targets_batch,
-            sequence_id_tensor,
-            subsequence_id_tensor,
-            start_item_positions_tensor,
-        ) = data_tuple
-
-        # 4. CRITICAL: Use .clone() to sever the link to the cached file
+        # 5. Stream data using precise global boundaries and a CROSS-FILE BUFFER
+        yielded_samples = 0
         train_seq_len = self.config.seq_length
-        sequence = {
-            key: tensor[local_index, -train_seq_len:].clone()
-            for key, tensor in sequences_batch.items()
-        }
-        targets = {
-            key: tensor[local_index, -train_seq_len:].clone()
-            for key, tensor in targets_batch.items()
-        }
+        global_file_start_sample = 0
 
-        return (
-            sequence,
-            targets,
-            int(sequence_id_tensor[local_index]),
-            int(subsequence_id_tensor[local_index]),
-            int(start_item_positions_tensor[local_index]),
-        )
+        # Initialize cross-file buffers
+        seq_buffer: Dict[str, torch.Tensor] = {}
+        tgt_buffer: Dict[str, torch.Tensor] = {}
+        buffer_len = 0
+
+        for f_id in extended_files:
+            if yielded_samples >= worker_target_samples:
+                break
+
+            file_samples = self.batch_files_info[f_id]["samples"]
+            file_start = global_file_start_sample
+            file_end = global_file_start_sample + file_samples
+            global_file_start_sample += file_samples
+
+            # Skip this file if it belongs entirely to other workers
+            if file_end <= worker_start_sample or file_start >= worker_end_sample:
+                continue
+
+            # This file overlaps with our worker's assigned boundary. Load it.
+            file_path = os.path.join(self.data_dir, self.batch_files_info[f_id]["path"])
+            (sequences_batch, targets_batch, _, _, _) = torch.load(
+                file_path, map_location="cpu", weights_only=False
+            )
+
+            # Generate indices for the whole file
+            indices = torch.arange(file_samples)
+            if self.shuffle:
+                g_file = torch.Generator()
+                g_file.manual_seed(self.config.seed + self.epoch + f_id + rank)
+                indices = indices[torch.randperm(file_samples, generator=g_file)]
+
+            # Slice the indices to extract ONLY the portion belonging to this worker
+            worker_file_start_idx = max(0, worker_start_sample - file_start)
+            worker_file_end_idx = min(file_samples, worker_end_sample - file_start)
+
+            worker_indices = indices[worker_file_start_idx:worker_file_end_idx]
+            num_new_samples = len(worker_indices)
+
+            if num_new_samples == 0:
+                del sequences_batch, targets_batch
+                continue
+
+            # Extract the data subset for this worker (Advanced indexing copies the data)
+            new_seq = {
+                k: v[worker_indices, -train_seq_len:]
+                for k, v in sequences_batch.items()
+            }
+            new_tgt = {
+                k: v[worker_indices, -train_seq_len:] for k, v in targets_batch.items()
+            }
+
+            # Free the large file immediately to keep RAM down
+            del sequences_batch, targets_batch
+
+            # Append the new slice to the cross-file buffer
+            if buffer_len == 0:
+                seq_buffer = new_seq
+                tgt_buffer = new_tgt
+            else:
+                seq_buffer = {
+                    k: torch.cat([seq_buffer[k], new_seq[k]], dim=0) for k in seq_buffer
+                }
+                tgt_buffer = {
+                    k: torch.cat([tgt_buffer[k], new_tgt[k]], dim=0) for k in tgt_buffer
+                }
+
+            buffer_len += num_new_samples
+
+            # Yield batches as long as the buffer contains at least `batch_size` samples
+            while buffer_len >= self.batch_size:
+                if yielded_samples >= worker_target_samples:
+                    break
+
+                # Slice out a perfect batch from the top of the buffer
+                batch_seq = {k: v[: self.batch_size] for k, v in seq_buffer.items()}
+                batch_tgt = {k: v[: self.batch_size] for k, v in tgt_buffer.items()}
+
+                yield batch_seq, batch_tgt, None, None, None
+                yielded_samples += self.batch_size
+
+                # Keep the remainder in the buffer for the next loop/file
+                seq_buffer = {k: v[self.batch_size :] for k, v in seq_buffer.items()}
+                tgt_buffer = {k: v[self.batch_size :] for k, v in tgt_buffer.items()}
+                buffer_len -= self.batch_size
+
+        # 6. Yield the final partial batch from the buffer if any remains
+        if buffer_len > 0 and yielded_samples < worker_target_samples:
+            remaining_needed = worker_target_samples - yielded_samples
+            final_yield_size = min(buffer_len, remaining_needed)
+
+            batch_seq = {k: v[:final_yield_size] for k, v in seq_buffer.items()}
+            batch_tgt = {k: v[:final_yield_size] for k, v in tgt_buffer.items()}
+
+            yield batch_seq, batch_tgt, None, None, None

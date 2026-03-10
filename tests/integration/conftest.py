@@ -30,6 +30,10 @@ def run_and_log(command: str) -> None:
         f.write(f"{command}\n")
 
 
+def pytest_configure(config):
+    os.environ["SEQUIFIER_TESTING"] = "1"
+
+
 @pytest.fixture(scope="session")
 def split_groups():
     return {"categorical": 3, "real": 2}

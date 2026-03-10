@@ -21,7 +21,7 @@ This gives us a number of benefits:
 - configurable architecture
 - trusted implementation (you can't create bugs inadvertedly)
 - standardized logging
-- native multi-gpu support
+- native multi-gpu support (DDP and FSDP)
 - native multi-core preprocessing
 - scales to datasets larger than RAM
 - hyperparameter search
@@ -201,7 +201,7 @@ Please cite with:
   title = {sequifier - causal transformer models for multivariate sequence modelling},
   year = {2025},
   publisher = {GitHub},
-  version = {v1.1.0.6},
+  version = {v1.1.1.0},
   url = {https://github.com/0xideas/sequifier}
 }
 ```
