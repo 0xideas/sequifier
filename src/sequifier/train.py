@@ -197,14 +197,6 @@ def train_worker(
         else:
             time_string = ""
 
-        if is_fsdp and global_rank == 0:
-            options = StateDictOptions(full_state_dict=True, cpu_offload=True)
-            set_state_dict(
-                model,
-                checkpoint["model_state_dict"],  # type: ignore
-                options=options,
-            )
-            del checkpoint["model_state_dict"]  # type: ignore
         logger.info(
             f"[INFO] Resuming training from checkpoint '{latest_model_path}'{time_string}. Total params: {format_number(pytorch_total_params)}"
         )
@@ -285,16 +277,25 @@ def train_worker(
     # Load Optimizer and Scheduler States
     if config.training_spec.continue_training and latest_model_path:
         if is_fsdp:
-            # FSDP2 handles the scattering automatically via set_optimizer_state_dict
+            # FSDP2 handles the scattering automatically for both model and optimizer
+            full_msd = checkpoint["model_state_dict"] if global_rank == 0 else None  # type: ignore
             full_osd = checkpoint["optimizer_state_dict"] if global_rank == 0 else None  # type: ignore
 
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
+
+            set_state_dict(
+                model,
+                model_state_dict=full_msd,
+                options=options,
+            )
+
             set_optimizer_state_dict(
                 model,
                 unwrapped_model.optimizer,
                 optim_state_dict=full_osd,
                 options=options,
             )
+
             # Broadcast the tiny scheduler and epoch metadata to all ranks
             if global_rank == 0:
                 if checkpoint["batch"] + 1 >= len(train_loader):  # type: ignore
@@ -325,7 +326,7 @@ def train_worker(
                 unwrapped_model.scheduler.load_state_dict(sched_state)
 
             if global_rank == 0:
-                del checkpoint, full_osd  # Clear remaining CPU memory
+                del checkpoint, full_msd, full_osd  # Clear remaining CPU memory
                 logger.info(
                     f"[INFO] Resuming FSDP training from checkpoint '{latest_model_path}'. Total params: {format_number(pytorch_total_params)}"
                 )
@@ -1379,10 +1380,7 @@ class TransformerModel(nn.Module):
                 ):
                     self.scaler.unscale_(self.optimizer)
 
-                    if is_fsdp:
-                        model_to_call.clip_grad_norm_(0.5)
-                    else:
-                        torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
 
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
