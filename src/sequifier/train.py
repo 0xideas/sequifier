@@ -634,6 +634,12 @@ class TransformerModel(nn.Module):
         self.scheduler_step_on = hparams.training_spec.scheduler_step_on
 
         self.save_interval_epochs = hparams.training_spec.save_interval_epochs
+        self.save_latest_interval_minutes = (
+            hparams.training_spec.save_latest_interval_minutes
+        )
+        self.save_batch_interval_minutes = (
+            hparams.training_spec.save_batch_interval_minutes
+        )
         self.continue_training = hparams.training_spec.continue_training
 
         use_scaler = False
@@ -1101,6 +1107,9 @@ class TransformerModel(nn.Module):
         best_model_state = None
 
         try:
+            self.last_latest_save_time = time.time()
+            self.last_batch_save_time = time.time()
+
             if self.start_epoch == 1:
                 total_loss, total_losses, output = self._evaluate(
                     valid_loader, ddp_model
@@ -1122,7 +1131,7 @@ class TransformerModel(nn.Module):
                     train_loader.dataset.set_epoch(epoch)
                     valid_loader.dataset.set_epoch(epoch)
 
-                    self._train_epoch(train_loader, epoch, ddp_model)
+                    self._train_epoch(train_loader, valid_loader, epoch, ddp_model)
 
                     total_loss, total_losses, output = self._evaluate(
                         valid_loader, ddp_model
@@ -1144,7 +1153,13 @@ class TransformerModel(nn.Module):
                         self.scheduler.step()
 
                     if epoch % self.save_interval_epochs == 0:
-                        self._save(epoch, total_loss, ddp_model)
+                        self._save(
+                            epoch,
+                            0,
+                            total_loss,
+                            ddp_model=ddp_model,
+                            suffix=f"epoch-{epoch}",
+                        )
 
                     last_epoch = epoch
         except KeyboardInterrupt:
@@ -1234,6 +1249,7 @@ class TransformerModel(nn.Module):
     def _train_epoch(
         self,
         train_loader: DataLoader,
+        valid_loader: DataLoader,
         epoch: int,
         ddp_model: Optional[nn.Module] = None,
     ) -> None:
@@ -1321,6 +1337,65 @@ class TransformerModel(nn.Module):
 
             if self.scheduler_step_on == "batch":
                 self.scheduler.step()
+
+            should_save_latest = torch.tensor(
+                [0], dtype=torch.int32, device=self.device
+            )
+            should_save_batch = torch.tensor([0], dtype=torch.int32, device=self.device)
+
+            if not self.hparams.training_spec.distributed or self.rank == 0:
+                current_time = time.time()
+                if self.save_latest_interval_minutes and (
+                    current_time - self.last_latest_save_time
+                ) >= (self.save_latest_interval_minutes * 60):
+                    current_time = time.time()
+                    should_save_latest[0] = 1
+                    self.last_latest_save_time = current_time
+
+                if self.save_batch_interval_minutes and (
+                    current_time - self.last_batch_save_time
+                ) >= (self.save_batch_interval_minutes * 60):
+                    if self.save_batch_interval_minutes_val_loss:
+                        val_loss, val_losses, output = self._evaluate(
+                            valid_loader, ddp_model
+                        )
+                        self._log_epoch_results(
+                            0,
+                            (current_time - self.last_batch_save_time),
+                            val_loss,
+                            val_losses,
+                            output,
+                            batch=batch_count,
+                        )
+                    else:
+                        val_loss = np.float32(np.nan)
+                    current_time = time.time()
+                    should_save_batch[0] = 1
+                    self.last_batch_save_time = current_time
+
+            if self.hparams.training_spec.distributed:
+                dist.broadcast(should_save_latest, src=0)
+                dist.broadcast(should_save_batch, src=0)
+
+            if should_save_latest.item() == 1:
+                self._save(
+                    epoch, batch_count, np.float32(np.nan), ddp_model, suffix="latest"
+                )
+                if self.rank != 0:
+                    self.last_latest_save_time = (
+                        time.time()
+                    )  # Keep ranks roughly aligned
+
+            if should_save_batch.item() == 1:
+                self._save(
+                    epoch,
+                    batch_count,
+                    val_loss,  # type: ignore
+                    ddp_model,
+                    suffix=f"epoch-{epoch}-batch-{batch_count + 1}",
+                )  # type: ignore
+                if self.rank != 0:
+                    self.last_batch_save_time = time.time()
 
     @beartype
     def _calculate_loss(
@@ -1770,7 +1845,12 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _save(
-        self, epoch: int, val_loss: np.float32, ddp_model: Optional[nn.Module] = None
+        self,
+        epoch: int,
+        batch: int,
+        val_loss: np.float32,
+        ddp_model: Optional[nn.Module] = None,
+        suffix: Optional[str] = None,
     ) -> None:
         """Saves the model checkpoint.
 
@@ -1778,9 +1858,9 @@ class TransformerModel(nn.Module):
         file in the checkpoints directory. Only runs on rank 0.
 
         Args:
-            epoch: The current epoch number.
             val_loss: The validation loss at the current epoch.
             ddp_model: DDP model
+            suffix: Checkpoint file suffix.
         """
         model_to_extract = ddp_model if ddp_model is not None else self
         is_fsdp = self.hparams.training_spec.fsdp
@@ -1816,15 +1896,18 @@ class TransformerModel(nn.Module):
 
         os.makedirs(os.path.join(self.project_root, "checkpoints"), exist_ok=True)
 
+        file_name = f"{self.model_name}-{suffix}.pt"
+
         output_path = os.path.join(
             self.project_root,
             "checkpoints",
-            f"{self.model_name}-epoch-{epoch}.pt",
+            file_name,
         )
 
         torch.save(
             {
                 "epoch": epoch,
+                "batch": batch,
                 "model_state_dict": model_state_dict,
                 "optimizer_state_dict": optim_state_dict,
                 "scheduler_state_dict": self.scheduler.state_dict(),
@@ -1911,6 +1994,7 @@ class TransformerModel(nn.Module):
         total_loss: np.float32,
         total_losses: dict[str, np.float32],
         output: dict[str, Tensor],
+        batch: Optional[int] = None,
     ) -> None:
         """Logs the results of an epoch.
 
@@ -1919,20 +2003,24 @@ class TransformerModel(nn.Module):
         Only runs on rank 0.
 
         Args:
-            epoch: The current epoch number.
+            epoch: Current epoch number.
             elapsed: Time taken for the epoch (in seconds).
             total_loss: The total aggregated validation loss.
             total_losses: A dictionary of aggregated losses for each target.
             output: The output tensor dictionary from the last validation batch,
                     used for class share logging.
+            batch: Current batch number.
         """
         if self.rank == 0:
             learning_rate = self.optimizer.state_dict()["param_groups"][0]["lr"]
 
+            log_string = f"[INFO] Validation | Epoch: {epoch:3d} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(learning_rate)}"
+            if batch is not None:
+                log_string = log_string.replace(
+                    " | Loss:", f" | Batch: {batch} | Loss:"
+                )
             self.logger.info("-" * 89)
-            self.logger.info(
-                f"[INFO] Validation | Epoch: {epoch:3d} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(learning_rate)}"
-            )
+            self.logger.info(log_string)
 
             if len(total_losses) > 1:
                 loss_strs = [
