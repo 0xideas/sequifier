@@ -1727,6 +1727,7 @@ class TransformerModel(nn.Module):
                 self.baseline_losses = baseline_losses_local
 
         model_to_call.train()
+        torch.clear_autocast_cache()
 
         return (
             np.float32(total_loss_global),
