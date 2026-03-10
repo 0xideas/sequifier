@@ -124,7 +124,6 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         fsdp: fsdp training
         fsdp_sharding_strategy: fsdp sharding strategy
         fsdp_cpu_offload: fsdp cpu offload
-
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
