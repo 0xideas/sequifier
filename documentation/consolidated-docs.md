@@ -21,7 +21,7 @@ This gives us a number of benefits:
 - configurable architecture
 - trusted implementation (you can't create bugs inadvertedly)
 - standardized logging
-- native multi-gpu support
+- native multi-gpu support (DDP and FSDP)
 - native multi-core preprocessing
 - scales to datasets larger than RAM
 - hyperparameter search
@@ -422,7 +422,15 @@ These fields determine the size and complexity of the Transformer.
 | `max_ram_gb` | `float` | No | `16` | RAM limit (GB) for the cache when using lazy loading. |
 | `backend` | `str` | No | `nccl` | The distributed training backend to use (e.g., `nccl` for GPUs, `gloo` for CPUs). Only relevant if `distributed: true`. |
 | `device_max_concat_length`| `int` | No | `12` | Controls recursive tensor concatenation to prevent CUDA kernel limits on specific hardware. Lower this if you encounter "CUDA error: too many resources requested for launch". |
-| `continue_training` | `bool` | No | `True` | Load model weights and optimizer state from laste checkpoint and continue training |
+| `continue_training` | `bool` | No | `true` | Load model weights and optimizer state from laste checkpoint and continue training |
+| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
+| `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
+| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
+| `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
+| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
+| `fsdp` | `bool` | No | `false` | Enable Fully Sharded Data Parallel (FSDP) for memory-efficient multi-GPU training.
+| `fsdp_sharding_strategy` | `str` | No | `FULL_SHARD` | Sharding strategy for FSDP (FULL_SHARD, SHARD_GRAD_OP, or NO_SHARD).
+| `fsdp_cpu_offload` | `bool` | No | `false` |"If true, offloads FSDP parameters to the CPU to save GPU VRAM."
 
 ### 5\. System & Export
 
@@ -434,11 +442,6 @@ These fields determine the size and complexity of the Transformer.
 | `export_onnx` | `bool` | No | `true` | Export model as `.onnx` for high-performance inference. |
 | `export_pt` | `bool` | No | `false`| Export model as `.pt` (PyTorch state dict). |
 | `export_with_dropout` | `bool` | No | `false`| Export model with dropout enabled (useful for Monte Carlo Dropout inference). |
-| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
-| `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
-| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
-| `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
-| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
 
 -----
 
@@ -447,13 +450,13 @@ These fields determine the size and complexity of the Transformer.
 ### 1\. Data Loading Strategy (`load_full_data_to_ram`)
 
 * **`true` (Default):** Loads the entire dataset into system RAM.
-      * *Mechanism:* Uses a `DistributedSampler` (global shuffling) which is statistically ideal for training.
-      * *Pros:* Fastest training speed.
-      * *Cons:* Limited by physical RAM. If the dataset is 64GB and you have 32GB RAM, this will crash.
+      * *Mechanism:* Uses a native PyTorch IterableDataset that handles global shuffling and pre-collates batches directly in memory.
+      * *Pros*: Fastest training speed.
+      * *Cons*: Limited by physical RAM. If the dataset is 64GB and you have 32GB RAM, this will crash.
   * **`false` (Lazy Loading):** Loads individual files on-demand during training.
       * *Requirements:* `read_format` must be `pt`.
-      * *Mechanism:* Uses a `DistributedGroupedRandomSampler` to minimize disk seeking by processing data in file-contiguous groups.
-      * *Pros:* Can train on datasets larger than RAM.
+      * *Mechanism:* Uses an `IterableDataset` with cross-file buffering to stream pre-processed chunked files sequentially, automatically calculating exact sample boundaries across GPU ranks and workers.
+      * *Pros:* Can train on datasets much larger than RAM, safely supporting DDP/FSDP synchronization.
       * *Cons:* Slight I/O overhead depending on disk speed. Increase `num_workers` to mitigate this.
 
 ### 2\. Attention Mechanism (`attention_type` & `n_kv_heads`)
@@ -474,7 +477,7 @@ If you have multiple GPUs:
 1.  Set `distributed: true` in `training_spec`.
 2.  **Crucial:** You must have run `preprocess` with `write_format: pt` and `merge_output: false`.
 3.  Set `world_size` to the number of GPUs.
-4.  Sequifier uses `DistributedDataParallel` (DDP) to synchronize gradients across GPUs.
+4.  Sequifier uses `DistributedDataParallel` (DDP) by default to synchronize gradients across GPUs. You can also enable fsdp: true for massive models to shard parameters, gradients, and optimizer states across your GPUs.
 
 ### 5\. Export Formats (`export_generative_model` vs `export_embedding_model`)
 
@@ -799,6 +802,9 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `layer_type_dtypes` | `dict` | No | **Fixed.** Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
 | `layer_autocast` | `bool` | No | **Fixed.** Enable `torch.autocast` (default `true`). |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
+| `fsdp` | `bool` | No | `false` | Enable Fully Sharded Data Parallel (FSDP) for memory-efficient multi-GPU training.
+| `fsdp_sharding_strategy` | `str` | No | `FULL_SHARD` | Sharding strategy for FSDP (FULL_SHARD, SHARD_GRAD_OP, or NO_SHARD).
+| `fsdp_cpu_offload` | `bool` | No | `false` |If true, offloads FSDP parameters to the CPU to save GPU VRAM.
 
 -----
 
@@ -882,7 +888,7 @@ The hyperparameter search command includes **automatic error handling for Out of
 
 # Distributed and Multi-Node Training in Sequifier
 
-Sequifier natively supports multi-GPU and multi-node training using PyTorch's `DistributedDataParallel` (DDP).
+Sequifier natively supports multi-GPU and multi-node training using PyTorch's `DistributedDataParallel` (DDP) and `FullyShardedDataParallel` (FSDP).
 
 ## 1. Prerequisites: Preprocessing for DDP
 
@@ -911,6 +917,9 @@ In your `train.yaml`, update the `training_spec` block:
 ```yaml
 training_spec:
   distributed: true
+  fsdp: true                           # Set to true to shard model weights/gradients across GPUs
+  fsdp_sharding_strategy: 'FULL_SHARD' # 'FULL_SHARD', 'SHARD_GRAD_OP', or 'NO_SHARD'
+  fsdp_cpu_offload: false              # Set to true to offload parameters to CPU RAM
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)
   backend: nccl        # 'nccl' is the standard and most efficient backend for NVIDIA GPUs
   sampling_strategy: 'oversampling' # if the number of files isn't perfectly divisible by the number of GPUs, you need to choose either 'oversampling' or 'undersampling'. If it is perfectly divisible, you can set it to 'exact'

@@ -99,6 +99,9 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `layer_type_dtypes` | `dict` | No | **Fixed.** Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
 | `layer_autocast` | `bool` | No | **Fixed.** Enable `torch.autocast` (default `true`). |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
+| `fsdp` | `bool` | No | `false` | Enable Fully Sharded Data Parallel (FSDP) for memory-efficient multi-GPU training.
+| `fsdp_sharding_strategy` | `str` | No | `FULL_SHARD` | Sharding strategy for FSDP (FULL_SHARD, SHARD_GRAD_OP, or NO_SHARD).
+| `fsdp_cpu_offload` | `bool` | No | `false` |If true, offloads FSDP parameters to the CPU to save GPU VRAM.
 
 -----
 

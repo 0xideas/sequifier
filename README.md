@@ -21,7 +21,7 @@ This gives us a number of benefits:
 - configurable architecture
 - trusted implementation (you can't create bugs inadvertedly)
 - standardized logging
-- native multi-gpu support
+- native multi-gpu support (DDP and FSDP)
 - native multi-core preprocessing
 - scales to datasets larger than RAM
 - hyperparameter search
