@@ -204,6 +204,13 @@ def train_worker(
             f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
         )
 
+    if config.training_spec.device.startswith("cuda"):
+        if torch_compile == "outer":
+            model = torch.compile(model)
+        elif torch_compile == "inner":
+            for i in range(len(model.layers)):
+                model.layers[i] = torch.compile(model.layers[i])
+
     if config.training_spec.distributed:
         if is_fsdp:
             mp_policy = None
@@ -238,12 +245,6 @@ def train_worker(
     unwrapped_model = model.module if isinstance(model, DDP) else model
 
     if config.training_spec.device.startswith("cuda"):
-        if torch_compile == "outer":
-            model = torch.compile(model)
-
-        elif torch_compile == "inner":
-            for i in range(len(unwrapped_model.layers)):
-                unwrapped_model.layers[i] = torch.compile(unwrapped_model.layers[i])
         dummy_data = create_dummy_data(config, local_rank)
 
         if config.training_spec.layer_autocast and not is_fsdp:
@@ -654,8 +655,7 @@ class TransformerModel(nn.Module):
         else:
             self.device = hparams.training_spec.device
 
-        if not self.hparams.training_spec.fsdp:
-            self.to(self.device)
+        self.to(self.device)
 
         self.criterion = self._init_criterion(hparams=hparams)
         self.batch_size = hparams.training_spec.batch_size
