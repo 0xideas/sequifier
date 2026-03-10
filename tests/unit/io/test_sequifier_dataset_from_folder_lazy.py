@@ -200,3 +200,91 @@ def test_exact_strategy_uneven_files_exception(
 
     # Assert the core error text is present
     assert "Found 2 different number of samples per rank/GPU" in error_msg
+
+
+@patch("torch.distributed.is_initialized", return_value=True)
+@patch("torch.distributed.get_world_size", return_value=2)
+@patch("torch.distributed.get_rank", return_value=1)
+def test_oversampling_strategy(
+    mock_rank, mock_ws, mock_init, mock_config, tmp_path, mock_torch_load
+):
+    """Tests that 'oversampling' pads a rank with fewer samples by looping its files."""
+    data_dir = tmp_path / "data_oversample"
+    data_dir.mkdir()
+
+    # Rank 0 gets file1 (10) + file3 (5) = 15 samples
+    # Rank 1 gets file2 (10) = 10 samples
+    metadata = {
+        "total_samples": 25,
+        "batch_files": [
+            {"path": "file1.pt", "samples": 10},
+            {"path": "file2.pt", "samples": 10},
+            {"path": "file3.pt", "samples": 5},
+        ],
+    }
+    with open(data_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f)
+
+    mock_config.training_spec.sampling_strategy = "oversampling"
+    mock_config.training_spec.batch_size = 5
+    mock_config.training_spec.num_workers = 0
+
+    dataset = SequifierDatasetFromFolderLazy(str(data_dir), mock_config, shuffle=False)
+
+    # Max samples across ranks is 15. Rank 1 must pad its 10 samples up to 15.
+    assert dataset.target_samples == 15
+    assert len(dataset) == 3  # 15 total samples / batch_size 5
+
+    batches = list(dataset)
+    assert len(batches) == 3
+
+    # Rank 1 only has file2 assigned. To get 15 samples, it must load file2,
+    # run out of data, loop back, and load file2 again.
+    assert mock_torch_load.call_count == 2
+    loaded_files = [call.args[0] for call in mock_torch_load.call_args_list]
+    assert "file2.pt" in loaded_files[0]
+    assert "file2.pt" in loaded_files[1]
+
+
+@patch("torch.distributed.is_initialized", return_value=True)
+@patch("torch.distributed.get_world_size", return_value=2)
+@patch("torch.distributed.get_rank", return_value=0)
+def test_undersampling_strategy(
+    mock_rank, mock_ws, mock_init, mock_config, tmp_path, mock_torch_load
+):
+    """Tests that 'undersampling' truncates a rank with more samples to match the lightest rank."""
+    data_dir = tmp_path / "data_undersample"
+    data_dir.mkdir()
+
+    # Rank 0 gets file1 (10) + file3 (5) = 15 samples
+    # Rank 1 gets file2 (10) = 10 samples
+    metadata = {
+        "total_samples": 25,
+        "batch_files": [
+            {"path": "file1.pt", "samples": 10},
+            {"path": "file2.pt", "samples": 10},
+            {"path": "file3.pt", "samples": 5},
+        ],
+    }
+    with open(data_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f)
+
+    mock_config.training_spec.sampling_strategy = "undersampling"
+    mock_config.training_spec.batch_size = 5
+    mock_config.training_spec.num_workers = 0
+
+    dataset = SequifierDatasetFromFolderLazy(str(data_dir), mock_config, shuffle=False)
+
+    # Min samples across ranks is 10. Rank 0 must truncate its 15 samples down to 10.
+    assert dataset.target_samples == 10
+    assert len(dataset) == 2  # 10 total samples / batch_size 5
+
+    batches = list(dataset)
+    assert len(batches) == 2
+
+    # Rank 0 should only need file1 (10 samples) to meet its truncated quota of 10.
+    # It should never attempt to load file3.
+    assert mock_torch_load.call_count == 1
+    loaded_files = [call.args[0] for call in mock_torch_load.call_args_list]
+    assert "file1.pt" in loaded_files[0]
+    assert not any("file3.pt" in f for f in loaded_files)
