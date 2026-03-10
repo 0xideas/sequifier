@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/io/sequifier_dataset_from_folder_lazy.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.io.sequifier_dataset_from_folder_lazy - sequifier v1.1.0.6 documentation</title>
+        <title>sequifier.io.sequifier_dataset_from_folder_lazy - sequifier v1.1.1.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v1.1.0.6 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v1.1.1.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.1.0.6 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.1.1.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -262,53 +262,55 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.io.sequifier_dataset_from_folder_lazy</h1><div class="highlight"><pre>
-<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">bisect</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">collections</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Tuple</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Iterator</span><span class="p">,</span> <span class="n">Tuple</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">psutil</span>  <span class="c1"># Dependency: pip install psutil</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch.distributed</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">dist</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">torch.utils.data</span><span class="w"> </span><span class="kn">import</span> <span class="n">Dataset</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">torch.utils.data</span><span class="w"> </span><span class="kn">import</span> <span class="n">IterableDataset</span><span class="p">,</span> <span class="n">get_worker_info</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModel</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">normalize_path</span>
 
 
-<div class="viewcode-block" id="SequifierDatasetFromFolderLazy"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">SequifierDatasetFromFolderLazy</span><span class="p">(</span><span class="n">Dataset</span><span class="p">):</span>
+<div class="viewcode-block" id="SequifierDatasetFromFolderLazy"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">SequifierDatasetFromFolderLazy</span><span class="p">(</span><span class="n">IterableDataset</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    An efficient PyTorch Dataset for datasets that do not fit into RAM.</span>
+<span class="sd">    An efficient, memory-safe PyTorch IterableDataset for out-of-core training.</span>
 
-<span class="sd">    This class loads data from individual .pt files on-demand (lazily) when an</span>
-<span class="sd">    item is requested via `__getitem__`. It maintains an in-memory cache of</span>
-<span class="sd">    recently used files to speed up access. To prevent memory exhaustion,</span>
-<span class="sd">    the cache is managed by a Least Recently Used (LRU) policy, which</span>
-<span class="sd">    evicts the oldest data chunks when the total system RAM usage exceeds a</span>
-<span class="sd">    configurable threshold.</span>
+<span class="sd">    Streams pre-processed chunked files sequentially using cross-file buffering to yield</span>
+<span class="sd">    exact batches, eliminating CPU cloning bottlenecks. Fully supports DDP/FSDP by</span>
+<span class="sd">    precisely calculating and distributing sample boundaries across GPU ranks and workers.</span>
 
-<span class="sd">    This strategy balances I/O overhead and memory usage, making it suitable</span>
-<span class="sd">    for training on datasets larger than the available system memory.</span>
+<span class="sd">    Args:</span>
+<span class="sd">        data_path (str): Path to the directory containing `.pt` chunks and `metadata.json`.</span>
+<span class="sd">        config (TrainModel): Training configuration (batch size, workers, sequence length, etc.).</span>
+<span class="sd">        shuffle (bool, optional): If True, deterministically shuffles file order and</span>
+<span class="sd">            sample indices per epoch. Defaults to True.</span>
+
+<span class="sd">    Yields:</span>
+<span class="sd">        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]:</span>
+<span class="sd">            A batch tuple containing sequence dictionaries, target dictionaries,</span>
+<span class="sd">            and three `None` placeholders (for API compatibility).</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        FileNotFoundError: If `metadata.json` is missing.</span>
+<span class="sd">        Exception: If sample counts are uneven across ranks using the &#39;exact&#39; sampling</span>
+<span class="sd">            strategy, or if a GPU rank is assigned no files.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
-<div class="viewcode-block" id="SequifierDatasetFromFolderLazy.__init__"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__init__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Initializes the dataset by reading metadata and setting up the cache.</span>
-<span class="sd">        Each .pt file is expected to contain a tuple:</span>
-<span class="sd">        (sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor).</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            data_path (str): The path to the directory containing the pre-processed</span>
-<span class="sd">                             .pt files and a metadata.json file.</span>
-<span class="sd">            config (TrainModel): The training configuration object.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">,</span> <span class="n">shuffle</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span> <span class="o">=</span> <span class="n">normalize_path</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">config</span> <span class="o">=</span> <span class="n">config</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">max_ram_gb</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">max_ram_gb</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">max_ram_bytes</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">max_ram_gb</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1024</span><span class="o">**</span><span class="mi">3</span><span class="p">)</span>
-        <span class="n">metadata_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">,</span> <span class="s2">&quot;metadata.json&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">batch_size</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span> <span class="o">=</span> <span class="n">shuffle</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span> <span class="o">=</span> <span class="mi">0</span>
 
+        <span class="n">metadata_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">,</span> <span class="s2">&quot;metadata.json&quot;</span><span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">metadata_path</span><span class="p">):</span>
             <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span>
                 <span class="sa">f</span><span class="s2">&quot;metadata.json not found in &#39;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="si">}</span><span class="s2">&#39;. &quot;</span>
@@ -318,172 +320,247 @@
         <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">metadata_path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
             <span class="n">metadata</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">=</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;total_samples&quot;</span><span class="p">]</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span> <span class="o">=</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;batch_files&quot;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">total_samples</span> <span class="o">=</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;total_samples&quot;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">sampling_strategy</span>
 
-        <span class="c1"># --- Build an index for fast sample-to-file mapping ---</span>
-        <span class="c1"># self.cumulative_samples will store the cumulative sample count at the end</span>
-        <span class="c1"># of each file, e.g., [1024, 2048, 3072, ...], allowing for a fast binary search.</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">cumulative_samples</span> <span class="o">=</span> <span class="p">[]</span>
-        <span class="n">current_sum</span> <span class="o">=</span> <span class="mi">0</span>
-        <span class="k">for</span> <span class="n">file_info</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">:</span>
-            <span class="n">current_sum</span> <span class="o">+=</span> <span class="n">file_info</span><span class="p">[</span><span class="s2">&quot;samples&quot;</span><span class="p">]</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">cumulative_samples</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">current_sum</span><span class="p">)</span>
-
-        <span class="c1"># --- Initialize cache and thread-safety mechanisms ---</span>
-        <span class="c1"># An OrderedDict is used to implement the LRU logic.</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">:</span> <span class="n">collections</span><span class="o">.</span><span class="n">OrderedDict</span><span class="p">[</span>
-            <span class="nb">str</span><span class="p">,</span>
-            <span class="n">Tuple</span><span class="p">[</span>
-                <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
-                <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
-                <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
-                <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
-                <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
-            <span class="p">],</span>
-        <span class="p">]</span> <span class="o">=</span> <span class="n">collections</span><span class="o">.</span><span class="n">OrderedDict</span><span class="p">()</span>
-
-        <span class="bp">self</span><span class="o">.</span><span class="n">max_cache_files</span> <span class="o">=</span> <span class="mi">2</span>
-
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_target_samples</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">total_batches</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_total_batches</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span><span class="p">)</span>
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;[INFO] Initialized lazy dataset from </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="si">}</span><span class="s2">. &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;Total samples: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2">. RAM threshold in GB: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_ram_gb</span><span class="si">}</span><span class="s2">, max cache files: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_cache_files</span><span class="si">}</span><span class="s2">&quot;</span>
-        <span class="p">)</span></div>
-
-<div class="viewcode-block" id="SequifierDatasetFromFolderLazy.__len__"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__len__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Returns the total number of samples in the dataset.&quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span></div>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">_find_file_for_index</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Finds which file contains the given sample index and the local index within it.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            idx: The global sample index across all files.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            A tuple containing (local_index_in_file, file_path).</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="c1"># bisect_right finds the insertion point for idx, which corresponds to the</span>
-        <span class="c1"># index of the file containing this sample.</span>
-        <span class="n">file_index</span> <span class="o">=</span> <span class="n">bisect</span><span class="o">.</span><span class="n">bisect_right</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cumulative_samples</span><span class="p">,</span> <span class="n">idx</span><span class="p">)</span>
-
-        <span class="c1"># Calculate the local index within the identified file.</span>
-        <span class="c1"># If it&#39;s the first file (index 0), the local index is just idx.</span>
-        <span class="c1"># Otherwise, subtract the cumulative sample count of the previous file.</span>
-        <span class="n">previous_samples</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">cumulative_samples</span><span class="p">[</span><span class="n">file_index</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="n">file_index</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">0</span>
-        <span class="p">)</span>
-        <span class="n">local_index</span> <span class="o">=</span> <span class="n">idx</span> <span class="o">-</span> <span class="n">previous_samples</span>
-
-        <span class="n">file_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">[</span><span class="n">file_index</span><span class="p">][</span><span class="s2">&quot;path&quot;</span><span class="p">]</span>
+            <span class="sa">f</span><span class="s2">&quot;[INFO] Lazy Dataset loaded into RAM with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span><span class="si">}</span><span class="s2"> samples and </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">total_batches</span><span class="si">}</span><span class="s2"> batches.&quot;</span>
         <span class="p">)</span>
 
-        <span class="k">return</span> <span class="n">local_index</span><span class="p">,</span> <span class="n">file_path</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_calculate_total_batches</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="n">num_workers</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">num_workers</span>
+        <span class="n">num_workers_to_use</span> <span class="o">=</span> <span class="n">num_workers</span> <span class="k">if</span> <span class="n">num_workers</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">1</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">_get_memory_usage_percent</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="c1"># Try cgroup v2</span>
-        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="s2">&quot;/sys/fs/cgroup/memory.current&quot;</span><span class="p">):</span>
-            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">&quot;/sys/fs/cgroup/memory.current&quot;</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-                <span class="n">used</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">())</span>
-            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">&quot;/sys/fs/cgroup/memory.max&quot;</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-                <span class="n">limit_str</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
-                <span class="c1"># Handle &#39;max&#39; which means no limit</span>
-                <span class="n">limit</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">limit_str</span><span class="p">)</span> <span class="k">if</span> <span class="n">limit_str</span> <span class="o">!=</span> <span class="s2">&quot;max&quot;</span> <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_ram_bytes</span>
-            <span class="k">return</span> <span class="n">used</span> <span class="o">/</span> <span class="n">limit</span> <span class="k">if</span> <span class="n">limit</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">0</span>
-
-        <span class="c1"># Try cgroup v1</span>
-        <span class="k">elif</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="s2">&quot;/sys/fs/cgroup/memory/memory.usage_in_bytes&quot;</span><span class="p">):</span>
-            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">&quot;/sys/fs/cgroup/memory/memory.usage_in_bytes&quot;</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-                <span class="n">used</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">())</span>
-            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">&quot;/sys/fs/cgroup/memory/memory.limit_in_bytes&quot;</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-                <span class="n">limit</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">())</span>
-            <span class="k">return</span> <span class="n">used</span> <span class="o">/</span> <span class="n">limit</span> <span class="k">if</span> <span class="n">limit</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">0</span>
-
-        <span class="c1"># Fallback to psutil (host memory)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">return</span> <span class="n">psutil</span><span class="o">.</span><span class="n">virtual_memory</span><span class="p">()</span><span class="o">.</span><span class="n">percent</span> <span class="o">/</span> <span class="mf">100.0</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">_evict_lru_items</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="c1"># Evict if usage &gt; 90% of limit (safety buffer)</span>
-        <span class="k">while</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_memory_usage_percent</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mf">0.90</span><span class="p">:</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">:</span>
-                <span class="k">break</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="o">.</span><span class="n">popitem</span><span class="p">(</span><span class="n">last</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-
-<div class="viewcode-block" id="SequifierDatasetFromFolderLazy.__getitem__"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__getitem__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__getitem__</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">:</span> <span class="nb">int</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Retrieves a single data sample, loading from disk if not in the cache.</span>
-
-<span class="sd">        This method is the core of the lazy-loading strategy. It is thread-safe</span>
-<span class="sd">        and manages the cache automatically.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            idx: The index of the sample to retrieve.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            A tuple containing:</span>
-<span class="sd">                - sequence (dict): Dictionary of feature tensors for the sample.</span>
-<span class="sd">                - targets (dict): Dictionary of target tensors for the sample.</span>
-<span class="sd">                - sequence_id (int): The sequence ID of the sample.</span>
-<span class="sd">                - subsequence_id (int): The subsequence ID within the sequence.</span>
-<span class="sd">                - start_position (int): The starting item position of the subsequence</span>
-<span class="sd">                                        within the original full sequence.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">idx</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">IndexError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Index </span><span class="si">{</span><span class="n">idx</span><span class="si">}</span><span class="s2"> is out of range for dataset with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2"> samples.&quot;</span>
+        <span class="n">total_batches</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">worker_id</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_workers_to_use</span><span class="p">):</span>
+            <span class="n">worker_samples</span> <span class="o">=</span> <span class="n">target_samples</span> <span class="o">//</span> <span class="n">num_workers_to_use</span> <span class="o">+</span> <span class="p">(</span>
+                <span class="mi">1</span> <span class="k">if</span> <span class="n">worker_id</span> <span class="o">&lt;</span> <span class="n">target_samples</span> <span class="o">%</span> <span class="n">num_workers_to_use</span> <span class="k">else</span> <span class="mi">0</span>
             <span class="p">)</span>
-        <span class="n">local_index</span><span class="p">,</span> <span class="n">file_path</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_find_file_for_index</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+            <span class="n">total_batches</span> <span class="o">+=</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">worker_samples</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">total_batches</span>
 
-        <span class="c1"># 1. Check if file is already in cache</span>
-        <span class="k">if</span> <span class="n">file_path</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="o">.</span><span class="n">move_to_end</span><span class="p">(</span><span class="n">file_path</span><span class="p">)</span>
-            <span class="n">data_tuple</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">[</span><span class="n">file_path</span><span class="p">]</span>
+<div class="viewcode-block" id="SequifierDatasetFromFolderLazy.set_epoch"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.set_epoch">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">epoch</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Allows the training loop to set the epoch for deterministic file shuffling.&quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span> <span class="o">=</span> <span class="n">epoch</span></div>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_get_target_samples</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculates exact sample count per rank to ensure FSDP syncs properly.&quot;&quot;&quot;</span>
+        <span class="n">world_size</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_world_size</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">1</span>
+
+        <span class="n">num_files</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">)</span>
+
+        <span class="n">samples_per_rank</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">world_size</span><span class="p">):</span>
+            <span class="n">f_r</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">num_files</span><span class="p">,</span> <span class="n">world_size</span><span class="p">))</span>
+            <span class="n">samples_per_rank</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="nb">sum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="s2">&quot;samples&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">f_r</span><span class="p">)</span> <span class="k">if</span> <span class="n">f_r</span> <span class="k">else</span> <span class="mi">0</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;exact&quot;</span><span class="p">:</span>
+            <span class="n">samples_per_rank</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">samples_per_rank</span><span class="p">)</span>
+            <span class="n">unique_samples_per_rank</span><span class="p">,</span> <span class="n">counts</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span>
+                <span class="n">samples_per_rank</span><span class="p">,</span> <span class="n">return_counts</span><span class="o">=</span><span class="kc">True</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">unique_samples_per_rank</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">counts</span><span class="p">)</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">counts</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mf">0.8</span><span class="p">:</span>
+                    <span class="n">most_frequent_unique_samples_val</span> <span class="o">=</span> <span class="n">unique_samples_per_rank</span><span class="p">[</span>
+                        <span class="n">np</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">counts</span><span class="p">)</span>
+                    <span class="p">]</span>
+                    <span class="n">non_max_idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span>
+                        <span class="n">samples_per_rank</span> <span class="o">!=</span> <span class="n">most_frequent_unique_samples_val</span>
+                    <span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+                    <span class="n">files_strings</span> <span class="o">=</span> <span class="p">[]</span>
+                    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">non_max_idx</span><span class="p">:</span>
+                        <span class="n">f_r</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">num_files</span><span class="p">,</span> <span class="n">world_size</span><span class="p">))</span>
+                        <span class="n">files_strings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                            <span class="s2">&quot;</span><span class="se">\n\t</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+                                <span class="p">[</span>
+                                    <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="s2">&quot;path&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">sep</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s1">: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">[</span><span class="n">j</span><span class="p">][</span><span class="s2">&quot;samples&quot;</span><span class="p">]</span><span class="si">}</span><span class="s1">&#39;</span>
+                                    <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="n">f_r</span>
+                                <span class="p">]</span>
+                            <span class="p">)</span>
+                        <span class="p">)</span>
+                    <span class="n">rank_details</span> <span class="o">=</span> <span class="p">[</span>
+                        <span class="sa">f</span><span class="s2">&quot;Rank </span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">samples_per_rank</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="si">}</span><span class="s2"> samples, files:</span><span class="se">\n\t</span><span class="si">{</span><span class="n">files_strings</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span>
+                        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">non_max_idx</span>
+                    <span class="p">]</span>
+                    <span class="n">rank_details</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">rank_details</span><span class="p">)</span>
+                    <span class="n">exception_detail</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;:</span><span class="se">\n</span><span class="s2">Most frequent sample value: </span><span class="si">{</span><span class="n">most_frequent_unique_samples_val</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="n">rank_details</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">exception_detail</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+
+                <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Found </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">unique_samples_per_rank</span><span class="p">)</span><span class="si">}</span><span class="s2"> different number of samples per rank/GPU: </span><span class="si">{</span><span class="n">unique_samples_per_rank</span><span class="si">}{</span><span class="n">exception_detail</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+            <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">unique_samples_per_rank</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;oversampling&quot;</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="n">samples_per_rank</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="c1"># 2. PRE-EVICTION: Make space BEFORE loading</span>
-            <span class="c1"># If adding this file would exceed the limit, evict the oldest one first.</span>
-            <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_cache_files</span><span class="p">:</span>
-                <span class="c1"># remove oldest item (FIFO)</span>
-                <span class="n">evicted_path</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="o">.</span><span class="n">popitem</span><span class="p">(</span><span class="n">last</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-                <span class="c1"># Optional: Force garbage collection if memory is tight,</span>
-                <span class="c1"># though .clone() usually makes this automatic.</span>
-                <span class="c1"># import gc; gc.collect()</span>
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;undersampling&quot;</span>
+            <span class="k">return</span> <span class="nb">min</span><span class="p">(</span><span class="n">samples_per_rank</span><span class="p">)</span>
 
-            <span class="c1"># 3. Load from disk (Safe now, as we made space)</span>
-            <span class="n">data_tuple</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">file_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">cache</span><span class="p">[</span><span class="n">file_path</span><span class="p">]</span> <span class="o">=</span> <span class="n">data_tuple</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">total_batches</span>
 
-        <span class="c1"># Unpack</span>
-        <span class="p">(</span>
-            <span class="n">sequences_batch</span><span class="p">,</span>
-            <span class="n">targets_batch</span><span class="p">,</span>
-            <span class="n">sequence_id_tensor</span><span class="p">,</span>
-            <span class="n">subsequence_id_tensor</span><span class="p">,</span>
-            <span class="n">start_item_positions_tensor</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">data_tuple</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__iter__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span>
+        <span class="n">Tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
+    <span class="p">]:</span>
+        <span class="n">world_size</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_world_size</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">1</span>
+        <span class="n">rank</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_rank</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">0</span>
 
-        <span class="c1"># 4. CRITICAL: Use .clone() to sever the link to the cached file</span>
+        <span class="n">worker_info</span> <span class="o">=</span> <span class="n">get_worker_info</span><span class="p">()</span>
+        <span class="n">worker_id</span> <span class="o">=</span> <span class="n">worker_info</span><span class="o">.</span><span class="n">id</span> <span class="k">if</span> <span class="n">worker_info</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="mi">0</span>
+        <span class="n">num_workers</span> <span class="o">=</span> <span class="n">worker_info</span><span class="o">.</span><span class="n">num_workers</span> <span class="k">if</span> <span class="n">worker_info</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="mi">1</span>
+
+        <span class="c1"># 1. Distribute files among ranks</span>
+        <span class="n">num_files</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">)</span>
+        <span class="n">files_for_this_rank</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">rank</span><span class="p">,</span> <span class="n">num_files</span><span class="p">,</span> <span class="n">world_size</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">files_for_this_rank</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;oversampling&quot;</span><span class="p">:</span>
+                <span class="n">files_for_this_rank</span> <span class="o">=</span> <span class="p">[</span><span class="n">rank</span> <span class="o">%</span> <span class="n">num_files</span><span class="p">]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;No file found for GPU rank </span><span class="si">{</span><span class="n">rank</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+
+        <span class="c1"># 2. Assign exact sample quotas and boundaries to this specific worker thread</span>
+        <span class="n">base_samples_per_worker</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span> <span class="o">//</span> <span class="n">num_workers</span>
+        <span class="n">remainder</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span> <span class="o">%</span> <span class="n">num_workers</span>
+
+        <span class="c1"># Calculate exactly where this worker&#39;s data starts and ends in the global stream</span>
+        <span class="n">worker_start_sample</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">worker_id</span><span class="p">):</span>
+            <span class="n">worker_start_sample</span> <span class="o">+=</span> <span class="n">base_samples_per_worker</span> <span class="o">+</span> <span class="p">(</span><span class="mi">1</span> <span class="k">if</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">remainder</span> <span class="k">else</span> <span class="mi">0</span><span class="p">)</span>
+
+        <span class="n">worker_target_samples</span> <span class="o">=</span> <span class="n">base_samples_per_worker</span> <span class="o">+</span> <span class="p">(</span>
+            <span class="mi">1</span> <span class="k">if</span> <span class="n">worker_id</span> <span class="o">&lt;</span> <span class="n">remainder</span> <span class="k">else</span> <span class="mi">0</span>
+        <span class="p">)</span>
+        <span class="n">worker_end_sample</span> <span class="o">=</span> <span class="n">worker_start_sample</span> <span class="o">+</span> <span class="n">worker_target_samples</span>
+
+        <span class="c1"># 3. Shuffle files deterministically</span>
+        <span class="n">g</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">()</span>
+        <span class="n">g</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">seed</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span><span class="p">:</span>
+            <span class="n">file_order</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">files_for_this_rank</span><span class="p">),</span> <span class="n">generator</span><span class="o">=</span><span class="n">g</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+            <span class="n">ordered_files</span> <span class="o">=</span> <span class="p">[</span><span class="n">files_for_this_rank</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">file_order</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">ordered_files</span> <span class="o">=</span> <span class="n">files_for_this_rank</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+        <span class="c1"># 4. Extend files based on exact target requirements</span>
+        <span class="n">extended_files</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">current_samples</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">file_idx</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">while</span> <span class="n">current_samples</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span><span class="p">:</span>
+            <span class="n">f_id</span> <span class="o">=</span> <span class="n">ordered_files</span><span class="p">[</span><span class="n">file_idx</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">ordered_files</span><span class="p">)]</span>
+            <span class="n">extended_files</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">f_id</span><span class="p">)</span>
+            <span class="n">current_samples</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">[</span><span class="n">f_id</span><span class="p">][</span><span class="s2">&quot;samples&quot;</span><span class="p">]</span>
+            <span class="n">file_idx</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="c1"># 5. Stream data using precise global boundaries and a CROSS-FILE BUFFER</span>
+        <span class="n">yielded_samples</span> <span class="o">=</span> <span class="mi">0</span>
         <span class="n">train_seq_len</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
-        <span class="n">sequence</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">,</span> <span class="o">-</span><span class="n">train_seq_len</span><span class="p">:]</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
-            <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">sequences_batch</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-        <span class="p">}</span>
-        <span class="n">targets</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">,</span> <span class="o">-</span><span class="n">train_seq_len</span><span class="p">:]</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
-            <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">targets_batch</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-        <span class="p">}</span>
+        <span class="n">global_file_start_sample</span> <span class="o">=</span> <span class="mi">0</span>
 
-        <span class="k">return</span> <span class="p">(</span>
-            <span class="n">sequence</span><span class="p">,</span>
-            <span class="n">targets</span><span class="p">,</span>
-            <span class="nb">int</span><span class="p">(</span><span class="n">sequence_id_tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">]),</span>
-            <span class="nb">int</span><span class="p">(</span><span class="n">subsequence_id_tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">]),</span>
-            <span class="nb">int</span><span class="p">(</span><span class="n">start_item_positions_tensor</span><span class="p">[</span><span class="n">local_index</span><span class="p">]),</span>
-        <span class="p">)</span></div></div>
+        <span class="c1"># Initialize cross-file buffers</span>
+        <span class="n">seq_buffer</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">tgt_buffer</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">buffer_len</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="k">for</span> <span class="n">f_id</span> <span class="ow">in</span> <span class="n">extended_files</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">yielded_samples</span> <span class="o">&gt;=</span> <span class="n">worker_target_samples</span><span class="p">:</span>
+                <span class="k">break</span>
+
+            <span class="n">file_samples</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">[</span><span class="n">f_id</span><span class="p">][</span><span class="s2">&quot;samples&quot;</span><span class="p">]</span>
+            <span class="n">file_start</span> <span class="o">=</span> <span class="n">global_file_start_sample</span>
+            <span class="n">file_end</span> <span class="o">=</span> <span class="n">global_file_start_sample</span> <span class="o">+</span> <span class="n">file_samples</span>
+            <span class="n">global_file_start_sample</span> <span class="o">+=</span> <span class="n">file_samples</span>
+
+            <span class="c1"># Skip this file if it belongs entirely to other workers</span>
+            <span class="k">if</span> <span class="n">file_end</span> <span class="o">&lt;=</span> <span class="n">worker_start_sample</span> <span class="ow">or</span> <span class="n">file_start</span> <span class="o">&gt;=</span> <span class="n">worker_end_sample</span><span class="p">:</span>
+                <span class="k">continue</span>
+
+            <span class="c1"># This file overlaps with our worker&#39;s assigned boundary. Load it.</span>
+            <span class="n">file_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">[</span><span class="n">f_id</span><span class="p">][</span><span class="s2">&quot;path&quot;</span><span class="p">])</span>
+            <span class="p">(</span><span class="n">sequences_batch</span><span class="p">,</span> <span class="n">targets_batch</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">)</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
+                <span class="n">file_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span>
+            <span class="p">)</span>
+
+            <span class="c1"># Generate indices for the whole file</span>
+            <span class="n">indices</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">file_samples</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span><span class="p">:</span>
+                <span class="n">g_file</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">()</span>
+                <span class="n">g_file</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">seed</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span> <span class="o">+</span> <span class="n">f_id</span> <span class="o">+</span> <span class="n">rank</span><span class="p">)</span>
+                <span class="n">indices</span> <span class="o">=</span> <span class="n">indices</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="n">file_samples</span><span class="p">,</span> <span class="n">generator</span><span class="o">=</span><span class="n">g_file</span><span class="p">)]</span>
+
+            <span class="c1"># Slice the indices to extract ONLY the portion belonging to this worker</span>
+            <span class="n">worker_file_start_idx</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">worker_start_sample</span> <span class="o">-</span> <span class="n">file_start</span><span class="p">)</span>
+            <span class="n">worker_file_end_idx</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">file_samples</span><span class="p">,</span> <span class="n">worker_end_sample</span> <span class="o">-</span> <span class="n">file_start</span><span class="p">)</span>
+
+            <span class="n">worker_indices</span> <span class="o">=</span> <span class="n">indices</span><span class="p">[</span><span class="n">worker_file_start_idx</span><span class="p">:</span><span class="n">worker_file_end_idx</span><span class="p">]</span>
+            <span class="n">num_new_samples</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">worker_indices</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">num_new_samples</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">del</span> <span class="n">sequences_batch</span><span class="p">,</span> <span class="n">targets_batch</span>
+                <span class="k">continue</span>
+
+            <span class="c1"># Extract the data subset for this worker (Advanced indexing copies the data)</span>
+            <span class="n">new_seq</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="p">[</span><span class="n">worker_indices</span><span class="p">,</span> <span class="o">-</span><span class="n">train_seq_len</span><span class="p">:]</span>
+                <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">sequences_batch</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="p">}</span>
+            <span class="n">new_tgt</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="p">[</span><span class="n">worker_indices</span><span class="p">,</span> <span class="o">-</span><span class="n">train_seq_len</span><span class="p">:]</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">targets_batch</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="p">}</span>
+
+            <span class="c1"># Free the large file immediately to keep RAM down</span>
+            <span class="k">del</span> <span class="n">sequences_batch</span><span class="p">,</span> <span class="n">targets_batch</span>
+
+            <span class="c1"># Append the new slice to the cross-file buffer</span>
+            <span class="k">if</span> <span class="n">buffer_len</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">seq_buffer</span> <span class="o">=</span> <span class="n">new_seq</span>
+                <span class="n">tgt_buffer</span> <span class="o">=</span> <span class="n">new_tgt</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">seq_buffer</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">k</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">seq_buffer</span><span class="p">[</span><span class="n">k</span><span class="p">],</span> <span class="n">new_seq</span><span class="p">[</span><span class="n">k</span><span class="p">]],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">seq_buffer</span>
+                <span class="p">}</span>
+                <span class="n">tgt_buffer</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">k</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">tgt_buffer</span><span class="p">[</span><span class="n">k</span><span class="p">],</span> <span class="n">new_tgt</span><span class="p">[</span><span class="n">k</span><span class="p">]],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">tgt_buffer</span>
+                <span class="p">}</span>
+
+            <span class="n">buffer_len</span> <span class="o">+=</span> <span class="n">num_new_samples</span>
+
+            <span class="c1"># Yield batches as long as the buffer contains at least `batch_size` samples</span>
+            <span class="k">while</span> <span class="n">buffer_len</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">yielded_samples</span> <span class="o">&gt;=</span> <span class="n">worker_target_samples</span><span class="p">:</span>
+                    <span class="k">break</span>
+
+                <span class="c1"># Slice out a perfect batch from the top of the buffer</span>
+                <span class="n">batch_seq</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="p">[:</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">]</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">seq_buffer</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+                <span class="n">batch_tgt</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="p">[:</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">]</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">tgt_buffer</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+
+                <span class="k">yield</span> <span class="n">batch_seq</span><span class="p">,</span> <span class="n">batch_tgt</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+                <span class="n">yielded_samples</span> <span class="o">+=</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span>
+
+                <span class="c1"># Keep the remainder in the buffer for the next loop/file</span>
+                <span class="n">seq_buffer</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="p">:]</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">seq_buffer</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+                <span class="n">tgt_buffer</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="p">:]</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">tgt_buffer</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+                <span class="n">buffer_len</span> <span class="o">-=</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span>
+
+        <span class="c1"># 6. Yield the final partial batch from the buffer if any remains</span>
+        <span class="k">if</span> <span class="n">buffer_len</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">yielded_samples</span> <span class="o">&lt;</span> <span class="n">worker_target_samples</span><span class="p">:</span>
+            <span class="n">remaining_needed</span> <span class="o">=</span> <span class="n">worker_target_samples</span> <span class="o">-</span> <span class="n">yielded_samples</span>
+            <span class="n">final_yield_size</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">buffer_len</span><span class="p">,</span> <span class="n">remaining_needed</span><span class="p">)</span>
+
+            <span class="n">batch_seq</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="p">[:</span><span class="n">final_yield_size</span><span class="p">]</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">seq_buffer</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+            <span class="n">batch_tgt</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="p">[:</span><span class="n">final_yield_size</span><span class="p">]</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">tgt_buffer</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+
+            <span class="k">yield</span> <span class="n">batch_seq</span><span class="p">,</span> <span class="n">batch_tgt</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span></div>
 </pre></div>
         </article>
       </div>
@@ -516,7 +593,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=83ab8cc3"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=9d8fd24e"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
