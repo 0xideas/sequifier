@@ -127,6 +127,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         fsdp: fsdp training
         fsdp_sharding_strategy: fsdp sharding strategy
         fsdp_cpu_offload: fsdp cpu offload
+        torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -170,6 +171,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     fsdp: bool = False
     fsdp_sharding_strategy: str = "FULL_SHARD"
     fsdp_cpu_offload: bool = False
+    torch_compile: str = "inner"
 
     def __init__(self, **kwargs):
         """Initialize the TrainingSpecHyperparameterSampling instance.
@@ -316,6 +318,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             fsdp=self.fsdp,
             fsdp_sharding_strategy=self.fsdp_sharding_strategy,
             fsdp_cpu_offload=self.fsdp_cpu_offload,
+            torch_compile=self.torch_compile,
         )
 
     def grid_sample(self, i):
@@ -389,6 +392,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             fsdp=self.fsdp,
             fsdp_sharding_strategy=self.fsdp_sharding_strategy,
             fsdp_cpu_offload=self.fsdp_cpu_offload,
+            torch_compile=self.torch_compile,
         )
 
     def n_combinations(self):
