@@ -64,7 +64,7 @@ def test_model_files_exists(run_training, run_training_from_checkpoint, project_
                 for kind in ["best", "last"]
             ]
             + [
-                f"sequifier-model-categorical-3-from-mid-epoch-checkpoint{model_type}-{kind}-3.{model_type_format}"
+                f"sequifier-model-categorical-3-from-mid-epoch-checkpoint-{kind}{model_type}-3.{model_type_format}"
                 for model_type in ["", "-embedding"]
                 for kind in ["best", "last"]
                 for model_type_format in ["pt", "onnx"]
