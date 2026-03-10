@@ -15,11 +15,27 @@ from sequifier.helpers import normalize_path
 
 class SequifierDatasetFromFolderLazy(IterableDataset):
     """
-    An efficient PyTorch IterableDataset for datasets that do not fit into RAM.
+    An efficient, memory-safe PyTorch IterableDataset for out-of-core training.
 
-    Instead of loading a file to cache and slicing individual rows, it reads
-    whole files sequentially, shuffles the indices, and yields full batches.
-    This completely eliminates the CPU cloning bottleneck.
+    Streams pre-processed chunked files sequentially using cross-file buffering to yield
+    exact batches, eliminating CPU cloning bottlenecks. Fully supports DDP/FSDP by
+    precisely calculating and distributing sample boundaries across GPU ranks and workers.
+
+    Args:
+        data_path (str): Path to the directory containing `.pt` chunks and `metadata.json`.
+        config (TrainModel): Training configuration (batch size, workers, sequence length, etc.).
+        shuffle (bool, optional): If True, deterministically shuffles file order and
+            sample indices per epoch. Defaults to True.
+
+    Yields:
+        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]:
+            A batch tuple containing sequence dictionaries, target dictionaries,
+            and three `None` placeholders (for API compatibility).
+
+    Raises:
+        FileNotFoundError: If `metadata.json` is missing.
+        Exception: If sample counts are uneven across ranks using the 'exact' sampling
+            strategy, or if a GPU rank is assigned no files.
     """
 
     def __init__(self, data_path: str, config: TrainModel, shuffle: bool = True):
