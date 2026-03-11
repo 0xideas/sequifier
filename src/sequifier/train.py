@@ -698,8 +698,6 @@ class TransformerModel(nn.Module):
         else:
             self.device = hparams.training_spec.device
 
-        self.to(self.device)
-
         self.criterion = self._init_criterion(hparams=hparams)
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
@@ -734,6 +732,8 @@ class TransformerModel(nn.Module):
         self.scaler = GradScaler(device=self.device.split(":")[0], enabled=use_scaler)
 
         self._apply_layer_dtypes()
+
+        self.to(self.device)
 
     @beartype
     def initialize_optimizer(self, params: Any = None) -> None:
