@@ -228,63 +228,9 @@ def train_worker(
 
         model.train_model(train_loader, valid_loader, ddp_model=None)
     elif is_fsdp:
-        if global_rank == 0:
-            checkpoint = torch.load(
-                latest_model_path, map_location="cpu", weights_only=False
-            )
-            full_msd = checkpoint["model_state_dict"]
-            full_osd = checkpoint["optimizer_state_dict"]
-
-            if checkpoint["batch"] + 1 >= len(train_loader):
-                start_epoch = checkpoint["epoch"] + 1
-                start_batch = 0
-            else:
-                start_epoch = checkpoint["epoch"]
-                start_batch = checkpoint["batch"] + 1
-
-            meta = (
-                start_epoch,
-                start_batch,
-                checkpoint["scheduler_state_dict"],
-            )
-        else:
-            full_msd, full_osd = None, None
-            start_epoch, start_batch = None, None
-            meta = (None, None, None)
-
-        options = StateDictOptions(full_state_dict=True, cpu_offload=True)
-
-        set_model_state_dict(
-            base_model,
-            model_state_dict=full_msd,
-            options=options,
-        )
-
-        set_optimizer_state_dict(
-            base_model,
-            base_model.optimizer,
-            optim_state_dict=full_osd,
-            options=options,
-        )
-
-        dist.broadcast_object_list(meta, src=0)
-
-        base_model.start_epoch, base_model.start_batch, sched_state = meta  # type: ignore
-        if sched_state is not None:
-            base_model.scheduler.load_state_dict(sched_state)
-
-        if global_rank == 0:
-            del checkpoint, full_msd, full_osd  # Clear remaining CPU memory
-            logger.info(
-                f"[INFO] Resuming FSDP training from checkpoint '{latest_model_path}'. Total params: {format_number(pytorch_total_params)}"
-            )
-
-        if config.training_spec.device.startswith("cuda"):
-            if torch_compile == "outer":
-                model = torch.compile(model)
-            elif torch_compile == "inner":
-                for i in range(len(model.layers)):
-                    model.layers[i] = torch.compile(model.layers[i])
+        mesh = init_device_mesh(
+            "cuda", (world_size,)
+        )  # 1D mesh for standard ZeRO-3 full sharding
 
         mp_policy = None
         if config.training_spec.layer_autocast:
@@ -302,17 +248,10 @@ def train_worker(
         offload_policy = (
             OffloadPolicy() if config.training_spec.fsdp_cpu_offload else None
         )
-
-        mesh = init_device_mesh(
-            "cuda", (world_size,)
-        )  # 1D mesh for standard ZeRO-3 full sharding
-
         for layer in model.layers:
             fully_shard(
                 layer, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
             )
-
-        # 3. Apply fully_shard to the root model
         fully_shard(
             model, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
         )
@@ -320,6 +259,72 @@ def train_worker(
 
         params_to_optimize = model.parameters()
         model.initialize_optimizer(params=params_to_optimize)
+
+        if config.training_spec.continue_training and latest_model_path:
+            if global_rank == 0:
+                checkpoint = torch.load(
+                    latest_model_path, map_location="cpu", weights_only=False
+                )
+                full_msd = checkpoint["model_state_dict"]
+                full_osd = checkpoint["optimizer_state_dict"]
+
+                if checkpoint["batch"] + 1 >= len(train_loader):
+                    start_epoch = checkpoint["epoch"] + 1
+                    start_batch = 0
+                else:
+                    start_epoch = checkpoint["epoch"]
+                    start_batch = checkpoint["batch"] + 1
+
+                meta = (
+                    start_epoch,
+                    start_batch,
+                    checkpoint["scheduler_state_dict"],
+                )
+            else:
+                full_msd, full_osd = None, None
+                start_epoch, start_batch = None, None
+                meta = (None, None, None)
+
+            options = StateDictOptions(full_state_dict=True, cpu_offload=True)
+
+            set_model_state_dict(
+                base_model,
+                model_state_dict=full_msd,
+                options=options,
+            )
+
+            set_optimizer_state_dict(
+                base_model,
+                base_model.optimizer,
+                optim_state_dict=full_osd,
+                options=options,
+            )
+
+            dist.broadcast_object_list(meta, src=0)
+
+            base_model.start_epoch, base_model.start_batch, sched_state = meta  # type: ignore
+
+            if sched_state is not None:
+                base_model.scheduler.load_state_dict(sched_state)
+
+            if global_rank == 0:
+                del checkpoint, full_msd, full_osd  # Clear remaining CPU memory
+                logger.info(
+                    f"[INFO] Resuming FSDP training from checkpoint '{latest_model_path}'. Total params: {format_number(pytorch_total_params)}"
+                )
+        else:
+            model.start_epoch = 1
+            model.start_batch = 0
+            logger.info(
+                f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
+            )
+
+        if config.training_spec.device.startswith("cuda"):
+            if torch_compile == "outer":
+                model = torch.compile(model)
+            elif torch_compile == "inner":
+                for i in range(len(model.layers)):
+                    model.layers[i] = torch.compile(model.layers[i])
 
         if config.training_spec.device.startswith("cuda"):
             dummy_data = create_dummy_data(config, local_rank)
