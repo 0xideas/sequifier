@@ -1433,6 +1433,9 @@ class TransformerModel(nn.Module):
                 should_save_batch = torch.tensor(
                     [0], dtype=torch.int32, device=self.device
                 )
+                val_loss_batch = torch.tensor(
+                    [np.float32(np.nan)], dtype=torch.float32, device=self.device
+                )
 
                 if not self.hparams.training_spec.distributed or self.rank == 0:
                     current_time = time.time()
@@ -1464,11 +1467,13 @@ class TransformerModel(nn.Module):
                             val_loss = np.float32(np.nan)
                         current_time = time.time()
                         should_save_batch[0] = 1
+                        val_loss_batch[0] = val_loss
                         self.last_batch_save_time = current_time
 
                 if self.hparams.training_spec.distributed:
                     dist.broadcast(should_save_latest, src=0)
                     dist.broadcast(should_save_batch, src=0)
+                    dist.broadcast(val_loss_batch, src=0)
 
                 if should_save_latest.item() == 1:
                     self._save(
@@ -1483,11 +1488,12 @@ class TransformerModel(nn.Module):
                             time.time()
                         )  # Keep ranks roughly aligned
 
-                if should_save_batch.item() == 1:
+                val_loss = val_loss_batch.item()
+                if should_save_batch.item() != 0:
                     self._save(
                         epoch,
                         batch_count,
-                        val_loss,  # type: ignore
+                        val_loss,
                         ddp_model,
                         suffix=f"epoch-{epoch}-batch-{batch_count + 1}",
                     )  # type: ignore
