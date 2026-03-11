@@ -449,9 +449,13 @@ def copy_checkpoints(run_training, project_root):
     )
     shutil.copy(src_ckpt, dst_ckpt)
 
-    src_ckpt = os.path.join(project_root, "checkpoints", "model-real-1-epoch-1.pt")
+    src_ckpt = os.path.join(
+        project_root, "checkpoints", "model-categorical-3-epoch-1.pt"
+    )
     dst_ckpt = os.path.join(
-        project_root, "checkpoints", "model-real-1-from-mid-epoch-checkpoint-epoch-1.pt"
+        project_root,
+        "checkpoints",
+        "model-categorical-3-from-mid-epoch-checkpoint-epoch-1.pt",
     )
     shutil.copy(src_ckpt, dst_ckpt)
 

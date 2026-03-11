@@ -1,58 +1,60 @@
 project_root: tests/project_folder
-model_name: model-real-1-from-mid-epoch-checkpoint
-read_format: parquet
-metadata_config_path: configs/metadata_configs/test-data-real-1.json
+model_name: model-categorical-3-from-mid-epoch-checkpoint
+read_format: pt
+metadata_config_path: configs/metadata_configs/test-data-categorical-3.json
 
-input_columns: null
-target_columns: [itemValue]
+input_columns: [itemId, supCat1]
+target_columns: [itemId]
 target_column_types:
-  itemValue: real
+  itemId: categorical
 
 seq_length: 8
 inference_batch_size: 10
 
 export_generative_model: true
-export_embedding_model: false
+export_embedding_model: true
 export_onnx: true
 export_pt: true
-export_with_dropout: false
 
 model_spec:
   initial_embedding_dim: 100
-  dim_model: 100
+  joint_embedding_dim: 200
+  dim_model: 200
   n_head: 2
-  dim_feedforward: 10
+  dim_feedforward: 12
   num_layers: 2
-  activation_fn: relu
-  normalization: layer_norm
-  positional_encoding: learned
-  attention_type: mha
-  norm_first: false
-  n_kv_heads: null
-  rope_theta: 10000.0
   prediction_length: 1
+  activation_fn: relu
+  normalization: rmsnorm
+  positional_encoding: rope
+  attention_type: mqa
+  norm_first: true
+  n_kv_heads: 1
+  rope_theta: 1000.0
 training_spec:
   device: cpu
+  torch_compile: "outer"
   epochs: 3
   save_interval_epochs: 1
-  save_latest_interval_minutes: null
-  save_batch_interval_minutes: null
-  batch_size: 20
+  batch_size: 5
   log_interval: 1
+  class_share_log_columns: ["itemId"]
   learning_rate: 0.003
-  accumulation_steps: null
+  accumulation_steps: 2
   dropout: 0.3
   criterion:
-    itemValue: MSELoss
+    itemId: CrossEntropyLoss
+  loss_weights:
+    itemId: 1.0
+    supCat1: 1.0
+  class_weights:
+    itemId: [1.0, 1.0, 1.5, 0.5, 0.6, 1.2, 0.66666667, 1.5, 1.2, 0.75, 0.85714286, 0.75, 0.85714286, 0.75, 0.6, 2.,1.5, 1.5, 1.0, 1.0, 0.66666667, 0.75, 0.5, 0.75, 2.0, 1.2, 3.0, 1.0, 0.75, 1.0, 0.85714286, 1.0]
   optimizer:
-    name: AdEMAMix
+    name: QHAdam
   scheduler:
     name: StepLR
     step_size: 1.0
     gamma: 0.99
+  scheduler_step_on: epoch
   continue_training: true
   enforce_determinism: true
-  layer_type_dtypes:
-    embedding: bfloat16
-    linear: bfloat16
-    norm: bfloat16

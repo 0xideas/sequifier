@@ -127,6 +127,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         fsdp: fsdp training
         fsdp_sharding_strategy: fsdp sharding strategy
         fsdp_cpu_offload: fsdp cpu offload
+        torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile, alternatively 'none'
+        float32_matmul_precision: precision level of float32 computations. One of 'highest', 'high' and 'medium'
+
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -170,6 +173,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     fsdp: bool = False
     fsdp_sharding_strategy: str = "FULL_SHARD"
     fsdp_cpu_offload: bool = False
+    torch_compile: str = "inner"
+    float32_matmul_precision: str = "highest"
 
     def __init__(self, **kwargs):
         """Initialize the TrainingSpecHyperparameterSampling instance.
@@ -316,6 +321,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             fsdp=self.fsdp,
             fsdp_sharding_strategy=self.fsdp_sharding_strategy,
             fsdp_cpu_offload=self.fsdp_cpu_offload,
+            torch_compile=self.torch_compile,
+            float32_matmul_precision=self.float32_matmul_precision,
         )
 
     def grid_sample(self, i):
@@ -389,6 +396,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             fsdp=self.fsdp,
             fsdp_sharding_strategy=self.fsdp_sharding_strategy,
             fsdp_cpu_offload=self.fsdp_cpu_offload,
+            torch_compile=self.torch_compile,
+            float32_matmul_precision=self.float32_matmul_precision,
         )
 
     def n_combinations(self):
