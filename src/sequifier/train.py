@@ -65,7 +65,7 @@ from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 
 
 @beartype
-def setup(rank: int, world_size: int, backend: str = "nccl"):
+def setup(rank: int, local_rank: int, world_size: int, backend: str = "nccl"):
     """Sets up the distributed training environment.
 
     Args:
@@ -80,11 +80,13 @@ def setup(rank: int, world_size: int, backend: str = "nccl"):
     os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
     if not dist.is_initialized():
         timeout_sec = int(os.environ.get("NCCL_TIMEOUT", 1800))
+
         dist.init_process_group(
             backend,
             rank=rank,
             world_size=world_size,
             timeout=timedelta(seconds=timeout_sec),
+            device_id=torch.device(f"cuda:{local_rank}"),
         )
 
 
@@ -129,9 +131,9 @@ def train_worker(
     logger = configure_logger(config.project_root, config.model_name, global_rank)
 
     if config.training_spec.distributed:
-        setup(global_rank, world_size, config.training_spec.backend)
         if config.training_spec.device.startswith("cuda"):
             torch.cuda.set_device(local_rank)
+        setup(global_rank, local_rank, world_size, config.training_spec.backend)
 
     # 1. Create Datasets and DataLoaders with DistributedSampler
     if from_folder:
