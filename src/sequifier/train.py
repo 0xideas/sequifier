@@ -20,10 +20,10 @@ from torch import Tensor, nn
 from torch.amp import GradScaler
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
+    get_model_state_dict,
     get_optimizer_state_dict,
-    get_state_dict,
+    set_model_state_dict,
     set_optimizer_state_dict,
-    set_state_dict,
 )
 
 if version.parse(torch.__version__) >= version.parse("2.6.0"):
@@ -285,7 +285,7 @@ def train_worker(
 
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
 
-            set_state_dict(
+            set_model_state_dict(
                 model,
                 model_state_dict=full_msd,
                 options=options,
@@ -1128,7 +1128,7 @@ class TransformerModel(nn.Module):
         if self.hparams.training_spec.fsdp:
             # FSDP2 uses StateDictOptions to gather the full state dict to rank 0 CPU
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
-            state_dict = get_state_dict(model_to_extract, options=options)
+            state_dict = get_model_state_dict(model_to_extract, options=options)
 
             # Only return on Rank 0 to save memory, as configured by StateDictOptions
             if self.rank == 0:
@@ -1963,7 +1963,7 @@ class TransformerModel(nn.Module):
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
 
             # Get model state dict
-            raw_model_state = get_state_dict(model_to_extract, options=options)
+            raw_model_state = get_model_state_dict(model_to_extract, options=options)
             model_state_dict = {
                 k.replace("_orig_mod.", ""): v for k, v in raw_model_state.items()
             }
