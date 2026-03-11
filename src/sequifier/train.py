@@ -279,11 +279,17 @@ def train_worker(
                     start_epoch,
                     start_batch,
                     checkpoint["scheduler_state_dict"],
+                    full_msd,
+                    full_osd,
                 ]
             else:
-                full_msd, full_osd = {}, {}
-                start_epoch, start_batch = None, None
-                meta = [None, None, None]
+                meta = [None, None, None, None, None]
+
+            # Broadcast the checkpoint data to all ranks simultaneously
+            dist.broadcast_object_list(meta, src=0)
+
+            # Unpack on all ranks
+            model.start_epoch, model.start_batch, sched_state, full_msd, full_osd = meta  # type: ignore
 
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
 
@@ -300,18 +306,9 @@ def train_worker(
                 options=options,
             )
 
-            dist.broadcast_object_list(meta, src=0)
-
-            base_model.start_epoch, base_model.start_batch, sched_state = meta  # type: ignore
-
             if sched_state is not None:
                 base_model.scheduler.load_state_dict(sched_state)
 
-            if global_rank == 0:
-                del checkpoint, full_msd, full_osd  # Clear remaining CPU memory
-                logger.info(
-                    f"[INFO] Resuming FSDP training from checkpoint '{latest_model_path}'. Total params: {format_number(pytorch_total_params)}"
-                )
         else:
             model.start_epoch = 1
             model.start_batch = 0
