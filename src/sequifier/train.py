@@ -99,7 +99,9 @@ def create_dummy_data(config: TrainModel, local_rank: int) -> dict[str, Tensor]:
     for col in config.input_columns:
         dtype = torch.int64 if col in config.categorical_columns else torch.float32
         dummy_data[col] = torch.ones(
-            (2, config.seq_length), dtype=dtype, device=local_rank
+            (config.training_spec.batch_size, config.seq_length),
+            dtype=dtype,
+            device=local_rank,
         )
 
     return dummy_data
