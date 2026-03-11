@@ -275,15 +275,15 @@ def train_worker(
                     start_epoch = checkpoint["epoch"]
                     start_batch = checkpoint["batch"] + 1
 
-                meta = (
+                meta = [
                     start_epoch,
                     start_batch,
                     checkpoint["scheduler_state_dict"],
-                )
+                ]
             else:
-                full_msd, full_osd = None, None
+                full_msd, full_osd = {}, {}
                 start_epoch, start_batch = None, None
-                meta = (None, None, None)
+                meta = [None, None, None]
 
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
 
