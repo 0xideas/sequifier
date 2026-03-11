@@ -351,6 +351,9 @@ def train_worker(
                 f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
             )
 
+        params_to_optimize = model.parameters()
+        model.initialize_optimizer(params=params_to_optimize)
+
         if config.training_spec.device.startswith("cuda"):
             if torch_compile == "outer":
                 model = torch.compile(model)
