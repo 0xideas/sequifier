@@ -400,6 +400,8 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
     config_path = args.config_path or "configs/train.yaml"
     config = load_train_config(config_path, args_config, args.skip_metadata)
 
+    torch.set_float32_matmul_precision(config.training_spec.float32_matmul_precision)
+
     world_size = config.training_spec.world_size
     from_folder = config.read_format == "pt"
 

@@ -142,6 +142,7 @@ class TrainingSpecModel(BaseModel):
         layer_autocast: Whether to use autocast
         sampling_strategy: how to equalize data between GPUs
         torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile, alternatively 'none'
+        float32_matmul_precision: precision level of float32 computations. One of 'highest', 'high' and 'medium'
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -185,6 +186,7 @@ class TrainingSpecModel(BaseModel):
     fsdp_sharding_strategy: str = "FULL_SHARD"
     fsdp_cpu_offload: bool = False
     torch_compile: str = "inner"
+    float32_matmul_precision: str = "highest"
 
     def __init__(self, **kwargs):
         super().__init__(
@@ -226,6 +228,16 @@ class TrainingSpecModel(BaseModel):
                     f"The following layer types are invalid: {bad_types}. Allowed types are: {allowed_types}"
                 )
 
+        return v
+
+    @field_validator("float32_matmul_precision")
+    @classmethod
+    def validate_float32_matmul_precision(cls, v):
+        allowed_precisions = ["highest", "high", "medium"]
+        if v not in allowed_precisions:
+            raise ValueError(
+                f"float32_matmul_precision must be one of {allowed_precisions}, got '{v}'"
+            )
         return v
 
     @field_validator("criterion")
