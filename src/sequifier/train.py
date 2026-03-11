@@ -81,12 +81,16 @@ def setup(rank: int, local_rank: int, world_size: int, backend: str = "nccl"):
     if not dist.is_initialized():
         timeout_sec = int(os.environ.get("NCCL_TIMEOUT", 1800))
 
+        device_id = (
+            torch.device(f"cuda:{local_rank}") if torch.cuda.is_available() else None
+        )
+
         dist.init_process_group(
             backend,
             rank=rank,
             world_size=world_size,
             timeout=timedelta(seconds=timeout_sec),
-            device_id=torch.device(f"cuda:{local_rank}"),
+            device_id=device_id,
         )
 
 
@@ -182,6 +186,7 @@ def train_worker(
     configure_determinism(config.seed, config.training_spec.enforce_determinism)
 
     model = TransformerModel(config, rank=global_rank, local_rank=local_rank)
+    base_model = model
 
     latest_model_path = model._get_latest_model_name()
     pytorch_total_params = sum(p.numel() for p in model.parameters())
@@ -189,185 +194,189 @@ def train_worker(
 
     is_fsdp = config.training_spec.fsdp
 
-    if config.training_spec.continue_training and latest_model_path:
-        if not is_fsdp or global_rank == 0:
+    # Initialize Optimizer
+    if not config.training_spec.distributed:
+        params_to_optimize = model.parameters()
+        model.initialize_optimizer(params=params_to_optimize)
+
+        if config.training_spec.continue_training and latest_model_path:
             checkpoint = torch.load(
                 latest_model_path, map_location="cpu", weights_only=False
             )
-            epoch = checkpoint["epoch"]
-            batch = checkpoint["batch"]
-
-            time_string = f", epoch {epoch}, batch {batch}"
+            model.load_state_dict(checkpoint["model_state_dict"])
+            model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            if checkpoint["batch"] + 1 >= len(train_loader):
+                base_model.start_epoch = checkpoint["epoch"] + 1
+                base_model.start_batch = 0
+            else:
+                base_model.start_epoch = checkpoint["epoch"]
+                base_model.start_batch = checkpoint["batch"] + 1
         else:
-            time_string = ""
-
-        logger.info(
-            f"[INFO] Resuming training from checkpoint '{latest_model_path}'{time_string}. Total params: {format_number(pytorch_total_params)}"
-        )
-    else:
-        model.start_epoch = 1
-        model.start_batch = 0
-        logger.info(
-            f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
-        )
-
-    if config.training_spec.device.startswith("cuda"):
-        if torch_compile == "outer":
-            model = torch.compile(model)
-        elif torch_compile == "inner":
-            for i in range(len(model.layers)):
-                model.layers[i] = torch.compile(model.layers[i])
-
-    if config.training_spec.distributed:
-        if is_fsdp:
-            mp_policy = None
-            if config.training_spec.layer_autocast:
-                amp_dtype = get_torch_dtype(
-                    config.training_spec.layer_type_dtypes.get("linear", "bfloat16")
-                    if config.training_spec.layer_type_dtypes
-                    else "float32"
-                )
-                mp_policy = MixedPrecisionPolicy(
-                    param_dtype=amp_dtype,
-                    reduce_dtype=amp_dtype,
-                    output_dtype=amp_dtype,
-                )
-
-            offload_policy = (
-                OffloadPolicy() if config.training_spec.fsdp_cpu_offload else None
+            model.start_epoch = 1
+            model.start_batch = 0
+            logger.info(
+                f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
             )
 
-            mesh = init_device_mesh(
-                "cuda", (world_size,)
-            )  # 1D mesh for standard ZeRO-3 full sharding
+        if config.training_spec.device.startswith("cuda"):
+            if torch_compile == "outer":
+                model = torch.compile(model)
+            elif torch_compile == "inner":
+                for i in range(len(model.layers)):
+                    model.layers[i] = torch.compile(model.layers[i])
 
-            for layer in model.layers:
-                fully_shard(
-                    layer, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
-                )
+        model.train_model(train_loader, valid_loader, ddp_model=None)
+    elif is_fsdp:
+        if global_rank == 0:
+            checkpoint = torch.load(
+                latest_model_path, map_location="cpu", weights_only=False
+            )
+            full_msd = checkpoint["model_state_dict"]
+            full_osd = checkpoint["optimizer_state_dict"]
 
-            # 3. Apply fully_shard to the root model
+            if checkpoint["batch"] + 1 >= len(train_loader):
+                start_epoch = checkpoint["epoch"] + 1
+                start_batch = 0
+            else:
+                start_epoch = checkpoint["epoch"]
+                start_batch = checkpoint["batch"] + 1
+
+            meta = (
+                start_epoch,
+                start_batch,
+                checkpoint["scheduler_state_dict"],
+            )
+        else:
+            full_msd, full_osd = None, None
+            start_epoch, start_batch = None, None
+            meta = (None, None, None)
+
+        options = StateDictOptions(full_state_dict=True, cpu_offload=True)
+
+        set_model_state_dict(
+            base_model,
+            model_state_dict=full_msd,
+            options=options,
+        )
+
+        set_optimizer_state_dict(
+            base_model,
+            base_model.optimizer,
+            optim_state_dict=full_osd,
+            options=options,
+        )
+
+        dist.broadcast_object_list(meta, src=0)
+
+        base_model.start_epoch, base_model.start_batch, sched_state = meta  # type: ignore
+        if sched_state is not None:
+            base_model.scheduler.load_state_dict(sched_state)
+
+        if global_rank == 0:
+            del checkpoint, full_msd, full_osd  # Clear remaining CPU memory
+            logger.info(
+                f"[INFO] Resuming FSDP training from checkpoint '{latest_model_path}'. Total params: {format_number(pytorch_total_params)}"
+            )
+
+        if config.training_spec.device.startswith("cuda"):
+            if torch_compile == "outer":
+                model = torch.compile(model)
+            elif torch_compile == "inner":
+                for i in range(len(model.layers)):
+                    model.layers[i] = torch.compile(model.layers[i])
+
+        mp_policy = None
+        if config.training_spec.layer_autocast:
+            amp_dtype = get_torch_dtype(
+                config.training_spec.layer_type_dtypes.get("linear", "bfloat16")
+                if config.training_spec.layer_type_dtypes
+                else "float32"
+            )
+            mp_policy = MixedPrecisionPolicy(
+                param_dtype=amp_dtype,
+                reduce_dtype=amp_dtype,
+                output_dtype=amp_dtype,
+            )
+
+        offload_policy = (
+            OffloadPolicy() if config.training_spec.fsdp_cpu_offload else None
+        )
+
+        mesh = init_device_mesh(
+            "cuda", (world_size,)
+        )  # 1D mesh for standard ZeRO-3 full sharding
+
+        for layer in model.layers:
             fully_shard(
-                model, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
+                layer, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
             )
-            dist.barrier()
-        else:
-            device_ids = (
-                [local_rank] if config.training_spec.device.startswith("cuda") else None
-            )
-            model = DDP(model, device_ids=device_ids, find_unused_parameters=False)
 
-    unwrapped_model = model.module if isinstance(model, DDP) else model
+        # 3. Apply fully_shard to the root model
+        fully_shard(
+            model, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
+        )
+        dist.barrier()
 
-    if config.training_spec.device.startswith("cuda"):
-        dummy_data = create_dummy_data(config, local_rank)
+        params_to_optimize = model.parameters()
+        model.initialize_optimizer(params=params_to_optimize)
 
-        if config.training_spec.layer_autocast and not is_fsdp:
-            with torch.no_grad(), torch.autocast(
-                device_type="cuda", dtype=torch.bfloat16
-            ):
-                _ = model(dummy_data, False)
-        else:
+        if config.training_spec.device.startswith("cuda"):
+            dummy_data = create_dummy_data(config, local_rank)
             with torch.no_grad():
                 _ = model(dummy_data, False)
 
-        if config.training_spec.distributed:
             dist.barrier()
 
-    # Initialize Optimizer
-    params_to_optimize = model.parameters() if is_fsdp else unwrapped_model.parameters()
-    unwrapped_model.initialize_optimizer(params=params_to_optimize)
-
-    # Load Optimizer and Scheduler States
-    if config.training_spec.continue_training and latest_model_path:
-        if is_fsdp:
-            # FSDP2 handles the scattering automatically for both model and optimizer
-            full_msd = checkpoint["model_state_dict"] if global_rank == 0 else None  # type: ignore
-            full_osd = checkpoint["optimizer_state_dict"] if global_rank == 0 else None  # type: ignore
-
-            options = StateDictOptions(full_state_dict=True, cpu_offload=True)
-
-            set_model_state_dict(
-                model,
-                model_state_dict=full_msd,
-                options=options,
+        model.train_model(train_loader, valid_loader, ddp_model=base_model)
+        cleanup()
+    else:  # DDP
+        if config.training_spec.continue_training and latest_model_path:
+            checkpoint = torch.load(
+                latest_model_path, map_location="cpu", weights_only=False
             )
-
-            set_optimizer_state_dict(
-                model,
-                unwrapped_model.optimizer,
-                optim_state_dict=full_osd,
-                options=options,
-            )
-
-            # Broadcast the tiny scheduler and epoch metadata to all ranks
-            if global_rank == 0:
-                if checkpoint["batch"] + 1 >= len(train_loader):  # type: ignore
-                    start_epoch = checkpoint["epoch"] + 1  # type: ignore
-                    start_batch = 0
-                else:
-                    start_epoch = checkpoint["epoch"]  # type: ignore
-                    start_batch = checkpoint["batch"] + 1  # type: ignore
+            base_model.load_state_dict(checkpoint["model_state_dict"])
+            base_model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            base_model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            if checkpoint["batch"] + 1 >= len(train_loader):
+                base_model.start_epoch = checkpoint["epoch"] + 1
+                base_model.start_batch = 0
             else:
-                start_epoch = None
-                start_batch = None
-
-            meta = (
-                [
-                    start_epoch,  # type: ignore
-                    start_batch,  # type: ignore
-                    checkpoint["scheduler_state_dict"],  # type: ignore
-                ]
-                if global_rank == 0
-                else [None, None, None]
-            )
-
-            if config.training_spec.distributed:
-                dist.broadcast_object_list(meta, src=0)
-
-            unwrapped_model.start_epoch, unwrapped_model.start_batch, sched_state = meta  # type: ignore
-            if sched_state is not None:
-                unwrapped_model.scheduler.load_state_dict(sched_state)
-
-            if global_rank == 0:
-                del checkpoint, full_msd, full_osd  # Clear remaining CPU memory
-                logger.info(
-                    f"[INFO] Resuming FSDP training from checkpoint '{latest_model_path}'. Total params: {format_number(pytorch_total_params)}"
-                )
+                base_model.start_epoch = checkpoint["epoch"]
+                base_model.start_batch = checkpoint["batch"] + 1
         else:
-            model.load_state_dict(checkpoint["model_state_dict"])  # type: ignore
-            unwrapped_model.optimizer.load_state_dict(
-                checkpoint["optimizer_state_dict"]  # type: ignore
+            model.start_epoch = 1
+            model.start_batch = 0
+            logger.info(
+                f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
             )
-            # Safely cast states to device if loading non-FSDP CPU state dict
-            for state in unwrapped_model.optimizer.state.values():
-                for k, v in state.items():
-                    if isinstance(v, torch.Tensor):
-                        state[k] = (
-                            v.cpu()
-                            if k == "step"
-                            else v.to(config.training_spec.device)
-                        )
 
-            if "scheduler_state_dict" in checkpoint:  # type: ignore
-                unwrapped_model.scheduler.load_state_dict(
-                    checkpoint["scheduler_state_dict"]  # type: ignore
-                )
-            if checkpoint["batch"] + 1 >= len(train_loader):  # type: ignore
-                unwrapped_model.start_epoch = checkpoint["epoch"] + 1  # type: ignore
-                unwrapped_model.start_batch = 0
+        if config.training_spec.device.startswith("cuda"):
+            if torch_compile == "outer":
+                model = torch.compile(model)
+            elif torch_compile == "inner":
+                for i in range(len(model.layers)):
+                    model.layers[i] = torch.compile(model.layers[i])
+
+        device_ids = (
+            [local_rank] if config.training_spec.device.startswith("cuda") else None
+        )
+        ddp_model = DDP(model, device_ids=device_ids, find_unused_parameters=False)
+
+        if config.training_spec.device.startswith("cuda"):
+            dummy_data = create_dummy_data(config, local_rank)
+
+            if config.training_spec.layer_autocast:
+                with torch.no_grad(), torch.autocast(
+                    device_type="cuda", dtype=torch.bfloat16
+                ):
+                    _ = ddp_model(dummy_data, False)
             else:
-                unwrapped_model.start_epoch = checkpoint["epoch"]  # type: ignore
-                unwrapped_model.start_batch = checkpoint["batch"] + 1  # type: ignore
+                with torch.no_grad():
+                    _ = ddp_model(dummy_data, False)
 
-    # Start training
-    unwrapped_model.train_model(
-        train_loader,
-        valid_loader,
-        ddp_model=model if config.training_spec.distributed else None,
-    )
-
-    if config.training_spec.distributed:
+            dist.barrier()
+        model.train_model(train_loader, valid_loader, ddp_model=ddp_model)
         cleanup()
 
 
