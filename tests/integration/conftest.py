@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import time
 
 import polars as pl
@@ -25,7 +26,8 @@ TARGET_VARIABLE_DICT = {"categorical": "itemId", "real": "itemValue"}
 
 
 def run_and_log(command: str) -> None:
-    os.system(command)
+    subprocess.run(command, shell=True, check=True)
+
     with open(os.path.join("tests", "integration-test-log.txt"), "a+") as f:
         f.write(f"{command}\n")
 

@@ -1475,7 +1475,7 @@ class TransformerModel(nn.Module):
                                 val_losses,
                                 output,
                             )
-                            val_loss_batch[0] = val_loss
+                            val_loss_batch[0] = float(val_loss)
                     else:
                         val_loss_batch[0] = np.float32(np.nan)
 
@@ -1494,7 +1494,7 @@ class TransformerModel(nn.Module):
                         self.last_latest_save_time = time.time()
 
                 val_loss = np.float32(val_loss_batch.item())
-                if val_loss != 0:
+                if should_save_batch.item() != 0:
                     self._save(
                         epoch,
                         batch_count,
