@@ -1494,10 +1494,11 @@ class TransformerModel(nn.Module):
                         self.last_latest_save_time = time.time()
 
                 if should_save_batch.item() == 1:
+                    val_loss = np.float32(val_loss_batch.item())
                     self._save(
                         epoch,
                         batch_count,
-                        val_loss_batch.item(),
+                        val_loss,  # type: ignore
                         ddp_model,
                         suffix=f"epoch-{epoch}-batch-{batch_count + 1}",
                     )
