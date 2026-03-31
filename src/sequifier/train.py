@@ -1493,8 +1493,8 @@ class TransformerModel(nn.Module):
                     if self.rank != 0:
                         self.last_latest_save_time = time.time()
 
-                if should_save_batch.item() == 1:
-                    val_loss = np.float32(val_loss_batch.item())
+                val_loss = np.float32(val_loss_batch.item())
+                if val_loss != 0:
                     self._save(
                         epoch,
                         batch_count,
