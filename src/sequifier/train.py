@@ -356,17 +356,19 @@ def train_worker(
         params_to_optimize = model.parameters()
         model.initialize_optimizer(params=params_to_optimize)
 
-        if config.training_spec.device.startswith("cuda"):
-            if torch_compile == "outer":
-                model = torch.compile(model)
-            elif torch_compile == "inner":
-                for i in range(len(model.layers)):
-                    model.layers[i] = torch.compile(model.layers[i])
-
         device_ids = (
             [local_rank] if config.training_spec.device.startswith("cuda") else None
         )
         ddp_model = DDP(model, device_ids=device_ids, find_unused_parameters=False)
+
+        if config.training_spec.device.startswith("cuda"):
+            if torch_compile == "outer":
+                ddp_model = torch.compile(ddp_model)
+            elif torch_compile == "inner":
+                for i in range(len(model.layers)):
+                    ddp_model.module.layers[i] = torch.compile(
+                        ddp_model.module.layers[i]
+                    )
 
         if config.training_spec.device.startswith("cuda"):
             dummy_data = create_dummy_data(config, local_rank)
