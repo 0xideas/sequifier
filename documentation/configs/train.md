@@ -44,6 +44,7 @@ These fields determine the size and complexity of the Transformer.
 | `dim_feedforward` | `int` | **Yes** | - | Dimension of the feedforward network model ($d_{ff}$). |
 | `initial_embedding_dim`| `int` | **Yes** | - | Size of initial feature embeddings. Usually equals `dim_model`. |
 | `joint_embedding_dim` | `int` | No | `null` | If set, projects concatenated inputs to this dim before the transformer. If set, must equal `dim_model`. |
+| `prediction_length` | `int` |	Yes	|	Number of steps into the future to predict simultaneously. |
 | `feature_embedding_dims`| `dict` | No | `null` | Manual map of column names to embedding sizes. If `null`, sizes are auto-calculated. This works only if there are *only* real or *only* categorical variables, and `initial_embedding_dim` is divisible by the number of variables |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
@@ -69,6 +70,10 @@ These fields determine the size and complexity of the Transformer.
 | `loss_weights` | `dict` | No | `null` | Weights for combining losses if predicting multiple targets. |
 | `class_weights` | `dict` | No | `null` | Weights for specific classes (useful for imbalanced datasets). |
 | `save_interval_epochs` | `int` | **Yes** | - | Save a checkpoint every N epochs. |
+| `save_latest_interval_minutes`| `float`| No | Time interval to overwrite a "latest" checkpoint. |
+| `save_batch_interval_minutes` | `float` | No | Time interval to save a unique, batch-specific checkpoint. |
+| `save_batch_interval_minutes_val_loss` | `bool` | No | Whether to calculate validation loss at the moment of the batch interval save. Defaults to true. |
+| `calculate_validation_loss_on_initialization` | `bool` | No | Determines if a validation pass runs before epoch 1 begins. Defaults to true. |
 | `early_stopping_epochs`| `int` | No | `null` | Stop training if validation loss doesn't improve for N epochs. |
 | `log_interval` | `int` | No | `10` | Print training logs every N batches. |
 | `class_share_log_columns`| `list[str]`| No | `[]` | Columns for which to log the predicted class distribution in validation. |
@@ -84,7 +89,9 @@ These fields determine the size and complexity of the Transformer.
 | `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
 | `data_parallelism` | `Optional[str]` | No | `None` | Set data parallelism approach, one of `DDP` and `FSDP`
-| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` |"If true, offloads FSDP parameters to the CPU to save GPU VRAM."
+| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` | If true, offloads FSDP parameters to the CPU to save GPU VRAM.
+| `torch_compile` | `str` | No | Controls torch.compile. Options are "outer" (compiles the whole model), "inner" (compiles individual transformer layers, for FSDP), or "none" (no compilation). Defaults to "outer". |
+| `float32_matmul_precision` | str | No | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". Defaults to "highest". |
 
 ### 5\. System & Export
 

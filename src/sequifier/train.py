@@ -315,9 +315,7 @@ def train_worker(
             )
 
         if config.training_spec.device.startswith("cuda"):
-            if torch_compile == "outer":
-                model = torch.compile(model)
-            elif torch_compile == "inner":
+            if torch_compile == "inner":
                 for i in range(len(model.layers)):
                     model.layers[i] = torch.compile(model.layers[i])
 
@@ -357,9 +355,6 @@ def train_worker(
         if config.training_spec.device.startswith("cuda"):
             if torch_compile == "outer":
                 model = torch.compile(model)
-            elif torch_compile == "inner":
-                for i in range(len(model.layers)):
-                    model.layers[i] = torch.compile(model.layers[i])
 
         device_ids = (
             [local_rank] if config.training_spec.device.startswith("cuda") else None

@@ -186,7 +186,7 @@ class TrainingSpecModel(BaseModel):
     sampling_strategy: str = "exact"
     data_parallelism: Optional[str] = None
     fsdp_cpu_offload: Optional[bool] = None
-    torch_compile: str = "inner"
+    torch_compile: str = "outer"
     float32_matmul_precision: str = "highest"
 
     def __init__(self, **kwargs):
@@ -564,6 +564,16 @@ class TrainModel(BaseModel):
         if v.torch_compile not in ["outer", "inner", "none"]:
             raise ValueError(
                 f'torch_compile {v.torch_compile} invalid, must be one of ["outer", "inner", "none"]'
+            )
+
+        if v.data_parallelism == "FSDP" and v.torch_compile == "outer":
+            raise ValueError(
+                "If data_parallelism is set to 'FSDP' then torch_compile must be one of 'none' and 'inner'"
+            )
+
+        if v.data_parallelism == "DDP" and v.torch_compile == "inner":
+            raise ValueError(
+                "If data_parallelism is set to 'DDP' then torch_compile must be one of 'none' and 'outer'"
             )
 
         if v.sampling_strategy in ["oversampling", "undersampling"]:
