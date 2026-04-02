@@ -33,6 +33,7 @@ model_spec:
   prediction_length: 1
 training_spec:
   device: cpu
+  torch_compile: "inner"
   epochs: 3
   save_interval_epochs: 1
   save_latest_interval_minutes: 0

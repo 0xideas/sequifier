@@ -1,5 +1,4 @@
 import copy
-import functools
 import glob
 import math
 import os
@@ -16,17 +15,27 @@ import torch._dynamo
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from beartype import beartype
+from packaging import version
 from torch import Tensor, nn
 from torch.amp import GradScaler
-from torch.distributed.fsdp import (
-    CPUOffload,
-    FullOptimStateDictConfig,
-    FullStateDictConfig,
+from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
+    get_model_state_dict,
+    get_optimizer_state_dict,
+    set_model_state_dict,
+    set_optimizer_state_dict,
 )
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp import MixedPrecision, ShardingStrategy, StateDictType
-from torch.distributed.fsdp.sharded_grad_scaler import ShardedGradScaler
-from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+
+if version.parse(torch.__version__) >= version.parse("2.6.0"):
+    from torch.distributed.fsdp import MixedPrecisionPolicy, OffloadPolicy, fully_shard
+else:
+    from torch.distributed._composable.fsdp import (
+        MixedPrecisionPolicy,
+        OffloadPolicy,
+        fully_shard,
+    )
+
+from torch.distributed.device_mesh import init_device_mesh
 from torch.nn import ModuleDict
 from torch.nn.functional import one_hot
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -56,7 +65,7 @@ from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 
 
 @beartype
-def setup(rank: int, world_size: int, backend: str = "nccl"):
+def setup(rank: int, local_rank: int, world_size: int, backend: str = "nccl"):
     """Sets up the distributed training environment.
 
     Args:
@@ -71,11 +80,17 @@ def setup(rank: int, world_size: int, backend: str = "nccl"):
     os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
     if not dist.is_initialized():
         timeout_sec = int(os.environ.get("NCCL_TIMEOUT", 1800))
+
+        device_id = (
+            torch.device(f"cuda:{local_rank}") if torch.cuda.is_available() else None
+        )
+
         dist.init_process_group(
             backend,
             rank=rank,
             world_size=world_size,
             timeout=timedelta(seconds=timeout_sec),
+            device_id=device_id,
         )
 
 
@@ -90,7 +105,9 @@ def create_dummy_data(config: TrainModel, local_rank: int) -> dict[str, Tensor]:
     for col in config.input_columns:
         dtype = torch.int64 if col in config.categorical_columns else torch.float32
         dummy_data[col] = torch.ones(
-            (2, config.seq_length), dtype=dtype, device=local_rank
+            (config.training_spec.batch_size, config.seq_length),
+            dtype=dtype,
+            device=local_rank,
         )
 
     return dummy_data
@@ -103,6 +120,7 @@ def train_worker(
     config: TrainModel,
     from_folder: bool,
     global_rank: int,
+    torch_compile: str,
 ):
     """The worker function for distributed training.
 
@@ -117,9 +135,9 @@ def train_worker(
     logger = configure_logger(config.project_root, config.model_name, global_rank)
 
     if config.training_spec.distributed:
-        setup(global_rank, world_size, config.training_spec.backend)
         if config.training_spec.device.startswith("cuda"):
             torch.cuda.set_device(local_rank)
+        setup(global_rank, local_rank, world_size, config.training_spec.backend)
 
     # 1. Create Datasets and DataLoaders with DistributedSampler
     if from_folder:
@@ -168,198 +186,216 @@ def train_worker(
     configure_determinism(config.seed, config.training_spec.enforce_determinism)
 
     model = TransformerModel(config, rank=global_rank, local_rank=local_rank)
+    base_model = model
 
     latest_model_path = model._get_latest_model_name()
     pytorch_total_params = sum(p.numel() for p in model.parameters())
     checkpoint = None
 
-    is_fsdp = config.training_spec.fsdp
+    # Initialize Optimizer
+    if not config.training_spec.distributed:
+        params_to_optimize = model.parameters()
+        model.initialize_optimizer(params=params_to_optimize)
 
-    if config.training_spec.continue_training and latest_model_path:
-        if not is_fsdp or global_rank == 0:
+        if config.training_spec.continue_training and latest_model_path:
             checkpoint = torch.load(
                 latest_model_path, map_location="cpu", weights_only=False
             )
-            epoch = checkpoint["epoch"]
-            batch = checkpoint["batch"]
-
-            time_string = f", epoch {epoch}, batch {batch}"
+            model.load_state_dict(checkpoint["model_state_dict"])
+            model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            if checkpoint["batch"] + 1 >= len(train_loader):
+                base_model.start_epoch = checkpoint["epoch"] + 1
+                base_model.start_batch = 0
+            else:
+                base_model.start_epoch = checkpoint["epoch"]
+                base_model.start_batch = checkpoint["batch"] + 1
         else:
-            time_string = ""
+            model.start_epoch = 1
+            model.start_batch = 0
+            logger.info(
+                f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
+            )
 
-        if is_fsdp and global_rank == 0:
-            model.load_state_dict(checkpoint["model_state_dict"])  # type: ignore
-            del checkpoint["model_state_dict"]  # type: ignore
+        if config.training_spec.device.startswith("cuda"):
+            if torch_compile == "outer":
+                model = torch.compile(model)
+            elif torch_compile == "inner":
+                for i in range(len(model.layers)):
+                    model.layers[i] = torch.compile(model.layers[i])
 
-        logger.info(
-            f"[INFO] Resuming training from checkpoint '{latest_model_path}'{time_string}. Total params: {format_number(pytorch_total_params)}"
+        model.train_model(train_loader, valid_loader, ddp_model=None)
+    elif config.training_spec.data_parallelism == "FSDP":
+        mesh = init_device_mesh(
+            "cuda", (world_size,)
+        )  # 1D mesh for standard ZeRO-3 full sharding
+
+        mp_policy = None
+        if config.training_spec.layer_autocast:
+            amp_dtype = get_torch_dtype(
+                config.training_spec.layer_type_dtypes.get("linear", "bfloat16")
+                if config.training_spec.layer_type_dtypes
+                else "float32"
+            )
+            mp_policy = MixedPrecisionPolicy(
+                param_dtype=amp_dtype,
+                reduce_dtype=amp_dtype,
+                output_dtype=amp_dtype,
+            )
+
+        offload_policy = (
+            OffloadPolicy() if config.training_spec.fsdp_cpu_offload else None
         )
-    else:
-        model.start_epoch = 1
-        model.start_batch = 0
-        logger.info(
-            f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
+        for layer in model.layers:
+            fully_shard(
+                layer, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
+            )
+        fully_shard(
+            model, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
         )
+        dist.barrier()
 
-    if config.training_spec.distributed:
-        if is_fsdp:
-            auto_wrap_policy = functools.partial(
-                transformer_auto_wrap_policy,
-                transformer_layer_cls={SequifierEncoderLayer},
-            )
-            strategy_map = {
-                "FULL_SHARD": ShardingStrategy.FULL_SHARD,
-                "SHARD_GRAD_OP": ShardingStrategy.SHARD_GRAD_OP,
-                "NO_SHARD": ShardingStrategy.NO_SHARD,
-            }
-            sharding_strategy = strategy_map.get(
-                config.training_spec.fsdp_sharding_strategy,  # default: "FULL_SHARD"),
-                ShardingStrategy.FULL_SHARD,
-            )
+        params_to_optimize = model.parameters()
+        model.initialize_optimizer(params=params_to_optimize)
 
-            mixed_precision = None
-            if config.training_spec.layer_autocast:
-                amp_dtype = get_torch_dtype(
-                    config.training_spec.layer_type_dtypes.get("linear", "bfloat16")
-                    if config.training_spec.layer_type_dtypes
-                    else "float32"
+        if config.training_spec.continue_training and latest_model_path:
+            if global_rank == 0:
+                checkpoint = torch.load(
+                    latest_model_path, map_location="cpu", weights_only=False
                 )
-                mixed_precision = MixedPrecision(
-                    param_dtype=amp_dtype,
-                    reduce_dtype=amp_dtype,
-                    buffer_dtype=amp_dtype,
-                )
+                full_msd = checkpoint["model_state_dict"]
+                full_osd = checkpoint["optimizer_state_dict"]
 
-            cpu_offload = CPUOffload(
-                offload_params=config.training_spec.fsdp_cpu_offload  # deault: False
+                if checkpoint["batch"] + 1 >= len(train_loader):
+                    start_epoch = checkpoint["epoch"] + 1
+                    start_batch = 0
+                else:
+                    start_epoch = checkpoint["epoch"]
+                    start_batch = checkpoint["batch"] + 1
+
+                meta = [
+                    start_epoch,
+                    start_batch,
+                    checkpoint["scheduler_state_dict"],
+                    full_msd,
+                    full_osd,
+                ]
+            else:
+                meta = [None, None, None, None, None]
+
+            # Broadcast the checkpoint data to all ranks simultaneously
+            dist.broadcast_object_list(meta, src=0)
+
+            # Unpack on all ranks
+            model.start_epoch, model.start_batch, sched_state, full_msd, full_osd = meta  # type: ignore
+
+            options = StateDictOptions(full_state_dict=True, cpu_offload=True)
+
+            set_model_state_dict(
+                base_model,
+                model_state_dict=full_msd,
+                options=options,
             )
 
-            model = FSDP(
-                model,
-                auto_wrap_policy=auto_wrap_policy,
-                mixed_precision=mixed_precision,
-                cpu_offload=cpu_offload,
-                sharding_strategy=sharding_strategy,
-                device_id=local_rank,
-                use_orig_params=True,
-                sync_module_states=True,
+            set_optimizer_state_dict(
+                base_model,
+                base_model.optimizer,
+                optim_state_dict=full_osd,
+                options=options,
             )
-            dist.barrier()
+
+            if sched_state is not None:
+                base_model.scheduler.load_state_dict(sched_state)
+
         else:
-            device_ids = (
-                [local_rank] if config.training_spec.device.startswith("cuda") else None
+            model.start_epoch = 1
+            model.start_batch = 0
+            logger.info(
+                f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
             )
-            model = DDP(model, device_ids=device_ids, find_unused_parameters=False)
 
-    if config.training_spec.device.startswith("cuda"):
-        model = torch.compile(model)
-        dummy_data = create_dummy_data(config, local_rank)
+        if config.training_spec.device.startswith("cuda"):
+            if torch_compile == "inner":
+                for i in range(len(model.layers)):
+                    model.layers[i] = torch.compile(model.layers[i])
 
-        if config.training_spec.layer_autocast and not is_fsdp:
-            with torch.no_grad(), torch.autocast(
-                device_type="cuda", dtype=torch.bfloat16
-            ):
-                _ = model(dummy_data, False)
-        else:
+        if config.training_spec.device.startswith("cuda"):
+            dummy_data = create_dummy_data(config, local_rank)
             with torch.no_grad():
                 _ = model(dummy_data, False)
 
-        if config.training_spec.distributed:
             dist.barrier()
 
-    # Initialize Optimizer
-    unwrapped_model = model.module if config.training_spec.distributed else model
-    params_to_optimize = model.parameters() if is_fsdp else unwrapped_model.parameters()
-    unwrapped_model.initialize_optimizer(params=params_to_optimize)
-
-    # Load Optimizer and Scheduler States
-    if config.training_spec.continue_training and latest_model_path:
-        if is_fsdp:
-            #           # Scatter optimizer states over the network
-            full_osd = checkpoint["optimizer_state_dict"] if global_rank == 0 else None  # type: ignore
-            sharded_osd = FSDP.scatter_full_optim_state_dict(
-                full_optim_state_dict=full_osd,
-                model=model,
-                optim=unwrapped_model.optimizer,
-            )
-            unwrapped_model.optimizer.load_state_dict(sharded_osd)
-
-            # Broadcast the tiny scheduler and epoch metadata to all ranks
-            if global_rank == 0:
-                if checkpoint["batch"] + 1 >= len(train_loader):  # type: ignore
-                    start_epoch = checkpoint["epoch"] + 1  # type: ignore
-                    start_batch = 0
-                else:
-                    start_epoch = checkpoint["epoch"]  # type: ignore
-                    start_batch = checkpoint["batch"] + 1  # type: ignore
-            else:
-                start_epoch = None
-                start_batch = None
-
-            meta = (
-                [
-                    start_epoch,  # type: ignore
-                    start_batch,  # type: ignore
-                    checkpoint["scheduler_state_dict"],  # type: ignore
-                ]
-                if global_rank == 0
-                else [None, None, None]
-            )
-
-            if config.training_spec.distributed:
-                dist.broadcast_object_list(meta, src=0)
-
-            unwrapped_model.start_epoch, unwrapped_model.start_batch, sched_state = meta  # type: ignore
-            if sched_state is not None:
-                unwrapped_model.scheduler.load_state_dict(sched_state)
-
-            if global_rank == 0:
-                del checkpoint, full_osd  # Clear remaining CPU memory
-                logger.info(
-                    f"[INFO] Resuming FSDP training from checkpoint '{latest_model_path}'. Total params: {format_number(pytorch_total_params)}"
-                )
-        else:
-            model.load_state_dict(checkpoint["model_state_dict"])  # type: ignore
-            unwrapped_model.optimizer.load_state_dict(
-                checkpoint["optimizer_state_dict"]  # type: ignore
-            )
-            # Safely cast states to device if loading non-FSDP CPU state dict
-            for state in unwrapped_model.optimizer.state.values():
-                for k, v in state.items():
-                    if isinstance(v, torch.Tensor):
-                        state[k] = (
-                            v.cpu()
-                            if k == "step"
-                            else v.to(config.training_spec.device)
-                        )
-
-            if "scheduler_state_dict" in checkpoint:  # type: ignore
-                unwrapped_model.scheduler.load_state_dict(
-                    checkpoint["scheduler_state_dict"]  # type: ignore
-                )
-            if checkpoint["batch"] + 1 >= len(train_loader):  # type: ignore
-                unwrapped_model.start_epoch = checkpoint["epoch"] + 1  # type: ignore
-                unwrapped_model.start_batch = 0
-            else:
-                unwrapped_model.start_epoch = checkpoint["epoch"]  # type: ignore
-                unwrapped_model.start_batch = checkpoint["batch"] + 1  # type: ignore
-
-    # Start training
-    unwrapped_model.train_model(
-        train_loader,
-        valid_loader,
-        ddp_model=model if config.training_spec.distributed else None,
-    )
-
-    if config.training_spec.distributed:
+        model.train_model(train_loader, valid_loader, ddp_model=base_model)
         cleanup()
+    elif config.training_spec.data_parallelism == "DDP":  # DDP
+        if config.training_spec.continue_training and latest_model_path:
+            checkpoint = torch.load(
+                latest_model_path, map_location="cpu", weights_only=False
+            )
+            base_model.load_state_dict(checkpoint["model_state_dict"])
+            base_model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            base_model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            if checkpoint["batch"] + 1 >= len(train_loader):
+                base_model.start_epoch = checkpoint["epoch"] + 1
+                base_model.start_batch = 0
+            else:
+                base_model.start_epoch = checkpoint["epoch"]
+                base_model.start_batch = checkpoint["batch"] + 1
+        else:
+            model.start_epoch = 1
+            model.start_batch = 0
+            logger.info(
+                f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
+            )
+
+        params_to_optimize = model.parameters()
+        model.initialize_optimizer(params=params_to_optimize)
+
+        if config.training_spec.device.startswith("cuda"):
+            if torch_compile == "outer":
+                model = torch.compile(model)
+
+        device_ids = (
+            [local_rank] if config.training_spec.device.startswith("cuda") else None
+        )
+        ddp_model = DDP(model, device_ids=device_ids, find_unused_parameters=False)
+
+        if config.training_spec.device.startswith("cuda"):
+            dummy_data = create_dummy_data(config, local_rank)
+
+            if config.training_spec.layer_autocast:
+                with torch.no_grad(), torch.autocast(
+                    device_type="cuda", dtype=torch.bfloat16
+                ):
+                    _ = ddp_model(dummy_data, False)
+            else:
+                with torch.no_grad():
+                    _ = ddp_model(dummy_data, False)
+
+            dist.barrier()
+        model.train_model(train_loader, valid_loader, ddp_model=ddp_model)
+        cleanup()
+    else:
+        raise ValueError("For data_parallelism, only 'FSDP' and 'DDP' are supported")
 
 
 @beartype
 def _mp_train_worker_wrapper(
-    local_rank: int, world_size: int, config: TrainModel, from_folder: bool
+    local_rank: int,
+    world_size: int,
+    config: TrainModel,
+    from_folder: bool,
+    torch_compile: str,
 ):
-    train_worker(local_rank, world_size, config, from_folder, global_rank=local_rank)
+    train_worker(
+        local_rank,
+        world_size,
+        config,
+        from_folder,
+        global_rank=local_rank,
+        torch_compile=torch_compile,
+    )
 
 
 @beartype
@@ -373,6 +409,8 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
     config_path = args.config_path or "configs/train.yaml"
     config = load_train_config(config_path, args_config, args.skip_metadata)
 
+    torch.set_float32_matmul_precision(config.training_spec.float32_matmul_precision)
+
     world_size = config.training_spec.world_size
     from_folder = config.read_format == "pt"
 
@@ -382,17 +420,29 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
             global_rank = int(os.environ["RANK"])
             world_size = int(os.environ["WORLD_SIZE"])
             local_rank = int(os.environ.get("LOCAL_RANK", 0))
-            train_worker(local_rank, world_size, config, from_folder, global_rank)
+            train_worker(
+                local_rank,
+                world_size,
+                config,
+                from_folder,
+                global_rank,
+                config.training_spec.torch_compile,
+            )
         else:
             # Single-node multi-GPU fallback using mp.spawn
             mp.spawn(
                 _mp_train_worker_wrapper,
-                args=(world_size, config, from_folder),
+                args=(
+                    world_size,
+                    config,
+                    from_folder,
+                    config.training_spec.torch_compile,
+                ),
                 nprocs=world_size,
                 join=True,
             )
     else:
-        train_worker(0, 1, config, from_folder, 0)
+        train_worker(0, 1, config, from_folder, 0, config.training_spec.torch_compile)
 
 
 @beartype
@@ -640,9 +690,6 @@ class TransformerModel(nn.Module):
         else:
             self.device = hparams.training_spec.device
 
-        if not self.hparams.training_spec.fsdp:
-            self.to(self.device)
-
         self.criterion = self._init_criterion(hparams=hparams)
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
@@ -673,14 +720,12 @@ class TransformerModel(nn.Module):
         if hparams.training_spec.layer_type_dtypes:
             if "float16" in hparams.training_spec.layer_type_dtypes.values():
                 use_scaler = True
-        if self.hparams.training_spec.fsdp:
-            self.scaler = ShardedGradScaler(enabled=use_scaler)
-        else:
-            self.scaler = GradScaler(
-                device=self.device.split(":")[0], enabled=use_scaler
-            )
 
-            self._apply_layer_dtypes()
+        self.scaler = GradScaler(device=self.device.split(":")[0], enabled=use_scaler)
+
+        self._apply_layer_dtypes()
+
+        self.to(self.device)
 
     @beartype
     def initialize_optimizer(self, params: Any = None) -> None:
@@ -1089,22 +1134,22 @@ class TransformerModel(nn.Module):
             for target_column, out in output.items()
         }
 
-    @beartype
     def _get_full_state_dict(
         self, ddp_model: Optional[nn.Module] = None
     ) -> dict[str, Tensor]:
-        """Safely extracts the full state dict to CPU memory, supporting FSDP."""
         model_to_extract = ddp_model if ddp_model is not None else self
-        if self.hparams.training_spec.fsdp:
-            save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-            with FSDP.state_dict_type(
-                model_to_extract, StateDictType.FULL_STATE_DICT, save_policy
-            ):
-                state_dict = model_to_extract.state_dict()
+        if self.hparams.training_spec.data_parallelism == "FSDP":
+            # FSDP2 uses StateDictOptions to gather the full state dict to rank 0 CPU
+            options = StateDictOptions(full_state_dict=True, cpu_offload=True)
+            state_dict = get_model_state_dict(model_to_extract, options=options)
+
+            # Only return on Rank 0 to save memory, as configured by StateDictOptions
+            if self.rank == 0:
                 return {
-                    k.replace("_orig_mod.", ""): v.cpu().clone()
+                    k.replace("_orig_mod.", ""): v.clone()
                     for k, v in state_dict.items()
                 }
+            return {}
         else:
             return {
                 k.replace("_orig_mod.", ""): v.cpu().clone()
@@ -1137,7 +1182,10 @@ class TransformerModel(nn.Module):
             self.last_latest_save_time = time.time()
             self.last_batch_save_time = time.time()
 
-            if self.start_epoch == 1:
+            if (
+                self.start_epoch == 1
+                and self.hparams.training_spec.calculate_validation_loss_on_initialization
+            ):
                 total_loss, total_losses, output = self._evaluate(
                     valid_loader, ddp_model
                 )
@@ -1182,7 +1230,11 @@ class TransformerModel(nn.Module):
                         n_epochs_no_improvement += 1
 
                     if self.scheduler_step_on == "epoch":
-                        self.scheduler.step()
+                        if (
+                            not hasattr(self.scheduler, "total_steps")
+                            or self.scheduler.last_epoch < self.scheduler.total_steps
+                        ):
+                            self.scheduler.step()
 
                     if epoch % self.save_interval_epochs == 0:
                         self._save(
@@ -1270,8 +1322,8 @@ class TransformerModel(nn.Module):
         # 2. Restrict the export saving to Rank 0 inside the _export method (which you already do)
         # or guard the I/O specifically:
         if self.rank == 0:
-            self._export(last_model_state, "last", last_epoch)  # type: ignore
-            self._export(best_model_state, "best", last_epoch)  # type: ignore
+            self._export(last_model_state, "last", last_epoch, clean=True)  # type: ignore
+            self._export(best_model_state, "best", last_epoch, clean=True)  # type: ignore
             self.logger.info("--- Training Complete ---")
 
         if self.hparams.training_spec.distributed:
@@ -1308,8 +1360,6 @@ class TransformerModel(nn.Module):
 
         model_to_call.train()
 
-        is_fsdp = self.hparams.training_spec.fsdp
-
         for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
             if batch_count >= start_batch:
                 data = {
@@ -1324,7 +1374,10 @@ class TransformerModel(nn.Module):
                 }
 
                 # Only use standard torch.autocast if FSDP MixedPrecision is NOT handling it natively
-                if self.hparams.training_spec.layer_autocast and not is_fsdp:
+                if (
+                    self.hparams.training_spec.layer_autocast
+                    and self.hparams.training_spec.data_parallelism != "FSDP"
+                ):
                     amp_dtype = get_torch_dtype(
                         self.hparams.training_spec.layer_type_dtypes.get(
                             "linear", "bfloat16"
@@ -1350,10 +1403,7 @@ class TransformerModel(nn.Module):
                 ):
                     self.scaler.unscale_(self.optimizer)
 
-                    if is_fsdp:
-                        model_to_call.clip_grad_norm_(0.5)
-                    else:
-                        torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
 
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
@@ -1378,7 +1428,11 @@ class TransformerModel(nn.Module):
                 del data, targets, output, loss, losses
 
                 if self.scheduler_step_on == "batch":
-                    self.scheduler.step()
+                    if (
+                        not hasattr(self.scheduler, "total_steps")
+                        or self.scheduler.last_epoch < self.scheduler.total_steps
+                    ):
+                        self.scheduler.step()
 
                 should_save_latest = torch.tensor(
                     [0], dtype=torch.int32, device=self.device
@@ -1386,10 +1440,13 @@ class TransformerModel(nn.Module):
                 should_save_batch = torch.tensor(
                     [0], dtype=torch.int32, device=self.device
                 )
+                val_loss_batch = torch.tensor(
+                    [np.float32(np.nan)], dtype=torch.float32, device=self.device
+                )
+
+                current_time = time.time()
 
                 if not self.hparams.training_spec.distributed or self.rank == 0:
-                    current_time = time.time()
-
                     if self.save_latest_interval_minutes is not None and (
                         current_time - self.last_latest_save_time
                     ) >= (self.save_latest_interval_minutes * 60):
@@ -1400,10 +1457,21 @@ class TransformerModel(nn.Module):
                     if self.save_batch_interval_minutes is not None and (
                         current_time - self.last_batch_save_time
                     ) >= (self.save_batch_interval_minutes * 60):
-                        if self.save_batch_interval_minutes_val_loss:
-                            val_loss, val_losses, output = self._evaluate(
-                                valid_loader, ddp_model
-                            )
+                        should_save_batch[0] = 1
+                        self.last_batch_save_time = current_time
+
+                if self.hparams.training_spec.distributed:
+                    dist.broadcast(should_save_latest, src=0)
+                    dist.broadcast(should_save_batch, src=0)
+                    dist.barrier()
+
+                if should_save_batch.item() == 1:
+                    if self.save_batch_interval_minutes_val_loss:
+                        val_loss, val_losses, output = self._evaluate(
+                            valid_loader, ddp_model
+                        )
+
+                        if not self.hparams.training_spec.distributed or self.rank == 0:
                             self._log_epoch_results(
                                 0,
                                 batch_count + 1,
@@ -1412,16 +1480,12 @@ class TransformerModel(nn.Module):
                                 val_losses,
                                 output,
                             )
-
-                        else:
-                            val_loss = np.float32(np.nan)
-                        current_time = time.time()
-                        should_save_batch[0] = 1
-                        self.last_batch_save_time = current_time
+                            val_loss_batch[0] = float(val_loss)
+                    else:
+                        val_loss_batch[0] = np.float32(np.nan)
 
                 if self.hparams.training_spec.distributed:
-                    dist.broadcast(should_save_latest, src=0)
-                    dist.broadcast(should_save_batch, src=0)
+                    dist.broadcast(val_loss_batch, src=0)
 
                 if should_save_latest.item() == 1:
                     self._save(
@@ -1432,18 +1496,17 @@ class TransformerModel(nn.Module):
                         suffix="latest",
                     )
                     if self.rank != 0:
-                        self.last_latest_save_time = (
-                            time.time()
-                        )  # Keep ranks roughly aligned
+                        self.last_latest_save_time = time.time()
 
-                if should_save_batch.item() == 1:
+                val_loss = np.float32(val_loss_batch.item())
+                if should_save_batch.item() != 0:
                     self._save(
                         epoch,
                         batch_count,
                         val_loss,  # type: ignore
                         ddp_model,
                         suffix=f"epoch-{epoch}-batch-{batch_count + 1}",
-                    )  # type: ignore
+                    )
                     if self.rank != 0:
                         self.last_batch_save_time = time.time()
 
@@ -1612,8 +1675,6 @@ class TransformerModel(nn.Module):
 
         model_to_call.eval()
 
-        is_fsdp = self.hparams.training_spec.fsdp
-
         with torch.no_grad():
             for data, targets, _, _, _ in valid_loader:
                 # Move data to the current process's assigned GPU
@@ -1628,7 +1689,10 @@ class TransformerModel(nn.Module):
                     if k in self.target_column_types
                 }
 
-                if self.hparams.training_spec.layer_autocast and not is_fsdp:
+                if (
+                    self.hparams.training_spec.layer_autocast
+                    and self.hparams.training_spec.data_parallelism != "FSDP"
+                ):
                     amp_dtype = get_torch_dtype(
                         self.hparams.training_spec.layer_type_dtypes.get(
                             "linear", "bfloat16"
@@ -1776,7 +1840,13 @@ class TransformerModel(nn.Module):
         )
 
     @beartype
-    def _export(self, state_dict: dict[str, Tensor], suffix: str, epoch: int) -> None:
+    def _export(
+        self,
+        state_dict: dict[str, Tensor],
+        suffix: str,
+        epoch: int,
+        clean: bool = False,
+    ) -> None:
         """Exports the model.
 
         This is a wrapper function that handles exporting the model (and
@@ -1791,7 +1861,13 @@ class TransformerModel(nn.Module):
             return
 
         # Instantiate a clean, decoupled CPU model for the export phase
-        export_model = TransformerModel(self.hparams)
+        if clean:
+            export_hparams = copy.deepcopy(self.hparams)
+            export_hparams.training_spec.torch_compile = "none"
+        else:
+            export_hparams = self.hparams
+
+        export_model = TransformerModel(export_hparams)
         export_model.load_state_dict(state_dict)
         export_model.eval()
 
@@ -1916,26 +1992,20 @@ class TransformerModel(nn.Module):
             suffix: Checkpoint file suffix.
         """
         model_to_extract = ddp_model if ddp_model is not None else self
-        is_fsdp = self.hparams.training_spec.fsdp
 
-        if is_fsdp:
-            save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-            optim_policy = FullOptimStateDictConfig(
-                offload_to_cpu=True, rank0_only=True
+        if self.hparams.training_spec.data_parallelism == "FSDP":
+            options = StateDictOptions(full_state_dict=True, cpu_offload=True)
+
+            # Get model state dict
+            raw_model_state = get_model_state_dict(model_to_extract, options=options)
+            model_state_dict = {
+                k.replace("_orig_mod.", ""): v for k, v in raw_model_state.items()
+            }
+
+            # Get optimizer state dict
+            optim_state_dict = get_optimizer_state_dict(
+                model_to_extract, self.optimizer, options=options
             )
-            with FSDP.state_dict_type(
-                model_to_extract,
-                StateDictType.FULL_STATE_DICT,
-                save_policy,
-                optim_policy,
-            ):
-                model_state_dict = {
-                    k.replace("_orig_mod.", ""): v
-                    for k, v in model_to_extract.state_dict().items()
-                }
-                optim_state_dict = FSDP.full_optim_state_dict(
-                    model_to_extract, self.optimizer
-                )
 
         else:
             model_state_dict = self.state_dict()
@@ -2132,6 +2202,8 @@ def load_inference_model(
         training_config_path, args_config_subset, skip_metadata
     )
 
+    training_config.training_spec.torch_compile = "none"
+
     with torch.no_grad():
         model = TransformerModel(training_config)
         if model_type == "generative":
@@ -2159,7 +2231,7 @@ def load_inference_model(
                 if isinstance(module, torch.nn.Dropout):
                     module.train()
 
-        if device.startswith("cuda"):
+        if not device.startswith("mps"):
             model = torch.compile(model).to(device)
         else:
             model.to(device)

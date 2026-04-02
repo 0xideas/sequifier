@@ -122,6 +122,7 @@ class TrainingSpecModel(BaseModel):
         save_latest_interval_minutes: the time interval in which a checkpoint is written to the "latest" checkpoint path
         save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path
         save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving
+        calculate_validation_loss_on_initialization: calculate val loss on weight initialization
         batch_size: The training batch size.
         learning_rate: The learning rate.
         criterion: A dictionary mapping each target column to a loss function.
@@ -141,6 +142,8 @@ class TrainingSpecModel(BaseModel):
         layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
         layer_autocast: Whether to use autocast
         sampling_strategy: how to equalize data between GPUs
+        torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile, alternatively 'none'
+        float32_matmul_precision: precision level of float32 computations. One of 'highest', 'high' and 'medium'
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -155,6 +158,7 @@ class TrainingSpecModel(BaseModel):
     save_latest_interval_minutes: Optional[float] = None
     save_batch_interval_minutes: Optional[float] = None
     save_batch_interval_minutes_val_loss: bool = True
+    calculate_validation_loss_on_initialization: bool = True
     batch_size: int
     learning_rate: float
     criterion: dict[str, str]
@@ -180,9 +184,10 @@ class TrainingSpecModel(BaseModel):
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: Optional[bool] = True
     sampling_strategy: str = "exact"
-    fsdp: bool = False
-    fsdp_sharding_strategy: str = "FULL_SHARD"
-    fsdp_cpu_offload: bool = False
+    data_parallelism: Optional[str] = None
+    fsdp_cpu_offload: Optional[bool] = None
+    torch_compile: str = "outer"
+    float32_matmul_precision: str = "highest"
 
     def __init__(self, **kwargs):
         super().__init__(
@@ -224,6 +229,16 @@ class TrainingSpecModel(BaseModel):
                     f"The following layer types are invalid: {bad_types}. Allowed types are: {allowed_types}"
                 )
 
+        return v
+
+    @field_validator("float32_matmul_precision")
+    @classmethod
+    def validate_float32_matmul_precision(cls, v):
+        allowed_precisions = ["highest", "high", "medium"]
+        if v not in allowed_precisions:
+            raise ValueError(
+                f"float32_matmul_precision must be one of {allowed_precisions}, got '{v}'"
+            )
         return v
 
     @field_validator("criterion")
@@ -281,6 +296,15 @@ class TrainingSpecModel(BaseModel):
         if v not in ["exact", "oversampling", "undersampling"]:
             raise ValueError(
                 f"sampling_strategy must be 'exact', 'oversampling', or 'undersampling', got '{v}'"
+            )
+        return v
+
+    @field_validator("data_parallelism")
+    @classmethod
+    def validate_data_parallelism(cls, v):
+        if v is not None and v not in ["DDP", "FSDP"]:
+            raise ValueError(
+                f"data_parallelism must be None, or 'DDP' or 'FSDP', got '{v}'"
             )
         return v
 
@@ -525,17 +549,32 @@ class TrainModel(BaseModel):
 
         if (
             v.save_latest_interval_minutes is not None
-            and not os.environ["SEQUIFIER_TESTING"] == "1"
+            and not os.getenv("SEQUIFIER_TESTING", "0") == "1"
             and v.save_latest_interval_minutes == 0
         ):
             raise ValueError("save_latest_interval_minutes must be larger than 0")
 
         if (
             v.save_batch_interval_minutes is not None
-            and not os.environ["SEQUIFIER_TESTING"] == "1"
+            and not os.getenv("SEQUIFIER_TESTING", "0") == "1"
             and v.save_batch_interval_minutes == 0
         ):
             raise ValueError("save_batch_interval_minutes must be larger than 0")
+
+        if v.torch_compile not in ["outer", "inner", "none"]:
+            raise ValueError(
+                f'torch_compile {v.torch_compile} invalid, must be one of ["outer", "inner", "none"]'
+            )
+
+        if v.data_parallelism == "FSDP" and v.torch_compile == "outer":
+            raise ValueError(
+                "If data_parallelism is set to 'FSDP' then torch_compile must be one of 'none' and 'inner'"
+            )
+
+        if v.data_parallelism == "DDP" and v.torch_compile == "inner":
+            raise ValueError(
+                "If data_parallelism is set to 'DDP' then torch_compile must be one of 'none' and 'outer'"
+            )
 
         if v.sampling_strategy in ["oversampling", "undersampling"]:
             if v.world_size <= 1:
@@ -552,6 +591,22 @@ class TrainModel(BaseModel):
                 raise ValueError(
                     "If world_size > 1 and sampling_strategy == 'exact', the input data must be a folder (read_format='pt')."
                 )
+
+        if v.data_parallelism is None or v.data_parallelism != "FSDP":
+            if v.fsdp_cpu_offload is not None:
+                raise ValueError(
+                    "If data_parallelism != 'FSDP', fsdp_cpu_offload must be None"
+                )
+        if v.data_parallelism == "FSDP":
+            if v.fsdp_cpu_offload is None:
+                raise ValueError(
+                    "If data_parallelism == 'FSDP', fsdp_cpu_offload cannot be None"
+                )
+
+        if v.distributed and v.data_parallelism is None:
+            raise ValueError(
+                "If 'distributed' is True, data_parallelism cannot be 'None'"
+            )
 
         return v
 
@@ -603,7 +658,7 @@ class TrainModel(BaseModel):
             if embedding_size % n_categorical != 0:
                 raise ValueError(
                     f"If only categorical variables are included and feature_embedding_dims is not set, "
-                    f"max(dim_model, n_head) ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical})."
+                    f"max(dim_model, n_head) ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical}: {categorical_columns})."
                 )
 
         return v

@@ -492,9 +492,9 @@ def _generate_multi_model_plot(
         if data["base_y"]:
             if baseline_val is None:
                 baseline_val = data["base_y"][0]
-            elif not np.isclose(
-                baseline_val, data["base_y"][0], rtol=1e-3, atol=1e-5
-            ) and not (np.isnan(baseline_val) and np.isnan(data["base_y"][0])):
+            elif not np.isclose(baseline_val, data["base_y"][0], atol=1e-2) and not (
+                np.isnan(baseline_val) and np.isnan(data["base_y"][0])
+            ):
                 raise DataContinuityError(
                     f"Baseline validation loss is not constant. Expected {baseline_val}, got {data['base_y'][0]} in '{model}'"
                 )

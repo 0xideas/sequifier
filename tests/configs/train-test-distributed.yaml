@@ -44,6 +44,7 @@ training_spec:
 
   # --- Mac Distributed Settings ---
   distributed: true
+  data_parallelism: 'DDP'
   world_size: 2
   backend: gloo
   load_full_data_to_ram: true

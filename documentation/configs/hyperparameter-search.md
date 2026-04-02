@@ -63,6 +63,7 @@ These fields define the search space for the Transformer architecture. All field
 | `dim_feedforward` | `list[int]` | **Yes** | Feedforward network dimension. |
 | `initial_embedding_dim`| `list[int]` | **Yes** | Feature embedding size. Usually matches `dim_model`. |
 | `joint_embedding_dim` | `list[int]` | **Yes** | Joint embedding size. If not null, must match `dim_model`. |
+| `prediction_length` | `int` |	Yes	|	Number of steps into the future to predict simultaneously. |
 | `activation_fn` | `list[str]` | **Yes** | `['swiglu', 'gelu', 'relu']`. |
 | `attention_type` | `list[str]` | **Yes** | `['mha', 'mqa', 'gqa']`. |
 | `n_kv_heads` | `list[int]` | **Yes** | Number of KV heads (for MQA/GQA). Use `null` for MHA. |
@@ -84,8 +85,12 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `accumulation_steps` | `list[int]` | **Yes** | Gradient accumulation steps. |
 | `dropout` | `list[float]`| No | List of dropout probabilities (default `[0.0]`). |
 | `optimizer` | `list[dict]` | No | List of optimizer configs (e.g., `[{'name': 'AdamW'}, {'name': 'AdEMAMix'}]`). |
-| `scheduler` | `list[dict]` | No | List of scheduler configs. |
+| `scheduler` | `list[dict]` | No | List of scheduler configs. `scheduler.step()` is only called if < total_steps, so correct configuration is essential |
 | `save_interval_epochs` | `int` | **Yes** | **Fixed.** Checkpoint save frequency. |
+| `save_latest_interval_minutes`| `float`| No | Time interval to overwrite a "latest" checkpoint. |
+| `save_batch_interval_minutes` | `float` | No | Time interval to save a unique, batch-specific checkpoint. |
+| `save_batch_interval_minutes_val_loss` | `bool` | No | Whether to calculate validation loss at the moment of the batch interval save. Defaults to true. |
+| `calculate_validation_loss_on_initialization` | `bool` | No | Determines if a validation pass runs before epoch 1 begins. Defaults to false for hyperparameter search. |
 | `log_interval` | `int` | No | **Fixed.** Logging frequency (batches). Default 10. |
 | `early_stopping_epochs`| `int` | No | **Fixed.** Stop if validation metric doesn't improve. |
 | `num_workers` | `int` | No | **Fixed.** Data loading subprocesses. |
@@ -95,13 +100,14 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `device_max_concat_length` | `int` | No | `12` |  Controls recursive tensor concatenation to prevent CUDA kernel limits on specific hardware. Lower this if you encounter "CUDA error: too many resources requested for launch". |
 | `max_ram_gb` | `int` | No | `16` | RAM limit (GB) for the cache when using lazy loading. |
 | `load_full_data_to_ram` | `bool` | No |  `true` |  If `false`, uses lazy loading (requires `read_format: pt`). |
-| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
+| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt`. |
 | `layer_type_dtypes` | `dict` | No | **Fixed.** Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
 | `layer_autocast` | `bool` | No | **Fixed.** Enable `torch.autocast` (default `true`). |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
-| `fsdp` | `bool` | No | `false` | Enable Fully Sharded Data Parallel (FSDP) for memory-efficient multi-GPU training.
-| `fsdp_sharding_strategy` | `str` | No | `FULL_SHARD` | Sharding strategy for FSDP (FULL_SHARD, SHARD_GRAD_OP, or NO_SHARD).
-| `fsdp_cpu_offload` | `bool` | No | `false` |If true, offloads FSDP parameters to the CPU to save GPU VRAM.
+| `data_parallelism` | `Optional[str]` | No | `None` | Set data parallelism approach, one of `DDP` and `FSDP`
+| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` | Must be explicitly true or false if data_parallelism is 'FSDP'. Must be `None` otherwise.
+| `torch_compile` | `str` | No | Controls torch.compile. Options are "outer" (compiles the whole model), "inner" (compiles individual transformer layers, for FSDP), or "none" (no compilation). Defaults to "outer". |
+| `float32_matmul_precision` | str | No | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". Defaults to "highest". |
 
 -----
 

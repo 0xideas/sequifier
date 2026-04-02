@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import time
 
 import polars as pl
@@ -25,7 +26,8 @@ TARGET_VARIABLE_DICT = {"categorical": "itemId", "real": "itemValue"}
 
 
 def run_and_log(command: str) -> None:
-    os.system(command)
+    subprocess.run(command, shell=True, check=True)
+
     with open(os.path.join("tests", "integration-test-log.txt"), "a+") as f:
         f.write(f"{command}\n")
 
@@ -449,9 +451,13 @@ def copy_checkpoints(run_training, project_root):
     )
     shutil.copy(src_ckpt, dst_ckpt)
 
-    src_ckpt = os.path.join(project_root, "checkpoints", "model-real-1-epoch-1.pt")
+    src_ckpt = os.path.join(
+        project_root, "checkpoints", "model-categorical-3-epoch-1.pt"
+    )
     dst_ckpt = os.path.join(
-        project_root, "checkpoints", "model-real-1-from-mid-epoch-checkpoint-epoch-1.pt"
+        project_root,
+        "checkpoints",
+        "model-categorical-3-from-mid-epoch-checkpoint-epoch-1.pt",
     )
     shutil.copy(src_ckpt, dst_ckpt)
 

@@ -28,7 +28,7 @@ The configuration is defined in a YAML file (e.g., `train.yaml`). The file is st
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `target_columns` | `list[str]`| **Yes** | - | The specific column(s) the model should learn to predict. |
-| `target_column_types`| `dict` | **Yes** | - | Map of target columns to their type: `'categorical'` or `'real'`. |
+| `target_column_types`| `dict` | **Yes** | - | Map of target columns to their type: `'categorical'` or `'real'`. The key order in target_column_types must exactly match the list order in target_columns |
 | `input_columns` | `list[str]`| No | All | Subset of columns to use as input features. Defaults to all available in metadata. |
 | `seq_length` | `int` | **Yes** | - | Must match the `seq_length` used in preprocessing. |
 
@@ -42,8 +42,9 @@ These fields determine the size and complexity of the Transformer.
 | `n_head` | `int` | **Yes** | - | Number of attention heads. `dim_model` must be divisible by `n_head`. |
 | `num_layers` | `int` | **Yes** | - | Number of transformer encoder layers. |
 | `dim_feedforward` | `int` | **Yes** | - | Dimension of the feedforward network model ($d_{ff}$). |
-| `initial_embedding_dim`| `int` | **Yes** | - | Size of initial feature embeddings. Usually equals `dim_model`. |
+| `initial_embedding_dim`| `int` | **Yes** | - | Size of initial feature embeddings. Must equal`dim_model` unless a `joint_embedding_dim` is configured. |
 | `joint_embedding_dim` | `int` | No | `null` | If set, projects concatenated inputs to this dim before the transformer. If set, must equal `dim_model`. |
+| `prediction_length` | `int` |	Yes	|	Number of steps into the future to predict simultaneously. |
 | `feature_embedding_dims`| `dict` | No | `null` | Manual map of column names to embedding sizes. If `null`, sizes are auto-calculated. This works only if there are *only* real or *only* categorical variables, and `initial_embedding_dim` is divisible by the number of variables |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
@@ -63,12 +64,16 @@ These fields determine the size and complexity of the Transformer.
 | `learning_rate` | `float` | **Yes** | - | Initial learning rate. |
 | `dropout` | `float` | No | `0.0` | Dropout probability. |
 | `optimizer` | `dict` | No | `{'name': 'Adam'}`| Optimizer config. Supports `Adam`, `AdamW`, `AdEMAMix`, etc. |
-| `scheduler` | `dict` | No | `StepLR...` | LR Scheduler config (e.g., `CosineAnnealingLR`). |
+| `scheduler` | `dict` | No | `StepLR...` | LR Scheduler config (e.g., `CosineAnnealingLR`). `scheduler.step()` is only called if < total_steps, so correct configuration is essential |
 | `scheduler_step_on` | `str` | No | `epoch` | When to step the scheduler: `epoch` or `batch`. |
 | `criterion` | `dict` | **Yes** | - | Map of target columns to loss functions (e.g., `CrossEntropyLoss`, `MSELoss`). |
 | `loss_weights` | `dict` | No | `null` | Weights for combining losses if predicting multiple targets. |
 | `class_weights` | `dict` | No | `null` | Weights for specific classes (useful for imbalanced datasets). |
 | `save_interval_epochs` | `int` | **Yes** | - | Save a checkpoint every N epochs. |
+| `save_latest_interval_minutes`| `float`| No | Time interval to overwrite a "latest" checkpoint. |
+| `save_batch_interval_minutes` | `float` | No | Time interval to save a unique, batch-specific checkpoint. |
+| `save_batch_interval_minutes_val_loss` | `bool` | No | Whether to calculate validation loss at the moment of the batch interval save. Defaults to true. |
+| `calculate_validation_loss_on_initialization` | `bool` | No | Determines if a validation pass runs before epoch 1 begins. Defaults to true. |
 | `early_stopping_epochs`| `int` | No | `null` | Stop training if validation loss doesn't improve for N epochs. |
 | `log_interval` | `int` | No | `10` | Print training logs every N batches. |
 | `class_share_log_columns`| `list[str]`| No | `[]` | Columns for which to log the predicted class distribution in validation. |
@@ -83,9 +88,10 @@ These fields determine the size and complexity of the Transformer.
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
 | `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
-| `fsdp` | `bool` | No | `false` | Enable Fully Sharded Data Parallel (FSDP) for memory-efficient multi-GPU training.
-| `fsdp_sharding_strategy` | `str` | No | `FULL_SHARD` | Sharding strategy for FSDP (FULL_SHARD, SHARD_GRAD_OP, or NO_SHARD).
-| `fsdp_cpu_offload` | `bool` | No | `false` |"If true, offloads FSDP parameters to the CPU to save GPU VRAM."
+| `data_parallelism` | `Optional[str]` | No | `None` | Set data parallelism approach, one of `DDP` and `FSDP`
+| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` | Must be explicitly true or false if data_parallelism is 'FSDP'. Must be `None` otherwise.
+| `torch_compile` | `str` | No | Controls torch.compile. Options are "outer" (compiles the whole model), "inner" (compiles individual transformer layers, for FSDP), or "none" (no compilation). Defaults to "outer". |
+| `float32_matmul_precision` | str | No | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". Defaults to "highest". |
 
 ### 5\. System & Export
 
@@ -132,7 +138,7 @@ If you have multiple GPUs:
 1.  Set `distributed: true` in `training_spec`.
 2.  **Crucial:** You must have run `preprocess` with `write_format: pt` and `merge_output: false`.
 3.  Set `world_size` to the number of GPUs.
-4.  Sequifier uses `DistributedDataParallel` (DDP) by default to synchronize gradients across GPUs. You can also enable fsdp: true for massive models to shard parameters, gradients, and optimizer states across your GPUs.
+4.  Set `data_parallelism` to `DDP` for `DistributedDataParallel`training or `FSDP` for `FullyShardedDataParallel` training
 
 ### 5\. Export Formats (`export_generative_model` vs `export_embedding_model`)
 

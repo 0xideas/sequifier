@@ -21,6 +21,7 @@ Lower/mixed precision training and inference
 Add top_k and top_p sampling
 Add autoregressive inference until specific values are reached for specific variables
 Add total weights and weight distribution tool
+Add tensorboard integration
 Option to leave "target" empty in preprocessing, no offset necessary (for inference on test sets)
 num_workers for GPU satutaration in inference
 within epoch checkpointing and checkpoint loading

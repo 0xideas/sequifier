@@ -111,6 +111,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         save_latest_interval_minutes: the time interval in which a checkpoint is written to the "latest" checkpoint path
         save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path
         save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving
+        calculate_validation_loss_on_initialization: calculate val loss on weight initialization
         batch_size: A list of possible batch sizes.
         learning_rate: A list of possible learning rates.
         criterion: A dictionary mapping target columns to loss functions.
@@ -124,9 +125,11 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
         layer_autocast: Whether to use autocast
         sampling_strategy: data sampling in distributed training: 'exact', 'oversampling' or 'undersampling'
-        fsdp: fsdp training
-        fsdp_sharding_strategy: fsdp sharding strategy
+        data_parallelism: 'DDP' or 'FSDP'
         fsdp_cpu_offload: fsdp cpu offload
+        torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile, alternatively 'none'
+        float32_matmul_precision: precision level of float32 computations. One of 'highest', 'high' and 'medium'
+
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -140,6 +143,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     save_latest_interval_minutes: Optional[float] = None
     save_batch_interval_minutes: Optional[float] = None
     save_batch_interval_minutes_val_loss: bool = True
+    calculate_validation_loss_on_initialization: bool = False
     batch_size: list[int]
     learning_rate: list[float]
     criterion: dict[str, str]
@@ -167,9 +171,10 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: Optional[bool] = True
     sampling_strategy: str = "exact"
-    fsdp: bool = False
-    fsdp_sharding_strategy: str = "FULL_SHARD"
-    fsdp_cpu_offload: bool = False
+    data_parallelism: Optional[str] = None
+    fsdp_cpu_offload: Optional[bool] = None
+    torch_compile: str = "outer"
+    float32_matmul_precision: str = "highest"
 
     def __init__(self, **kwargs):
         """Initialize the TrainingSpecHyperparameterSampling instance.
@@ -291,6 +296,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             save_latest_interval_minutes=self.save_batch_interval_minutes,
             save_batch_interval_minutes=self.save_batch_interval_minutes,
             save_batch_interval_minutes_val_loss=self.save_batch_interval_minutes_val_loss,
+            calculate_validation_loss_on_initialization=self.calculate_validation_loss_on_initialization,
             batch_size=batch_size,
             learning_rate=learning_rate,
             criterion=self.criterion,
@@ -313,9 +319,10 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             layer_type_dtypes=self.layer_type_dtypes,
             layer_autocast=self.layer_autocast,
             sampling_strategy=self.sampling_strategy,
-            fsdp=self.fsdp,
-            fsdp_sharding_strategy=self.fsdp_sharding_strategy,
+            data_parallelism=self.data_parallelism,
             fsdp_cpu_offload=self.fsdp_cpu_offload,
+            torch_compile=self.torch_compile,
+            float32_matmul_precision=self.float32_matmul_precision,
         )
 
     def grid_sample(self, i):
@@ -364,6 +371,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             save_latest_interval_minutes=self.save_batch_interval_minutes,
             save_batch_interval_minutes=self.save_batch_interval_minutes,
             save_batch_interval_minutes_val_loss=self.save_batch_interval_minutes_val_loss,
+            calculate_validation_loss_on_initialization=self.calculate_validation_loss_on_initialization,
             batch_size=batch_size,
             learning_rate=learning_rate,
             criterion=self.criterion,
@@ -386,9 +394,10 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             layer_type_dtypes=self.layer_type_dtypes,
             layer_autocast=self.layer_autocast,
             sampling_strategy=self.sampling_strategy,
-            fsdp=self.fsdp,
-            fsdp_sharding_strategy=self.fsdp_sharding_strategy,
+            data_parallelism=self.data_parallelism,
             fsdp_cpu_offload=self.fsdp_cpu_offload,
+            torch_compile=self.torch_compile,
+            float32_matmul_precision=self.float32_matmul_precision,
         )
 
     def n_combinations(self):

@@ -25,7 +25,7 @@ def test_checkpoint_files_exists(
             + [f"model-real-{j}-latest.pt" for j in [1, 3, 5, 50]]
             + [f"model-real-1-from-epoch-checkpoint-epoch-{i}.pt" for i in range(1, 4)]
             + [
-                f"model-real-1-from-mid-epoch-checkpoint-epoch-{i}.pt"
+                f"model-categorical-3-from-mid-epoch-checkpoint-epoch-{i}.pt"
                 for i in range(1, 4)
             ]
             + [
@@ -64,7 +64,8 @@ def test_model_files_exists(run_training, run_training_from_checkpoint, project_
                 for kind in ["best", "last"]
             ]
             + [
-                f"sequifier-model-real-1-from-mid-epoch-checkpoint-{kind}-3.{model_type_format}"
+                f"sequifier-model-categorical-3-from-mid-epoch-checkpoint-{kind}{model_type}-3.{model_type_format}"
+                for model_type in ["", "-embedding"]
                 for kind in ["best", "last"]
                 for model_type_format in ["pt", "onnx"]
             ]

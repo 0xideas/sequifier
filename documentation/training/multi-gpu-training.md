@@ -29,8 +29,7 @@ In your `train.yaml`, update the `training_spec` block:
 ```yaml
 training_spec:
   distributed: true
-  fsdp: true                           # Set to true to shard model weights/gradients across GPUs
-  fsdp_sharding_strategy: 'FULL_SHARD' # 'FULL_SHARD', 'SHARD_GRAD_OP', or 'NO_SHARD'
+  data_parallelism: 'FSDP' # or 'DDP   # Set to true to shard model weights/gradients across GPUs
   fsdp_cpu_offload: false              # Set to true to offload parameters to CPU RAM
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)
   backend: nccl        # 'nccl' is the standard and most efficient backend for NVIDIA GPUs
