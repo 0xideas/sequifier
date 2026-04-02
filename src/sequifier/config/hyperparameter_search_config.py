@@ -173,7 +173,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     sampling_strategy: str = "exact"
     data_parallelism: Optional[str] = None
     fsdp_cpu_offload: Optional[bool] = None
-    torch_compile: str = "inner"
+    torch_compile: str = "outer"
     float32_matmul_precision: str = "highest"
 
     def __init__(self, **kwargs):
