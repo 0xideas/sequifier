@@ -65,7 +65,7 @@ training_spec:
     div_factor: 100
     final_div_factor: 1000
     anneal_strategy: cos
-    total_steps: 10000
+    total_steps: PLEASE FILL
     three_phase: false
   continue_training: true
 """

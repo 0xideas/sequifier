@@ -88,6 +88,7 @@ def adapt_configs(config_strings):
             .replace("epochs: 1000", "epochs: 3")
             .replace("device: cuda", "device: cpu")
             .replace("seq_length: 48", "seq_length: 10")
+            .replace("total_steps: PLEASE FILL", "total_steps: 10000")
         )
 
     with open(train_config_path, "w") as f:
