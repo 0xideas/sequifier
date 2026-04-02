@@ -324,9 +324,14 @@
 <span class="s2">  optimizer:</span>
 <span class="s2">    name: AdamW</span>
 <span class="s2">  scheduler:</span>
-<span class="s2">    name: CosineAnnealingLR</span>
-<span class="s2">    T_max: 111</span>
-<span class="s2">    eta_min: 0.00001</span>
+<span class="s2">    name: OneCycleLR</span>
+<span class="s2">    max_lr: 0.001</span>
+<span class="s2">    pct_start: 0.1</span>
+<span class="s2">    div_factor: 100</span>
+<span class="s2">    final_div_factor: 1000</span>
+<span class="s2">    anneal_strategy: cos</span>
+<span class="s2">    total_steps: PLEASE FILL</span>
+<span class="s2">    three_phase: false</span>
 <span class="s2">  continue_training: true</span>
 <span class="s2">&quot;&quot;&quot;</span>
 

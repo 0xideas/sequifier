@@ -376,6 +376,7 @@
 <span class="sd">        save_latest_interval_minutes: the time interval in which a checkpoint is written to the &quot;latest&quot; checkpoint path</span>
 <span class="sd">        save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path</span>
 <span class="sd">        save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving</span>
+<span class="sd">        calculate_validation_loss_on_initialization: calculate val loss on weight initialization</span>
 <span class="sd">        batch_size: A list of possible batch sizes.</span>
 <span class="sd">        learning_rate: A list of possible learning rates.</span>
 <span class="sd">        criterion: A dictionary mapping target columns to loss functions.</span>
@@ -389,9 +390,11 @@
 <span class="sd">        layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).</span>
 <span class="sd">        layer_autocast: Whether to use autocast</span>
 <span class="sd">        sampling_strategy: data sampling in distributed training: &#39;exact&#39;, &#39;oversampling&#39; or &#39;undersampling&#39;</span>
-<span class="sd">        fsdp: fsdp training</span>
-<span class="sd">        fsdp_sharding_strategy: fsdp sharding strategy</span>
+<span class="sd">        data_parallelism: &#39;DDP&#39; or &#39;FSDP&#39;</span>
 <span class="sd">        fsdp_cpu_offload: fsdp cpu offload</span>
+<span class="sd">        torch_compile: compile entire model (&#39;outer&#39;) or transformer layers (&#39;inner&#39;) with torch.compile, alternatively &#39;none&#39;</span>
+<span class="sd">        float32_matmul_precision: precision level of float32 computations. One of &#39;highest&#39;, &#39;high&#39; and &#39;medium&#39;</span>
+
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">arbitrary_types_allowed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
@@ -405,6 +408,7 @@
     <span class="n">save_latest_interval_minutes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">save_batch_interval_minutes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">save_batch_interval_minutes_val_loss</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">calculate_validation_loss_on_initialization</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">batch_size</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
     <span class="n">learning_rate</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span>
     <span class="n">criterion</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>
@@ -432,9 +436,10 @@
     <span class="n">layer_type_dtypes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">layer_autocast</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">sampling_strategy</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;exact&quot;</span>
-    <span class="n">fsdp</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
-    <span class="n">fsdp_sharding_strategy</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;FULL_SHARD&quot;</span>
-    <span class="n">fsdp_cpu_offload</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">data_parallelism</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">fsdp_cpu_offload</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">torch_compile</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;outer&quot;</span>
+    <span class="n">float32_matmul_precision</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;highest&quot;</span>
 
 <div class="viewcode-block" id="TrainingSpecHyperparameterSampling.__init__"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.__init__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialize the TrainingSpecHyperparameterSampling instance.</span>
@@ -556,6 +561,7 @@
             <span class="n">save_latest_interval_minutes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">save_batch_interval_minutes</span><span class="p">,</span>
             <span class="n">save_batch_interval_minutes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">save_batch_interval_minutes</span><span class="p">,</span>
             <span class="n">save_batch_interval_minutes_val_loss</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">save_batch_interval_minutes_val_loss</span><span class="p">,</span>
+            <span class="n">calculate_validation_loss_on_initialization</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">calculate_validation_loss_on_initialization</span><span class="p">,</span>
             <span class="n">batch_size</span><span class="o">=</span><span class="n">batch_size</span><span class="p">,</span>
             <span class="n">learning_rate</span><span class="o">=</span><span class="n">learning_rate</span><span class="p">,</span>
             <span class="n">criterion</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">criterion</span><span class="p">,</span>
@@ -578,9 +584,10 @@
             <span class="n">layer_type_dtypes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="p">,</span>
             <span class="n">layer_autocast</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_autocast</span><span class="p">,</span>
             <span class="n">sampling_strategy</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span><span class="p">,</span>
-            <span class="n">fsdp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">fsdp</span><span class="p">,</span>
-            <span class="n">fsdp_sharding_strategy</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">fsdp_sharding_strategy</span><span class="p">,</span>
+            <span class="n">data_parallelism</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">data_parallelism</span><span class="p">,</span>
             <span class="n">fsdp_cpu_offload</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">fsdp_cpu_offload</span><span class="p">,</span>
+            <span class="n">torch_compile</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">torch_compile</span><span class="p">,</span>
+            <span class="n">float32_matmul_precision</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">float32_matmul_precision</span><span class="p">,</span>
         <span class="p">)</span></div>
 
 <div class="viewcode-block" id="TrainingSpecHyperparameterSampling.grid_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.grid_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">grid_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
@@ -629,6 +636,7 @@
             <span class="n">save_latest_interval_minutes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">save_batch_interval_minutes</span><span class="p">,</span>
             <span class="n">save_batch_interval_minutes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">save_batch_interval_minutes</span><span class="p">,</span>
             <span class="n">save_batch_interval_minutes_val_loss</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">save_batch_interval_minutes_val_loss</span><span class="p">,</span>
+            <span class="n">calculate_validation_loss_on_initialization</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">calculate_validation_loss_on_initialization</span><span class="p">,</span>
             <span class="n">batch_size</span><span class="o">=</span><span class="n">batch_size</span><span class="p">,</span>
             <span class="n">learning_rate</span><span class="o">=</span><span class="n">learning_rate</span><span class="p">,</span>
             <span class="n">criterion</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">criterion</span><span class="p">,</span>
@@ -651,9 +659,10 @@
             <span class="n">layer_type_dtypes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="p">,</span>
             <span class="n">layer_autocast</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_autocast</span><span class="p">,</span>
             <span class="n">sampling_strategy</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span><span class="p">,</span>
-            <span class="n">fsdp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">fsdp</span><span class="p">,</span>
-            <span class="n">fsdp_sharding_strategy</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">fsdp_sharding_strategy</span><span class="p">,</span>
+            <span class="n">data_parallelism</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">data_parallelism</span><span class="p">,</span>
             <span class="n">fsdp_cpu_offload</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">fsdp_cpu_offload</span><span class="p">,</span>
+            <span class="n">torch_compile</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">torch_compile</span><span class="p">,</span>
+            <span class="n">float32_matmul_precision</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">float32_matmul_precision</span><span class="p">,</span>
         <span class="p">)</span></div>
 
 <div class="viewcode-block" id="TrainingSpecHyperparameterSampling.n_combinations"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.n_combinations">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">n_combinations</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>

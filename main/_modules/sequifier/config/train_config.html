@@ -387,6 +387,7 @@
 <span class="sd">        save_latest_interval_minutes: the time interval in which a checkpoint is written to the &quot;latest&quot; checkpoint path</span>
 <span class="sd">        save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path</span>
 <span class="sd">        save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving</span>
+<span class="sd">        calculate_validation_loss_on_initialization: calculate val loss on weight initialization</span>
 <span class="sd">        batch_size: The training batch size.</span>
 <span class="sd">        learning_rate: The learning rate.</span>
 <span class="sd">        criterion: A dictionary mapping each target column to a loss function.</span>
@@ -406,6 +407,8 @@
 <span class="sd">        layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).</span>
 <span class="sd">        layer_autocast: Whether to use autocast</span>
 <span class="sd">        sampling_strategy: how to equalize data between GPUs</span>
+<span class="sd">        torch_compile: compile entire model (&#39;outer&#39;) or transformer layers (&#39;inner&#39;) with torch.compile, alternatively &#39;none&#39;</span>
+<span class="sd">        float32_matmul_precision: precision level of float32 computations. One of &#39;highest&#39;, &#39;high&#39; and &#39;medium&#39;</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">arbitrary_types_allowed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
@@ -420,6 +423,7 @@
     <span class="n">save_latest_interval_minutes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">save_batch_interval_minutes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">save_batch_interval_minutes_val_loss</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">calculate_validation_loss_on_initialization</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span>
     <span class="n">learning_rate</span><span class="p">:</span> <span class="nb">float</span>
     <span class="n">criterion</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>
@@ -445,9 +449,10 @@
     <span class="n">layer_type_dtypes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">layer_autocast</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">sampling_strategy</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;exact&quot;</span>
-    <span class="n">fsdp</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
-    <span class="n">fsdp_sharding_strategy</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;FULL_SHARD&quot;</span>
-    <span class="n">fsdp_cpu_offload</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">data_parallelism</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">fsdp_cpu_offload</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">torch_compile</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;outer&quot;</span>
+    <span class="n">float32_matmul_precision</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;highest&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
@@ -489,6 +494,16 @@
                     <span class="sa">f</span><span class="s2">&quot;The following layer types are invalid: </span><span class="si">{</span><span class="n">bad_types</span><span class="si">}</span><span class="s2">. Allowed types are: </span><span class="si">{</span><span class="n">allowed_types</span><span class="si">}</span><span class="s2">&quot;</span>
                 <span class="p">)</span>
 
+        <span class="k">return</span> <span class="n">v</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;float32_matmul_precision&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_float32_matmul_precision</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="n">allowed_precisions</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;highest&quot;</span><span class="p">,</span> <span class="s2">&quot;high&quot;</span><span class="p">,</span> <span class="s2">&quot;medium&quot;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">allowed_precisions</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;float32_matmul_precision must be one of </span><span class="si">{</span><span class="n">allowed_precisions</span><span class="si">}</span><span class="s2">, got &#39;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&#39;&quot;</span>
+            <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;criterion&quot;</span><span class="p">)</span>
@@ -546,6 +561,15 @@
         <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;exact&quot;</span><span class="p">,</span> <span class="s2">&quot;oversampling&quot;</span><span class="p">,</span> <span class="s2">&quot;undersampling&quot;</span><span class="p">]:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="sa">f</span><span class="s2">&quot;sampling_strategy must be &#39;exact&#39;, &#39;oversampling&#39;, or &#39;undersampling&#39;, got &#39;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&#39;&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;data_parallelism&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_data_parallelism</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;DDP&quot;</span><span class="p">,</span> <span class="s2">&quot;FSDP&quot;</span><span class="p">]:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;data_parallelism must be None, or &#39;DDP&#39; or &#39;FSDP&#39;, got &#39;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&#39;&quot;</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span></div>
 
@@ -790,17 +814,32 @@
 
         <span class="k">if</span> <span class="p">(</span>
             <span class="n">v</span><span class="o">.</span><span class="n">save_latest_interval_minutes</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;SEQUIFIER_TESTING&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span>
+            <span class="ow">and</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;SEQUIFIER_TESTING&quot;</span><span class="p">,</span> <span class="s2">&quot;0&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span>
             <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">save_latest_interval_minutes</span> <span class="o">==</span> <span class="mi">0</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;save_latest_interval_minutes must be larger than 0&quot;</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="p">(</span>
             <span class="n">v</span><span class="o">.</span><span class="n">save_batch_interval_minutes</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;SEQUIFIER_TESTING&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span>
+            <span class="ow">and</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;SEQUIFIER_TESTING&quot;</span><span class="p">,</span> <span class="s2">&quot;0&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span>
             <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">save_batch_interval_minutes</span> <span class="o">==</span> <span class="mi">0</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;save_batch_interval_minutes must be larger than 0&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">torch_compile</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;outer&quot;</span><span class="p">,</span> <span class="s2">&quot;inner&quot;</span><span class="p">,</span> <span class="s2">&quot;none&quot;</span><span class="p">]:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s1">&#39;torch_compile </span><span class="si">{</span><span class="n">v</span><span class="o">.</span><span class="n">torch_compile</span><span class="si">}</span><span class="s1"> invalid, must be one of [&quot;outer&quot;, &quot;inner&quot;, &quot;none&quot;]&#39;</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">==</span> <span class="s2">&quot;FSDP&quot;</span> <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">torch_compile</span> <span class="o">==</span> <span class="s2">&quot;outer&quot;</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;If data_parallelism is set to &#39;FSDP&#39; then torch_compile must be one of &#39;none&#39; and &#39;inner&#39;&quot;</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">==</span> <span class="s2">&quot;DDP&quot;</span> <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">torch_compile</span> <span class="o">==</span> <span class="s2">&quot;inner&quot;</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;If data_parallelism is set to &#39;DDP&#39; then torch_compile must be one of &#39;none&#39; and &#39;outer&#39;&quot;</span>
+            <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;oversampling&quot;</span><span class="p">,</span> <span class="s2">&quot;undersampling&quot;</span><span class="p">]:</span>
             <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">world_size</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span>
@@ -817,6 +856,22 @@
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                     <span class="s2">&quot;If world_size &gt; 1 and sampling_strategy == &#39;exact&#39;, the input data must be a folder (read_format=&#39;pt&#39;).&quot;</span>
                 <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">v</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">!=</span> <span class="s2">&quot;FSDP&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">fsdp_cpu_offload</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;If data_parallelism != &#39;FSDP&#39;, fsdp_cpu_offload must be None&quot;</span>
+                <span class="p">)</span>
+        <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">==</span> <span class="s2">&quot;FSDP&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">fsdp_cpu_offload</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;If data_parallelism == &#39;FSDP&#39;, fsdp_cpu_offload cannot be None&quot;</span>
+                <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">distributed</span> <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;If &#39;distributed&#39; is True, data_parallelism cannot be &#39;None&#39;&quot;</span>
+            <span class="p">)</span>
 
         <span class="k">return</span> <span class="n">v</span>
 
@@ -868,7 +923,7 @@
             <span class="k">if</span> <span class="n">embedding_size</span> <span class="o">%</span> <span class="n">n_categorical</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                     <span class="sa">f</span><span class="s2">&quot;If only categorical variables are included and feature_embedding_dims is not set, &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;max(dim_model, n_head) (</span><span class="si">{</span><span class="n">embedding_size</span><span class="si">}</span><span class="s2">) must be a multiple of the number of categorical variables (</span><span class="si">{</span><span class="n">n_categorical</span><span class="si">}</span><span class="s2">).&quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;max(dim_model, n_head) (</span><span class="si">{</span><span class="n">embedding_size</span><span class="si">}</span><span class="s2">) must be a multiple of the number of categorical variables (</span><span class="si">{</span><span class="n">n_categorical</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">categorical_columns</span><span class="si">}</span><span class="s2">).&quot;</span>
                 <span class="p">)</span>
 
         <span class="k">return</span> <span class="n">v</span></div>

@@ -343,7 +343,7 @@
 
 <span class="sd">        This allows for resuming a search. It finds the highest existing run</span>
 <span class="sd">        number (e.g., &#39;hp_search_name-run-10.yaml&#39;) and returns the next</span>
-<span class="sd">        integer (e.g., 11). If no previous runs are found, it starts from 1.</span>
+<span class="sd">        integer (e.g., 11). If no previous runs are found, it starts from 0.</span>
 
 <span class="sd">        Returns:</span>
 <span class="sd">            int: The integer run number to start the search from (e.g., 1 for a</span>
@@ -358,7 +358,7 @@
 
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">files</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
             <span class="n">last_iter</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">files</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">file_root</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
-            <span class="k">return</span> <span class="n">last_iter</span>
+            <span class="k">return</span> <span class="n">last_iter</span> <span class="o">+</span> <span class="mi">1</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="k">return</span> <span class="mi">0</span>
 
