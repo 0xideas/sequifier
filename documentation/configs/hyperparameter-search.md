@@ -85,7 +85,7 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `accumulation_steps` | `list[int]` | **Yes** | Gradient accumulation steps. |
 | `dropout` | `list[float]`| No | List of dropout probabilities (default `[0.0]`). |
 | `optimizer` | `list[dict]` | No | List of optimizer configs (e.g., `[{'name': 'AdamW'}, {'name': 'AdEMAMix'}]`). |
-| `scheduler` | `list[dict]` | No | List of scheduler configs. |
+| `scheduler` | `list[dict]` | No | List of scheduler configs. `scheduler.step()` is only called if < total_steps, so correct configuration is essential |
 | `save_interval_epochs` | `int` | **Yes** | **Fixed.** Checkpoint save frequency. |
 | `save_latest_interval_minutes`| `float`| No | Time interval to overwrite a "latest" checkpoint. |
 | `save_batch_interval_minutes` | `float` | No | Time interval to save a unique, batch-specific checkpoint. |
@@ -105,7 +105,7 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `layer_autocast` | `bool` | No | **Fixed.** Enable `torch.autocast` (default `true`). |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
 | `data_parallelism` | `Optional[str]` | No | `None` | Set data parallelism approach, one of `DDP` and `FSDP`
-| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` | If true, offloads FSDP parameters to the CPU to save GPU VRAM.
+| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` | Must be explicitly true or false if data_parallelism is 'FSDP'. Must be `None` otherwise.
 | `torch_compile` | `str` | No | Controls torch.compile. Options are "outer" (compiles the whole model), "inner" (compiles individual transformer layers, for FSDP), or "none" (no compilation). Defaults to "outer". |
 | `float32_matmul_precision` | str | No | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". Defaults to "highest". |
 

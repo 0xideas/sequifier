@@ -1230,7 +1230,11 @@ class TransformerModel(nn.Module):
                         n_epochs_no_improvement += 1
 
                     if self.scheduler_step_on == "epoch":
-                        self.scheduler.step()
+                        if (
+                            hasattr(self.scheduler, "total_steps")
+                            and self.scheduler.last_epoch < self.scheduler.total_steps
+                        ):
+                            self.scheduler.step()
 
                     if epoch % self.save_interval_epochs == 0:
                         self._save(
@@ -1424,7 +1428,11 @@ class TransformerModel(nn.Module):
                 del data, targets, output, loss, losses
 
                 if self.scheduler_step_on == "batch":
-                    self.scheduler.step()
+                    if (
+                        hasattr(self.scheduler, "total_steps")
+                        and self.scheduler.last_epoch < self.scheduler.total_steps
+                    ):
+                        self.scheduler.step()
 
                 should_save_latest = torch.tensor(
                     [0], dtype=torch.int32, device=self.device

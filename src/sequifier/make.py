@@ -59,9 +59,14 @@ training_spec:
   optimizer:
     name: AdamW
   scheduler:
-    name: CosineAnnealingLR
-    T_max: 111
-    eta_min: 0.00001
+    name: OneCycleLR
+    max_lr: 0.001
+    pct_start: 0.1
+    div_factor: 100
+    final_div_factor: 1000
+    anneal_strategy: cos
+    total_steps: 10000
+    three_phase: false
   continue_training: true
 """
 
