@@ -1231,8 +1231,8 @@ class TransformerModel(nn.Module):
 
                     if self.scheduler_step_on == "epoch":
                         if (
-                            hasattr(self.scheduler, "total_steps")
-                            and self.scheduler.last_epoch < self.scheduler.total_steps
+                            not hasattr(self.scheduler, "total_steps")
+                            or self.scheduler.last_epoch < self.scheduler.total_steps
                         ):
                             self.scheduler.step()
 
@@ -1429,8 +1429,8 @@ class TransformerModel(nn.Module):
 
                 if self.scheduler_step_on == "batch":
                     if (
-                        hasattr(self.scheduler, "total_steps")
-                        and self.scheduler.last_epoch < self.scheduler.total_steps
+                        not hasattr(self.scheduler, "total_steps")
+                        or self.scheduler.last_epoch < self.scheduler.total_steps
                     ):
                         self.scheduler.step()
 
