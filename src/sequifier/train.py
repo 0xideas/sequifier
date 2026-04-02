@@ -1187,7 +1187,10 @@ class TransformerModel(nn.Module):
             self.last_latest_save_time = time.time()
             self.last_batch_save_time = time.time()
 
-            if self.start_epoch == 1:
+            if (
+                self.start_epoch == 1
+                and self.hparams.training_spec.calculate_validation_loss_on_initialization
+            ):
                 total_loss, total_losses, output = self._evaluate(
                     valid_loader, ddp_model
                 )

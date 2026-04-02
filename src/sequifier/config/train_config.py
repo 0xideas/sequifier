@@ -122,6 +122,7 @@ class TrainingSpecModel(BaseModel):
         save_latest_interval_minutes: the time interval in which a checkpoint is written to the "latest" checkpoint path
         save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path
         save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving
+        calculate_validation_loss_on_initialization: calculate val loss on weight initialization
         batch_size: The training batch size.
         learning_rate: The learning rate.
         criterion: A dictionary mapping each target column to a loss function.
@@ -157,6 +158,7 @@ class TrainingSpecModel(BaseModel):
     save_latest_interval_minutes: Optional[float] = None
     save_batch_interval_minutes: Optional[float] = None
     save_batch_interval_minutes_val_loss: bool = True
+    calculate_validation_loss_on_initialization: bool = True
     batch_size: int
     learning_rate: float
     criterion: dict[str, str]

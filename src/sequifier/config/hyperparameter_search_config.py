@@ -111,6 +111,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         save_latest_interval_minutes: the time interval in which a checkpoint is written to the "latest" checkpoint path
         save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path
         save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving
+        calculate_validation_loss_on_initialization: calculate val loss on weight initialization
         batch_size: A list of possible batch sizes.
         learning_rate: A list of possible learning rates.
         criterion: A dictionary mapping target columns to loss functions.
@@ -142,6 +143,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     save_latest_interval_minutes: Optional[float] = None
     save_batch_interval_minutes: Optional[float] = None
     save_batch_interval_minutes_val_loss: bool = True
+    calculate_validation_loss_on_initialization: bool = False
     batch_size: list[int]
     learning_rate: list[float]
     criterion: dict[str, str]
@@ -294,6 +296,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             save_latest_interval_minutes=self.save_batch_interval_minutes,
             save_batch_interval_minutes=self.save_batch_interval_minutes,
             save_batch_interval_minutes_val_loss=self.save_batch_interval_minutes_val_loss,
+            calculate_validation_loss_on_initialization=self.calculate_validation_loss_on_initialization,
             batch_size=batch_size,
             learning_rate=learning_rate,
             criterion=self.criterion,
@@ -368,6 +371,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             save_latest_interval_minutes=self.save_batch_interval_minutes,
             save_batch_interval_minutes=self.save_batch_interval_minutes,
             save_batch_interval_minutes_val_loss=self.save_batch_interval_minutes_val_loss,
+            calculate_validation_loss_on_initialization=self.calculate_validation_loss_on_initialization,
             batch_size=batch_size,
             learning_rate=learning_rate,
             criterion=self.criterion,
