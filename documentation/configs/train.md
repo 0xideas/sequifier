@@ -83,9 +83,8 @@ These fields determine the size and complexity of the Transformer.
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
 | `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
-| `fsdp` | `bool` | No | `false` | Enable Fully Sharded Data Parallel (FSDP) for memory-efficient multi-GPU training.
-| `fsdp_sharding_strategy` | `str` | No | `FULL_SHARD` | Sharding strategy for FSDP (FULL_SHARD, SHARD_GRAD_OP, or NO_SHARD).
-| `fsdp_cpu_offload` | `bool` | No | `false` |"If true, offloads FSDP parameters to the CPU to save GPU VRAM."
+| `data_parallelism` | `Optional[str]` | No | `None` | Set data parallelism approach, one of `DDP` and `FSDP`
+| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` |"If true, offloads FSDP parameters to the CPU to save GPU VRAM."
 
 ### 5\. System & Export
 
@@ -132,7 +131,7 @@ If you have multiple GPUs:
 1.  Set `distributed: true` in `training_spec`.
 2.  **Crucial:** You must have run `preprocess` with `write_format: pt` and `merge_output: false`.
 3.  Set `world_size` to the number of GPUs.
-4.  Sequifier uses `DistributedDataParallel` (DDP) by default to synchronize gradients across GPUs. You can also enable fsdp: true for massive models to shard parameters, gradients, and optimizer states across your GPUs.
+4.  Set `data_parallelism` to `DDP` for `DistributedDataParallel`training or `FSDP` for `FullyShardedDataParallel` training
 
 ### 5\. Export Formats (`export_generative_model` vs `export_embedding_model`)
 

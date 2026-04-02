@@ -182,9 +182,8 @@ class TrainingSpecModel(BaseModel):
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: Optional[bool] = True
     sampling_strategy: str = "exact"
-    fsdp: bool = False
-    fsdp_sharding_strategy: str = "FULL_SHARD"
-    fsdp_cpu_offload: bool = False
+    data_parallelism: Optional[str] = None
+    fsdp_cpu_offload: Optional[bool] = None
     torch_compile: str = "inner"
     float32_matmul_precision: str = "highest"
 
@@ -295,6 +294,15 @@ class TrainingSpecModel(BaseModel):
         if v not in ["exact", "oversampling", "undersampling"]:
             raise ValueError(
                 f"sampling_strategy must be 'exact', 'oversampling', or 'undersampling', got '{v}'"
+            )
+        return v
+
+    @field_validator("data_parallelism")
+    @classmethod
+    def validate_data_parallelism(cls, v):
+        if v is not None and v not in ["DDP", "FSDP"]:
+            raise ValueError(
+                f"data_parallelism must be None, or 'DDP' or 'FSDP', got '{v}'"
             )
         return v
 
@@ -571,6 +579,22 @@ class TrainModel(BaseModel):
                 raise ValueError(
                     "If world_size > 1 and sampling_strategy == 'exact', the input data must be a folder (read_format='pt')."
                 )
+
+        if v.data_parallelism is None or v.data_parallelism != "FSDP":
+            if v.fsdp_cpu_offload is not None:
+                raise ValueError(
+                    "If data_parallelism != 'FSDP', fsdp_cpu_offload must be None"
+                )
+        if v.data_parallelism == "FSDP":
+            if v.fsdp_cpu_offload is None:
+                raise ValueError(
+                    "If data_parallelism == 'FSDP', fsdp_cpu_offload cannot be None"
+                )
+
+        if v.distributed and v.data_parallelism is None:
+            raise ValueError(
+                "If 'distributed' is True, data_parallelism cannot be 'None'"
+            )
 
         return v
 

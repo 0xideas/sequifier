@@ -192,8 +192,6 @@ def train_worker(
     pytorch_total_params = sum(p.numel() for p in model.parameters())
     checkpoint = None
 
-    is_fsdp = config.training_spec.fsdp
-
     # Initialize Optimizer
     if not config.training_spec.distributed:
         params_to_optimize = model.parameters()
@@ -227,7 +225,7 @@ def train_worker(
                     model.layers[i] = torch.compile(model.layers[i])
 
         model.train_model(train_loader, valid_loader, ddp_model=None)
-    elif is_fsdp:
+    elif config.training_spec.data_parallelism == "FSDP":
         mesh = init_device_mesh(
             "cuda", (world_size,)
         )  # 1D mesh for standard ZeRO-3 full sharding
@@ -332,7 +330,7 @@ def train_worker(
 
         model.train_model(train_loader, valid_loader, ddp_model=base_model)
         cleanup()
-    else:  # DDP
+    elif config.training_spec.data_parallelism == "DDP":  # DDP
         if config.training_spec.continue_training and latest_model_path:
             checkpoint = torch.load(
                 latest_model_path, map_location="cpu", weights_only=False
@@ -383,6 +381,8 @@ def train_worker(
             dist.barrier()
         model.train_model(train_loader, valid_loader, ddp_model=ddp_model)
         cleanup()
+    else:
+        raise ValueError("For data_parallelism, only 'FSDP' and 'DDP' are supported")
 
 
 @beartype
@@ -1143,7 +1143,7 @@ class TransformerModel(nn.Module):
         self, ddp_model: Optional[nn.Module] = None
     ) -> dict[str, Tensor]:
         model_to_extract = ddp_model if ddp_model is not None else self
-        if self.hparams.training_spec.fsdp:
+        if self.hparams.training_spec.data_parallelism == "FSDP":
             # FSDP2 uses StateDictOptions to gather the full state dict to rank 0 CPU
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
             state_dict = get_model_state_dict(model_to_extract, options=options)
@@ -1358,8 +1358,6 @@ class TransformerModel(nn.Module):
 
         model_to_call.train()
 
-        is_fsdp = self.hparams.training_spec.fsdp
-
         for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
             if batch_count >= start_batch:
                 data = {
@@ -1374,7 +1372,10 @@ class TransformerModel(nn.Module):
                 }
 
                 # Only use standard torch.autocast if FSDP MixedPrecision is NOT handling it natively
-                if self.hparams.training_spec.layer_autocast and not is_fsdp:
+                if (
+                    self.hparams.training_spec.layer_autocast
+                    and self.hparams.training_spec.data_parallelism != "FSDP"
+                ):
                     amp_dtype = get_torch_dtype(
                         self.hparams.training_spec.layer_type_dtypes.get(
                             "linear", "bfloat16"
@@ -1668,8 +1669,6 @@ class TransformerModel(nn.Module):
 
         model_to_call.eval()
 
-        is_fsdp = self.hparams.training_spec.fsdp
-
         with torch.no_grad():
             for data, targets, _, _, _ in valid_loader:
                 # Move data to the current process's assigned GPU
@@ -1684,7 +1683,10 @@ class TransformerModel(nn.Module):
                     if k in self.target_column_types
                 }
 
-                if self.hparams.training_spec.layer_autocast and not is_fsdp:
+                if (
+                    self.hparams.training_spec.layer_autocast
+                    and self.hparams.training_spec.data_parallelism != "FSDP"
+                ):
                     amp_dtype = get_torch_dtype(
                         self.hparams.training_spec.layer_type_dtypes.get(
                             "linear", "bfloat16"
@@ -1984,9 +1986,8 @@ class TransformerModel(nn.Module):
             suffix: Checkpoint file suffix.
         """
         model_to_extract = ddp_model if ddp_model is not None else self
-        is_fsdp = self.hparams.training_spec.fsdp
 
-        if is_fsdp:
+        if self.hparams.training_spec.data_parallelism == "FSDP":
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
 
             # Get model state dict

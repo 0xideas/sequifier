@@ -428,9 +428,8 @@ These fields determine the size and complexity of the Transformer.
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
 | `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
-| `fsdp` | `bool` | No | `false` | Enable Fully Sharded Data Parallel (FSDP) for memory-efficient multi-GPU training.
-| `fsdp_sharding_strategy` | `str` | No | `FULL_SHARD` | Sharding strategy for FSDP (FULL_SHARD, SHARD_GRAD_OP, or NO_SHARD).
-| `fsdp_cpu_offload` | `bool` | No | `false` |"If true, offloads FSDP parameters to the CPU to save GPU VRAM."
+| `data_parallelism` | `Optional[str]` | No | `None` | Set data parallelism approach, one of `DDP` and `FSDP`
+| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` |"If true, offloads FSDP parameters to the CPU to save GPU VRAM."
 
 ### 5\. System & Export
 
@@ -477,7 +476,7 @@ If you have multiple GPUs:
 1.  Set `distributed: true` in `training_spec`.
 2.  **Crucial:** You must have run `preprocess` with `write_format: pt` and `merge_output: false`.
 3.  Set `world_size` to the number of GPUs.
-4.  Sequifier uses `DistributedDataParallel` (DDP) by default to synchronize gradients across GPUs. You can also enable fsdp: true for massive models to shard parameters, gradients, and optimizer states across your GPUs.
+4.  Set `data_parallelism` to `DDP` for `DistributedDataParallel`training or `FSDP` for `FullyShardedDataParallel` training
 
 ### 5\. Export Formats (`export_generative_model` vs `export_embedding_model`)
 
@@ -798,13 +797,12 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `device_max_concat_length` | `int` | No | `12` |  Controls recursive tensor concatenation to prevent CUDA kernel limits on specific hardware. Lower this if you encounter "CUDA error: too many resources requested for launch". |
 | `max_ram_gb` | `int` | No | `16` | RAM limit (GB) for the cache when using lazy loading. |
 | `load_full_data_to_ram` | `bool` | No |  `true` |  If `false`, uses lazy loading (requires `read_format: pt`). |
-| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
+| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt`. |
 | `layer_type_dtypes` | `dict` | No | **Fixed.** Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
 | `layer_autocast` | `bool` | No | **Fixed.** Enable `torch.autocast` (default `true`). |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
-| `fsdp` | `bool` | No | `false` | Enable Fully Sharded Data Parallel (FSDP) for memory-efficient multi-GPU training.
-| `fsdp_sharding_strategy` | `str` | No | `FULL_SHARD` | Sharding strategy for FSDP (FULL_SHARD, SHARD_GRAD_OP, or NO_SHARD).
-| `fsdp_cpu_offload` | `bool` | No | `false` |If true, offloads FSDP parameters to the CPU to save GPU VRAM.
+| `data_parallelism` | `Optional[str]` | No | `None` | Set data parallelism approach, one of `DDP` and `FSDP`
+| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` | If true, offloads FSDP parameters to the CPU to save GPU VRAM.
 
 -----
 
@@ -917,8 +915,7 @@ In your `train.yaml`, update the `training_spec` block:
 ```yaml
 training_spec:
   distributed: true
-  fsdp: true                           # Set to true to shard model weights/gradients across GPUs
-  fsdp_sharding_strategy: 'FULL_SHARD' # 'FULL_SHARD', 'SHARD_GRAD_OP', or 'NO_SHARD'
+  data_parallelism: 'FSDP' # or 'DDP   # Set to true to shard model weights/gradients across GPUs
   fsdp_cpu_offload: false              # Set to true to offload parameters to CPU RAM
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)
   backend: nccl        # 'nccl' is the standard and most efficient backend for NVIDIA GPUs

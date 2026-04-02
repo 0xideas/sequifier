@@ -124,8 +124,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
         layer_autocast: Whether to use autocast
         sampling_strategy: data sampling in distributed training: 'exact', 'oversampling' or 'undersampling'
-        fsdp: fsdp training
-        fsdp_sharding_strategy: fsdp sharding strategy
+        data_parallelism: 'DDP' or 'FSDP'
         fsdp_cpu_offload: fsdp cpu offload
         torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile, alternatively 'none'
         float32_matmul_precision: precision level of float32 computations. One of 'highest', 'high' and 'medium'
@@ -170,9 +169,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: Optional[bool] = True
     sampling_strategy: str = "exact"
-    fsdp: bool = False
-    fsdp_sharding_strategy: str = "FULL_SHARD"
-    fsdp_cpu_offload: bool = False
+    data_parallelism: Optional[str] = None
+    fsdp_cpu_offload: Optional[bool] = None
     torch_compile: str = "inner"
     float32_matmul_precision: str = "highest"
 
@@ -318,8 +316,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             layer_type_dtypes=self.layer_type_dtypes,
             layer_autocast=self.layer_autocast,
             sampling_strategy=self.sampling_strategy,
-            fsdp=self.fsdp,
-            fsdp_sharding_strategy=self.fsdp_sharding_strategy,
+            data_parallelism=self.data_parallelism,
             fsdp_cpu_offload=self.fsdp_cpu_offload,
             torch_compile=self.torch_compile,
             float32_matmul_precision=self.float32_matmul_precision,
@@ -393,8 +390,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             layer_type_dtypes=self.layer_type_dtypes,
             layer_autocast=self.layer_autocast,
             sampling_strategy=self.sampling_strategy,
-            fsdp=self.fsdp,
-            fsdp_sharding_strategy=self.fsdp_sharding_strategy,
+            data_parallelism=self.data_parallelism,
             fsdp_cpu_offload=self.fsdp_cpu_offload,
             torch_compile=self.torch_compile,
             float32_matmul_precision=self.float32_matmul_precision,
