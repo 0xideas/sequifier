@@ -78,7 +78,7 @@ class HyperparameterSearcher:
 
         This allows for resuming a search. It finds the highest existing run
         number (e.g., 'hp_search_name-run-10.yaml') and returns the next
-        integer (e.g., 11). If no previous runs are found, it starts from 1.
+        integer (e.g., 11). If no previous runs are found, it starts from 0.
 
         Returns:
             int: The integer run number to start the search from (e.g., 1 for a
@@ -93,7 +93,7 @@ class HyperparameterSearcher:
 
         if len(files) > 0:
             last_iter = int(files[-1].split(".")[0].replace(file_root, ""))
-            return last_iter
+            return last_iter + 1
         else:
             return 0
 
