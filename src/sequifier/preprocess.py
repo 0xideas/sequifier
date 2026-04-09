@@ -79,6 +79,7 @@ class Preprocessor:
         process_by_file: bool,
         subsequence_start_mode: str,
         use_precomputed_maps: Optional[list[str]],
+        metadata_config_path: Optional[str],
     ):
         """Initializes the Preprocessor with the given parameters.
 
@@ -98,7 +99,7 @@ class Preprocessor:
             batches_per_file: The number of batches to process per file.
             process_by_file: A flag to indicate if processing should be done file by file.
             use_precomputed_maps: An optional list of columns for which to enforce precomputed maps
-
+            metadata_config_path: Optional path to a precomputed metadata config
         """
         self.project_root = project_root
         self.batches_per_file = batches_per_file
@@ -115,6 +116,7 @@ class Preprocessor:
             self.target_dir = f"{self.data_name_root}-temp"
 
         self.use_precomputed_maps = use_precomputed_maps
+        self.metadata_config_path = metadata_config_path
         self.seed = seed
         np.random.seed(seed)
         self.n_cores = n_cores or multiprocessing.cpu_count()
@@ -156,27 +158,48 @@ class Preprocessor:
             data_columns = [
                 col for col in data.columns if col not in ["sequenceId", "itemPosition"]
             ]
-            id_maps, selected_columns_statistics = {}, {}
+            if self.metadata_config_path:
+                metadata_path = os.path.join(
+                    self.project_root, self.metadata_config_path
+                )
 
-            precomputed_id_maps = load_precomputed_id_maps(
-                self.project_root, data_columns, self.use_precomputed_maps
-            )
+                with open(metadata_path, "r") as f:
+                    preexisting_metadata = json.load(f)
 
-            id_maps, selected_columns_statistics = _get_column_statistics(
+                id_maps = preexisting_metadata["id_maps"]
+                selected_columns_statistics = preexisting_metadata[
+                    "selected_columns_statistics"
+                ]
+                n_classes = preexisting_metadata["n_classes"]
+                col_types = preexisting_metadata["column_types"]
+            else:
+                id_maps, selected_columns_statistics = {}, {}
+
+                precomputed_id_maps = load_precomputed_id_maps(
+                    self.project_root, data_columns, self.use_precomputed_maps
+                )
+
+                id_maps, selected_columns_statistics = _get_column_statistics(
+                    data,
+                    data_columns,
+                    id_maps,
+                    selected_columns_statistics,
+                    0,
+                    precomputed_id_maps,
+                )
+
+                id_maps = id_maps | precomputed_id_maps
+                n_classes = None
+                col_types = None
+
+            data, n_classes, col_types = _apply_column_statistics(
                 data,
                 data_columns,
                 id_maps,
                 selected_columns_statistics,
-                0,
-                precomputed_id_maps,
+                n_classes=n_classes,
+                col_types=col_types,
             )
-
-            id_maps = id_maps | precomputed_id_maps
-
-            data, n_classes, col_types = _apply_column_statistics(
-                data, data_columns, id_maps, selected_columns_statistics
-            )
-
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
@@ -222,18 +245,47 @@ class Preprocessor:
                 )
                 delete_files(input_files)
         else:
-            (
-                files_to_process,
-                n_classes,
-                id_maps,
-                selected_columns_statistics,
-                col_types,
-                data_columns,
-            ) = self._get_column_metadata_across_files(
-                data_path, read_format, max_rows, selected_columns
-            )
-            for col in id_maps:
-                col_types[col] = "Int64"
+            if self.metadata_config_path:
+                metadata_path = os.path.join(
+                    self.project_root, self.metadata_config_path
+                )
+
+                with open(metadata_path, "r") as f:
+                    preexisting_metadata = json.load(f)
+
+                id_maps = preexisting_metadata["id_maps"]
+                selected_columns_statistics = preexisting_metadata[
+                    "selected_columns_statistics"
+                ]
+                n_classes = preexisting_metadata["n_classes"]
+                col_types = preexisting_metadata["column_types"]
+
+                # Reconstruct data_columns from the provided col_types
+                data_columns = [
+                    col
+                    for col in col_types.keys()
+                    if col not in ["sequenceId", "itemPosition"]
+                ]
+
+                # We still need to find the files to process
+                files_to_process = []
+                for root, dirs, files in os.walk(data_path):
+                    for file in sorted(list(files)):
+                        if file.endswith(read_format):
+                            files_to_process.append(os.path.join(root, file))
+            else:
+                (
+                    files_to_process,
+                    n_classes,
+                    id_maps,
+                    selected_columns_statistics,
+                    col_types,
+                    data_columns,
+                ) = self._get_column_metadata_across_files(
+                    data_path, read_format, max_rows, selected_columns
+                )
+                for col in id_maps:
+                    col_types[col] = "Int64"
 
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics

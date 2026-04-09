@@ -77,6 +77,7 @@ class PreprocessorModel(BaseModel):
     continue_preprocessing: bool = False
     subsequence_start_mode: str = "distribute"
     use_precomputed_maps: Optional[list[str]] = None
+    metadata_config_path: Optional[str] = None
 
     @field_validator("data_path")
     @classmethod
