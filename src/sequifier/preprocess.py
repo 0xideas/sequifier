@@ -1877,12 +1877,8 @@ def get_subsequence_starts(
             raise ValueError(
                 f"'exact' mode requires sequence length alignment, i.e. if: ((in_seq_length - 1) - seq_length) % stride_for_split == 0, {(in_seq_length -1) = }, {seq_length = }, {stride_for_split = }"
             )
-        last_possible_start = (
-            in_seq_length - (seq_length - 1) - 1
-        )  # the latter '-1' is to translate to index
-        return np.arange(
-            0, last_possible_start + 1, stride_for_split
-        )  # the '+1' is to make it inclusive
+        last_possible_start = in_seq_length - (seq_length + 1)
+        return np.arange(0, last_possible_start + 1, stride_for_split)
     return np.array([])
 
 
