@@ -1444,9 +1444,9 @@ class Inferer:
             assert x is not None
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
             inference_batch_embeddings = [
-                self.infer_pure(x_sub)[0][:size] for x_sub in x_adjusted
+                self.infer_pure(x_sub)[0] for x_sub in x_adjusted
             ]
-            embeddings = np.concatenate(inference_batch_embeddings, axis=0)
+            embeddings = np.concatenate(inference_batch_embeddings, axis=0)[:size]
         elif self.inference_model_type == "pt":
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
             embeddings = infer_with_embedding_model(
