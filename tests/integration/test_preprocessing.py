@@ -5,6 +5,7 @@ import numpy as np
 import polars as pl
 import pytest
 import torch
+from conftest import run_and_log
 
 
 @pytest.fixture()
@@ -315,3 +316,118 @@ def test_preprocessing_interrupted(run_preprocessing, metadata_configs):
         assert np.all(
             interrupted_output[split].to_numpy() == baseline_output[split].to_numpy()
         ), f"interrupted output != baseline output for split {split}"
+
+
+def test_preprocessing_from_precomputed_stats(
+    run_preprocessing,
+    project_root,
+    preprocessing_config_path_cat_precomputed_stats,
+    preprocessing_config_path_cat_precomputed_stats_negative,
+):
+    """
+    Tests that providing a preexisting metadata config produces identical
+    outputs to the standard run, bypassing metadata computation.
+    """
+
+    run_and_log(
+        f"sequifier preprocess --config-path {preprocessing_config_path_cat_precomputed_stats}"
+    )
+
+    run_and_log(
+        f"sequifier preprocess --config-path {preprocessing_config_path_cat_precomputed_stats_negative}"
+    )
+
+    preprocessing_output_path = os.path.join(
+        "tests",
+        "project_folder",
+        "data",
+        "test-data-categorical-precomputed-stats-split0.parquet",
+    )
+
+    preprocessing_output = pl.read_parquet(preprocessing_output_path)
+
+    preprocessing_output_negative_path = os.path.join(
+        "tests",
+        "project_folder",
+        "data",
+        "test-data-categorical-precomputed-stats-negative-split0.parquet",
+    )
+
+    preprocessing_output_negative = pl.read_parquet(preprocessing_output_negative_path)
+
+    assert np.all(
+        preprocessing_output[
+            ["sequenceId", "subsequenceId", "startItemPosition"]
+        ].to_numpy()
+        == preprocessing_output_negative[
+            ["sequenceId", "subsequenceId", "startItemPosition"]
+        ].to_numpy()
+    )
+
+    metadata_cols = ["sequenceId", "subsequenceId", "startItemPosition", "inputCol"]
+
+    assert (
+        np.mean(
+            np.isclose(
+                preprocessing_output.filter(pl.col("inputCol") == "supReal2")
+                .drop(metadata_cols)
+                .to_numpy()
+                * 2,
+                preprocessing_output_negative.filter(pl.col("inputCol") == "supReal2")
+                .drop(metadata_cols)
+                .to_numpy(),
+                rtol=1e-01,
+            )
+        )
+        > 0.5
+    )
+
+    assert (
+        np.mean(
+            np.isclose(
+                preprocessing_output.filter(pl.col("inputCol") == "supReal3")
+                .drop(metadata_cols)
+                .to_numpy()
+                / 2,
+                preprocessing_output_negative.filter(pl.col("inputCol") == "supReal3")
+                .drop(metadata_cols)
+                .to_numpy(),
+                rtol=1e-01,
+            )
+        )
+        > 0.5
+    )
+
+    assert (
+        np.mean(
+            preprocessing_output.filter(pl.col("inputCol") == "itemId")
+            .drop(metadata_cols)
+            .to_numpy()
+            != preprocessing_output_negative.filter(pl.col("inputCol") == "itemId")
+            .drop(metadata_cols)
+            .to_numpy()
+        )
+        > 0.1
+    )
+    assert (
+        np.mean(
+            preprocessing_output.filter(pl.col("inputCol") == "supCat1")
+            .drop(metadata_cols)
+            .to_numpy()
+            != preprocessing_output_negative.filter(pl.col("inputCol") == "supCat1")
+            .drop(metadata_cols)
+            .to_numpy()
+        )
+        > 0.1
+    )
+    assert (
+        np.mean(
+            preprocessing_output.filter(pl.col("inputCol") == "supCat4")
+            .drop(metadata_cols)
+            .to_numpy()
+            != preprocessing_output_negative.filter(pl.col("inputCol") == "supCat4")
+            .drop(metadata_cols)
+            .to_numpy()
+        )
+        > 0.1
+    )

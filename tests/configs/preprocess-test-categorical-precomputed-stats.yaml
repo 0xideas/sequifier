@@ -1,0 +1,14 @@
+project_root: tests/project_folder
+data_path: tests/resources/source_data/test-data-categorical-precomputed-stats.csv
+read_format: csv
+write_format: parquet
+merge_output: true
+selected_columns: null
+
+split_ratios:
+- 1.0
+seq_length: 8
+stride_by_split:
+- 1
+max_rows: null
+metadata_config_path: configs/metadata_configs/test-data-categorical-multitarget-5.json

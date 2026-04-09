@@ -86,6 +86,22 @@ def preprocessing_config_path_real():
 
 
 @pytest.fixture(scope="session")
+def preprocessing_config_path_cat_precomputed_stats():
+    return os.path.join(
+        "tests", "configs", "preprocess-test-categorical-precomputed-stats.yaml"
+    )
+
+
+@pytest.fixture(scope="session")
+def preprocessing_config_path_cat_precomputed_stats_negative():
+    return os.path.join(
+        "tests",
+        "configs",
+        "preprocess-test-categorical-precomputed-stats-negative.yaml",
+    )
+
+
+@pytest.fixture(scope="session")
 def training_config_path_cat():
     return os.path.join("tests", "configs", "train-test-categorical.yaml")
 
