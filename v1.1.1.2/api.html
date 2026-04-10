@@ -198,7 +198,7 @@
 <li class="toctree-l1"><a class="reference internal" href="#module-sequifier.config.infer_config">Inference Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
-<li class="toctree-l1"><a class="reference internal" href="#module-sequifier.preprocess">Internals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#module-sequifier.sequifier">Internals</a></li>
 </ul>
 
 </div>
@@ -2413,9 +2413,40 @@ and returns the loss. (default: None)</p>
 </dd></dl>
 
 </section>
-<section id="module-sequifier.preprocess">
-<span id="internals"></span><h1>Internals<a class="headerlink" href="#module-sequifier.preprocess" title="Permalink to this heading">¶</a></h1>
-<dl class="py class">
+<section id="module-sequifier.sequifier">
+<span id="internals"></span><h1>Internals<a class="headerlink" href="#module-sequifier.sequifier" title="Permalink to this heading">¶</a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.sequifier.build_args_config">
+<span class="sig-prename descclassname"><span class="pre">sequifier.sequifier.</span></span><span class="sig-name descname"><span class="pre">build_args_config</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/sequifier.html#build_args_config"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.sequifier.build_args_config" title="Permalink to this definition">¶</a></dt>
+<dd><p>Build configuration dictionary from command-line arguments.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>args</strong> – Parsed command-line arguments.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Dictionary containing configuration options.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.sequifier.main">
+<span class="sig-prename descclassname"><span class="pre">sequifier.sequifier.</span></span><span class="sig-name descname"><span class="pre">main</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/sequifier/sequifier.html#main"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.sequifier.main" title="Permalink to this definition">¶</a></dt>
+<dd><p>Main function to run the Sequifier CLI.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.sequifier.setup_parser">
+<span class="sig-prename descclassname"><span class="pre">sequifier.sequifier.</span></span><span class="sig-name descname"><span class="pre">setup_parser</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ArgumentParser</span></span></span><a class="reference internal" href="_modules/sequifier/sequifier.html#setup_parser"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.sequifier.setup_parser" title="Permalink to this definition">¶</a></dt>
+<dd><p>Set up the argument parser for the command-line interface.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Configured ArgumentParser object.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<span class="target" id="module-sequifier.preprocess"></span><dl class="py class">
 <dt class="sig sig-object py" id="sequifier.preprocess.Preprocessor">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.preprocess.</span></span><span class="sig-name descname"><span class="pre">Preprocessor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">continue_preprocessing</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">read_format</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_format</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">merge_output</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">selected_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">split_ratios</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride_by_split</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rows</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_cores</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batches_per_file</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">process_by_file</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subsequence_start_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_precomputed_maps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata_config_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/preprocess.html#Preprocessor"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.preprocess.Preprocessor" title="Permalink to this definition">¶</a></dt>
 <dd><p>A class for preprocessing data for the sequifier model.</p>
@@ -4837,7 +4868,10 @@ rank and worker ID.</p>
 </li>
 </ul>
 </li>
-<li><a class="reference internal" href="#module-sequifier.preprocess">Internals</a><ul>
+<li><a class="reference internal" href="#module-sequifier.sequifier">Internals</a><ul>
+<li><a class="reference internal" href="#sequifier.sequifier.build_args_config"><code class="docutils literal notranslate"><span class="pre">build_args_config()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.sequifier.main"><code class="docutils literal notranslate"><span class="pre">main()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.sequifier.setup_parser"><code class="docutils literal notranslate"><span class="pre">setup_parser()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.preprocess.Preprocessor"><code class="docutils literal notranslate"><span class="pre">Preprocessor</span></code></a><ul>
 <li><a class="reference internal" href="#sequifier.preprocess.Preprocessor.project_root"><code class="docutils literal notranslate"><span class="pre">Preprocessor.project_root</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.preprocess.Preprocessor.batches_per_file"><code class="docutils literal notranslate"><span class="pre">Preprocessor.batches_per_file</span></code></a></li>
