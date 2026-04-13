@@ -47,7 +47,7 @@ model_spec:
   prediction_length: 1
 training_spec:
   device: cuda
-  epochs: 1000
+  epochs: 10
   save_interval_epochs: 10
   batch_size: 100
   log_interval: 10

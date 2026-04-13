@@ -160,7 +160,7 @@ sequifier train
 sequifier infer
 ```
 
-9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/sequifier-default-best-predictions.csv`
+9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/sequifier-default-best-10-predictions.csv`
 
 
 ## Other Features
@@ -179,7 +179,9 @@ Technical Details: The generated embedding has dimensionality `dim_model` and co
 
 ### Distributed Training
 
-Sequifier supports distributed training using torch `DistributedDataParallel`. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
+Sequifier supports distributed training using torch `DistributedDataParallel` and `FullyShardedDataParallel`. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
+
+For the full guide on how to configure a distributed run, check the [training config README](./documentation/training/multi-gpu-training.md)
 
 
 

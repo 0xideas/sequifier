@@ -46,9 +46,10 @@ These fields tell the inference engine which columns to extract from the new dat
 | `autoregression` | `bool` | No | `false` | If `true`, feeds predictions back into the model to predict further into the future. |
 | `autoregression_extra_steps`| `int` | No | `null` | If `autoregression: true`, how many *additional* future steps to predict beyond the first. |
 | `output_probabilities`| `bool` | No | `false` | If `true`, outputs the full probability distribution for categorical targets. |
-| `sample_from_distribution_columns`| `list[str]`| No | `[]` | If set, the model **samples** from the predicted distribution for these columns instead of taking the top-1 (argmax). Essential for diversity in generation. |
+| `sample_from_distribution_columns`| `Optional[list[str]]`| No | `null` | If set, the model **samples** from the predicted distribution for these columns instead of taking the top-1 (argmax). Essential for diversity in generation. |
 | `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). |
 | `infer_with_dropout` | `bool` | No | `false` | If `true`, keeps dropout active during inference (useful for uncertainty estimation/Monte Carlo Dropout). |
+| `seed` | `int` | No | `1010` | Random seed for reproducibility. |
 
 ### 4\. System & Distributed
 
@@ -103,7 +104,7 @@ Results are saved in the `outputs/` folder within your project root.
       * If `map_to_id` is true, categorical predictions will be the original strings (e.g., "Product\_A"). If false, they will be integers (e.g., 42).
       * Real-valued predictions are automatically denormalized back to their original scale.
 
-2.  **Probabilities:** `outputs/probabilities/[MODEL_NAME]-[TARGET]-probabilities.[format]`
+2.  **Probabilities:** `outputs/probabilities/[MODEL_NAME]-[TARGET_COLUMN]-probabilities.[format]`
 
       * Generated only if `output_probabilities: true`.
       * Contains one column per class.
@@ -112,3 +113,15 @@ Results are saved in the `outputs/` folder within your project root.
 
       * Generated only if `model_type: embedding`.
       * Contains columns `0`, `1`, `2`... representing the vector dimensions.
+
+### Directory Output Mode (Sharded Inference)
+
+When using PyTorch tensors (`read_format: pt`), sequifier creates a directory containing multiple sharded outputs.
+
+**File Structure**
+* **`pt` inputs:** `outputs/predictions/[MODEL_NAME]-predictions/[MODEL_NAME]-[CHUNK_ID]-predictions.[format]` *(Directory of files)*
+* **`pt` inputs:** `outputs/probabilities/[MODEL_NAME]-[TARGET_COLUMN]-probabilities/[MODEL_NAME]-[CHUNK_ID]-probabilities.[format]` *(Directory of files)*
+* **`pt` inputs:** `outputs/embeddings/[MODEL_NAME]-embeddings/[MODEL_NAME]-[CHUNK_ID]-embeddings.[format]` *(Directory of files)*
+
+
+**Pipeline Note:** If you switch to `.pt` inputs, ensure your downstream scripts are configured to read from a directory of files rather than a single file. This behavior applies to predictions, probabilities, and embeddings.

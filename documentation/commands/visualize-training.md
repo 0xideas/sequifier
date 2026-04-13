@@ -24,7 +24,7 @@ Unlike other commands that rely on a YAML config, `visualize-training` is config
 | --- | --- | --- | --- |
 | `models` | `str` | **Required** | A single model name, a comma-separated list of model names, or the path to a `.txt` file containing model names (one per line). |
 | `--log-scale` | `flag` | `False` | Use a logarithmic scale on the y-axis for the loss curves. |
-| `--bucket-training-batches` | `int` | `None` | Smooths the training loss curve by averaging the loss over a specified number of batches. **Must be a multiple of the logged batch interval** used during training. |
+| `--bucket-training-batches` | `int` | `null` | Smooths the training loss curve by averaging the loss over a specified number of batches. **Must be a multiple of the logged batch interval** used during training. |
 | `--project-root` | `str` | `.` | The root directory of your Sequifier project. |
 
 ## Outputs

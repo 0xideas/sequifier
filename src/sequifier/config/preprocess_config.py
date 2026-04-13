@@ -156,9 +156,9 @@ class PreprocessorModel(BaseModel):
     @field_validator("continue_preprocessing")
     @classmethod
     def validate_continue_preprocessing(cls, v: bool, info: ValidationInfo) -> bool:
-        if v and info.data.get("data_path").split(".") in ["csv", "parquet"]:
+        if v and info.data.get("merge_data"):
             raise ValueError(
-                "'continue_preprocessing' can only be set to true for folder inputs, not single files "
+                "'continue_preprocessing' can only be set to true if merge_data is False, not single files "
             )
         return v
 

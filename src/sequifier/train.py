@@ -235,7 +235,7 @@ def train_worker(
             amp_dtype = get_torch_dtype(
                 config.training_spec.layer_type_dtypes.get("linear", "bfloat16")
                 if config.training_spec.layer_type_dtypes
-                else "float32"
+                else "bfloat16"
             )
             mp_policy = MixedPrecisionPolicy(
                 param_dtype=amp_dtype,
@@ -1383,7 +1383,7 @@ class TransformerModel(nn.Module):
                             "linear", "bfloat16"
                         )
                         if self.hparams.training_spec.layer_type_dtypes
-                        else "float32"
+                        else "bfloat16"
                     )
                     with torch.autocast(
                         device_type=self.device.split(":")[0], dtype=amp_dtype
@@ -1698,7 +1698,7 @@ class TransformerModel(nn.Module):
                             "linear", "bfloat16"
                         )
                         if self.hparams.training_spec.layer_type_dtypes
-                        else "float32"
+                        else "bfloat16"
                     )
                     with torch.autocast(
                         device_type=self.device.split(":")[0], dtype=amp_dtype
