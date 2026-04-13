@@ -85,7 +85,7 @@ def adapt_configs(config_strings):
             .replace("EXAMPLE_TARGET_COLUMN_NAME: real", "itemId: categorical")
             .replace("EXAMPLE_INPUT_COLUMN_NAME:", "itemId: 128")
             .replace("EXAMPLE_TARGET_COLUMN_NAME: MSELoss", "itemId: CrossEntropyLoss")
-            .replace("epochs: 1000", "epochs: 3")
+            .replace("epochs: 10", "epochs: 3")
             .replace("device: cuda", "device: cpu")
             .replace("seq_length: 48", "seq_length: 10")
             .replace("total_steps: PLEASE FILL", "total_steps: 10000")

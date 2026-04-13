@@ -6,7 +6,7 @@ The `sequifier hyperparameter-search` command automates the process of finding t
 
 ```console
 sequifier hyperparameter-search --config-path configs/hyperparameter_search.yaml
-```
+````
 
 ## Configuration Fields
 
@@ -62,8 +62,9 @@ These fields define the search space for the Transformer architecture. All field
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list[int]` | **Yes** | Feedforward network dimension. |
 | `initial_embedding_dim`| `list[int]` | **Yes** | Feature embedding size. Usually matches `dim_model`. |
+| `feature_embedding_dims`| `list[dict]` | No | List of maps for feature embedding dimensions. Used if mixing real and categorical features. |
 | `joint_embedding_dim` | `list[int]` | **Yes** | Joint embedding size. If not null, must match `dim_model`. |
-| `prediction_length` | `int` |	Yes	|	Number of steps into the future to predict simultaneously. |
+| `prediction_length` | `int` | **Yes** | Number of steps into the future to predict simultaneously. |
 | `activation_fn` | `list[str]` | **Yes** | `['swiglu', 'gelu', 'relu']`. |
 | `attention_type` | `list[str]` | **Yes** | `['mha', 'mqa', 'gqa']`. |
 | `n_kv_heads` | `list[int]` | **Yes** | Number of KV heads (for MQA/GQA). Use `null` for MHA. |
@@ -71,46 +72,50 @@ These fields define the search space for the Transformer architecture. All field
 | `norm_first` | `list[bool]` | **Yes** | `[true, false]`. Pre-LN vs Post-LN. |
 | `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope']`. |
 | `rope_theta` | `list[float]` | **Yes** | Base frequency for RoPE (e.g., `[10000.0, 50000.0]`). |
-| `prediction_length` | `int` | No | Fixed value (not sampled). Steps to predict simultaneously. Default 1. |
 
 ### 5\. Training Hyperparameters (`training_hyperparameter_sampling`)
 
 Most fields here are lists for sampling, but some are scalar values fixed for all runs.
 
-| Field | Type | Mandatory | Description |
-| :--- | :--- | :--- | :--- |
-| `learning_rate` | `list[float]`| **Yes** | List of learning rates to test. |
-| `batch_size` | `list[int]` | **Yes** | List of batch sizes. |
-| `epochs` | `list[int]` | **Yes** | Epochs to train. Paired with `learning_rate`. |
-| `accumulation_steps` | `list[int]` | **Yes** | Gradient accumulation steps. |
-| `dropout` | `list[float]`| No | List of dropout probabilities (default `[0.0]`). |
-| `optimizer` | `list[dict]` | No | List of optimizer configs (e.g., `[{'name': 'AdamW'}, {'name': 'AdEMAMix'}]`). |
-| `scheduler` | `list[dict]` | No | List of scheduler configs. `scheduler.step()` is only called if < total_steps, so correct configuration is essential |
-| `save_interval_epochs` | `int` | **Yes** | **Fixed.** Checkpoint save frequency. |
-| `save_latest_interval_minutes`| `float`| No | Time interval to overwrite a "latest" checkpoint. |
-| `save_batch_interval_minutes` | `float` | No | Time interval to save a unique, batch-specific checkpoint. |
-| `save_batch_interval_minutes_val_loss` | `bool` | No | Whether to calculate validation loss at the moment of the batch interval save. Defaults to true. |
-| `calculate_validation_loss_on_initialization` | `bool` | No | Determines if a validation pass runs before epoch 1 begins. Defaults to false for hyperparameter search. |
-| `log_interval` | `int` | No | **Fixed.** Logging frequency (batches). Default 10. |
-| `early_stopping_epochs`| `int` | No | **Fixed.** Stop if validation metric doesn't improve. |
-| `num_workers` | `int` | No | **Fixed.** Data loading subprocesses. |
-| `loss_weights` | `dict` | No | **Fixed.** Weights for multi-objective loss. |
-| `class_weights` | `dict` | No | **Fixed.** Weights for imbalanced classes. |
-| `backend` | str | No | `"nccl"` | The distributed training backend to use (e.g., `nccl` for GPUs, `gloo` for CPUs). Only relevant if `distributed: true`. |
-| `device_max_concat_length` | `int` | No | `12` |  Controls recursive tensor concatenation to prevent CUDA kernel limits on specific hardware. Lower this if you encounter "CUDA error: too many resources requested for launch". |
-| `max_ram_gb` | `int` | No | `16` | RAM limit (GB) for the cache when using lazy loading. |
-| `load_full_data_to_ram` | `bool` | No |  `true` |  If `false`, uses lazy loading (requires `read_format: pt`). |
+| Field | Type | Mandatory | Default | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `device` | `str` | **Yes** | - | The device to train on (e.g., `cuda`, `cpu`). |
+| `learning_rate` | `list[float]`| **Yes** | - | List of learning rates to test. |
+| `batch_size` | `list[int]` | **Yes** | - | List of batch sizes. |
+| `epochs` | `list[int]` | **Yes** | - | Epochs to train. Paired with `learning_rate`. |
+| `accumulation_steps` | `list[int]` | **Yes** | - | Gradient accumulation steps. |
+| `criterion` | `dict` | **Yes** | - | Map of target columns to loss functions (e.g., `{'target': 'MSELoss'}`). |
+| `continue_training` | `bool` | **Yes** | - | Load model weights and optimizer state from the latest checkpoint to continue. |
+| `save_interval_epochs` | `int` | **Yes** | - | Checkpoint save frequency. |
+| `dropout` | `list[float]`| No | `[0.0]` | List of dropout probabilities. |
+| `optimizer` | `list[dict]` | No | `[{'name': 'Adam'}]`| List of optimizer configs (e.g., `[{'name': 'AdamW'}, {'name': 'AdEMAMix'}]`). |
+| `scheduler` | `list[dict]` | No | `[{'name': 'StepLR'...}]`| List of scheduler configs. `scheduler.step()` is only called if \< total\_steps, so correct configuration is essential. |
+| `scheduler_step_on` | `str` | No | `epoch` | When to step the scheduler: `epoch` or `batch`. |
+| `save_latest_interval_minutes`| `float`| No | `null` | Time interval to overwrite a "latest" checkpoint. |
+| `save_batch_interval_minutes` | `float` | No | `null` | Time interval to save a unique, batch-specific checkpoint. |
+| `save_batch_interval_minutes_val_loss` | `bool` | No | `true` | Whether to calculate validation loss at the moment of the batch interval save. |
+| `calculate_validation_loss_on_initialization` | `bool` | No | `false` | Determines if a validation pass runs before epoch 1 begins. |
+| `log_interval` | `int` | No | `10` | Logging frequency (batches). |
+| `class_share_log_columns`| `list[str]`| No | `[]` | Columns for which to log the predicted class distribution in validation. |
+| `early_stopping_epochs`| `int` | No | `null` | Stop if validation metric doesn't improve. |
+| `num_workers` | `int` | No | `0` | Data loading subprocesses. |
+| `loss_weights` | `dict` | No | `null` | Weights for multi-objective loss. |
+| `class_weights` | `dict` | No | `null` | Weights for imbalanced classes. |
+| `world_size` | `int` | No | `1` | Number of processes for distributed training. |
+| `backend` | str | No | `nccl` | The distributed training backend to use (e.g., `nccl` for GPUs). Only relevant if `distributed: true`. |
+| `device_max_concat_length` | `int` | No | `12` | Controls recursive tensor concatenation to prevent CUDA kernel limits. |
+| `max_ram_gb` | `int` or `float`| No | `16` | RAM limit (GB) for the cache when using lazy loading. |
+| `load_full_data_to_ram` | `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt`. |
-| `layer_type_dtypes` | `dict` | No | **Fixed.** Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
-| `layer_autocast` | `bool` | No | **Fixed.** Enable `torch.autocast` (default `true`). |
-| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
-| `data_parallelism` | `Optional[str]` | No | `None` | Set data parallelism approach, one of `DDP` and `FSDP`
-| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` | Must be explicitly true or false if data_parallelism is 'FSDP'. Must be `None` otherwise.
-| `torch_compile` | `str` | No | Controls torch.compile. Options are "outer" (compiles the whole model), "inner" (compiles individual transformer layers, for FSDP), or "none" (no compilation). Defaults to "outer". |
-| `float32_matmul_precision` | str | No | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". Defaults to "highest". |
+| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
+| `layer_autocast` | `bool` | No | `true` | Enable `torch.autocast`. |
+| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance for multi-GPU training. |
+| `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`. |
+| `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly `true` or `false` if data\_parallelism is 'FSDP'. |
+| `torch_compile` | `str` | No | `outer` | Controls torch.compile. Options are "outer", "inner", or "none". |
+| `float32_matmul_precision` | str | No | `highest` | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". |
 
 -----
-
 
 ## Parameter Linkage vs. Independence
 

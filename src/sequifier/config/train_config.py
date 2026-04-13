@@ -654,11 +654,11 @@ class TrainModel(BaseModel):
         # If only categorical variables are included and auto-calculation is used,
         # max(dim_model, n_head) must be divisible by the number of categorical variables.
         if n_categorical > 0 and n_real == 0 and v.feature_embedding_dims is None:
-            embedding_size = max(v.dim_model, v.n_head)
+            embedding_size = v.initial_embedding_dim
             if embedding_size % n_categorical != 0:
                 raise ValueError(
                     f"If only categorical variables are included and feature_embedding_dims is not set, "
-                    f"max(dim_model, n_head) ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical}: {categorical_columns})."
+                    f"initial_embedding_dim ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical}: {categorical_columns})."
                 )
 
         return v

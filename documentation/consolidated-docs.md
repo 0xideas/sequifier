@@ -160,7 +160,7 @@ sequifier train
 sequifier infer
 ```
 
-9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/sequifier-default-best-predictions.csv`
+9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/sequifier-default-best-10-predictions.csv`
 
 
 ## Other Features
@@ -179,7 +179,9 @@ Technical Details: The generated embedding has dimensionality `dim_model` and co
 
 ### Distributed Training
 
-Sequifier supports distributed training using torch `DistributedDataParallel`. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
+Sequifier supports distributed training using torch `DistributedDataParallel` and `FullyShardedDataParallel`. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
+
+For the full guide on how to configure a distributed run, check the [training config README](./documentation/training/multi-gpu-training.md)
 
 
 
@@ -201,7 +203,7 @@ Please cite with:
   title = {sequifier - causal transformer models for multivariate sequence modelling},
   year = {2025},
   publisher = {GitHub},
-  version = {v1.1.1.3},
+  version = {v1.1.1.4},
   url = {https://github.com/0xideas/sequifier}
 }
 ```
@@ -244,7 +246,8 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | :--- | :--- | :--- | :--- | :--- |
 | `selected_columns` | `list[str]` | No | `null` | A specific list of columns to process. If `null`, all columns (except metadata) are processed. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
-| `use_precomputed_maps`| `list[str]` | No | `None` | If not `None`, enforces the use of precomputed maps for the variables in the list. |
+| `metadata_config_path` | `Optional[str]` | No | `null` | use a preexisting metadata config path for tokenizing discrete columns and standardising real-valued columns |
+| `use_precomputed_maps`| `list[str]` | No | `null` | If not `null`, enforces the use of precomputed maps for the variables in the list. |
 
 ### 3\. Sequence Logic & Splitting
 
@@ -407,6 +410,7 @@ These fields determine the size and complexity of the Transformer.
 | `epochs` | `int` | **Yes** | - | Maximum number of training epochs. |
 | `batch_size` | `int` | **Yes** | - | Samples per batch. |
 | `learning_rate` | `float` | **Yes** | - | Initial learning rate. |
+| `accumulation_steps` | `Optional[int] | **No** | `null` | Accumulation steps between weight updates, to increase effective batch size |
 | `dropout` | `float` | No | `0.0` | Dropout probability. |
 | `optimizer` | `dict` | No | `{'name': 'Adam'}`| Optimizer config. Supports `Adam`, `AdamW`, `AdEMAMix`, etc. |
 | `scheduler` | `dict` | No | `StepLR...` | LR Scheduler config (e.g., `CosineAnnealingLR`). `scheduler.step()` is only called if < total_steps, so correct configuration is essential |
@@ -433,10 +437,12 @@ These fields determine the size and complexity of the Transformer.
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
 | `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
-| `data_parallelism` | `Optional[str]` | No | `None` | Set data parallelism approach, one of `DDP` and `FSDP`
-| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` | Must be explicitly true or false if data_parallelism is 'FSDP'. Must be `None` otherwise.
+| `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`
+| `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly true or false if data_parallelism is 'FSDP'. Must be `null` otherwise.
 | `torch_compile` | `str` | No | Controls torch.compile. Options are "outer" (compiles the whole model), "inner" (compiles individual transformer layers, for FSDP), or "none" (no compilation). Defaults to "outer". |
 | `float32_matmul_precision` | str | No | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". Defaults to "highest". |
+| `seed` | `int` | No | `1010` | Random seed for reproducibility. |
+
 
 ### 5\. System & Export
 
@@ -484,6 +490,7 @@ If you have multiple GPUs:
 2.  **Crucial:** You must have run `preprocess` with `write_format: pt` and `merge_output: false`.
 3.  Set `world_size` to the number of GPUs.
 4.  Set `data_parallelism` to `DDP` for `DistributedDataParallel`training or `FSDP` for `FullyShardedDataParallel` training
+5.  Set `torch_compile` to `inner` when training with `FSDP` and to `outer` when training with `DDP`
 
 ### 5\. Export Formats (`export_generative_model` vs `export_embedding_model`)
 
@@ -602,9 +609,10 @@ These fields tell the inference engine which columns to extract from the new dat
 | `autoregression` | `bool` | No | `false` | If `true`, feeds predictions back into the model to predict further into the future. |
 | `autoregression_extra_steps`| `int` | No | `null` | If `autoregression: true`, how many *additional* future steps to predict beyond the first. |
 | `output_probabilities`| `bool` | No | `false` | If `true`, outputs the full probability distribution for categorical targets. |
-| `sample_from_distribution_columns`| `list[str]`| No | `[]` | If set, the model **samples** from the predicted distribution for these columns instead of taking the top-1 (argmax). Essential for diversity in generation. |
+| `sample_from_distribution_columns`| `Optional[list[str]]`| No | `null` | If set, the model **samples** from the predicted distribution for these columns instead of taking the top-1 (argmax). Essential for diversity in generation. |
 | `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). |
 | `infer_with_dropout` | `bool` | No | `false` | If `true`, keeps dropout active during inference (useful for uncertainty estimation/Monte Carlo Dropout). |
+| `seed` | `int` | No | `1010` | Random seed for reproducibility. |
 
 ### 4\. System & Distributed
 
@@ -659,7 +667,7 @@ Results are saved in the `outputs/` folder within your project root.
       * If `map_to_id` is true, categorical predictions will be the original strings (e.g., "Product\_A"). If false, they will be integers (e.g., 42).
       * Real-valued predictions are automatically denormalized back to their original scale.
 
-2.  **Probabilities:** `outputs/probabilities/[MODEL_NAME]-[TARGET]-probabilities.[format]`
+2.  **Probabilities:** `outputs/probabilities/[MODEL_NAME]-[TARGET_COLUMN]-probabilities.[format]`
 
       * Generated only if `output_probabilities: true`.
       * Contains one column per class.
@@ -668,6 +676,18 @@ Results are saved in the `outputs/` folder within your project root.
 
       * Generated only if `model_type: embedding`.
       * Contains columns `0`, `1`, `2`... representing the vector dimensions.
+
+### Directory Output Mode (Sharded Inference)
+
+When using PyTorch tensors (`read_format: pt`), sequifier creates a directory containing multiple sharded outputs.
+
+**File Structure**
+* **`pt` inputs:** `outputs/predictions/[MODEL_NAME]-predictions/[MODEL_NAME]-[CHUNK_ID]-predictions.[format]` *(Directory of files)*
+* **`pt` inputs:** `outputs/probabilities/[MODEL_NAME]-[TARGET_COLUMN]-probabilities/[MODEL_NAME]-[CHUNK_ID]-probabilities.[format]` *(Directory of files)*
+* **`pt` inputs:** `outputs/embeddings/[MODEL_NAME]-embeddings/[MODEL_NAME]-[CHUNK_ID]-embeddings.[format]` *(Directory of files)*
+
+
+**Pipeline Note:** If you switch to `.pt` inputs, ensure your downstream scripts are configured to read from a directory of files rather than a single file. This behavior applies to predictions, probabilities, and embeddings.
 
 
 # Visualize Training Command Guide
@@ -696,7 +716,7 @@ Unlike other commands that rely on a YAML config, `visualize-training` is config
 | --- | --- | --- | --- |
 | `models` | `str` | **Required** | A single model name, a comma-separated list of model names, or the path to a `.txt` file containing model names (one per line). |
 | `--log-scale` | `flag` | `False` | Use a logarithmic scale on the y-axis for the loss curves. |
-| `--bucket-training-batches` | `int` | `None` | Smooths the training loss curve by averaging the loss over a specified number of batches. **Must be a multiple of the logged batch interval** used during training. |
+| `--bucket-training-batches` | `int` | `null` | Smooths the training loss curve by averaging the loss over a specified number of batches. **Must be a multiple of the logged batch interval** used during training. |
 | `--project-root` | `str` | `.` | The root directory of your Sequifier project. |
 
 ## Outputs
@@ -715,7 +735,7 @@ The `sequifier hyperparameter-search` command automates the process of finding t
 
 ```console
 sequifier hyperparameter-search --config-path configs/hyperparameter_search.yaml
-```
+````
 
 ## Configuration Fields
 
@@ -771,8 +791,9 @@ These fields define the search space for the Transformer architecture. All field
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list[int]` | **Yes** | Feedforward network dimension. |
 | `initial_embedding_dim`| `list[int]` | **Yes** | Feature embedding size. Usually matches `dim_model`. |
+| `feature_embedding_dims`| `list[dict]` | No | List of maps for feature embedding dimensions. Used if mixing real and categorical features. |
 | `joint_embedding_dim` | `list[int]` | **Yes** | Joint embedding size. If not null, must match `dim_model`. |
-| `prediction_length` | `int` |	Yes	|	Number of steps into the future to predict simultaneously. |
+| `prediction_length` | `int` | **Yes** | Number of steps into the future to predict simultaneously. |
 | `activation_fn` | `list[str]` | **Yes** | `['swiglu', 'gelu', 'relu']`. |
 | `attention_type` | `list[str]` | **Yes** | `['mha', 'mqa', 'gqa']`. |
 | `n_kv_heads` | `list[int]` | **Yes** | Number of KV heads (for MQA/GQA). Use `null` for MHA. |
@@ -780,46 +801,50 @@ These fields define the search space for the Transformer architecture. All field
 | `norm_first` | `list[bool]` | **Yes** | `[true, false]`. Pre-LN vs Post-LN. |
 | `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope']`. |
 | `rope_theta` | `list[float]` | **Yes** | Base frequency for RoPE (e.g., `[10000.0, 50000.0]`). |
-| `prediction_length` | `int` | No | Fixed value (not sampled). Steps to predict simultaneously. Default 1. |
 
 ### 5\. Training Hyperparameters (`training_hyperparameter_sampling`)
 
 Most fields here are lists for sampling, but some are scalar values fixed for all runs.
 
-| Field | Type | Mandatory | Description |
-| :--- | :--- | :--- | :--- |
-| `learning_rate` | `list[float]`| **Yes** | List of learning rates to test. |
-| `batch_size` | `list[int]` | **Yes** | List of batch sizes. |
-| `epochs` | `list[int]` | **Yes** | Epochs to train. Paired with `learning_rate`. |
-| `accumulation_steps` | `list[int]` | **Yes** | Gradient accumulation steps. |
-| `dropout` | `list[float]`| No | List of dropout probabilities (default `[0.0]`). |
-| `optimizer` | `list[dict]` | No | List of optimizer configs (e.g., `[{'name': 'AdamW'}, {'name': 'AdEMAMix'}]`). |
-| `scheduler` | `list[dict]` | No | List of scheduler configs. `scheduler.step()` is only called if < total_steps, so correct configuration is essential |
-| `save_interval_epochs` | `int` | **Yes** | **Fixed.** Checkpoint save frequency. |
-| `save_latest_interval_minutes`| `float`| No | Time interval to overwrite a "latest" checkpoint. |
-| `save_batch_interval_minutes` | `float` | No | Time interval to save a unique, batch-specific checkpoint. |
-| `save_batch_interval_minutes_val_loss` | `bool` | No | Whether to calculate validation loss at the moment of the batch interval save. Defaults to true. |
-| `calculate_validation_loss_on_initialization` | `bool` | No | Determines if a validation pass runs before epoch 1 begins. Defaults to false for hyperparameter search. |
-| `log_interval` | `int` | No | **Fixed.** Logging frequency (batches). Default 10. |
-| `early_stopping_epochs`| `int` | No | **Fixed.** Stop if validation metric doesn't improve. |
-| `num_workers` | `int` | No | **Fixed.** Data loading subprocesses. |
-| `loss_weights` | `dict` | No | **Fixed.** Weights for multi-objective loss. |
-| `class_weights` | `dict` | No | **Fixed.** Weights for imbalanced classes. |
-| `backend` | str | No | `"nccl"` | The distributed training backend to use (e.g., `nccl` for GPUs, `gloo` for CPUs). Only relevant if `distributed: true`. |
-| `device_max_concat_length` | `int` | No | `12` |  Controls recursive tensor concatenation to prevent CUDA kernel limits on specific hardware. Lower this if you encounter "CUDA error: too many resources requested for launch". |
-| `max_ram_gb` | `int` | No | `16` | RAM limit (GB) for the cache when using lazy loading. |
-| `load_full_data_to_ram` | `bool` | No |  `true` |  If `false`, uses lazy loading (requires `read_format: pt`). |
+| Field | Type | Mandatory | Default | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `device` | `str` | **Yes** | - | The device to train on (e.g., `cuda`, `cpu`). |
+| `learning_rate` | `list[float]`| **Yes** | - | List of learning rates to test. |
+| `batch_size` | `list[int]` | **Yes** | - | List of batch sizes. |
+| `epochs` | `list[int]` | **Yes** | - | Epochs to train. Paired with `learning_rate`. |
+| `accumulation_steps` | `list[int]` | **Yes** | - | Gradient accumulation steps. |
+| `criterion` | `dict` | **Yes** | - | Map of target columns to loss functions (e.g., `{'target': 'MSELoss'}`). |
+| `continue_training` | `bool` | **Yes** | - | Load model weights and optimizer state from the latest checkpoint to continue. |
+| `save_interval_epochs` | `int` | **Yes** | - | Checkpoint save frequency. |
+| `dropout` | `list[float]`| No | `[0.0]` | List of dropout probabilities. |
+| `optimizer` | `list[dict]` | No | `[{'name': 'Adam'}]`| List of optimizer configs (e.g., `[{'name': 'AdamW'}, {'name': 'AdEMAMix'}]`). |
+| `scheduler` | `list[dict]` | No | `[{'name': 'StepLR'...}]`| List of scheduler configs. `scheduler.step()` is only called if \< total\_steps, so correct configuration is essential. |
+| `scheduler_step_on` | `str` | No | `epoch` | When to step the scheduler: `epoch` or `batch`. |
+| `save_latest_interval_minutes`| `float`| No | `null` | Time interval to overwrite a "latest" checkpoint. |
+| `save_batch_interval_minutes` | `float` | No | `null` | Time interval to save a unique, batch-specific checkpoint. |
+| `save_batch_interval_minutes_val_loss` | `bool` | No | `true` | Whether to calculate validation loss at the moment of the batch interval save. |
+| `calculate_validation_loss_on_initialization` | `bool` | No | `false` | Determines if a validation pass runs before epoch 1 begins. |
+| `log_interval` | `int` | No | `10` | Logging frequency (batches). |
+| `class_share_log_columns`| `list[str]`| No | `[]` | Columns for which to log the predicted class distribution in validation. |
+| `early_stopping_epochs`| `int` | No | `null` | Stop if validation metric doesn't improve. |
+| `num_workers` | `int` | No | `0` | Data loading subprocesses. |
+| `loss_weights` | `dict` | No | `null` | Weights for multi-objective loss. |
+| `class_weights` | `dict` | No | `null` | Weights for imbalanced classes. |
+| `world_size` | `int` | No | `1` | Number of processes for distributed training. |
+| `backend` | str | No | `nccl` | The distributed training backend to use (e.g., `nccl` for GPUs). Only relevant if `distributed: true`. |
+| `device_max_concat_length` | `int` | No | `12` | Controls recursive tensor concatenation to prevent CUDA kernel limits. |
+| `max_ram_gb` | `int` or `float`| No | `16` | RAM limit (GB) for the cache when using lazy loading. |
+| `load_full_data_to_ram` | `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt`. |
-| `layer_type_dtypes` | `dict` | No | **Fixed.** Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
-| `layer_autocast` | `bool` | No | **Fixed.** Enable `torch.autocast` (default `true`). |
-| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
-| `data_parallelism` | `Optional[str]` | No | `None` | Set data parallelism approach, one of `DDP` and `FSDP`
-| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` | Must be explicitly true or false if data_parallelism is 'FSDP'. Must be `None` otherwise.
-| `torch_compile` | `str` | No | Controls torch.compile. Options are "outer" (compiles the whole model), "inner" (compiles individual transformer layers, for FSDP), or "none" (no compilation). Defaults to "outer". |
-| `float32_matmul_precision` | str | No | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". Defaults to "highest". |
+| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
+| `layer_autocast` | `bool` | No | `true` | Enable `torch.autocast`. |
+| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance for multi-GPU training. |
+| `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`. |
+| `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly `true` or `false` if data\_parallelism is 'FSDP'. |
+| `torch_compile` | `str` | No | `outer` | Controls torch.compile. Options are "outer", "inner", or "none". |
+| `float32_matmul_precision` | str | No | `highest` | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". |
 
 -----
-
 
 ## Parameter Linkage vs. Independence
 
@@ -902,7 +927,7 @@ The hyperparameter search command includes **automatic error handling for Out of
 
 Sequifier natively supports multi-GPU and multi-node training using PyTorch's `DistributedDataParallel` (DDP) and `FullyShardedDataParallel` (FSDP).
 
-## 1. Prerequisites: Preprocessing for DDP
+## 1. Prerequisites: Preprocessing for Distributed training
 
 To use distributed training, your data must be sharded into multiple files so that different GPUs can read different chunks simultaneously without memory bottlenecks.
 
@@ -912,7 +937,7 @@ In your `preprocess.yaml`, you **must** set the following:
 merge_output: false
 ```
 
-typically, you'd also want to set
+you also need to set
 
 ```yaml
 write_format: pt
@@ -933,7 +958,7 @@ training_spec:
   fsdp_cpu_offload: false              # Set to true to offload parameters to CPU RAM
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)
   backend: nccl        # 'nccl' is the standard and most efficient backend for NVIDIA GPUs
-  sampling_strategy: 'oversampling' # if the number of files isn't perfectly divisible by the number of GPUs, you need to choose either 'oversampling' or 'undersampling'. If it is perfectly divisible, you can set it to 'exact'
+  sampling_strategy: 'oversampling' # if the number of files isn't perfectly divisible by the number of GPUs, you need to choose either 'oversampling' or 'undersampling'. If it is perfectly divisible, you can set it to 'exact', but the files must be very close to each other in size to prevent timing mismatches
 
 ```
 
@@ -964,22 +989,12 @@ Here is a standard `sbatch` script template for launching Sequifier across multi
 
 ```bash
 #!/bin/bash
-#SBATCH --job-name=sequifier_multinode
-#SBATCH --nodes=8                  # Number of nodes
-#SBATCH --gres=gpu:4               # GPUs per node
-#SBATCH --ntasks-per-node=1        # One task per node (torchrun handles the rest)
-#SBATCH --cpus-per-task=80         # CPU cores per node
-
-# ... python env setup ...
+#[SBATCH COMMANDS]
 
 MASTER_NODE=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
 
 srun torchrun \
-    --nnodes=8 \
-    --nproc_per_node=4 \
-    --rdzv_id=sequifier_job \
-    --rdzv_backend=c10d \
-    --rdzv_endpoint=$MASTER_NODE:29400 \
+    [-- torchrun args]...
     $(which sequifier) train --config-path=configs/train.yaml
 ```
 

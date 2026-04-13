@@ -62,6 +62,7 @@ These fields determine the size and complexity of the Transformer.
 | `epochs` | `int` | **Yes** | - | Maximum number of training epochs. |
 | `batch_size` | `int` | **Yes** | - | Samples per batch. |
 | `learning_rate` | `float` | **Yes** | - | Initial learning rate. |
+| `accumulation_steps` | `Optional[int] | **No** | `null` | Accumulation steps between weight updates, to increase effective batch size |
 | `dropout` | `float` | No | `0.0` | Dropout probability. |
 | `optimizer` | `dict` | No | `{'name': 'Adam'}`| Optimizer config. Supports `Adam`, `AdamW`, `AdEMAMix`, etc. |
 | `scheduler` | `dict` | No | `StepLR...` | LR Scheduler config (e.g., `CosineAnnealingLR`). `scheduler.step()` is only called if < total_steps, so correct configuration is essential |
@@ -88,10 +89,12 @@ These fields determine the size and complexity of the Transformer.
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
 | `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
-| `data_parallelism` | `Optional[str]` | No | `None` | Set data parallelism approach, one of `DDP` and `FSDP`
-| `fsdp_cpu_offload` | `Optional[bool]` | No | `None` | Must be explicitly true or false if data_parallelism is 'FSDP'. Must be `None` otherwise.
+| `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`
+| `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly true or false if data_parallelism is 'FSDP'. Must be `null` otherwise.
 | `torch_compile` | `str` | No | Controls torch.compile. Options are "outer" (compiles the whole model), "inner" (compiles individual transformer layers, for FSDP), or "none" (no compilation). Defaults to "outer". |
 | `float32_matmul_precision` | str | No | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". Defaults to "highest". |
+| `seed` | `int` | No | `1010` | Random seed for reproducibility. |
+
 
 ### 5\. System & Export
 
@@ -139,6 +142,7 @@ If you have multiple GPUs:
 2.  **Crucial:** You must have run `preprocess` with `write_format: pt` and `merge_output: false`.
 3.  Set `world_size` to the number of GPUs.
 4.  Set `data_parallelism` to `DDP` for `DistributedDataParallel`training or `FSDP` for `FullyShardedDataParallel` training
+5.  Set `torch_compile` to `inner` when training with `FSDP` and to `outer` when training with `DDP`
 
 ### 5\. Export Formats (`export_generative_model` vs `export_embedding_model`)
 
