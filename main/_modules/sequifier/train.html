@@ -267,8 +267,10 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.train</h1><div class="highlight"><pre>
-<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">copy</span>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">contextlib</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">copy</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">glob</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
@@ -815,8 +817,6 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">model_name</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_name</span> <span class="ow">or</span> <span class="n">uuid</span><span class="o">.</span><span class="n">uuid4</span><span class="p">()</span><span class="o">.</span><span class="n">hex</span><span class="p">[:</span><span class="mi">8</span><span class="p">]</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_initialize_log_file</span><span class="p">()</span>
-
-        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;--- Starting Training for model: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model_name</span><span class="si">}</span><span class="s2"> ---&quot;</span><span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">input_columns</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span> <span class="o">=</span> <span class="p">[</span>
@@ -1442,6 +1442,8 @@
 <span class="sd">            valid_loader: DataLoader for the validation dataset.</span>
 <span class="sd">            ddp_model: ddp model</span>
 <span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;--- Starting Training for model: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model_name</span><span class="si">}</span><span class="s2"> ---&quot;</span><span class="p">)</span>
+
         <span class="n">best_val_loss</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)</span>
         <span class="n">n_epochs_no_improvement</span> <span class="o">=</span> <span class="mi">0</span>
         <span class="n">last_epoch</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span> <span class="o">-</span> <span class="mi">1</span>
@@ -2196,7 +2198,25 @@
                 <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span>
             <span class="p">}</span>
 
-            <span class="n">x</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;src&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">**</span><span class="n">x_cat</span><span class="p">,</span> <span class="o">**</span><span class="n">x_real</span><span class="p">}}</span>
+            <span class="n">input_dict</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">x_cat</span><span class="p">,</span> <span class="o">**</span><span class="n">x_real</span><span class="p">}</span>
+
+            <span class="c1"># Wrap in a tuple with an empty dict to prevent PyTorch from treating input_dict as kwargs</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="p">(</span><span class="n">input_dict</span><span class="p">,</span> <span class="p">{})</span>
+
+            <span class="c1"># PyTree flattening sorts dictionary keys automatically, so we sort names to match</span>
+            <span class="n">input_names</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_in&quot;</span> <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">input_dict</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span> <span class="k">else</span> <span class="n">col</span>
+                <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">)</span>
+            <span class="p">]</span>
+
+            <span class="c1"># Determine output names based on the model type</span>
+            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">model_to_export</span><span class="p">,</span> <span class="s2">&quot;transformer_model&quot;</span><span class="p">):</span>
+                <span class="n">output_names</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;output&quot;</span><span class="p">]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">output_names</span> <span class="o">=</span> <span class="p">[</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2">_out&quot;</span> <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">input_names</span> <span class="k">else</span> <span class="n">col</span>
+                    <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">model_to_export</span><span class="o">.</span><span class="n">target_columns</span><span class="p">)</span>
+                <span class="p">]</span>
 
             <span class="c1"># Export the model</span>
             <span class="n">export_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
@@ -2211,21 +2231,36 @@
             <span class="p">)</span>
             <span class="n">constant_folding</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">export_with_dropout</span> <span class="o">==</span> <span class="kc">False</span>  <span class="c1"># noqa: E712</span>
 
-            <span class="n">torch</span><span class="o">.</span><span class="n">onnx</span><span class="o">.</span><span class="n">export</span><span class="p">(</span>
-                <span class="n">model_to_export</span><span class="p">,</span>
-                <span class="n">x</span><span class="p">,</span>  <span class="c1"># model input (or a tuple for multiple inputs)</span>
-                <span class="n">export_path</span><span class="p">,</span>  <span class="c1"># where to save the model</span>
-                <span class="n">export_params</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>  <span class="c1"># store the trained parameter weights</span>
-                <span class="n">opset_version</span><span class="o">=</span><span class="mi">14</span><span class="p">,</span>  <span class="c1"># the ONNX version</span>
-                <span class="n">do_constant_folding</span><span class="o">=</span><span class="n">constant_folding</span><span class="p">,</span>
-                <span class="n">input_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;input&quot;</span><span class="p">],</span>
-                <span class="n">output_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;output&quot;</span><span class="p">],</span>
-                <span class="n">dynamic_axes</span><span class="o">=</span><span class="p">{</span>
-                    <span class="s2">&quot;input&quot;</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="s2">&quot;batch_size&quot;</span><span class="p">},</span>
-                    <span class="s2">&quot;output&quot;</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="s2">&quot;batch_size&quot;</span><span class="p">},</span>
-                <span class="p">},</span>
-                <span class="n">training</span><span class="o">=</span><span class="n">training_mode</span><span class="p">,</span>
-            <span class="p">)</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">torch</span><span class="o">.</span><span class="n">_logging</span><span class="o">.</span><span class="n">set_logs</span><span class="p">(</span><span class="n">onnx</span><span class="o">=</span><span class="n">logging</span><span class="o">.</span><span class="n">ERROR</span><span class="p">)</span>
+                <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s2">&quot;torch.onnx&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">ERROR</span><span class="p">)</span>
+            <span class="k">except</span> <span class="p">(</span><span class="ne">ImportError</span><span class="p">,</span> <span class="ne">AttributeError</span><span class="p">):</span>
+                <span class="n">torch</span><span class="o">.</span><span class="n">onnx</span><span class="o">.</span><span class="n">disable_log</span><span class="p">()</span>  <span class="c1"># Fallback for older PyTorch versions</span>
+            <span class="c1"># 2. Catch and ignore standard Python warnings temporarily</span>
+            <span class="k">with</span> <span class="n">warnings</span><span class="o">.</span><span class="n">catch_warnings</span><span class="p">(),</span> <span class="nb">open</span><span class="p">(</span>
+                <span class="n">os</span><span class="o">.</span><span class="n">devnull</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span>
+            <span class="p">)</span> <span class="k">as</span> <span class="n">fnull</span><span class="p">,</span> <span class="n">contextlib</span><span class="o">.</span><span class="n">redirect_stdout</span><span class="p">(</span><span class="n">fnull</span><span class="p">),</span> <span class="n">contextlib</span><span class="o">.</span><span class="n">redirect_stderr</span><span class="p">(</span>
+                <span class="n">fnull</span>
+            <span class="p">):</span>  <span class="c1"># Ignore ONLY the specific messages we understand and expect</span>
+                <span class="n">warnings</span><span class="o">.</span><span class="n">filterwarnings</span><span class="p">(</span>
+                    <span class="s2">&quot;ignore&quot;</span><span class="p">,</span>
+                    <span class="n">message</span><span class="o">=</span><span class="s2">&quot;.*Exporting a model while it is in training mode.*&quot;</span><span class="p">,</span>
+                <span class="p">)</span>
+
+                <span class="c1"># Ignore the internal PyTree deprecation bubbling up from Python 3.14/copyreg</span>
+                <span class="n">warnings</span><span class="o">.</span><span class="n">filterwarnings</span><span class="p">(</span><span class="s2">&quot;ignore&quot;</span><span class="p">,</span> <span class="n">category</span><span class="o">=</span><span class="ne">FutureWarning</span><span class="p">)</span>
+
+                <span class="n">torch</span><span class="o">.</span><span class="n">onnx</span><span class="o">.</span><span class="n">export</span><span class="p">(</span>
+                    <span class="n">model_to_export</span><span class="p">,</span>
+                    <span class="n">x</span><span class="p">,</span>
+                    <span class="n">export_path</span><span class="p">,</span>
+                    <span class="n">export_params</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                    <span class="n">opset_version</span><span class="o">=</span><span class="mi">18</span><span class="p">,</span>
+                    <span class="n">do_constant_folding</span><span class="o">=</span><span class="n">constant_folding</span><span class="p">,</span>
+                    <span class="n">input_names</span><span class="o">=</span><span class="n">input_names</span><span class="p">,</span>
+                    <span class="n">output_names</span><span class="o">=</span><span class="n">output_names</span><span class="p">,</span>
+                    <span class="n">training</span><span class="o">=</span><span class="n">training_mode</span><span class="p">,</span>
+                <span class="p">)</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">export_pt</span><span class="p">:</span>
             <span class="n">export_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
