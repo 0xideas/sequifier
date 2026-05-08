@@ -50,7 +50,13 @@ def test_checkpoint_files_exists(
 def test_model_files_exists(run_training, run_training_from_checkpoint, project_root):
     model_type_formats = {"categorical": ["onnx", "pt"], "real": ["onnx", "pt"]}
     found_items = np.array(
-        sorted(list(os.listdir(os.path.join(project_root, "models"))))
+        sorted(
+            [
+                f
+                for f in os.listdir(os.path.join(project_root, "models"))
+                if not f.endswith(".onnx.data")
+            ]
+        )
     )
 
     expected_items = np.array(
