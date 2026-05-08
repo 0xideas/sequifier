@@ -31,3 +31,5 @@ use configurable (external or also sequifier) embedding model to embed text into
 "deembedding model export"
 if sequifier embedding model used during preprocessing, support deembedding model during inference for generative inference
 trajectory transformer: rewrite sequifier/infer.py to optionally implement beam search and integrate a reward-maximization objective.
+add conditional "decoding" of target variables: define target variable order in config, use sampled/selected value of tv-1 as input to tv0
+exporting "backbone" checkpoints so that training runs can use different embedding/disembedding modules. This supports training foundation models across data types

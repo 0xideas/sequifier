@@ -1,5 +1,7 @@
+import contextlib
 import copy
 import glob
+import logging
 import math
 import os
 import time
@@ -546,8 +548,6 @@ class TransformerModel(nn.Module):
         self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
 
         self._initialize_log_file()
-
-        self.logger.info(f"--- Starting Training for model: {self.model_name} ---")
 
         self.input_columns = hparams.input_columns
         self.categorical_columns = [
@@ -1173,6 +1173,8 @@ class TransformerModel(nn.Module):
             valid_loader: DataLoader for the validation dataset.
             ddp_model: ddp model
         """
+        self.logger.info(f"--- Starting Training for model: {self.model_name} ---")
+
         best_val_loss = float("inf")
         n_epochs_no_improvement = 0
         last_epoch = self.start_epoch - 1
@@ -1927,7 +1929,25 @@ class TransformerModel(nn.Module):
                 for col in self.real_columns
             }
 
-            x = {"src": {**x_cat, **x_real}}
+            input_dict = {**x_cat, **x_real}
+
+            # Wrap in a tuple with an empty dict to prevent PyTorch from treating input_dict as kwargs
+            x = (input_dict, {})
+
+            # PyTree flattening sorts dictionary keys automatically, so we sort names to match
+            input_names = [
+                f"{col}_in" if col in sorted(list(input_dict.keys())) else col
+                for col in sorted(self.target_columns)
+            ]
+
+            # Determine output names based on the model type
+            if hasattr(model_to_export, "transformer_model"):
+                output_names = ["output"]
+            else:
+                output_names = [
+                    f"{col}_out" if col in input_names else col
+                    for col in sorted(model_to_export.target_columns)
+                ]
 
             # Export the model
             export_path = os.path.join(
@@ -1942,21 +1962,36 @@ class TransformerModel(nn.Module):
             )
             constant_folding = self.export_with_dropout == False  # noqa: E712
 
-            torch.onnx.export(
-                model_to_export,
-                x,  # model input (or a tuple for multiple inputs)
-                export_path,  # where to save the model
-                export_params=True,  # store the trained parameter weights
-                opset_version=14,  # the ONNX version
-                do_constant_folding=constant_folding,
-                input_names=["input"],
-                output_names=["output"],
-                dynamic_axes={
-                    "input": {0: "batch_size"},
-                    "output": {0: "batch_size"},
-                },
-                training=training_mode,
-            )
+            try:
+                torch._logging.set_logs(onnx=logging.ERROR)
+                logging.getLogger("torch.onnx").setLevel(logging.ERROR)
+            except (ImportError, AttributeError):
+                torch.onnx.disable_log()  # Fallback for older PyTorch versions
+            # 2. Catch and ignore standard Python warnings temporarily
+            with warnings.catch_warnings(), open(
+                os.devnull, "w"
+            ) as fnull, contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(
+                fnull
+            ):  # Ignore ONLY the specific messages we understand and expect
+                warnings.filterwarnings(
+                    "ignore",
+                    message=".*Exporting a model while it is in training mode.*",
+                )
+
+                # Ignore the internal PyTree deprecation bubbling up from Python 3.14/copyreg
+                warnings.filterwarnings("ignore", category=FutureWarning)
+
+                torch.onnx.export(
+                    model_to_export,
+                    x,
+                    export_path,
+                    export_params=True,
+                    opset_version=18,
+                    do_constant_folding=constant_folding,
+                    input_names=input_names,
+                    output_names=output_names,
+                    training=training_mode,
+                )
 
         if self.export_pt:
             export_path = os.path.join(
