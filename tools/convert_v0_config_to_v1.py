@@ -35,6 +35,9 @@ def convert_preprocess(config):
     write_format = config.get("write_format", "parquet")
     if write_format == "pt":
         config["merge_output"] = False
+    elif write_format == "parquet":
+        # Keep the user's choice, defaulting to True if not present to mimic old behavior
+        config["merge_output"] = config.get("merge_output", True)
     else:
         config["merge_output"] = True
 
