@@ -33,8 +33,8 @@ In your `train.yaml`, update the `training_spec` block:
 ```yaml
 training_spec:
   distributed: true
-  data_parallelism: 'FSDP' # or 'DDP   # Set to true to shard model weights/gradients across GPUs
-  fsdp_cpu_offload: false              # Set to true to offload parameters to CPU RAM
+  data_parallelism: 'FSDP' # or 'DDP'   # Set to true to shard model weights/gradients across GPUs
+  fsdp_cpu_offload: false   # omit if using 'DDP', set to true to offload parameters to CPU RAM
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)
   backend: nccl        # 'nccl' is the standard and most efficient backend for NVIDIA GPUs
   sampling_strategy: 'oversampling' # if the number of files isn't perfectly divisible by the number of GPUs, you need to choose either 'oversampling' or 'undersampling'. If it is perfectly divisible, you can set it to 'exact', but the files must be very close to each other in size to prevent timing mismatches

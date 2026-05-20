@@ -111,7 +111,7 @@ class Preprocessor:
         else:
             if write_format not in ["pt", "parquet"]:
                 raise ValueError(
-                    f"write_format must be 'pt' when merge_output is False, got '{write_format}'"
+                    f"write_format must be 'pt' or 'parquet' when merge_output is False, got '{write_format}'"
                 )
             self.target_dir = f"{self.data_name_root}-temp"
 

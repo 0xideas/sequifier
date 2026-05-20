@@ -47,7 +47,7 @@ def dataset_path(tmp_path):
         for s in range(10):
             rows.append((s, 0, s * 2, "item", float(s), float(s + 1), float(s + 2)))
 
-        df = pl.DataFrame(rows, schema=schema)
+        df = pl.DataFrame(rows, schema=schema, orient="row")
         df.write_parquet(data_dir / filename)
         batch_files.append({"path": filename, "samples": 10})
 
@@ -150,7 +150,9 @@ def test_oversampling_strategy(mock_config, tmp_path):
             (s, 0, s * 2, "item", float(s), float(s + 1), float(s + 2))
             for s in range(num_rows)
         ]
-        pl.DataFrame(rows, schema=schema).write_parquet(data_dir / f"file_{i}.parquet")
+        pl.DataFrame(rows, schema=schema, orient="row").write_parquet(
+            data_dir / f"file_{i}.parquet"
+        )
 
     batch_files = [
         {"path": "file_1.parquet", "samples": 15},
@@ -192,7 +194,9 @@ def test_undersampling_strategy(mock_config, tmp_path):
             (s, 0, s * 2, "item", float(s), float(s + 1), float(s + 2))
             for s in range(num_rows)
         ]
-        pl.DataFrame(rows, schema=schema).write_parquet(data_dir / f"file_{i}.parquet")
+        pl.DataFrame(rows, schema=schema, orient="row").write_parquet(
+            data_dir / f"file_{i}.parquet"
+        )
 
     batch_files = [
         {"path": "file_1.parquet", "samples": 15},

@@ -100,7 +100,6 @@ class InfererModel(BaseModel):
         seq_length: The sequence length of the model's input.
         inference_batch_size: The batch size for inference.
         distributed: If True, enables distributed inference.
-        load_full_data_to_ram: If True, loads the entire dataset into RAM.
         world_size: The number of processes for distributed inference.
         num_workers: The number of worker threads for data loading.
         sample_from_distribution_columns: A list of columns from which to sample from the distribution.
@@ -137,7 +136,6 @@ class InfererModel(BaseModel):
     inference_batch_size: int
 
     distributed: bool = False
-    load_full_data_to_ram: bool = True
     world_size: int = 1
     num_workers: int = 0
 
@@ -260,7 +258,7 @@ class InfererModel(BaseModel):
     @field_validator("distributed")
     @classmethod
     def validate_distributed_inference(cls, v: bool, info: ValidationInfo) -> bool:
-        if v and info.data.get("read_format") != "pt":
+        if v and info.data.get("read_format") not in ["pt", "parquet"]:
             raise ValueError(
                 "Distributed inference is only supported for preprocessed '.pt' files. Please set read_format to 'pt'."
             )

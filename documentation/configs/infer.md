@@ -60,8 +60,6 @@ These fields tell the inference engine which columns to extract from the new dat
 | `world_size` | `int` | No | `1` | Number of GPUs/processes for distributed inference. |
 | `num_workers` | `int` | No | `0` | Number of subprocesses for data loading. |
 | `enforce_determinism` | `bool` | No | `false` | Forces PyTorch to use deterministic algorithms. |
-| `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
-
 -----
 
 ## Key Trade-offs and Decisions
