@@ -112,6 +112,13 @@ def training_config_path_cat_multitarget():
 
 
 @pytest.fixture(scope="session")
+def training_config_path_cat_multitarget_eager():
+    return os.path.join(
+        "tests", "configs", "train-test-categorical-multitarget-eager.yaml"
+    )
+
+
+@pytest.fixture(scope="session")
 def training_config_path_real():
     return os.path.join("tests", "configs", "train-test-real.yaml")
 
@@ -254,6 +261,7 @@ def format_configs_locally(
     training_config_path_resume_mid_epoch,
     inference_config_path_cat,
     inference_config_path_cat_multitarget,
+    training_config_path_cat_multitarget_eager,
     inference_config_path_real,
     inference_config_path_real_autoregression,
     inference_config_path_categorical_autoregression,
@@ -283,6 +291,7 @@ def format_configs_locally(
             training_config_path_resume_mid_epoch,
             inference_config_path_cat,
             inference_config_path_cat_multitarget,
+            training_config_path_cat_multitarget_eager,
             inference_config_path_real,
             inference_config_path_real_autoregression,
             inference_config_path_categorical_autoregression,
@@ -421,6 +430,7 @@ def run_training(
     training_config_path_distributed,
     training_config_path_lazy,
     training_config_path_cat_multitarget,
+    training_config_path_cat_multitarget_eager,
 ):
     for model_number in [1, 3, 5, 50]:
         metadata_config_path_cat = os.path.join(
@@ -444,6 +454,10 @@ def run_training(
     run_and_log(f"sequifier train --config-path {training_config_path_cat_inf_size_3}")
 
     run_and_log(f"sequifier train --config-path {training_config_path_cat_multitarget}")
+
+    run_and_log(
+        f"sequifier train --config-path {training_config_path_cat_multitarget_eager}"
+    )
 
     run_and_log(f"sequifier train --config-path {training_config_path_distributed}")
 
