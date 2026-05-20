@@ -57,17 +57,17 @@ from sequifier.helpers import (  # noqa: E402
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
 )
-from sequifier.io.sequifier_dataset_from_folder import (  # noqa: E402
-    SequifierDatasetFromFolder,
-)
-from sequifier.io.sequifier_dataset_from_folder_lazy import (  # noqa: E402
-    SequifierDatasetFromFolderLazy,
-)
 from sequifier.io.sequifier_dataset_from_folder_parquet import (  # noqa: E402
     SequifierDatasetFromFolderParquet,
 )
 from sequifier.io.sequifier_dataset_from_folder_parquet_lazy import (  # noqa: E402
     SequifierDatasetFromFolderParquetLazy,
+)
+from sequifier.io.sequifier_dataset_from_folder_pt import (  # noqa: E402
+    SequifierDatasetFromFolderPt,
+)
+from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
+    SequifierDatasetFromFolderPtLazy,
 )
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
@@ -152,17 +152,17 @@ def train_worker(
     if from_folder:
         if config.read_format == "pt":
             if config.training_spec.load_full_data_to_ram:
-                train_dataset = SequifierDatasetFromFolder(
+                train_dataset = SequifierDatasetFromFolderPt(
                     config.training_data_path, config
                 )
-                valid_dataset = SequifierDatasetFromFolder(
+                valid_dataset = SequifierDatasetFromFolderPt(
                     config.validation_data_path, config
                 )
             else:
-                train_dataset = SequifierDatasetFromFolderLazy(
+                train_dataset = SequifierDatasetFromFolderPtLazy(
                     config.training_data_path, config
                 )
-                valid_dataset = SequifierDatasetFromFolderLazy(
+                valid_dataset = SequifierDatasetFromFolderPtLazy(
                     config.validation_data_path, config
                 )
         elif config.read_format == "parquet":

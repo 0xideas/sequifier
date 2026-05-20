@@ -712,7 +712,7 @@ class Preprocessor:
         `target_dir` into their final split-specific subfolders (e.g.,
         'data_name_root-split0/'). It also generates a 'metadata.json' file
         in each of these subfolders, which is required by
-        `SequifierDatasetFromFolder`.
+        `SequifierDatasetFromFolderPt`.
 
         Finally, it removes the temporary `target_dir` if it's empty or
         if `target_dir` is "temp" (implying `merge_output` was True).
@@ -813,7 +813,7 @@ class Preprocessor:
                 samples (sequences), and writes a `metadata.json` file in that
                 same folder. This JSON file contains the total sample count and a
                 list of all batch files with their respective sample counts, which
-        s        is required by the `SequifierDatasetFromFolder` data loader.
+        s        is required by the `SequifierDatasetFromFolderPt` data loader.
 
                 Args:
                     folder_path: The path to the directory containing the .pt batch files

@@ -63,7 +63,7 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 ### 1\. `write_format`: `parquet` vs. `pt`
 
   * **Choose `parquet` (default):** If your dataset is small to medium (fits in RAM) and you want to inspect the preprocessed data easily using standard tools like Pandas or Polars. This produces one file per split (e.g., `data-split0.parquet`).
-  * **Choose `pt`:** If your dataset is massive (larger than RAM) or you intend to use **Distributed Training** (multi-GPU). This format saves data as thousands of small PyTorch tensor files. It allows the `SequifierDatasetFromFolderLazy` to load data on demand without clogging memory.
+  * **Choose `pt`:** If your dataset is massive (larger than RAM) or you intend to use **Distributed Training** (multi-GPU). This format saves data as thousands of small PyTorch tensor files. It allows the `SequifierDatasetFromFolderPtLazy` to load data on demand without clogging memory.
 
 ### 2\. `stride_by_split` configuration
 

@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from sequifier.io.sequifier_dataset_from_folder_lazy import (
-    SequifierDatasetFromFolderLazy,
+from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (
+    SequifierDatasetFromFolderPtLazy,
 )
 
 
@@ -75,7 +75,7 @@ def mock_torch_load():
 
 def test_initialization(mock_config, dataset_path):
     """Tests that metadata is read correctly and __len__ calculates batches."""
-    dataset = SequifierDatasetFromFolderLazy(dataset_path, mock_config)
+    dataset = SequifierDatasetFromFolderPtLazy(dataset_path, mock_config)
 
     # 40 total samples / batch size of 5 = 8 batches
     assert len(dataset) == 8
@@ -85,7 +85,7 @@ def test_initialization(mock_config, dataset_path):
 
 def test_iteration_yields_correct_batches(mock_config, dataset_path, mock_torch_load):
     """Tests that the dataset iterates over files and yields correct tensor slices."""
-    dataset = SequifierDatasetFromFolderLazy(dataset_path, mock_config, shuffle=False)
+    dataset = SequifierDatasetFromFolderPtLazy(dataset_path, mock_config, shuffle=False)
 
     # Consume the generator
     batches = list(dataset)
@@ -114,7 +114,7 @@ def test_distributed_sharding(
     mock_rank, mock_ws, mock_init, mock_config, dataset_path, mock_torch_load
 ):
     """Tests that the dataset correctly shards files across distributed GPUs."""
-    dataset = SequifierDatasetFromFolderLazy(dataset_path, mock_config, shuffle=False)
+    dataset = SequifierDatasetFromFolderPtLazy(dataset_path, mock_config, shuffle=False)
 
     # World size = 2, Total files = 4
     # Rank 0 gets file index 0 and 2 (file1.pt, file3.pt) -> Total 20 samples
@@ -133,7 +133,7 @@ def test_distributed_sharding(
     assert not any("file2.pt" in f for f in loaded_files)
 
 
-@patch("sequifier.io.sequifier_dataset_from_folder_lazy.get_worker_info")
+@patch("sequifier.io.sequifier_dataset_from_folder_pt_lazy.get_worker_info")
 def test_dataloader_worker_sharding_continuous_boundaries(
     mock_worker_info, mock_config, dataset_path, mock_torch_load
 ):
@@ -147,7 +147,7 @@ def test_dataloader_worker_sharding_continuous_boundaries(
 
     mock_config.training_spec.num_workers = 2
 
-    dataset = SequifierDatasetFromFolderLazy(dataset_path, mock_config, shuffle=False)
+    dataset = SequifierDatasetFromFolderPtLazy(dataset_path, mock_config, shuffle=False)
 
     # Consume the generator for THIS specific worker
     batches = list(dataset)
@@ -194,7 +194,7 @@ def test_exact_strategy_uneven_files_exception(
 
     # The dataset initialization calls _get_target_samples(), which should raise the Exception
     with pytest.raises(Exception) as exc_info:
-        SequifierDatasetFromFolderLazy(str(data_dir), mock_config)
+        SequifierDatasetFromFolderPtLazy(str(data_dir), mock_config)
 
     error_msg = str(exc_info.value)
 
@@ -229,7 +229,9 @@ def test_oversampling_strategy(
     mock_config.training_spec.batch_size = 5
     mock_config.training_spec.num_workers = 0
 
-    dataset = SequifierDatasetFromFolderLazy(str(data_dir), mock_config, shuffle=False)
+    dataset = SequifierDatasetFromFolderPtLazy(
+        str(data_dir), mock_config, shuffle=False
+    )
 
     # Max samples across ranks is 15. Rank 1 must pad its 10 samples up to 15.
     assert dataset.target_samples == 15
@@ -273,7 +275,9 @@ def test_undersampling_strategy(
     mock_config.training_spec.batch_size = 5
     mock_config.training_spec.num_workers = 0
 
-    dataset = SequifierDatasetFromFolderLazy(str(data_dir), mock_config, shuffle=False)
+    dataset = SequifierDatasetFromFolderPtLazy(
+        str(data_dir), mock_config, shuffle=False
+    )
 
     # Min samples across ranks is 10. Rank 0 must truncate its 15 samples down to 10.
     assert dataset.target_samples == 10

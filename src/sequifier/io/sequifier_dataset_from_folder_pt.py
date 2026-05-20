@@ -12,7 +12,7 @@ from sequifier.config.train_config import TrainModel
 from sequifier.helpers import normalize_path
 
 
-class SequifierDatasetFromFolder(IterableDataset):
+class SequifierDatasetFromFolderPt(IterableDataset):
     """
     An efficient PyTorch IterableDataset that pre-loads all data into RAM.
 
