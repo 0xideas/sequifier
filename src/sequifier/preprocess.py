@@ -805,20 +805,18 @@ class Preprocessor:
 
     @beartype
     def _create_metadata_for_folder(self, folder_path: str, write_format: str) -> None:
-        """Scans a directory for .pt files, counts samples, and writes metadata.json.
+        """Scans a directory for batch files, counts samples, and writes metadata.json.
 
-                This method is used when `write_format` is 'pt' and
-                `merge_output` is False. It iterates over all .pt files
-                in the given `folder_path`, loads each one to count the number of
-                samples (sequences), and writes a `metadata.json` file in that
-                same folder. This JSON file contains the total sample count and a
-                list of all batch files with their respective sample counts, which
-        s        is required by the `SequifierDatasetFromFolderPt` data loader.
+        This method is used when `merge_output` is False. It iterates over all
+        files in the given `folder_path` matching the `write_format`, loads each
+        one to count the number of samples (sequences), and writes a `metadata.json`
+        file in that same folder. This JSON file contains the total sample count and a
+        list of all batch files with their respective sample counts.
 
-                Args:
-                    folder_path: The path to the directory containing the .pt batch files
-                        for a specific data split.
-                    write_format: file format
+        Args:
+            folder_path: The path to the directory containing the batch files
+                for a specific data split.
+            write_format: The file format of the output files (e.g., 'pt', 'parquet').
         """
         logger.info(f"Creating metadata for folder '{folder_path}'")
         batch_files_metadata = []

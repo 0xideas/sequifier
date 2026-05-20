@@ -115,7 +115,24 @@ def load_pt_dataset(data_path: str, start_pct: float, end_pct: float) -> Iterato
 def load_parquet_folder_dataset(
     data_path: str, start_pct: float, end_pct: float
 ) -> Iterator[Any]:
-    """Lazily loads and yields data from long-format .parquet chunk files in a directory."""
+    """Lazily loads and yields data from long-format .parquet chunk files in a directory.
+
+    This function scans a directory for `.parquet` files, sorts them, and then
+    yields the contents of a specific slice of those files defined by a
+    start and end percentage. This allows for processing large datasets
+    in chunks without loading everything into memory.
+
+    Args:
+        data_path: The path to the folder containing the `.parquet` files.
+        start_pct: The starting percentage (0.0 to 100.0) of the file list
+            to begin loading from.
+        end_pct: The ending percentage (0.0 to 100.0) of the file list
+            to stop loading at.
+
+    Yields:
+        Iterator: An iterator where each item is a Polars DataFrame loaded from a
+        single `.parquet` file.
+    """
     parquet_files = sorted(Path(data_path).glob("*.parquet"))
 
     total = len(parquet_files)
