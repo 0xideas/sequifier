@@ -2,7 +2,7 @@ project_root: tests/project_folder
 data_path: tests/resources/source_data/test-data-categorical-multitarget-5.csv
 merge_output: false
 read_format: csv
-write_format: pt
+write_format: parquet
 selected_columns: null
 
 split_ratios:

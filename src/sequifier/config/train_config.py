@@ -542,9 +542,9 @@ class TrainModel(BaseModel):
             )
 
         if v.distributed:
-            if not (info.data.get("read_format") == "pt"):
+            if info.data.get("read_format") not in ["pt", "parquet"]:
                 raise ValueError(
-                    "If distributed is set to 'true', the format has to be 'pt'"
+                    "If distributed is set to 'true', the format must be 'pt' or 'parquet' representing a folder dataset."
                 )
 
         if (
@@ -581,15 +581,15 @@ class TrainModel(BaseModel):
                 raise ValueError(
                     f"sampling_strategy '{v.sampling_strategy}' is only admissible if world_size > 1"
                 )
-            if info.data.get("read_format") != "pt":
+            if info.data.get("read_format") not in ["pt", "parquet"]:
                 raise ValueError(
-                    f"sampling_strategy '{v.sampling_strategy}' is only admissible if training data is a folder (read_format='pt')"
+                    f"sampling_strategy '{v.sampling_strategy}' is only admissible if training data is a folder (read_format='pt' or 'parquet')"
                 )
 
         if v.world_size > 1 and v.sampling_strategy == "exact":
-            if info.data.get("read_format") != "pt":
+            if info.data.get("read_format") not in ["pt", "parquet"]:
                 raise ValueError(
-                    "If world_size > 1 and sampling_strategy == 'exact', the input data must be a folder (read_format='pt')."
+                    "If world_size > 1 and sampling_strategy == 'exact', the input data must be a folder (read_format='pt' or 'parquet')."
                 )
 
         if v.data_parallelism is None or v.data_parallelism != "FSDP":

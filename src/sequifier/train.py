@@ -46,6 +46,7 @@ from torch.utils.data import DataLoader
 torch._dynamo.config.suppress_errors = True
 
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
+from sequifier.helpers import normalize_path  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
     conditional_beartype,
     configure_determinism,
@@ -61,6 +62,12 @@ from sequifier.io.sequifier_dataset_from_folder import (  # noqa: E402
 )
 from sequifier.io.sequifier_dataset_from_folder_lazy import (  # noqa: E402
     SequifierDatasetFromFolderLazy,
+)
+from sequifier.io.sequifier_dataset_from_folder_parquet import (  # noqa: E402
+    SequifierDatasetFromFolderParquet,
+)
+from sequifier.io.sequifier_dataset_from_folder_parquet_lazy import (  # noqa: E402
+    SequifierDatasetFromFolderParquetLazy,
 )
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
@@ -143,20 +150,39 @@ def train_worker(
 
     # 1. Create Datasets and DataLoaders with DistributedSampler
     if from_folder:
-        if config.training_spec.load_full_data_to_ram:
-            train_dataset = SequifierDatasetFromFolder(
-                config.training_data_path, config
-            )
-            valid_dataset = SequifierDatasetFromFolder(
-                config.validation_data_path, config
-            )
+        if config.read_format == "pt":
+            if config.training_spec.load_full_data_to_ram:
+                train_dataset = SequifierDatasetFromFolder(
+                    config.training_data_path, config
+                )
+                valid_dataset = SequifierDatasetFromFolder(
+                    config.validation_data_path, config
+                )
+            else:
+                train_dataset = SequifierDatasetFromFolderLazy(
+                    config.training_data_path, config
+                )
+                valid_dataset = SequifierDatasetFromFolderLazy(
+                    config.validation_data_path, config
+                )
+        elif config.read_format == "parquet":
+            if config.training_spec.load_full_data_to_ram:
+                train_dataset = SequifierDatasetFromFolderParquet(
+                    config.training_data_path, config
+                )
+                valid_dataset = SequifierDatasetFromFolderParquet(
+                    config.validation_data_path, config
+                )
+            else:
+                train_dataset = SequifierDatasetFromFolderParquetLazy(
+                    config.training_data_path, config
+                )
+                valid_dataset = SequifierDatasetFromFolderParquetLazy(
+                    config.validation_data_path, config
+                )
         else:
-            train_dataset = SequifierDatasetFromFolderLazy(
-                config.training_data_path, config
-            )
-            valid_dataset = SequifierDatasetFromFolderLazy(
-                config.validation_data_path, config
-            )
+            raise Exception("Not allowed")
+
     else:
         if config.training_spec.distributed:
             raise ValueError(
@@ -414,7 +440,9 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
     torch.set_float32_matmul_precision(config.training_spec.float32_matmul_precision)
 
     world_size = config.training_spec.world_size
-    from_folder = config.read_format == "pt"
+    from_folder = os.path.isdir(
+        normalize_path(config.training_data_path, config.project_root)
+    )
 
     if config.training_spec.distributed:
         if "RANK" in os.environ and "WORLD_SIZE" in os.environ:

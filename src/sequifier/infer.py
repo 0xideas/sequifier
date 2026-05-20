@@ -112,6 +112,21 @@ def load_pt_dataset(data_path: str, start_pct: float, end_pct: float) -> Iterato
 
 
 @beartype
+def load_parquet_folder_dataset(
+    data_path: str, start_pct: float, end_pct: float
+) -> Iterator[Any]:
+    """Lazily loads and yields data from long-format .parquet chunk files in a directory."""
+    parquet_files = sorted(Path(data_path).glob("*.parquet"))
+
+    total = len(parquet_files)
+    start_idx = int(total * start_pct / 100)
+    end_idx = int(total * end_pct / 100)
+
+    for parquet_file in parquet_files[start_idx:end_idx]:
+        yield pl.read_parquet(parquet_file)
+
+
+@beartype
 def infer_worker(
     config: Any,
     args_config: dict[str, Any],
@@ -143,12 +158,18 @@ def infer_worker(
             `config.read_format == "pt"` to slice the dataset.
     """
     logger.info(f"[INFO] Reading data from '{config.data_path}'...")
+
+    is_folder_input = os.path.isdir(
+        normalize_path(config.data_path, config.project_root)
+    )
     # Step 1: Use Polars for data ingestion
     dataset = None
-    if config.read_format == "parquet":
-        dataset = [pl.read_parquet(config.data_path)]
-    elif config.read_format == "csv":
-        dataset = [pl.read_csv(config.data_path)]
+    if not is_folder_input:
+        # Standalone Single-File Path Execution
+        if config.read_format == "parquet":
+            dataset = [pl.read_parquet(config.data_path)]
+        elif config.read_format == "csv":
+            dataset = [pl.read_csv(config.data_path)]
 
     model_paths = (
         config.model_path
@@ -156,16 +177,25 @@ def infer_worker(
         else [config.model_path]
     )
     for model_path in model_paths:
-        if config.read_format == "pt":
+        if is_folder_input:
             if percentage_limits is None:
                 raise ValueError(
-                    "percentage_limits must be provided for 'pt' read format"
+                    "percentage_limits must be provided for folder-based read formats"
                 )
             start_pct, end_pct = percentage_limits
-            dataset = load_pt_dataset(config.data_path, start_pct, end_pct)
+
+            # Direct folders to their respective lazy loaders based on file format
+            if config.read_format == "pt":
+                dataset = load_pt_dataset(config.data_path, start_pct, end_pct)
+            elif config.read_format == "parquet":
+                dataset = load_parquet_folder_dataset(
+                    config.data_path, start_pct, end_pct
+                )
 
         if dataset is None:
-            raise Exception(f"{config.read_format = } not in ['parquet', 'csv', 'pt']")
+            raise Exception(
+                f"Unsupported input type or read format: {config.read_format}"
+            )
 
         inferer = Inferer(
             config.model_type,
@@ -238,7 +268,11 @@ def infer_embedding(
         prediction_length = inferer.prediction_length
 
         # Step 1: Get embeddings and base position/ID data
-        if config.read_format in ["parquet", "csv"]:
+        is_folder_input = os.path.isdir(
+            normalize_path(config.data_path, config.project_root)
+        )
+
+        if config.read_format in ["parquet", "csv"] and not is_folder_input:
             if config.input_columns is not None:
                 data = subset_to_input_columns(data, config.input_columns)
 
@@ -253,6 +287,25 @@ def infer_embedding(
             sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
             # --- ADDED THIS LINE ---
             subsequence_ids_for_preds = data.get_column("subsequenceId").filter(mask)
+            item_positions_for_preds_base = (
+                data.get_column("startItemPosition").filter(mask).to_numpy()
+            )
+        elif config.read_format == "parquet" and is_folder_input:
+            # Folder-based Parquet chunk logic
+            if config.input_columns is not None:
+                data = subset_to_input_columns(data, config.input_columns)
+
+            n_input_cols = data.get_column("inputCol").n_unique()
+            mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
+
+            embeddings = get_embeddings(config, inferer, data, column_types)
+
+            sequence_ids_for_preds = (
+                data.get_column("sequenceId").filter(mask).to_numpy()
+            )
+            subsequence_ids_for_preds = (
+                data.get_column("subsequenceId").filter(mask).to_numpy()
+            )
             item_positions_for_preds_base = (
                 data.get_column("startItemPosition").filter(mask).to_numpy()
             )
@@ -319,7 +372,7 @@ def infer_embedding(
             exist_ok=True,
         )
 
-        if config.read_format in ["csv", "parquet"]:
+        if not is_folder_input:
             file_name = f"{model_id}-embeddings.{config.write_format}"
         else:
             dirname = f"{model_id}-embeddings"
@@ -380,7 +433,11 @@ def infer_generative(
     """
     for data_id, data in enumerate(dataset):
         # Step 1: Adapt Data Subsetting (now works on Polars DF)
-        if config.read_format in ["parquet", "csv"]:
+        is_folder_input = os.path.isdir(
+            normalize_path(config.data_path, config.project_root)
+        )
+
+        if config.read_format in ["parquet", "csv"] and not is_folder_input:
             if config.input_columns is not None:
                 data = subset_to_input_columns(data, config.input_columns)
             n_input_cols = data.get_column("inputCol").n_unique()
@@ -430,6 +487,56 @@ def infer_generative(
                     + config.seq_length
                 )
                 # Unpack the new third return value
+                probs, preds, sequence_ids_for_preds = get_probs_preds_autoregression(
+                    config, inferer, data, column_types, config.seq_length
+                )
+        elif config.read_format == "parquet" and is_folder_input:
+            # Folder-based Parquet chunk logic
+            if config.input_columns is not None:
+                data = subset_to_input_columns(data, config.input_columns)
+            n_input_cols = data.get_column("inputCol").n_unique()
+
+            # Folder-based inference can accept autoregression extra steps similar to .pt layout
+            extra_steps = (
+                0
+                if config.autoregression_extra_steps is None
+                else config.autoregression_extra_steps
+            )
+
+            if extra_steps == 0:
+                probs, preds = get_probs_preds(config, inferer, data, column_types)
+                mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
+                sequence_ids_for_preds_base = (
+                    data.get_column("sequenceId").filter(mask).to_numpy()
+                )
+                item_positions_for_preds_base = (
+                    data.get_column("startItemPosition").filter(mask).to_numpy()
+                    + config.seq_length
+                )
+
+                prediction_length = inferer.prediction_length
+                sequence_ids_for_preds = np.repeat(
+                    sequence_ids_for_preds_base, prediction_length
+                )
+                item_positions_repeated = np.repeat(
+                    item_positions_for_preds_base, prediction_length
+                )
+                position_offsets = np.tile(
+                    np.arange(-prediction_length + 1, 1),
+                    len(item_positions_for_preds_base),
+                )
+                item_positions_for_preds = item_positions_repeated + position_offsets
+            else:
+                if inferer.prediction_length != 1:
+                    raise ValueError(
+                        f"prediction_length must be 1 for autoregression, got {inferer.prediction_length}"
+                    )
+                # Treat chunk file as standard autoregressive pass
+                mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
+                item_positions_for_preds = (
+                    data.get_column("startItemPosition").filter(mask).to_numpy()
+                    + config.seq_length
+                )
                 probs, preds, sequence_ids_for_preds = get_probs_preds_autoregression(
                     config, inferer, data, column_types, config.seq_length
                 )
@@ -509,7 +616,7 @@ def infer_generative(
             )
 
             for target_column in inferer.target_columns:
-                if config.read_format in ["csv", "parquet"]:
+                if not is_folder_input:
                     file_name = f"{model_id}-{target_column}-probabilities.{config.write_format}"
                 else:
                     dirname = f"{model_id}-{target_column}-probabilities"
@@ -556,7 +663,7 @@ def infer_generative(
             }
         )
 
-        if config.read_format in ["csv", "parquet"]:
+        if not is_folder_input:
             file_name = f"{model_id}-predictions.{config.write_format}"
         else:
             dirname = f"{model_id}-predictions"
