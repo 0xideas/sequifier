@@ -17,8 +17,12 @@ you also need to set
 ```yaml
 write_format: pt
 ```
+or
+```yaml
+write_format: parquet
+```
 
-*Note: Distributed training is not supported if your data is kept as a single `csv` or `parquet` file.*
+*Note: Distributed training is not supported if your data is kept as a single `csv` or `parquet` file. You must use merge_output: false to generate a folder of sharded files.*
 
 ## 2. Configuration: `train.yaml`
 

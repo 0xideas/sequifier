@@ -17,7 +17,7 @@ The configuration is defined in a YAML file (e.g., `infer.yaml`).
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
-| `data_path` | `str` | **Yes** | - | Path to the input data file (csv/parquet) or folder (if `read_format: pt`). |
+| `data_path` | `str` | **Yes** | - | Path to the input data file (`csv` or `parquet`) or folder (`pt` or `parquet`). |
 | `model_path` | `str` or `list[str]` | **Yes** | - | Path to a specific model file, or a list of paths to process sequentially. (e.g., `models/sequifier-[NAME]-best-[EPOCH].pt`). |
 | `training_config_path`| `str` | No | `configs/train.yaml`| Path to the config used to train the model. Required to reconstruct the model architecture. |
 | `metadata_config_path`| `str` | **Yes** | - | Path to the JSON metadata file generated during preprocessing. Used for ID mapping and normalization. |
@@ -56,11 +56,11 @@ These fields tell the inference engine which columns to extract from the new dat
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `device` | `str` | **Yes** | - | `cuda`, `cpu`, or `mps`. |
-| `distributed` | `bool` | No | `false`| Enable multi-GPU inference. Requires `read_format: pt`. |
+| `distributed` | `bool` | No | `false`| Enable multi-GPU inference. Requires `read_format: pt` or `read_format: parquet`. |
 | `world_size` | `int` | No | `1` | Number of GPUs/processes for distributed inference. |
 | `num_workers` | `int` | No | `0` | Number of subprocesses for data loading. |
 | `enforce_determinism` | `bool` | No | `false` | Forces PyTorch to use deterministic algorithms. |
-| `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
+| `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
 
 -----
 
@@ -89,7 +89,7 @@ Standard inference predicts the next step ($t+1$) based on history ($t-n \dots t
 
 ### 4\. Input Format (`read_format`)
 
-  * **`parquet` / `csv`:** Best for standard inference on new data files. The inferer will filter the data to `input_columns` automatically.
+  * **`parquet` / `csv`:** Best for standard inference on new data files. The inferer will filter the data to `input_columns` automatically. `parquet` is compatible with `distributed: true`
   * **`pt` (PyTorch Tensors):** Required for **Distributed Inference** or **Lazy Loading**. If your inference dataset is massive (terabytes), preprocess it into `.pt` chunks first, then run inference with `read_format: pt` and `distributed: true`.
 
 -----
@@ -116,12 +116,12 @@ Results are saved in the `outputs/` folder within your project root.
 
 ### Directory Output Mode (Sharded Inference)
 
-When using PyTorch tensors (`read_format: pt`), sequifier creates a directory containing multiple sharded outputs.
+When using a folder of files as input, sequifier creates a directory containing multiple sharded outputs.
 
 **File Structure**
-* **`pt` inputs:** `outputs/predictions/[MODEL_NAME]-predictions/[MODEL_NAME]-[CHUNK_ID]-predictions.[format]` *(Directory of files)*
-* **`pt` inputs:** `outputs/probabilities/[MODEL_NAME]-[TARGET_COLUMN]-probabilities/[MODEL_NAME]-[CHUNK_ID]-probabilities.[format]` *(Directory of files)*
-* **`pt` inputs:** `outputs/embeddings/[MODEL_NAME]-embeddings/[MODEL_NAME]-[CHUNK_ID]-embeddings.[format]` *(Directory of files)*
+* **folder inputs:** `outputs/predictions/[MODEL_NAME]-predictions/[MODEL_NAME]-[CHUNK_ID]-predictions.[format]` *(Directory of files)*
+* **folder inputs:** `outputs/probabilities/[MODEL_NAME]-[TARGET_COLUMN]-probabilities/[MODEL_NAME]-[CHUNK_ID]-probabilities.[format]` *(Directory of files)*
+* **folder inputs:** `outputs/embeddings/[MODEL_NAME]-embeddings/[MODEL_NAME]-[CHUNK_ID]-embeddings.[format]` *(Directory of files)*
 
 
 **Pipeline Note:** If you switch to `.pt` inputs, ensure your downstream scripts are configured to read from a directory of files rather than a single file. This behavior applies to predictions, probabilities, and embeddings.
