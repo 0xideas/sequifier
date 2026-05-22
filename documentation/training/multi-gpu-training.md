@@ -17,12 +17,13 @@ you also need to set
 ```yaml
 write_format: pt
 ```
-or
-```yaml
-write_format: parquet
-```
 
 *Note: Distributed training is not supported if your data is kept as a single `csv` or `parquet` file. You must use merge_output: false to generate a folder of sharded files.*
+
+> **⚠️ Beta Notice for Parquet in Distributed Training:**
+> While `write_format: parquet` is supported for distributed training, it is currently considered **Beta**. Because Parquet chunk reading relies on Polars' multi-threading, using it alongside PyTorch's multiprocess `DataLoader` in heavy multi-GPU environments can lead to CPU thread contention, high RAM usage, or NCCL timeouts.
+> **Recommendation:** For production multi-GPU runs, use `write_format: pt`. It relies on native PyTorch serialization and is significantly more stable under heavy hardware loads.
+
 
 ## 2. Configuration: `train.yaml`
 

@@ -275,8 +275,8 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 ### 1\. `write_format`: `parquet` vs. `pt`
 
-  * **Choose `parquet` (default):** Unless you have a specific reason, use `parquet`.
-  * **Choose `pt`:** Use `pt` data loading if speed and CPU overhead are your primary bottlenecks.
+  * **Choose `parquet` (default):** Unless you have a specific reason, use `parquet`. *Note: If you are doing distributed training, Parquet support is currently in **Beta**.
+  * **Choose `pt`:** Use `pt` data loading if speed and CPU overhead are your primary bottlenecks, **or if you are running multi-GPU distributed training.** This format is the most stable choice for high-throughput scaling.
 
 ### 2\. `stride_by_split` configuration
 
@@ -471,7 +471,7 @@ These fields determine the size and complexity of the Transformer.
       * *Requirements:* `read_format` must be `parquet` or `pt`.
       * *Mechanism:* Uses an `IterableDataset` with cross-file buffering to stream pre-processed chunked files sequentially, automatically calculating exact sample boundaries across GPU ranks and workers.
       * *Pros:* Can train on datasets much larger than RAM, safely supporting DDP/FSDP synchronization.
-      * *Cons:* Slight I/O overhead depending on disk speed. Increase `num_workers` to mitigate this.
+      * *Cons:* Slight I/O overhead depending on disk speed. Increase `num_workers` to mitigate this. **Note for Parquet users:** Lazy loading distributed Parquet files is currently in **Beta** and may cause high CPU overhead or deadlocks on large multi-GPU nodes. For distributed lazy loading, `read_format: pt` is strongly recommended.
 
 ### 2\. Attention Mechanism (`attention_type` & `n_kv_heads`)
 
@@ -940,12 +940,13 @@ you also need to set
 ```yaml
 write_format: pt
 ```
-or
-```yaml
-write_format: parquet
-```
 
 *Note: Distributed training is not supported if your data is kept as a single `csv` or `parquet` file. You must use merge_output: false to generate a folder of sharded files.*
+
+> **⚠️ Beta Notice for Parquet in Distributed Training:**
+> While `write_format: parquet` is supported for distributed training, it is currently considered **Beta**. Because Parquet chunk reading relies on Polars' multi-threading, using it alongside PyTorch's multiprocess `DataLoader` in heavy multi-GPU environments can lead to CPU thread contention, high RAM usage, or NCCL timeouts.
+> **Recommendation:** For production multi-GPU runs, use `write_format: pt`. It relies on native PyTorch serialization and is significantly more stable under heavy hardware loads.
+
 
 ## 2. Configuration: `train.yaml`
 

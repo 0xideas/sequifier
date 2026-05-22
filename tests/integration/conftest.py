@@ -139,6 +139,11 @@ def training_config_path_distributed():
 
 
 @pytest.fixture(scope="session")
+def training_config_path_distributed_lazy_parquet():
+    return os.path.join("tests", "configs", "train-test-distributed-lazy-parquet.yaml")
+
+
+@pytest.fixture(scope="session")
 def training_config_path_lazy():
     return os.path.join("tests", "configs", "train-test-lazy.yaml")
 
@@ -261,6 +266,7 @@ def format_configs_locally(
     training_config_path_cat_inf_size_1,
     training_config_path_cat_inf_size_3,
     training_config_path_distributed,
+    training_config_path_distributed_lazy_parquet,
     training_config_path_lazy,
     training_config_path_resume_epoch,
     training_config_path_resume_mid_epoch,
@@ -292,6 +298,7 @@ def format_configs_locally(
             training_config_path_cat_inf_size_1,
             training_config_path_cat_inf_size_3,
             training_config_path_distributed,
+            training_config_path_distributed_lazy_parquet,
             training_config_path_lazy,
             training_config_path_resume_epoch,
             training_config_path_resume_mid_epoch,
@@ -435,6 +442,7 @@ def run_training(
     training_config_path_cat_inf_size_1,
     training_config_path_cat_inf_size_3,
     training_config_path_distributed,
+    training_config_path_distributed_lazy_parquet,
     training_config_path_lazy,
     training_config_path_cat_multitarget,
     training_config_path_cat_multitarget_eager,
@@ -467,6 +475,10 @@ def run_training(
     )
 
     run_and_log(f"sequifier train --config-path {training_config_path_distributed}")
+
+    run_and_log(
+        f"sequifier train --config-path {training_config_path_distributed_lazy_parquet}"
+    )
 
     run_and_log(f"sequifier train --config-path {training_config_path_lazy}")
 

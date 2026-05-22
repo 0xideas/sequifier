@@ -121,7 +121,7 @@ These fields determine the size and complexity of the Transformer.
       * *Requirements:* `read_format` must be `parquet` or `pt`.
       * *Mechanism:* Uses an `IterableDataset` with cross-file buffering to stream pre-processed chunked files sequentially, automatically calculating exact sample boundaries across GPU ranks and workers.
       * *Pros:* Can train on datasets much larger than RAM, safely supporting DDP/FSDP synchronization.
-      * *Cons:* Slight I/O overhead depending on disk speed. Increase `num_workers` to mitigate this.
+      * *Cons:* Slight I/O overhead depending on disk speed. Increase `num_workers` to mitigate this. **Note for Parquet users:** Lazy loading distributed Parquet files is currently in **Beta** and may cause high CPU overhead or deadlocks on large multi-GPU nodes. For distributed lazy loading, `read_format: pt` is strongly recommended.
 
 ### 2\. Attention Mechanism (`attention_type` & `n_kv_heads`)
 

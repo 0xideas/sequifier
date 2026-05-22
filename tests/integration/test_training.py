@@ -39,6 +39,10 @@ def test_checkpoint_files_exists(
                 for i in range(1, 4)
             ]
             + [f"model-categorical-distributed-epoch-{i}.pt" for i in range(1, 4)]
+            + [
+                f"model-categorical-distributed-lazy-parquet-epoch-{i}.pt"
+                for i in range(1, 4)
+            ]
             + [f"model-categorical-lazy-epoch-{i}.pt" for i in range(1, 4)]
         )
     )
@@ -107,6 +111,10 @@ def test_model_files_exists(run_training, run_training_from_checkpoint, project_
                 "sequifier-model-categorical-distributed-best-3.onnx",
                 "sequifier-model-categorical-distributed-last-3.pt",
                 "sequifier-model-categorical-distributed-last-3.onnx",
+                "sequifier-model-categorical-distributed-lazy-parquet-best-3.pt",
+                "sequifier-model-categorical-distributed-lazy-parquet-best-3.onnx",
+                "sequifier-model-categorical-distributed-lazy-parquet-last-3.pt",
+                "sequifier-model-categorical-distributed-lazy-parquet-last-3.onnx",
                 "sequifier-model-categorical-lazy-best-3.pt",
                 "sequifier-model-categorical-lazy-best-3.onnx",
                 "sequifier-model-categorical-lazy-last-3.pt",

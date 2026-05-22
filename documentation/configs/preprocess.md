@@ -64,8 +64,8 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 ### 1\. `write_format`: `parquet` vs. `pt`
 
-  * **Choose `parquet` (default):** Unless you have a specific reason, use `parquet`.
-  * **Choose `pt`:** Use `pt` data loading if speed and CPU overhead are your primary bottlenecks.
+  * **Choose `parquet` (default):** Unless you have a specific reason, use `parquet`. *Note: If you are doing distributed training, Parquet support is currently in **Beta**.
+  * **Choose `pt`:** Use `pt` data loading if speed and CPU overhead are your primary bottlenecks, **or if you are running multi-GPU distributed training.** This format is the most stable choice for high-throughput scaling.
 
 ### 2\. `stride_by_split` configuration
 
