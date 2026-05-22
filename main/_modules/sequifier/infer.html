@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/infer.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.infer - sequifier v1.1.2.0 documentation</title>
+        <title>sequifier.infer - sequifier v1.1.2.1 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v1.1.2.0 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v1.1.2.1 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.1.2.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.1.2.1 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -381,6 +381,38 @@
         <span class="k">yield</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">pt_file</span><span class="p">,</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
 
 
+<div class="viewcode-block" id="load_parquet_folder_dataset"><a class="viewcode-back" href="../../api.html#sequifier.infer.load_parquet_folder_dataset">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">load_parquet_folder_dataset</span><span class="p">(</span>
+    <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">start_pct</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">end_pct</span><span class="p">:</span> <span class="nb">float</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Any</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Lazily loads and yields data from long-format .parquet chunk files in a directory.</span>
+
+<span class="sd">    This function scans a directory for `.parquet` files, sorts them, and then</span>
+<span class="sd">    yields the contents of a specific slice of those files defined by a</span>
+<span class="sd">    start and end percentage. This allows for processing large datasets</span>
+<span class="sd">    in chunks without loading everything into memory.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        data_path: The path to the folder containing the `.parquet` files.</span>
+<span class="sd">        start_pct: The starting percentage (0.0 to 100.0) of the file list</span>
+<span class="sd">            to begin loading from.</span>
+<span class="sd">        end_pct: The ending percentage (0.0 to 100.0) of the file list</span>
+<span class="sd">            to stop loading at.</span>
+
+<span class="sd">    Yields:</span>
+<span class="sd">        Iterator: An iterator where each item is a Polars DataFrame loaded from a</span>
+<span class="sd">        single `.parquet` file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">parquet_files</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">data_path</span><span class="p">)</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">&quot;*.parquet&quot;</span><span class="p">))</span>
+
+    <span class="n">total</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">parquet_files</span><span class="p">)</span>
+    <span class="n">start_idx</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">total</span> <span class="o">*</span> <span class="n">start_pct</span> <span class="o">/</span> <span class="mi">100</span><span class="p">)</span>
+    <span class="n">end_idx</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">total</span> <span class="o">*</span> <span class="n">end_pct</span> <span class="o">/</span> <span class="mi">100</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">parquet_file</span> <span class="ow">in</span> <span class="n">parquet_files</span><span class="p">[</span><span class="n">start_idx</span><span class="p">:</span><span class="n">end_idx</span><span class="p">]:</span>
+        <span class="k">yield</span> <span class="n">pl</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">parquet_file</span><span class="p">)</span></div>
+
+
 <div class="viewcode-block" id="infer_worker"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer_worker">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">infer_worker</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
@@ -413,12 +445,18 @@
 <span class="sd">            `config.read_format == &quot;pt&quot;` to slice the dataset.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] Reading data from &#39;</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="si">}</span><span class="s2">&#39;...&quot;</span><span class="p">)</span>
+
+    <span class="n">is_folder_input</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span>
+        <span class="n">normalize_path</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span>
+    <span class="p">)</span>
     <span class="c1"># Step 1: Use Polars for data ingestion</span>
     <span class="n">dataset</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span><span class="p">:</span>
-        <span class="n">dataset</span> <span class="o">=</span> <span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">)]</span>
-    <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;csv&quot;</span><span class="p">:</span>
-        <span class="n">dataset</span> <span class="o">=</span> <span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">)]</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
+        <span class="c1"># Standalone Single-File Path Execution</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span><span class="p">:</span>
+            <span class="n">dataset</span> <span class="o">=</span> <span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">)]</span>
+        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;csv&quot;</span><span class="p">:</span>
+            <span class="n">dataset</span> <span class="o">=</span> <span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">)]</span>
 
     <span class="n">model_paths</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">config</span><span class="o">.</span><span class="n">model_path</span>
@@ -426,16 +464,25 @@
         <span class="k">else</span> <span class="p">[</span><span class="n">config</span><span class="o">.</span><span class="n">model_path</span><span class="p">]</span>
     <span class="p">)</span>
     <span class="k">for</span> <span class="n">model_path</span> <span class="ow">in</span> <span class="n">model_paths</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">is_folder_input</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">percentage_limits</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;percentage_limits must be provided for &#39;pt&#39; read format&quot;</span>
+                    <span class="s2">&quot;percentage_limits must be provided for folder-based read formats&quot;</span>
                 <span class="p">)</span>
             <span class="n">start_pct</span><span class="p">,</span> <span class="n">end_pct</span> <span class="o">=</span> <span class="n">percentage_limits</span>
-            <span class="n">dataset</span> <span class="o">=</span> <span class="n">load_pt_dataset</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">,</span> <span class="n">start_pct</span><span class="p">,</span> <span class="n">end_pct</span><span class="p">)</span>
+
+            <span class="c1"># Direct folders to their respective lazy loaders based on file format</span>
+            <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
+                <span class="n">dataset</span> <span class="o">=</span> <span class="n">load_pt_dataset</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">,</span> <span class="n">start_pct</span><span class="p">,</span> <span class="n">end_pct</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span><span class="p">:</span>
+                <span class="n">dataset</span> <span class="o">=</span> <span class="n">load_parquet_folder_dataset</span><span class="p">(</span>
+                    <span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">,</span> <span class="n">start_pct</span><span class="p">,</span> <span class="n">end_pct</span>
+                <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">dataset</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">read_format</span><span class="w"> </span><span class="si">= }</span><span class="s2"> not in [&#39;parquet&#39;, &#39;csv&#39;, &#39;pt&#39;]&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Unsupported input type or read format: </span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">read_format</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
 
         <span class="n">inferer</span> <span class="o">=</span> <span class="n">Inferer</span><span class="p">(</span>
             <span class="n">config</span><span class="o">.</span><span class="n">model_type</span><span class="p">,</span>
@@ -508,7 +555,11 @@
         <span class="n">prediction_length</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span>
 
         <span class="c1"># Step 1: Get embeddings and base position/ID data</span>
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;parquet&quot;</span><span class="p">,</span> <span class="s2">&quot;csv&quot;</span><span class="p">]:</span>
+        <span class="n">is_folder_input</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span>
+            <span class="n">normalize_path</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;parquet&quot;</span><span class="p">,</span> <span class="s2">&quot;csv&quot;</span><span class="p">]</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="n">data</span> <span class="o">=</span> <span class="n">subset_to_input_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
 
@@ -523,6 +574,25 @@
             <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
             <span class="c1"># --- ADDED THIS LINE ---</span>
             <span class="n">subsequence_ids_for_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
+            <span class="n">item_positions_for_preds_base</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+            <span class="p">)</span>
+        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span> <span class="ow">and</span> <span class="n">is_folder_input</span><span class="p">:</span>
+            <span class="c1"># Folder-based Parquet chunk logic</span>
+            <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">data</span> <span class="o">=</span> <span class="n">subset_to_input_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
+
+            <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
+            <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
+
+            <span class="n">embeddings</span> <span class="o">=</span> <span class="n">get_embeddings</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">)</span>
+
+            <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+            <span class="p">)</span>
+            <span class="n">subsequence_ids_for_preds</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+            <span class="p">)</span>
             <span class="n">item_positions_for_preds_base</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
             <span class="p">)</span>
@@ -589,7 +659,7 @@
             <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
         <span class="p">)</span>
 
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;csv&quot;</span><span class="p">,</span> <span class="s2">&quot;parquet&quot;</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
             <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-embeddings.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">dirname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-embeddings&quot;</span>
@@ -650,7 +720,11 @@
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">for</span> <span class="n">data_id</span><span class="p">,</span> <span class="n">data</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">dataset</span><span class="p">):</span>
         <span class="c1"># Step 1: Adapt Data Subsetting (now works on Polars DF)</span>
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;parquet&quot;</span><span class="p">,</span> <span class="s2">&quot;csv&quot;</span><span class="p">]:</span>
+        <span class="n">is_folder_input</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span>
+            <span class="n">normalize_path</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;parquet&quot;</span><span class="p">,</span> <span class="s2">&quot;csv&quot;</span><span class="p">]</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="n">data</span> <span class="o">=</span> <span class="n">subset_to_input_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
             <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
@@ -700,6 +774,56 @@
                     <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
                 <span class="p">)</span>
                 <span class="c1"># Unpack the new third return value</span>
+                <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">get_probs_preds_autoregression</span><span class="p">(</span>
+                    <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
+                <span class="p">)</span>
+        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span> <span class="ow">and</span> <span class="n">is_folder_input</span><span class="p">:</span>
+            <span class="c1"># Folder-based Parquet chunk logic</span>
+            <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">data</span> <span class="o">=</span> <span class="n">subset_to_input_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
+            <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
+
+            <span class="c1"># Folder-based inference can accept autoregression extra steps similar to .pt layout</span>
+            <span class="n">extra_steps</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="mi">0</span>
+                <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_extra_steps</span> <span class="ow">is</span> <span class="kc">None</span>
+                <span class="k">else</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_extra_steps</span>
+            <span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">extra_steps</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">)</span>
+                <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
+                <span class="n">sequence_ids_for_preds_base</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                <span class="p">)</span>
+                <span class="n">item_positions_for_preds_base</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                    <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
+                <span class="p">)</span>
+
+                <span class="n">prediction_length</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span>
+                <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span>
+                    <span class="n">sequence_ids_for_preds_base</span><span class="p">,</span> <span class="n">prediction_length</span>
+                <span class="p">)</span>
+                <span class="n">item_positions_repeated</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span>
+                    <span class="n">item_positions_for_preds_base</span><span class="p">,</span> <span class="n">prediction_length</span>
+                <span class="p">)</span>
+                <span class="n">position_offsets</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">tile</span><span class="p">(</span>
+                    <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="o">-</span><span class="n">prediction_length</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+                    <span class="nb">len</span><span class="p">(</span><span class="n">item_positions_for_preds_base</span><span class="p">),</span>
+                <span class="p">)</span>
+                <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="n">item_positions_repeated</span> <span class="o">+</span> <span class="n">position_offsets</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="sa">f</span><span class="s2">&quot;prediction_length must be 1 for autoregression, got </span><span class="si">{</span><span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">&quot;</span>
+                    <span class="p">)</span>
+                <span class="c1"># Treat chunk file as standard autoregressive pass</span>
+                <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
+                <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                    <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
+                <span class="p">)</span>
                 <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">get_probs_preds_autoregression</span><span class="p">(</span>
                     <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
                 <span class="p">)</span>
@@ -779,7 +903,7 @@
             <span class="p">)</span>
 
             <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_columns</span><span class="p">:</span>
-                <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;csv&quot;</span><span class="p">,</span> <span class="s2">&quot;parquet&quot;</span><span class="p">]:</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
                     <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">target_column</span><span class="si">}</span><span class="s2">-probabilities.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span>
                 <span class="k">else</span><span class="p">:</span>
                     <span class="n">dirname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">target_column</span><span class="si">}</span><span class="s2">-probabilities&quot;</span>
@@ -826,7 +950,7 @@
             <span class="p">}</span>
         <span class="p">)</span>
 
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;csv&quot;</span><span class="p">,</span> <span class="s2">&quot;parquet&quot;</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
             <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-predictions.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">dirname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-predictions&quot;</span>
@@ -1950,7 +2074,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=0ff00ca5"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=ab8888bc"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
     <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>

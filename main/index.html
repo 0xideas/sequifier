@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/index.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier v1.1.2.0 documentation</title>
+        <title>sequifier v1.1.2.1 documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="#"><div class="brand">sequifier v1.1.2.0 documentation</div></a>
+      <a href="#"><div class="brand">sequifier v1.1.2.1 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="#">
   
-  <span class="sidebar-brand-text">sequifier v1.1.2.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.1.2.1 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -335,7 +335,6 @@
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.train.infer_with_embedding_model"><code class="docutils literal notranslate"><span class="pre">infer_with_embedding_model()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.train.infer_with_generative_model"><code class="docutils literal notranslate"><span class="pre">infer_with_generative_model()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.train.load_inference_model"><code class="docutils literal notranslate"><span class="pre">load_inference_model()</span></code></a></li>
-<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.train.setup"><code class="docutils literal notranslate"><span class="pre">setup()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.train.train"><code class="docutils literal notranslate"><span class="pre">train()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.train.train_worker"><code class="docutils literal notranslate"><span class="pre">train_worker()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.Inferer"><code class="docutils literal notranslate"><span class="pre">Inferer</span></code></a></li>
@@ -352,6 +351,7 @@
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.infer_embedding"><code class="docutils literal notranslate"><span class="pre">infer_embedding()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.infer_generative"><code class="docutils literal notranslate"><span class="pre">infer_generative()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.infer_worker"><code class="docutils literal notranslate"><span class="pre">infer_worker()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.load_parquet_folder_dataset"><code class="docutils literal notranslate"><span class="pre">load_parquet_folder_dataset()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.load_pt_dataset"><code class="docutils literal notranslate"><span class="pre">load_pt_dataset()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.normalize"><code class="docutils literal notranslate"><span class="pre">normalize()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.sample_with_cumsum"><code class="docutils literal notranslate"><span class="pre">sample_with_cumsum()</span></code></a></li>
@@ -373,8 +373,6 @@
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.io.yaml.represent_numpy_float"><code class="docutils literal notranslate"><span class="pre">represent_numpy_float()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.io.yaml.represent_numpy_int"><code class="docutils literal notranslate"><span class="pre">represent_numpy_int()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.io.yaml.represent_sequifier_object"><code class="docutils literal notranslate"><span class="pre">represent_sequifier_object()</span></code></a></li>
-<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFolder</span></code></a></li>
-<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFolderLazy</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFile</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.optimizers.optimizers.get_optimizer_class"><code class="docutils literal notranslate"><span class="pre">get_optimizer_class()</span></code></a></li>
 </ul>
@@ -430,7 +428,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="./" id="documentation_options" src="_static/documentation_options.js?v=0ff00ca5"></script>
+</div><script data-url_root="./" id="documentation_options" src="_static/documentation_options.js?v=ab8888bc"></script>
     <script src="_static/doctools.js?v=888ff710"></script>
     <script src="_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>
