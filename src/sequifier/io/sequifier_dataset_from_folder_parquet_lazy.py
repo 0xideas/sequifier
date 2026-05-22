@@ -278,11 +278,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             # 2. Iterate over the expected config columns, not the dynamically found ones
             for col_name in cols_to_process:
                 # Gracefully handle MagicMock column_torch_types dictionaries
-                torch_type = (
-                    self.column_torch_types.get(col_name, torch.float32)
-                    if isinstance(getattr(self, "column_torch_types", None), dict)
-                    else torch.float32
-                )
+                torch_type = self.column_torch_types[col_name]
 
                 if col_name in feature_partitions:
                     # Positional advanced selection using the coordinated indices
