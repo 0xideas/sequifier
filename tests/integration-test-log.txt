@@ -40,6 +40,7 @@ sequifier infer --config-path tests/configs/infer-test-real-autoregression.yaml 
 sequifier infer --config-path tests/configs/infer-test-categorical-inf-size-1.yaml
 sequifier infer --config-path tests/configs/infer-test-categorical-inf-size-3.yaml
 sequifier infer --config-path tests/configs/infer-test-distributed.yaml
+sequifier infer --config-path tests/configs/infer-test-distributed-parquet.yaml
 sequifier infer --config-path tests/configs/infer-test-lazy.yaml
 sequifier infer --config-path tests/configs/infer-test-categorical-autoregression.yaml  --input-columns itemId
 sequifier infer --config-path tests/configs/infer-test-categorical-embedding.yaml  --input-columns itemId

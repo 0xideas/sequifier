@@ -93,17 +93,22 @@ def test_probabilities(probabilities):
 
 
 def test_multi_pred(predictions):
-    preds = predictions["model-categorical-multitarget-5-best-3"]
+    multitarget_models = [name for name in predictions.keys() if "multitarget" in name]
 
-    assert preds.shape[0] > 0
-    assert preds.shape[1] == 5
+    for model_name in multitarget_models:
+        preds = predictions[model_name]
 
-    admssible_vals = [str(x) for x in np.arange(0, 10)] + ["unknown", "other"]
+        assert preds.shape[0] > 0, f"{model_name} has no predictions"
+        assert preds.shape[1] == 5, f"{model_name} should have 5 columns"
 
-    assert np.all([v in admssible_vals for v in preds["supCat1"]])
-    assert np.all(preds["supReal3"].to_numpy() > -4.0) and np.all(
-        preds["supReal3"].to_numpy() < 4.0
-    )
+        admssible_vals = [str(x) for x in np.arange(0, 10)] + ["unknown", "other"]
+
+        assert np.all(
+            [v in admssible_vals for v in preds["supCat1"]]
+        ), f"Invalid supCat1 values in {model_name}"
+        assert np.all(preds["supReal3"].to_numpy() > -4.0) and np.all(
+            preds["supReal3"].to_numpy() < 4.0
+        ), f"supReal3 out of bounds in {model_name}"
 
 
 def test_embeddings(embeddings):

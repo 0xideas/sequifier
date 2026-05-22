@@ -1,5 +1,6 @@
 import json
 import os
+import warnings
 from typing import Optional, Union
 
 import numpy as np
@@ -262,6 +263,11 @@ class InfererModel(BaseModel):
             raise ValueError(
                 "Distributed inference is only supported for preprocessed '.pt' files. Please set read_format to 'pt'."
             )
+        if v and info.data.get("read_format") == "parquet":
+            warnings.warn(
+                "Inferring on distributed data in parquet is less efficient than with 'pt'"
+            )
+
         return v
 
     def __init__(self, **data):

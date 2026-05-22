@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import warnings
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -545,6 +546,10 @@ class TrainModel(BaseModel):
             if info.data.get("read_format") not in ["pt", "parquet"]:
                 raise ValueError(
                     "If distributed is set to 'true', the format must be 'pt' or 'parquet' representing a folder dataset."
+                )
+            if info.data.get("read_format") == "parquet":
+                warnings.warn(
+                    "Training on distributed data in parquet format takes significantly more CPU per GPU than with 'pt'."
                 )
 
         if (

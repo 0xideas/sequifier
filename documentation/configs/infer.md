@@ -87,8 +87,9 @@ Standard inference predicts the next step ($t+1$) based on history ($t-n \dots t
 
 ### 4\. Input Format (`read_format`)
 
-  * **`parquet` / `csv`:** Best for standard inference on new data files. The inferer will filter the data to `input_columns` automatically. `parquet` is compatible with `distributed: true`
-  * **`pt` (PyTorch Tensors):** Required for **Distributed Inference** or **Lazy Loading**. If your inference dataset is massive (terabytes), preprocess it into `.pt` chunks first, then run inference with `read_format: pt` and `distributed: true`.
+  * **`csv`:** Best for standard inference on small data. The inferer will filter the data to `input_columns` automatically.
+  * **`parquet`** Best for most use cases. Can be used with distributed and lazy loading, will use less disk space but probably more CPU than `pt`
+  * **`pt`** Optimized for distributed inference or lazy loading
 
 -----
 

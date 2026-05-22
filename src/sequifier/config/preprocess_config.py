@@ -1,4 +1,5 @@
 import os
+import warnings
 from typing import Optional
 
 import numpy as np
@@ -104,6 +105,11 @@ class PreprocessorModel(BaseModel):
         if write_format == "pt" and v is True:
             raise ValueError(
                 "With write_format 'pt', merge_output must be set to False"
+            )
+
+        if write_format == "parquet" and v is True:
+            warnings.warn(
+                "Training on distributed data in parquet format takes significantly more CPU per GPU than with 'pt'. Inferring on distributed data in parquet is less efficient than with 'pt'"
             )
 
         # Allow "parquet" to have merge_output = False
