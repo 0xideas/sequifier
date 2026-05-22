@@ -22,6 +22,3 @@ enforce_determinism: true
 
 sample_from_distribution_columns: null
 autoregression: false
-
-distributed: true
-world_size: 2

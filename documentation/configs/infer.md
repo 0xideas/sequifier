@@ -51,14 +51,11 @@ These fields tell the inference engine which columns to extract from the new dat
 | `infer_with_dropout` | `bool` | No | `false` | If `true`, keeps dropout active during inference (useful for uncertainty estimation/Monte Carlo Dropout). |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
 
-### 4\. System & Distributed
+### 4\. System
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `device` | `str` | **Yes** | - | `cuda`, `cpu`, or `mps`. |
-| `distributed` | `bool` | No | `false`| Enable multi-GPU inference. Requires `read_format: pt` or `read_format: parquet`. |
-| `world_size` | `int` | No | `1` | Number of GPUs/processes for distributed inference. |
-| `num_workers` | `int` | No | `0` | Number of subprocesses for data loading. |
 | `enforce_determinism` | `bool` | No | `false` | Forces PyTorch to use deterministic algorithms. |
 -----
 
@@ -88,8 +85,8 @@ Standard inference predicts the next step ($t+1$) based on history ($t-n \dots t
 ### 4\. Input Format (`read_format`)
 
   * **`csv`:** Best for standard inference on small data. The inferer will filter the data to `input_columns` automatically.
-  * **`parquet`** Best for most use cases. Can be used with distributed and lazy loading, will use less disk space but probably more CPU than `pt`
-  * **`pt`** Optimized for distributed inference or lazy loading
+  * **`parquet`** Best for most use cases. Can be used with lazy loading, will use less disk space but more CPU than `pt`
+  * **`pt`** Optimized for lazy loading, uses more disk space but less CPU than `parquet`
 
 -----
 

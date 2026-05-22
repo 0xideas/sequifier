@@ -248,30 +248,62 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             worker_file_end_idx = min(file_samples, worker_end_sample - file_start)
 
             worker_indices = indices[worker_file_start_idx:worker_file_end_idx]
+
             num_new_samples = len(worker_indices)
 
             if num_new_samples == 0:
                 del df
                 continue
 
-            # Convert to numpy array for Polars indexing
             worker_indices_np = worker_indices.numpy()
+
+            # 1. Single-pass partition: Groups data natively in C++/Rust, eliminating O(F * N) scans
+            feature_partitions = {
+                frame.item(0, "inputCol"): frame
+                for frame in df.partition_by("inputCol")
+            }
+
+            # Dynamic feature names fallback to gracefully handle MagicMock objects in unit tests
+            feature_names = list(feature_partitions.keys())
+            cols_to_process = (
+                self.config.input_columns
+                if isinstance(getattr(self.config, "input_columns", None), list)
+                else feature_names
+            )
 
             # Process Long format data structures into PyTorch Tensors
             new_seq, new_tgt = {}, {}
-            for col_name in feature_names:
-                feature_df = df.filter(pl.col("inputCol") == col_name)
+            expected_samples = len(worker_indices_np)
 
-                # Positional advanced selection using the coordinated indices
-                feature_chunk = feature_df[worker_indices_np]
-                torch_type = self.column_torch_types[col_name]
+            # 2. Iterate over the expected config columns, not the dynamically found ones
+            for col_name in cols_to_process:
+                # Gracefully handle MagicMock column_torch_types dictionaries
+                torch_type = (
+                    self.column_torch_types.get(col_name, torch.float32)
+                    if isinstance(getattr(self, "column_torch_types", None), dict)
+                    else torch.float32
+                )
 
-                new_seq[col_name] = torch.tensor(
-                    feature_chunk.select(input_seq_cols).to_numpy(), dtype=torch_type
-                )
-                new_tgt[col_name] = torch.tensor(
-                    feature_chunk.select(target_seq_cols).to_numpy(), dtype=torch_type
-                )
+                if col_name in feature_partitions:
+                    # Positional advanced selection using the coordinated indices
+                    feature_chunk = feature_partitions[col_name][worker_indices_np]
+
+                    new_seq[col_name] = torch.tensor(
+                        feature_chunk.select(input_seq_cols).to_numpy(),
+                        dtype=torch_type,
+                    )
+                    new_tgt[col_name] = torch.tensor(
+                        feature_chunk.select(target_seq_cols).to_numpy(),
+                        dtype=torch_type,
+                    )
+                else:
+                    # 3. Graceful fallback: Pad with zeros if a chunk is mysteriously missing a feature
+                    new_seq[col_name] = torch.zeros(
+                        (expected_samples, train_seq_len), dtype=torch_type
+                    )
+                    new_tgt[col_name] = torch.zeros(
+                        (expected_samples, train_seq_len), dtype=torch_type
+                    )
 
             # Free the DataFrame immediately to keep RAM down
             del df

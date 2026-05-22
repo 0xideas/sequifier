@@ -7,7 +7,6 @@ import os
 import time
 import uuid
 import warnings
-from datetime import timedelta
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -46,6 +45,7 @@ from torch.utils.data import DataLoader
 torch._dynamo.config.suppress_errors = True
 
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
+from sequifier.distributed.env import setup_distributed_env  # noqa: E402
 from sequifier.helpers import normalize_path  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
     conditional_beartype,
@@ -71,36 +71,6 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
 )
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
-
-
-@beartype
-def setup(rank: int, local_rank: int, world_size: int, backend: str = "nccl"):
-    """Sets up the distributed training environment.
-
-    Args:
-        rank: The rank of the current process.
-        world_size: The total number of processes.
-        backend: The distributed backend to use.
-    """
-    os.environ["MASTER_ADDR"] = os.getenv("MASTER_ADDR", "localhost")
-    os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
-
-    os.environ["NCCL_DEBUG"] = "INFO"
-    os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
-    if not dist.is_initialized():
-        timeout_sec = int(os.environ.get("NCCL_TIMEOUT", 1800))
-
-        device_id = (
-            torch.device(f"cuda:{local_rank}") if torch.cuda.is_available() else None
-        )
-
-        dist.init_process_group(
-            backend,
-            rank=rank,
-            world_size=world_size,
-            timeout=timedelta(seconds=timeout_sec),
-            device_id=device_id,
-        )
 
 
 def cleanup():
@@ -146,7 +116,9 @@ def train_worker(
     if config.training_spec.distributed:
         if config.training_spec.device.startswith("cuda"):
             torch.cuda.set_device(local_rank)
-        setup(global_rank, local_rank, world_size, config.training_spec.backend)
+        setup_distributed_env(
+            global_rank, local_rank, world_size, config.training_spec.backend
+        )
 
     # 1. Create Datasets and DataLoaders with DistributedSampler
     if from_folder:
