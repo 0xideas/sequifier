@@ -18,6 +18,3 @@ map_to_id: true
 device: cpu
 seq_length: 8
 inference_batch_size: 2
-
-# --- Lazy Loading Setting ---
-load_full_data_to_ram: false

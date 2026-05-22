@@ -1,3 +1,4 @@
+distributed inference
 Inference scope:
  - Add "infinite" autoregressive inference via output_to_folder (configurable number of rows per file)
  - implement kv_cache (adapt specifically for learned positional embeddings)

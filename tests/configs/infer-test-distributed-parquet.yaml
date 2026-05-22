@@ -1,0 +1,24 @@
+project_root: tests/project_folder
+metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-categorical-multitarget-5.json
+model_type: generative
+model_path: tests/project_folder/models/sequifier-model-categorical-multitarget-5-last-3.onnx
+data_path: tests/project_folder/data/test-data-categorical-multitarget-5-split2
+read_format: parquet
+write_format: csv
+
+input_columns: null
+target_columns: [itemId, supCat1, supReal3]
+target_column_types:
+  itemId: categorical
+  supCat1: categorical
+  supReal3: real
+
+output_probabilities: false
+map_to_id: true
+device: cpu
+seq_length: 8
+inference_batch_size: 10
+enforce_determinism: true
+
+sample_from_distribution_columns: null
+autoregression: false

@@ -1,4 +1,5 @@
 import os
+import warnings
 from typing import Optional
 
 import numpy as np
@@ -101,17 +102,21 @@ class PreprocessorModel(BaseModel):
     def validate_format2(cls, v: bool, info: ValidationInfo):
         write_format = info.data.get("write_format")
 
-        # Existing check: 'pt' format cannot be combined
         if write_format == "pt" and v is True:
             raise ValueError(
                 "With write_format 'pt', merge_output must be set to False"
             )
 
-        # New constraint: 'parquet' or 'csv' formats cannot be uncombined (split)
-        if write_format != "pt" and v is False:
+        if write_format == "parquet" and v is True:
+            warnings.warn(
+                "Training on distributed data in parquet format takes significantly more CPU per GPU than with 'pt'. Inferring on distributed data in parquet is less efficient than with 'pt'"
+            )
+
+        # Allow "parquet" to have merge_output = False
+        if write_format not in ["pt", "parquet"] and v is False:
             raise ValueError(
                 f"With write_format '{write_format}', merge_output must be set to True. "
-                "Only 'pt' format supports uncombined (split) output."
+                "Only 'pt' and 'parquet' formats support uncombined (split) output."
             )
 
         return v

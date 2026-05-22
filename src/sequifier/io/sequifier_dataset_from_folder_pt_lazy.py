@@ -13,7 +13,7 @@ from sequifier.config.train_config import TrainModel
 from sequifier.helpers import normalize_path
 
 
-class SequifierDatasetFromFolderLazy(IterableDataset):
+class SequifierDatasetFromFolderPtLazy(IterableDataset):
     """
     An efficient, memory-safe PyTorch IterableDataset for out-of-core training.
 

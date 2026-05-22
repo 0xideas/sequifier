@@ -112,6 +112,13 @@ def training_config_path_cat_multitarget():
 
 
 @pytest.fixture(scope="session")
+def training_config_path_cat_multitarget_eager():
+    return os.path.join(
+        "tests", "configs", "train-test-categorical-multitarget-eager.yaml"
+    )
+
+
+@pytest.fixture(scope="session")
 def training_config_path_real():
     return os.path.join("tests", "configs", "train-test-real.yaml")
 
@@ -129,6 +136,11 @@ def training_config_path_cat_inf_size_3():
 @pytest.fixture(scope="session")
 def training_config_path_distributed():
     return os.path.join("tests", "configs", "train-test-distributed.yaml")
+
+
+@pytest.fixture(scope="session")
+def training_config_path_distributed_lazy_parquet():
+    return os.path.join("tests", "configs", "train-test-distributed-lazy-parquet.yaml")
 
 
 @pytest.fixture(scope="session")
@@ -201,6 +213,11 @@ def inference_config_path_distributed():
 
 
 @pytest.fixture(scope="session")
+def inference_config_path_distributed_parquet():
+    return os.path.join("tests", "configs", "infer-test-distributed-parquet.yaml")
+
+
+@pytest.fixture(scope="session")
 def inference_config_path_lazy():
     return os.path.join("tests", "configs", "infer-test-lazy.yaml")
 
@@ -249,17 +266,20 @@ def format_configs_locally(
     training_config_path_cat_inf_size_1,
     training_config_path_cat_inf_size_3,
     training_config_path_distributed,
+    training_config_path_distributed_lazy_parquet,
     training_config_path_lazy,
     training_config_path_resume_epoch,
     training_config_path_resume_mid_epoch,
     inference_config_path_cat,
     inference_config_path_cat_multitarget,
+    training_config_path_cat_multitarget_eager,
     inference_config_path_real,
     inference_config_path_real_autoregression,
     inference_config_path_categorical_autoregression,
     inference_config_path_cat_inf_size_1,
     inference_config_path_cat_inf_size_3,
     inference_config_path_distributed,
+    inference_config_path_distributed_parquet,
     inference_config_path_lazy,
     hp_search_configs,
 ):
@@ -278,17 +298,20 @@ def format_configs_locally(
             training_config_path_cat_inf_size_1,
             training_config_path_cat_inf_size_3,
             training_config_path_distributed,
+            training_config_path_distributed_lazy_parquet,
             training_config_path_lazy,
             training_config_path_resume_epoch,
             training_config_path_resume_mid_epoch,
             inference_config_path_cat,
             inference_config_path_cat_multitarget,
+            training_config_path_cat_multitarget_eager,
             inference_config_path_real,
             inference_config_path_real_autoregression,
             inference_config_path_categorical_autoregression,
             inference_config_path_cat_inf_size_1,
             inference_config_path_cat_inf_size_3,
             inference_config_path_distributed,
+            inference_config_path_distributed_parquet,
             inference_config_path_lazy,
             hp_search_configs["grid"],
             hp_search_configs["sample"],
@@ -419,8 +442,10 @@ def run_training(
     training_config_path_cat_inf_size_1,
     training_config_path_cat_inf_size_3,
     training_config_path_distributed,
+    training_config_path_distributed_lazy_parquet,
     training_config_path_lazy,
     training_config_path_cat_multitarget,
+    training_config_path_cat_multitarget_eager,
 ):
     for model_number in [1, 3, 5, 50]:
         metadata_config_path_cat = os.path.join(
@@ -445,7 +470,15 @@ def run_training(
 
     run_and_log(f"sequifier train --config-path {training_config_path_cat_multitarget}")
 
+    run_and_log(
+        f"sequifier train --config-path {training_config_path_cat_multitarget_eager}"
+    )
+
     run_and_log(f"sequifier train --config-path {training_config_path_distributed}")
+
+    run_and_log(
+        f"sequifier train --config-path {training_config_path_distributed_lazy_parquet}"
+    )
 
     run_and_log(f"sequifier train --config-path {training_config_path_lazy}")
 
@@ -531,6 +564,7 @@ def run_inference(
     inference_config_path_cat_inf_size_1,
     inference_config_path_cat_inf_size_3,
     inference_config_path_distributed,
+    inference_config_path_distributed_parquet,
     inference_config_path_lazy,
     inference_config_path_cat_inf_size_3_embedding,
 ):
@@ -575,6 +609,10 @@ def run_inference(
 
     run_and_log(f"sequifier infer --config-path {inference_config_path_distributed}")
 
+    run_and_log(
+        f"sequifier infer --config-path {inference_config_path_distributed_parquet}"
+    )
+
     run_and_log(f"sequifier infer --config-path {inference_config_path_lazy}")
 
     run_and_log(
@@ -599,6 +637,7 @@ def model_names_preds():
     ]
     model_names_preds += [
         "model-categorical-multitarget-5-best-3",
+        "model-categorical-multitarget-5-last-3",
         "model-real-1-best-3-autoregression",
         "model-categorical-1-best-3-autoregression",
         "model-categorical-1-inf-size-best-3",

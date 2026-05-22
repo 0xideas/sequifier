@@ -109,9 +109,9 @@ class Preprocessor:
         if self.merge_output:
             self.target_dir = "temp"
         else:
-            if write_format != "pt":
+            if write_format not in ["pt", "parquet"]:
                 raise ValueError(
-                    f"write_format must be 'pt' when merge_output is False, got '{write_format}'"
+                    f"write_format must be 'pt' or 'parquet' when merge_output is False, got '{write_format}'"
                 )
             self.target_dir = f"{self.data_name_root}-temp"
 
@@ -223,6 +223,7 @@ class Preprocessor:
                 self.target_dir,
                 self.batches_per_file,
                 subsequence_start_mode,
+                self.merge_output,
             )
 
             if self.merge_output:
@@ -711,7 +712,7 @@ class Preprocessor:
         `target_dir` into their final split-specific subfolders (e.g.,
         'data_name_root-split0/'). It also generates a 'metadata.json' file
         in each of these subfolders, which is required by
-        `SequifierDatasetFromFolder`.
+        `SequifierDatasetFromFolderPt`.
 
         Finally, it removes the temporary `target_dir` if it's empty or
         if `target_dir` is "temp" (implying `merge_output` was True).
@@ -746,7 +747,7 @@ class Preprocessor:
                         logger.info(f"Moving '{file_path}' to '{destination}'")
                         shutil.move(str(file_path), str(destination))
 
-                self._create_metadata_for_folder(folder_path)
+                self._create_metadata_for_folder(folder_path, write_format)
 
         if not os.listdir(directory) or self.target_dir == "temp":
             shutil.rmtree(directory)
@@ -780,7 +781,8 @@ class Preprocessor:
             "n_classes": n_classes,
             "id_maps": id_maps,
             "split_paths": [
-                split_path.replace(".pt", "") for split_path in self.split_paths
+                os.path.splitext(split_path)[0] if not self.merge_output else split_path
+                for split_path in self.split_paths
             ],
             "column_types": col_types,
             "selected_columns_statistics": selected_columns_statistics,
@@ -802,55 +804,70 @@ class Preprocessor:
             json.dump(data_driven_config, f)
 
     @beartype
-    def _create_metadata_for_folder(self, folder_path: str) -> None:
-        """Scans a directory for .pt files, counts samples, and writes metadata.json.
+    def _create_metadata_for_folder(self, folder_path: str, write_format: str) -> None:
+        """Scans a directory for batch files, counts samples, and writes metadata.json.
 
-                This method is used when `write_format` is 'pt' and
-                `merge_output` is False. It iterates over all .pt files
-                in the given `folder_path`, loads each one to count the number of
-                samples (sequences), and writes a `metadata.json` file in that
-                same folder. This JSON file contains the total sample count and a
-                list of all batch files with their respective sample counts, which
-        s        is required by the `SequifierDatasetFromFolder` data loader.
+        This method is used when `merge_output` is False. It iterates over all
+        files in the given `folder_path` matching the `write_format`, loads each
+        one to count the number of samples (sequences), and writes a `metadata.json`
+        file in that same folder. This JSON file contains the total sample count and a
+        list of all batch files with their respective sample counts.
 
-                Args:
-                    folder_path: The path to the directory containing the .pt batch files
-                        for a specific data split.
+        Args:
+            folder_path: The path to the directory containing the batch files
+                for a specific data split.
+            write_format: The file format of the output files (e.g., 'pt', 'parquet').
         """
         logger.info(f"Creating metadata for folder '{folder_path}'")
         batch_files_metadata = []
         total_samples = 0
         directory = Path(folder_path)
 
-        # Find all .pt files in the target folder
-        pt_files = sorted(
-            [f for f in directory.iterdir() if f.is_file() and f.suffix == ".pt"]
+        # Find files matching the current write_format
+        files = sorted(
+            [
+                f
+                for f in directory.iterdir()
+                if f.is_file() and f.suffix == f".{write_format}"
+            ]
         )
 
-        for file_path in pt_files:
+        for file_path in files:
             try:
-                # Load the tensor file to inspect its contents
-                sequences_dict, _, _, _, _ = torch.load(file_path, weights_only=False)
-                if sequences_dict:
-                    # All tensors in the dict have the same number of samples (batch size)
-                    n_samples = sequences_dict[list(sequences_dict.keys())[0]].shape[0]
-
-                    # Store the file's name (relative path) and its sample count
-                    batch_files_metadata.append(
-                        {"path": file_path.name, "samples": n_samples}
+                if write_format == "pt":
+                    sequences_dict, _, _, _, _ = torch.load(
+                        file_path, weights_only=False
                     )
-                    total_samples += n_samples
+                    if sequences_dict:
+                        n_samples = sequences_dict[
+                            list(sequences_dict.keys())[0]
+                        ].shape[0]
+                        batch_files_metadata.append(
+                            {"path": file_path.name, "samples": n_samples}
+                        )
+                        total_samples += n_samples
+                elif write_format == "parquet":
+                    # Use Polars lazy scanning to efficiently count rows and features
+                    lazy_df = pl.scan_parquet(file_path)
+                    n_rows = lazy_df.select(pl.len()).collect().item()
+                    n_cols = (
+                        lazy_df.select(pl.col("inputCol").n_unique()).collect().item()
+                    )
+
+                    if n_cols > 0:
+                        n_samples = n_rows // n_cols
+                        batch_files_metadata.append(
+                            {"path": file_path.name, "samples": n_samples}
+                        )
+                        total_samples += n_samples
             except Exception as e:
-                # Add a warning for robustness in case a file is corrupted
                 logger.warning(f"Could not process file {file_path} for metadata: {e}")
 
-        # Final metadata structure required by SequifierDatasetFromFolder
         metadata = {
             "total_samples": total_samples,
             "batch_files": batch_files_metadata,
         }
 
-        # Write the metadata to a json file in the same folder
         metadata_path = directory / "metadata.json"
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=4)
@@ -1285,6 +1302,7 @@ def _process_batches_multiple_files_inner(
                 target_dir,
                 batches_per_file,
                 subsequence_start_mode,
+                merge_output,
             )
 
             if merge_output:
@@ -1331,6 +1349,7 @@ def _process_batches_single_file(
     target_dir: str,
     batches_per_file: int,
     subsequence_start_mode: str,
+    merge_output: bool,
 ) -> int:
     """Processes batches of data from a single file.
 
@@ -1350,6 +1369,7 @@ def _process_batches_single_file(
         target_dir: The target directory for temporary files.
         batches_per_file: The number of batches to process per file.
         subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
+        merge_output: merge output
 
     Returns:
         The number of batches processed.
@@ -1374,6 +1394,7 @@ def _process_batches_single_file(
             write_format,
             batches_per_file,
             subsequence_start_mode,
+            merge_output,
         )
         for process_id, (start, end) in enumerate(valid_batch_limits)
     ]
@@ -1653,19 +1674,20 @@ def _write_accumulated_sequences(
         seq_length: The total sequence length.
         col_types: A dictionary mapping column names to their string types.
     """
+
     if not sequences_to_write:
         return
 
     combined_df = pl.concat(sequences_to_write)
-
-    # Construct a unique filename for the batched file
     split_path_batch_seq = split_path.replace(
         f".{write_format}", f"-{process_id}-{file_index_str}.{write_format}"
     )
     out_path = insert_top_folder(split_path_batch_seq, target_dir)
 
-    # Write the combined data
-    process_and_write_data_pt(combined_df, seq_length, out_path, col_types)
+    if write_format == "pt":
+        process_and_write_data_pt(combined_df, seq_length, out_path, col_types)
+    elif write_format == "parquet":
+        combined_df.write_parquet(out_path)
 
 
 @beartype
@@ -1685,6 +1707,7 @@ def preprocess_batch(
     write_format: str,
     batches_per_file: int,
     subsequence_start_mode: str,
+    merge_output: bool,
 ) -> None:
     """Processes a batch of data.
 
@@ -1707,7 +1730,7 @@ def preprocess_batch(
     """
     sequence_ids = sorted(batch.get_column("sequenceId").unique().to_list())
 
-    if write_format == "pt":
+    if not merge_output:
         # New logic for batching sequences into files for .pt format
         sequences_by_split = {i: [] for i in range(len(split_paths))}
         file_indices = {i: 0 for i in range(len(split_paths))}

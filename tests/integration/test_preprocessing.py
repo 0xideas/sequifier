@@ -67,6 +67,22 @@ def test_metadata_config(metadata_configs):
             assert "mean" in metadata_config["selected_columns_statistics"]["itemValue"]
 
 
+def load_parquet_folder_outputs(path):
+    """Reads a directory of Parquet chunks into a single sorted Polars DataFrame."""
+    # Polars natively supports reading all matching files via glob patterns
+    data = pl.read_parquet(os.path.join(path, "*.parquet"))
+
+    other_cols = [
+        col
+        for col in data.columns
+        if col not in ["sequenceId", "subsequenceId", "startItemPosition", "inputCol"]
+    ]
+
+    return data[
+        ["sequenceId", "subsequenceId", "startItemPosition", "inputCol"] + other_cols
+    ].sort(["sequenceId", "subsequenceId", "startItemPosition", "inputCol"])
+
+
 def load_pt_outputs(path):
     contents = []
     for root, _, files in os.walk(path):
@@ -135,6 +151,10 @@ def read_preprocessing_outputs(path, variant):
     if variant == "real":
         return pl.read_parquet(f"{path}.parquet")
     elif variant == "categorical":
+        if os.path.isdir(path) and any(
+            f.endswith(".parquet") for f in os.listdir(path)
+        ):
+            return load_parquet_folder_outputs(path)
         return load_pt_outputs(path)
 
 

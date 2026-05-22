@@ -1,7 +1,8 @@
 project_root: tests/project_folder
 model_name: model-categorical-multitarget-5
-read_format: pt
+read_format: parquet
 metadata_config_path: configs/metadata_configs/test-data-categorical-multitarget-5.json
+
 
 input_columns: null
 target_columns: [itemId, supCat1, supReal3]
@@ -9,7 +10,6 @@ target_column_types:
   itemId: categorical
   supCat1: categorical
   supReal3: real
-
 seq_length: 8
 inference_batch_size: 10
 
@@ -75,3 +75,4 @@ training_spec:
     decoder: bfloat16
     embedding: float32
     norm: float32
+  load_full_data_to_ram: false

@@ -4,7 +4,7 @@ metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-ca
 model_type: generative
 model_path: tests/project_folder/models/sequifier-model-categorical-multitarget-5-best-3.onnx
 data_path: tests/project_folder/data/test-data-categorical-multitarget-5-split2
-read_format: pt
+read_format: parquet
 write_format: csv
 
 input_columns: null

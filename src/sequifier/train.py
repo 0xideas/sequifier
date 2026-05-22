@@ -7,7 +7,6 @@ import os
 import time
 import uuid
 import warnings
-from datetime import timedelta
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -46,6 +45,8 @@ from torch.utils.data import DataLoader
 torch._dynamo.config.suppress_errors = True
 
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
+from sequifier.distributed.env import setup_distributed_env  # noqa: E402
+from sequifier.helpers import normalize_path  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
     conditional_beartype,
     configure_determinism,
@@ -56,44 +57,20 @@ from sequifier.helpers import (  # noqa: E402
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
 )
-from sequifier.io.sequifier_dataset_from_folder import (  # noqa: E402
-    SequifierDatasetFromFolder,
+from sequifier.io.sequifier_dataset_from_folder_parquet import (  # noqa: E402
+    SequifierDatasetFromFolderParquet,
 )
-from sequifier.io.sequifier_dataset_from_folder_lazy import (  # noqa: E402
-    SequifierDatasetFromFolderLazy,
+from sequifier.io.sequifier_dataset_from_folder_parquet_lazy import (  # noqa: E402
+    SequifierDatasetFromFolderParquetLazy,
+)
+from sequifier.io.sequifier_dataset_from_folder_pt import (  # noqa: E402
+    SequifierDatasetFromFolderPt,
+)
+from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
+    SequifierDatasetFromFolderPtLazy,
 )
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
-
-
-@beartype
-def setup(rank: int, local_rank: int, world_size: int, backend: str = "nccl"):
-    """Sets up the distributed training environment.
-
-    Args:
-        rank: The rank of the current process.
-        world_size: The total number of processes.
-        backend: The distributed backend to use.
-    """
-    os.environ["MASTER_ADDR"] = os.getenv("MASTER_ADDR", "localhost")
-    os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
-
-    os.environ["NCCL_DEBUG"] = "INFO"
-    os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
-    if not dist.is_initialized():
-        timeout_sec = int(os.environ.get("NCCL_TIMEOUT", 1800))
-
-        device_id = (
-            torch.device(f"cuda:{local_rank}") if torch.cuda.is_available() else None
-        )
-
-        dist.init_process_group(
-            backend,
-            rank=rank,
-            world_size=world_size,
-            timeout=timedelta(seconds=timeout_sec),
-            device_id=device_id,
-        )
 
 
 def cleanup():
@@ -139,24 +116,45 @@ def train_worker(
     if config.training_spec.distributed:
         if config.training_spec.device.startswith("cuda"):
             torch.cuda.set_device(local_rank)
-        setup(global_rank, local_rank, world_size, config.training_spec.backend)
+        setup_distributed_env(
+            global_rank, local_rank, world_size, config.training_spec.backend
+        )
 
     # 1. Create Datasets and DataLoaders with DistributedSampler
     if from_folder:
-        if config.training_spec.load_full_data_to_ram:
-            train_dataset = SequifierDatasetFromFolder(
-                config.training_data_path, config
-            )
-            valid_dataset = SequifierDatasetFromFolder(
-                config.validation_data_path, config
-            )
+        if config.read_format == "pt":
+            if config.training_spec.load_full_data_to_ram:
+                train_dataset = SequifierDatasetFromFolderPt(
+                    config.training_data_path, config
+                )
+                valid_dataset = SequifierDatasetFromFolderPt(
+                    config.validation_data_path, config
+                )
+            else:
+                train_dataset = SequifierDatasetFromFolderPtLazy(
+                    config.training_data_path, config
+                )
+                valid_dataset = SequifierDatasetFromFolderPtLazy(
+                    config.validation_data_path, config
+                )
+        elif config.read_format == "parquet":
+            if config.training_spec.load_full_data_to_ram:
+                train_dataset = SequifierDatasetFromFolderParquet(
+                    config.training_data_path, config
+                )
+                valid_dataset = SequifierDatasetFromFolderParquet(
+                    config.validation_data_path, config
+                )
+            else:
+                train_dataset = SequifierDatasetFromFolderParquetLazy(
+                    config.training_data_path, config
+                )
+                valid_dataset = SequifierDatasetFromFolderParquetLazy(
+                    config.validation_data_path, config
+                )
         else:
-            train_dataset = SequifierDatasetFromFolderLazy(
-                config.training_data_path, config
-            )
-            valid_dataset = SequifierDatasetFromFolderLazy(
-                config.validation_data_path, config
-            )
+            raise Exception("Not allowed")
+
     else:
         if config.training_spec.distributed:
             raise ValueError(
@@ -414,7 +412,9 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
     torch.set_float32_matmul_precision(config.training_spec.float32_matmul_precision)
 
     world_size = config.training_spec.world_size
-    from_folder = config.read_format == "pt"
+    from_folder = os.path.isdir(
+        normalize_path(config.training_data_path, config.project_root)
+    )
 
     if config.training_spec.distributed:
         if "RANK" in os.environ and "WORLD_SIZE" in os.environ:

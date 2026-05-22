@@ -26,8 +26,10 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 > **Important Constraint on `write_format`:**
 >
->   * If `write_format` is **`pt`** (PyTorch tensors), `merge_output` must be **`false`**. This sharded format is **required** for distributed training on large datasets.
->   * If `write_format` is **`csv`** or **`parquet`**, `merge_output` must be **`true`**.
+>   * If `write_format` is **`pt`** (PyTorch tensors), `merge_output` must be **`false`**.
+>   * If `write_format` is **`parquet`**, `merge_output` can be **`false`** or **`true`**.
+>   * If `write_format` is **`csv`**, `merge_output` must be **`true`**.
+> For distributed training, `merge_output` must be set to **`false`**.
 
 ### 2\. Column Selection & Filtering
 
@@ -62,8 +64,8 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 ### 1\. `write_format`: `parquet` vs. `pt`
 
-  * **Choose `parquet` (default):** If your dataset is small to medium (fits in RAM) and you want to inspect the preprocessed data easily using standard tools like Pandas or Polars. This produces one file per split (e.g., `data-split0.parquet`).
-  * **Choose `pt`:** If your dataset is massive (larger than RAM) or you intend to use **Distributed Training** (multi-GPU). This format saves data as thousands of small PyTorch tensor files. It allows the `SequifierDatasetFromFolderLazy` to load data on demand without clogging memory.
+  * **Choose `parquet` (default):** Unless you have a specific reason, use `parquet`. *Note: If you are doing distributed training, Parquet support is currently in **Beta**.
+  * **Choose `pt`:** Use `pt` data loading if speed and CPU overhead are your primary bottlenecks, **or if you are running multi-GPU distributed training.** This format is the most stable choice for high-throughput scaling.
 
 ### 2\. `stride_by_split` configuration
 

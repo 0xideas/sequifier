@@ -203,7 +203,7 @@ Please cite with:
   title = {sequifier - causal transformer models for multivariate sequence modelling},
   year = {2025},
   publisher = {GitHub},
-  version = {v1.1.2.0},
+  version = {v1.1.2.1},
   url = {https://github.com/0xideas/sequifier}
 }
 ```
@@ -237,8 +237,10 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 > **Important Constraint on `write_format`:**
 >
->   * If `write_format` is **`pt`** (PyTorch tensors), `merge_output` must be **`false`**. This sharded format is **required** for distributed training on large datasets.
->   * If `write_format` is **`csv`** or **`parquet`**, `merge_output` must be **`true`**.
+>   * If `write_format` is **`pt`** (PyTorch tensors), `merge_output` must be **`false`**.
+>   * If `write_format` is **`parquet`**, `merge_output` can be **`false`** or **`true`**.
+>   * If `write_format` is **`csv`**, `merge_output` must be **`true`**.
+> For distributed training, `merge_output` must be set to **`false`**.
 
 ### 2\. Column Selection & Filtering
 
@@ -273,8 +275,8 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 ### 1\. `write_format`: `parquet` vs. `pt`
 
-  * **Choose `parquet` (default):** If your dataset is small to medium (fits in RAM) and you want to inspect the preprocessed data easily using standard tools like Pandas or Polars. This produces one file per split (e.g., `data-split0.parquet`).
-  * **Choose `pt`:** If your dataset is massive (larger than RAM) or you intend to use **Distributed Training** (multi-GPU). This format saves data as thousands of small PyTorch tensor files. It allows the `SequifierDatasetFromFolderLazy` to load data on demand without clogging memory.
+  * **Choose `parquet` (default):** Unless you have a specific reason, use `parquet`. *Note: If you are doing distributed training, Parquet support is currently in **Beta**.
+  * **Choose `pt`:** Use `pt` data loading if speed and CPU overhead are your primary bottlenecks, **or if you are running multi-GPU distributed training.** This format is the most stable choice for high-throughput scaling.
 
 ### 2\. `stride_by_split` configuration
 
@@ -432,8 +434,8 @@ These fields determine the size and complexity of the Transformer.
 | `backend` | `str` | No | `nccl` | The distributed training backend to use (e.g., `nccl` for GPUs, `gloo` for CPUs). Only relevant if `distributed: true`. |
 | `device_max_concat_length`| `int` | No | `12` | Controls recursive tensor concatenation to prevent CUDA kernel limits on specific hardware. Lower this if you encounter "CUDA error: too many resources requested for launch". |
 | `continue_training` | `bool` | No | `true` | Load model weights and optimizer state from laste checkpoint and continue training |
-| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
-| `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
+| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt` or `read_format: parquet`. |
+| `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
 | `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
@@ -466,10 +468,10 @@ These fields determine the size and complexity of the Transformer.
       * *Pros*: Fastest training speed.
       * *Cons*: Limited by physical RAM. If the dataset is 64GB and you have 32GB RAM, this will crash.
   * **`false` (Lazy Loading):** Loads individual files on-demand during training.
-      * *Requirements:* `read_format` must be `pt`.
+      * *Requirements:* `read_format` must be `parquet` or `pt`.
       * *Mechanism:* Uses an `IterableDataset` with cross-file buffering to stream pre-processed chunked files sequentially, automatically calculating exact sample boundaries across GPU ranks and workers.
       * *Pros:* Can train on datasets much larger than RAM, safely supporting DDP/FSDP synchronization.
-      * *Cons:* Slight I/O overhead depending on disk speed. Increase `num_workers` to mitigate this.
+      * *Cons:* Slight I/O overhead depending on disk speed. Increase `num_workers` to mitigate this. **Note for Parquet users:** Lazy loading distributed Parquet files is currently in **Beta** and may cause high CPU overhead or deadlocks on large multi-GPU nodes. For distributed lazy loading, `read_format: pt` is strongly recommended.
 
 ### 2\. Attention Mechanism (`attention_type` & `n_kv_heads`)
 
@@ -487,7 +489,7 @@ These fields determine the size and complexity of the Transformer.
 If you have multiple GPUs:
 
 1.  Set `distributed: true` in `training_spec`.
-2.  **Crucial:** You must have run `preprocess` with `write_format: pt` and `merge_output: false`.
+2.  **Crucial:** You must have run `preprocess` with `merge_output: false`.
 3.  Set `world_size` to the number of GPUs.
 4.  Set `data_parallelism` to `DDP` for `DistributedDataParallel`training or `FSDP` for `FullyShardedDataParallel` training
 5.  Set `torch_compile` to `inner` when training with `FSDP` and to `outer` when training with `DDP`
@@ -580,7 +582,7 @@ The configuration is defined in a YAML file (e.g., `infer.yaml`).
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
-| `data_path` | `str` | **Yes** | - | Path to the input data file (csv/parquet) or folder (if `read_format: pt`). |
+| `data_path` | `str` | **Yes** | - | Path to the input data file (`csv` or `parquet`) or folder (`pt` or `parquet`). |
 | `model_path` | `str` or `list[str]` | **Yes** | - | Path to a specific model file, or a list of paths to process sequentially. (e.g., `models/sequifier-[NAME]-best-[EPOCH].pt`). |
 | `training_config_path`| `str` | No | `configs/train.yaml`| Path to the config used to train the model. Required to reconstruct the model architecture. |
 | `metadata_config_path`| `str` | **Yes** | - | Path to the JSON metadata file generated during preprocessing. Used for ID mapping and normalization. |
@@ -614,17 +616,12 @@ These fields tell the inference engine which columns to extract from the new dat
 | `infer_with_dropout` | `bool` | No | `false` | If `true`, keeps dropout active during inference (useful for uncertainty estimation/Monte Carlo Dropout). |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
 
-### 4\. System & Distributed
+### 4\. System
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `device` | `str` | **Yes** | - | `cuda`, `cpu`, or `mps`. |
-| `distributed` | `bool` | No | `false`| Enable multi-GPU inference. Requires `read_format: pt`. |
-| `world_size` | `int` | No | `1` | Number of GPUs/processes for distributed inference. |
-| `num_workers` | `int` | No | `0` | Number of subprocesses for data loading. |
 | `enforce_determinism` | `bool` | No | `false` | Forces PyTorch to use deterministic algorithms. |
-| `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
-
 -----
 
 ## Key Trade-offs and Decisions
@@ -652,8 +649,9 @@ Standard inference predicts the next step ($t+1$) based on history ($t-n \dots t
 
 ### 4\. Input Format (`read_format`)
 
-  * **`parquet` / `csv`:** Best for standard inference on new data files. The inferer will filter the data to `input_columns` automatically.
-  * **`pt` (PyTorch Tensors):** Required for **Distributed Inference** or **Lazy Loading**. If your inference dataset is massive (terabytes), preprocess it into `.pt` chunks first, then run inference with `read_format: pt` and `distributed: true`.
+  * **`csv`:** Best for standard inference on small data. The inferer will filter the data to `input_columns` automatically.
+  * **`parquet`** Best for most use cases. Can be used with lazy loading, will use less disk space but more CPU than `pt`
+  * **`pt`** Optimized for lazy loading, uses more disk space but less CPU than `parquet`
 
 -----
 
@@ -679,12 +677,12 @@ Results are saved in the `outputs/` folder within your project root.
 
 ### Directory Output Mode (Sharded Inference)
 
-When using PyTorch tensors (`read_format: pt`), sequifier creates a directory containing multiple sharded outputs.
+When using a folder of files as input, sequifier creates a directory containing multiple sharded outputs.
 
 **File Structure**
-* **`pt` inputs:** `outputs/predictions/[MODEL_NAME]-predictions/[MODEL_NAME]-[CHUNK_ID]-predictions.[format]` *(Directory of files)*
-* **`pt` inputs:** `outputs/probabilities/[MODEL_NAME]-[TARGET_COLUMN]-probabilities/[MODEL_NAME]-[CHUNK_ID]-probabilities.[format]` *(Directory of files)*
-* **`pt` inputs:** `outputs/embeddings/[MODEL_NAME]-embeddings/[MODEL_NAME]-[CHUNK_ID]-embeddings.[format]` *(Directory of files)*
+* **folder inputs:** `outputs/predictions/[MODEL_NAME]-predictions/[MODEL_NAME]-[CHUNK_ID]-predictions.[format]` *(Directory of files)*
+* **folder inputs:** `outputs/probabilities/[MODEL_NAME]-[TARGET_COLUMN]-probabilities/[MODEL_NAME]-[CHUNK_ID]-probabilities.[format]` *(Directory of files)*
+* **folder inputs:** `outputs/embeddings/[MODEL_NAME]-embeddings/[MODEL_NAME]-[CHUNK_ID]-embeddings.[format]` *(Directory of files)*
 
 
 **Pipeline Note:** If you switch to `.pt` inputs, ensure your downstream scripts are configured to read from a directory of files rather than a single file. This behavior applies to predictions, probabilities, and embeddings.
@@ -834,8 +832,8 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `backend` | str | No | `nccl` | The distributed training backend to use (e.g., `nccl` for GPUs). Only relevant if `distributed: true`. |
 | `device_max_concat_length` | `int` | No | `12` | Controls recursive tensor concatenation to prevent CUDA kernel limits. |
 | `max_ram_gb` | `int` or `float`| No | `16` | RAM limit (GB) for the cache when using lazy loading. |
-| `load_full_data_to_ram` | `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
-| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt`. |
+| `load_full_data_to_ram` | `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
+| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt` or `read_format: parquet`. |
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
 | `layer_autocast` | `bool` | No | `true` | Enable `torch.autocast`. |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance for multi-GPU training. |
@@ -943,7 +941,12 @@ you also need to set
 write_format: pt
 ```
 
-*Note: Distributed training is not supported if your data is kept as a single `csv` or `parquet` file.*
+*Note: Distributed training is not supported if your data is kept as a single `csv` or `parquet` file. You must use merge_output: false to generate a folder of sharded files.*
+
+> **⚠️ Beta Notice for Parquet in Distributed Training:**
+> While `write_format: parquet` is supported for distributed training, it is currently considered **Beta**. Because Parquet chunk reading relies on Polars' multi-threading, using it alongside PyTorch's multiprocess `DataLoader` in heavy multi-GPU environments can lead to CPU thread contention, high RAM usage, or NCCL timeouts.
+> **Recommendation:** For production multi-GPU runs, use `write_format: pt`. It relies on native PyTorch serialization and is significantly more stable under heavy hardware loads.
+
 
 ## 2. Configuration: `train.yaml`
 
@@ -954,8 +957,8 @@ In your `train.yaml`, update the `training_spec` block:
 ```yaml
 training_spec:
   distributed: true
-  data_parallelism: 'FSDP' # or 'DDP   # Set to true to shard model weights/gradients across GPUs
-  fsdp_cpu_offload: false              # Set to true to offload parameters to CPU RAM
+  data_parallelism: 'FSDP' # or 'DDP'   # Set to true to shard model weights/gradients across GPUs
+  fsdp_cpu_offload: false   # omit if using 'DDP', set to true to offload parameters to CPU RAM
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)
   backend: nccl        # 'nccl' is the standard and most efficient backend for NVIDIA GPUs
   sampling_strategy: 'oversampling' # if the number of files isn't perfectly divisible by the number of GPUs, you need to choose either 'oversampling' or 'undersampling'. If it is perfectly divisible, you can set it to 'exact', but the files must be very close to each other in size to prevent timing mismatches

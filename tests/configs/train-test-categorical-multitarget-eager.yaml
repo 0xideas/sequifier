@@ -1,0 +1,77 @@
+project_root: tests/project_folder
+model_name: model-categorical-multitarget-5-eager
+read_format: parquet
+metadata_config_path: configs/metadata_configs/test-data-categorical-multitarget-5.json
+
+input_columns: null
+target_columns: [itemId, supCat1, supReal3]
+target_column_types:
+  itemId: categorical
+  supCat1: categorical
+  supReal3: real
+seq_length: 8
+inference_batch_size: 10
+
+export_generative_model: true
+export_embedding_model: true
+
+model_spec:
+  initial_embedding_dim: 16
+  feature_embedding_dims:
+    itemId: 6
+    supCat1: 4
+    supReal2: 1
+    supReal3: 1
+    supCat4: 4
+  dim_model: 16
+  n_head: 2
+  dim_feedforward: 10
+  num_layers: 2
+  prediction_length: 1
+
+  activation_fn: gelu
+  normalization: rmsnorm
+  positional_encoding: rope
+  attention_type: gqa
+  norm_first: true
+  n_kv_heads: 1
+  rope_theta: 10000.0
+
+training_spec:
+  device: cpu
+  epochs: 3
+  save_interval_epochs: 1
+  batch_size: 10
+  learning_rate: 0.003
+  log_interval: 1
+  accumulation_steps: 2
+  dropout: 0.3
+  criterion:
+    itemId: CrossEntropyLoss
+    supCat1: CrossEntropyLoss
+    supReal3: MSELoss
+  loss_weights:
+    itemId: 1.0
+    supCat1: 0.5
+    supReal3: 0.5
+  optimizer:
+    name: AdamW
+  scheduler:
+    name: OneCycleLR
+    max_lr: 0.001
+    pct_start: 0.03
+    div_factor: 1000
+    final_div_factor: 1000
+    anneal_strategy: cos
+    total_steps: 100
+    three_phase: false
+  scheduler_step_on: 'batch'
+  continue_training: false
+  enforce_determinism: true
+  layer_autocast: true
+  layer_type_dtypes:
+    linear: bfloat16
+    decoder: bfloat16
+    embedding: float32
+    norm: float32
+  load_full_data_to_ram: true

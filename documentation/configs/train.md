@@ -84,8 +84,8 @@ These fields determine the size and complexity of the Transformer.
 | `backend` | `str` | No | `nccl` | The distributed training backend to use (e.g., `nccl` for GPUs, `gloo` for CPUs). Only relevant if `distributed: true`. |
 | `device_max_concat_length`| `int` | No | `12` | Controls recursive tensor concatenation to prevent CUDA kernel limits on specific hardware. Lower this if you encounter "CUDA error: too many resources requested for launch". |
 | `continue_training` | `bool` | No | `true` | Load model weights and optimizer state from laste checkpoint and continue training |
-| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt`. |
-| `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt`). |
+| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP). Requires `read_format: pt` or `read_format: parquet`. |
+| `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
 | `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
 | `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
@@ -118,10 +118,10 @@ These fields determine the size and complexity of the Transformer.
       * *Pros*: Fastest training speed.
       * *Cons*: Limited by physical RAM. If the dataset is 64GB and you have 32GB RAM, this will crash.
   * **`false` (Lazy Loading):** Loads individual files on-demand during training.
-      * *Requirements:* `read_format` must be `pt`.
+      * *Requirements:* `read_format` must be `parquet` or `pt`.
       * *Mechanism:* Uses an `IterableDataset` with cross-file buffering to stream pre-processed chunked files sequentially, automatically calculating exact sample boundaries across GPU ranks and workers.
       * *Pros:* Can train on datasets much larger than RAM, safely supporting DDP/FSDP synchronization.
-      * *Cons:* Slight I/O overhead depending on disk speed. Increase `num_workers` to mitigate this.
+      * *Cons:* Slight I/O overhead depending on disk speed. Increase `num_workers` to mitigate this. **Note for Parquet users:** Lazy loading distributed Parquet files is currently in **Beta** and may cause high CPU overhead or deadlocks on large multi-GPU nodes. For distributed lazy loading, `read_format: pt` is strongly recommended.
 
 ### 2\. Attention Mechanism (`attention_type` & `n_kv_heads`)
 
@@ -139,7 +139,7 @@ These fields determine the size and complexity of the Transformer.
 If you have multiple GPUs:
 
 1.  Set `distributed: true` in `training_spec`.
-2.  **Crucial:** You must have run `preprocess` with `write_format: pt` and `merge_output: false`.
+2.  **Crucial:** You must have run `preprocess` with `merge_output: false`.
 3.  Set `world_size` to the number of GPUs.
 4.  Set `data_parallelism` to `DDP` for `DistributedDataParallel`training or `FSDP` for `FullyShardedDataParallel` training
 5.  Set `torch_compile` to `inner` when training with `FSDP` and to `outer` when training with `DDP`

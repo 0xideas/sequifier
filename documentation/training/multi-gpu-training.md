@@ -18,7 +18,12 @@ you also need to set
 write_format: pt
 ```
 
-*Note: Distributed training is not supported if your data is kept as a single `csv` or `parquet` file.*
+*Note: Distributed training is not supported if your data is kept as a single `csv` or `parquet` file. You must use merge_output: false to generate a folder of sharded files.*
+
+> **⚠️ Beta Notice for Parquet in Distributed Training:**
+> While `write_format: parquet` is supported for distributed training, it is currently considered **Beta**. Because Parquet chunk reading relies on Polars' multi-threading, using it alongside PyTorch's multiprocess `DataLoader` in heavy multi-GPU environments can lead to CPU thread contention, high RAM usage, or NCCL timeouts.
+> **Recommendation:** For production multi-GPU runs, use `write_format: pt`. It relies on native PyTorch serialization and is significantly more stable under heavy hardware loads.
+
 
 ## 2. Configuration: `train.yaml`
 
@@ -29,8 +34,8 @@ In your `train.yaml`, update the `training_spec` block:
 ```yaml
 training_spec:
   distributed: true
-  data_parallelism: 'FSDP' # or 'DDP   # Set to true to shard model weights/gradients across GPUs
-  fsdp_cpu_offload: false              # Set to true to offload parameters to CPU RAM
+  data_parallelism: 'FSDP' # or 'DDP'   # Set to true to shard model weights/gradients across GPUs
+  fsdp_cpu_offload: false   # omit if using 'DDP', set to true to offload parameters to CPU RAM
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)
   backend: nccl        # 'nccl' is the standard and most efficient backend for NVIDIA GPUs
   sampling_strategy: 'oversampling' # if the number of files isn't perfectly divisible by the number of GPUs, you need to choose either 'oversampling' or 'undersampling'. If it is perfectly divisible, you can set it to 'exact', but the files must be very close to each other in size to prevent timing mismatches
