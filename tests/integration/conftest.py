@@ -240,6 +240,9 @@ def hp_search_configs():
     return {
         "grid": os.path.join("tests", "configs", "hyperparameter-search-grid.yaml"),
         "sample": os.path.join("tests", "configs", "hyperparameter-search-sample.yaml"),
+        "bayesian": os.path.join(
+            "tests", "configs", "hyperparameter-search-bayesian.yaml"
+        ),
     }
 
 
@@ -315,6 +318,7 @@ def format_configs_locally(
             inference_config_path_lazy,
             hp_search_configs["grid"],
             hp_search_configs["sample"],
+            hp_search_configs["bayesian"],
         ]
         for config_path in config_paths:
             with open(config_path, "r") as f:
@@ -534,6 +538,10 @@ def run_hp_search(
 
     run_and_log(
         f"sequifier hyperparameter-search --config-path {hp_search_configs['sample']}"
+    )
+
+    run_and_log(
+        f"sequifier hyperparameter-search --config-path {hp_search_configs['bayesian']}"
     )
 
 

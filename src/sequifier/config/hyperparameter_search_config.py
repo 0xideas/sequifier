@@ -52,11 +52,11 @@ OptunaInt = Union[list[int], IntDistribution]
 @beartype
 def load_hyperparameter_search_config(
     config_path: str, skip_metadata: bool
-) -> "HyperparameterSearch":
+) -> "HyperparameterSearchConfig":
     """Load a hyperparameter search configuration from a YAML file.
 
     This function reads a YAML configuration file, processes it to include
-    data-driven configurations if needed, and returns a HyperparameterSearch
+    data-driven configurations if needed, and returns a HyperparameterSearchConfig
     object.
 
     Args:
@@ -66,7 +66,7 @@ def load_hyperparameter_search_config(
             data-driven configurations.
 
     Returns:
-        An instance of the HyperparameterSearch class, populated with the
+        An instance of the HyperparameterSearchConfig class, populated with the
         configuration from the file.
     """
     with open(config_path, "r") as f:
@@ -127,7 +127,7 @@ def load_hyperparameter_search_config(
 
         config_values["id_maps"] = metadata_config["id_maps"]
 
-    return try_catch_excess_keys(config_path, HyperparameterSearch, config_values)
+    return try_catch_excess_keys(config_path, HyperparameterSearchConfig, config_values)
 
 
 class TrainingSpecHyperparameterSampling(BaseModel):
@@ -538,7 +538,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         )
 
 
-class HyperparameterSearch(BaseModel):
+class HyperparameterSearchConfig(BaseModel):
     """Pydantic model for hyperparameter search configuration.
 
     Attributes:
@@ -571,6 +571,7 @@ class HyperparameterSearch(BaseModel):
     project_root: str
     metadata_config_path: str
     hp_search_name: str
+    search_strategy: str
     n_trials: Optional[int] = Field(None, alias="n_samples")
     model_config_write_path: str
     training_data_path: str
@@ -608,6 +609,14 @@ class HyperparameterSearch(BaseModel):
                 raise ValueError(
                     "input_columns and column_types must have the same number of candidate values, that are paired"
                 )
+        return v
+
+    @field_validator("search_strategy")
+    @classmethod
+    def validate_search_strategy(cls, v: str) -> str:
+        allowed = ["sample", "grid", "bayesian"]
+        if v not in allowed:
+            raise ValueError(f"search_strategy must be one of {allowed}, got '{v}'")
         return v
 
     def sample_trial(self, trial: Any, run_index: int) -> TrainModel:

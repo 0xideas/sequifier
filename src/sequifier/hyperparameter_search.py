@@ -43,7 +43,7 @@ def objective(trial: optuna.Trial, config) -> float:
 
     Args:
         trial (optuna.Trial): The Optuna trial object managing the current hyperparameter combination.
-        config (HyperparameterSearch): The parsed hyperparameter search configuration.
+        config (HyperparameterSearchConfig): The parsed hyperparameter search configuration.
 
     Returns:
         float: The best validation loss achieved during the trial.
@@ -145,7 +145,22 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     """
     config = load_hyperparameter_search_config(config_path, skip_metadata)
 
-    study = optuna.create_study(study_name=config.hp_search_name, direction="minimize")
+    strategy = getattr(config, "search_strategy", "bayesian")
+    if strategy in ["sample", "random"]:
+        sampler = optuna.samplers.RandomSampler()
+    elif strategy == "grid":
+        if hasattr(optuna.samplers, "BruteForceSampler"):
+            sampler = optuna.samplers.BruteForceSampler()
+        else:
+            raise RuntimeError(
+                "Grid search requires Optuna >= 3.1 for BruteForceSampler."
+            )
+    else:  # "bayesian"
+        sampler = optuna.samplers.TPESampler()
+
+    study = optuna.create_study(
+        study_name=config.hp_search_name, direction="minimize", sampler=sampler
+    )
 
     n_trials = config.n_trials
     if n_trials is None:

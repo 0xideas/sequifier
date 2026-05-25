@@ -20,3 +20,13 @@ def test_hp_search_sample_outputs(run_hp_search, project_root):
     assert (
         len(generated_configs) == 4
     ), f"Expected 4 sample configs, found {len(generated_configs)}"
+
+
+def test_hp_search_bayesian_outputs(run_hp_search, project_root):
+    hp_name = "test-hp-search-bayesian"
+    config_dir = os.path.join(project_root, "configs")
+
+    generated_configs = glob.glob(os.path.join(config_dir, f"{hp_name}-run-*.yaml"))
+    assert (
+        len(generated_configs) == 4
+    ), f"Expected 4 bayesian configs, found {len(generated_configs)}"
