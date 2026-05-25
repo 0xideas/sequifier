@@ -145,6 +145,7 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     """
     config = load_hyperparameter_search_config(config_path, skip_metadata)
 
+    os.makedirs(os.path.join(config.project_root, "state", "optuna"), exist_ok=True)
     strategy = getattr(config, "search_strategy", "bayesian")
     if strategy in ["sample", "random"]:
         sampler = optuna.samplers.RandomSampler()
@@ -158,8 +159,16 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     else:  # "bayesian"
         sampler = optuna.samplers.TPESampler()
 
+    storage_path = os.path.join(
+        config.project_root, "state", "optuna", f"{config.hp_search_name}.db"
+    )
+
     study = optuna.create_study(
-        study_name=config.hp_search_name, direction="minimize", sampler=sampler
+        study_name=config.hp_search_name,
+        direction="minimize",
+        sampler=sampler,
+        storage=f"sqlite:///{storage_path}",
+        load_if_exists=True,
     )
 
     n_trials = config.n_trials

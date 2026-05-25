@@ -30,3 +30,11 @@ def test_hp_search_bayesian_outputs(run_hp_search, project_root):
     assert (
         len(generated_configs) == 4
     ), f"Expected 4 bayesian configs, found {len(generated_configs)}"
+
+
+def test_hp_search_state(run_hp_search, project_root):
+    state_dir = os.path.join(project_root, "state", "optuna")
+
+    assert os.path.exists(os.path.join(state_dir, "test-hp-search-sample.db"))
+    assert os.path.exists(os.path.join(state_dir, "test-hp-search-grid.db"))
+    assert os.path.exists(os.path.join(state_dir, "test-hp-search-bayesian.db"))
