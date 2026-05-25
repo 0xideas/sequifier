@@ -1,11 +1,13 @@
-import glob
+import ctypes
+import json
 import os
+import signal
+import socket
 import subprocess
-from datetime import datetime
-from typing import Optional
+import sys
+import time
 
-import numpy as np
-import torch
+import optuna
 import torch._dynamo
 import yaml
 from beartype import beartype
@@ -14,241 +16,148 @@ torch._dynamo.config.suppress_errors = True
 from sequifier.config.hyperparameter_search_config import (  # noqa: E402
     load_hyperparameter_search_config,
 )
-from sequifier.config.train_config import TrainModel  # noqa: E402
-from sequifier.helpers import configure_logger  # noqa: E402
-from sequifier.helpers import normalize_path  # noqa: E402
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 
 
-@beartype
-def hyperparameter_search(config_path, skip_metadata) -> None:
-    """Main function for initiating a hyperparameter search process.
+def get_free_port() -> int:
+    """Dynamically binds to socket 0 to retrieve a free port for NCCL."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
 
-    This function loads the hyperparameter search configuration, initializes
-    the searcher, and starts the search.
+
+def set_pdeathsig():
+    """Binds child process lifecycle to the parent orchestrator via Linux prctl."""
+    if sys.platform.startswith("linux"):
+        libc = ctypes.CDLL("libc.so.6")
+        libc.prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG = 1
+
+
+def objective(trial: optuna.Trial, config) -> float:
+    """The central objective engine bridging Optuna to pure CLI execution.
+
+    This function handles generating the YAML configuration for the specific
+    trial, dynamically allocating a port for distributed training, launching the
+    training subprocess, asynchronously polling the validation metrics, and reporting
+    them back to Optuna for potential pruning.
 
     Args:
-        config_path (str): Path to the hyperparameter search YAML
-            configuration file.
-        skip_metadata (bool): Flag indicating whether to run the search
-            on unprocessed data.
+        trial (optuna.Trial): The Optuna trial object managing the current hyperparameter combination.
+        config (HyperparameterSearch): The parsed hyperparameter search configuration.
 
     Returns:
-        None
+        float: The best validation loss achieved during the trial.
+
+    Raises:
+        optuna.TrialPruned: If the trial is pruned by the Optuna orchestrator.
+        RuntimeError: If the training subprocess fails or is externally preempted.
     """
-    hyperparameter_search_config = load_hyperparameter_search_config(
-        config_path, skip_metadata
+    run_config = config.sample_trial(trial, trial.number)
+    run_name = run_config.model_name
+
+    # 1. YAML Generation
+    config_path = os.path.join(
+        config.project_root, config.model_config_write_path, f"{run_name}.yaml"
+    )
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    with open(config_path, "w") as f:
+        yaml.dump(run_config, f, Dumper=TrainModelDumper, sort_keys=False)
+
+    # 2. Dynamic Port Allocation
+    env = os.environ.copy()
+    env["MASTER_PORT"] = str(get_free_port())
+
+    # 3. Subprocess Launch (Worker Isolation)
+    cmd = ["sequifier", "train", f"--config-path={config_path}"]
+    process = subprocess.Popen(
+        cmd,
+        env=env,
+        preexec_fn=set_pdeathsig if sys.platform.startswith("linux") else None,
     )
 
-    hyperparameter_searcher = HyperparameterSearcher(hyperparameter_search_config)
+    metrics_path = os.path.join(
+        config.project_root, "logs", f"sequifier-{run_name}-metrics.jsonl"
+    )
+    prune_path = os.path.join(
+        config.project_root, "logs", f"sequifier-{run_name}.prune"
+    )
 
-    hyperparameter_searcher.hyperparameter_search()
+    last_read_pos = 0
+    best_val_loss = float("inf")
+
+    # 4. Asynchronous Polling & Caching Mitigation
+    while process.poll() is None:
+        if os.path.exists(metrics_path):
+            with open(metrics_path, "r") as f:
+                f.seek(last_read_pos)
+                for line in f:
+                    try:
+                        data = json.loads(line)
+                        epoch = data.get("epoch")
+                        val_loss = data.get("val_loss")
+                        if epoch is not None and val_loss is not None:
+                            # 5. Cooperative Pruning Evaluation
+                            trial.report(val_loss, epoch)
+                            best_val_loss = min(best_val_loss, val_loss)
+
+                            if trial.should_prune():
+                                open(prune_path, "w").close()
+                                try:
+                                    process.wait(timeout=60)
+                                except subprocess.TimeoutExpired:
+                                    process.kill()  # Escalation
+                                raise optuna.TrialPruned()
+
+                    except json.JSONDecodeError:
+                        pass  # Incomplete line handling (fsync latency)
+                last_read_pos = f.tell()
+        time.sleep(2)
+
+    # 6. Exit Code Disambiguation
+    exit_code = process.returncode
+    if exit_code == 143:
+        if os.path.exists(prune_path):
+            raise optuna.TrialPruned()
+        else:
+            raise RuntimeError(
+                f"Trial pre-empted externally by cluster (SIGTERM). Exit code: {exit_code}"
+            )
+    elif exit_code != 0:
+        raise RuntimeError(f"Training failed with exit code {exit_code}")
+
+    return best_val_loss
 
 
-class HyperparameterSearcher:
-    """A class for performing hyperparameter search.
+@beartype
+def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
+    """Main function for initiating an Optuna-based hyperparameter search process.
 
-    Manages the hyperparameter search process based on a given configuration.
-    This class handles sampling hyperparameters, creating training configurations,
-    launching training subprocesses, and logging results.
+    This function loads the configuration, initializes the Optuna study with a
+    minimization direction, and kicks off the optimization loop. Once the configured
+    number of trials is complete, it prints out the best trial's value and hyperparameters.
+
+    Args:
+        config_path (str): Path to the hyperparameter search YAML configuration file.
+        skip_metadata (bool): Flag indicating whether to skip loading/processing data metadata.
+
+    Raises:
+        ValueError: If `n_trials` is not defined in the configuration.
     """
+    config = load_hyperparameter_search_config(config_path, skip_metadata)
 
-    def __init__(self, hyperparameter_search_config):
-        """Initializes the HyperparameterSearcher instance.
+    study = optuna.create_study(study_name=config.hp_search_name, direction="minimize")
 
-        Args:
-            hyperparameter_search_config (HyperparameterSearchConfig): An object
-                containing the configuration for the hyperparameter search,
-                loaded via `load_hyperparameter_search_config`.
-        """
-        self.config = hyperparameter_search_config
-        self.normalized_config_path = normalize_path(
-            self.config.model_config_write_path,
-            self.config.project_root,
-        )
-        self.start_run = self._get_start_run()
-        self._initialize_log_file()
-        self.n_samples = self._calculate_n_samples(
-            hyperparameter_search_config.override_input
+    n_trials = config.n_trials
+    if n_trials is None:
+        raise ValueError(
+            "n_trials/n_samples must be specified for hyperparameter search."
         )
 
-    @beartype
-    def _get_start_run(self) -> int:
-        """Determines the starting run number by checking existing config files.
+    study.optimize(lambda trial: objective(trial, config), n_trials=n_trials)
 
-        This allows for resuming a search. It finds the highest existing run
-        number (e.g., 'hp_search_name-run-10.yaml') and returns the next
-        integer (e.g., 11). If no previous runs are found, it starts from 0.
-
-        Returns:
-            int: The integer run number to start the search from (e.g., 1 for a
-                new search, or `n+1` if `n` is the last completed run).
-        """
-        file_root = f"{self.config.hp_search_name}-run-"
-        search_pattern = os.path.join(self.normalized_config_path, f"{file_root}*.yaml")
-        files = [os.path.split(file)[1] for file in glob.glob(search_pattern)]
-        files.sort(
-            key=lambda filename: int(filename.replace(file_root, "").split(".")[0])
-        )
-
-        if len(files) > 0:
-            last_iter = int(files[-1].split(".")[0].replace(file_root, ""))
-            return last_iter + 1
-        else:
-            return 0
-
-    @beartype
-    def _initialize_log_file(self) -> None:
-        """Sets up the log file for the hyperparameter search.
-
-        It creates the 'logs' directory if it doesn't exist and opens a log file.
-        If starting from run 1, it overwrites (mode 'w'); otherwise, it appends
-        (mode 'a') to the existing log.
-
-        Returns:
-            None
-        """
-        self.logger = configure_logger(
-            self.config.project_root, self.config.hp_search_name
-        )
-
-    @beartype
-    def _calculate_n_samples(self, override_input: bool) -> int:
-        """Calculates the total number of hyperparameter combinations to sample.
-
-        Based on the `search_strategy` ('grid' or 'sample'), it either
-        calculates the total number of combinations or uses the specified
-        `n_samples`. It includes interactive prompts for user confirmation if
-        the strategy is 'grid' or if 'sample' exceeds the total combinations.
-
-        Returns:
-            int: The total number of samples (runs) to execute.
-
-        Raises:
-            Exception: If the `search_strategy` in the config is not 'grid'
-                or 'sample'.
-            AssertionError: If `n_samples` is not set when `search_strategy`
-                is 'sample'.
-        """
-        n_combinations = self.config.n_combinations()
-        self.logger.info(f"Found {n_combinations} hyperparameter combinations")
-        if self.config.search_strategy == "sample":
-            n_samples = self.config.n_samples
-            if n_samples is None:
-                raise ValueError("n_samples must be defined for 'sample' strategy")
-            if n_samples > self.config.n_combinations():
-                if not override_input:
-                    input(
-                        f"{n_samples} is above the number of combinations of hyperparameters. Press any key to continue with grid search or abort to reconfigure"
-                    )
-                n_samples = self.config.n_combinations()
-                self.config.search_strategy = "grid"
-        elif self.config.search_strategy == "grid":
-            n_samples = self.config.n_combinations()
-            if not override_input:
-                input(
-                    f"Found {n_samples} hyperparameter combinations. Please enter any key to confirm, or change search strategy to 'sample'"
-                )
-        else:
-            raise Exception(
-                f"search strategy '{self.config.search_strategy}' is not valid. Allowed values are 'grid' and 'sample'"
-            )
-
-        if n_samples is None:
-            raise ValueError("n_samples must be defined for 'sample' strategy")
-
-        return n_samples
-
-    def _create_config_and_run(
-        self, i: int, seed: int, config: Optional[TrainModel] = None, attempt=0
-    ):
-        """Creates a specific training configuration file and executes the run.
-
-        This method samples a configuration (if not provided), writes it to a
-        YAML file, and then launches the `sequifier train` command as a
-        subprocess. It includes retry logic: if a run fails (e.g., CUDA out
-        of memory), it recursively calls itself with a halved batch size,
-        retrying up to 3 times.
-
-        Args:
-            i (int): The current run number (e.g., 1, 2, 3...).
-            seed (int): The random seed to use for this specific run.
-            config (Optional[TrainModel]): A specific `TrainModel` config to
-                use. If `None`, a new config will be sampled using
-                `self.config.sample(i)`. Defaults to `None`.
-            attempt (int): The current retry attempt number (0 for the first
-                try). Defaults to 0.
-
-        Returns:
-            None
-
-        Raises:
-            AssertionError: If the batch size becomes non-positive after
-                halving during a retry.
-        """
-        if config is None:
-            config = self.config.sample(i)
-        full_config_path = os.path.join(
-            self.normalized_config_path,
-            f"{self.config.hp_search_name}-run-{i}.yaml",
-        )
-        with open(full_config_path, "w") as f:
-            f.write(
-                yaml.dump(
-                    config,
-                    Dumper=TrainModelDumper,
-                    sort_keys=False,
-                    default_flow_style=False,
-                )
-            )
-
-        self.logger.info(
-            f"--- Starting Hyperparameter Search Run {i} with seed {seed} ---"
-        )
-        try:
-            subprocess.run(
-                [
-                    "sequifier",
-                    "train",
-                    f"--config-path={full_config_path}",
-                    f"--seed={seed}",
-                ],
-                check=True,
-            )
-            self.logger.info(f"--- Finished Hyperparameter Search Run {i} ---")
-
-        except subprocess.CalledProcessError as e:
-            if attempt < 3:
-                if config is None:
-                    raise RuntimeError("Config object lost during retry logic.")
-                new_batch_size = int(config.training_spec.batch_size / 2)
-
-                if new_batch_size <= 0:
-                    raise ValueError(
-                        "Batch size reduced to 0 or less during retry logic."
-                    )
-                config.training_spec.batch_size = new_batch_size
-                self.logger.info(
-                    f"ERROR: Run {i} failed with exit code {e.returncode}. Halving batch size to {new_batch_size} in attempt {attempt + 1}"
-                )
-                self._create_config_and_run(i, seed, config, attempt=attempt + 1)
-            else:
-                self.logger.info(
-                    f"ERROR: Run {i} failed with exit code {e.returncode}. Stopping run {i}"
-                )
-
-    @beartype
-    def hyperparameter_search(self) -> None:
-        """Performs the hyperparameter search loop.
-
-        It iterates from the `start_run` number up to the total `n_samples`,
-        generating a unique seed for each run and calling
-        `_create_config_and_run` to execute it.
-
-        Returns:
-            None
-        """
-        for i in range(self.start_run, self.n_samples):
-            seed = int(datetime.now().timestamp() * 1e6) % (2**32)
-            np.random.seed(seed)
-            self._create_config_and_run(i, seed=seed)
+    print("\nBest trial:")
+    trial = study.best_trial
+    print(f"  Value: {trial.value}")
+    print("  Params: ")
+    for key, value in trial.params.items():
+        print(f"    {key}: {value}")

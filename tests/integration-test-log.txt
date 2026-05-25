@@ -50,8 +50,6 @@ sequifier preprocess --config-path tests/configs/preprocess-test-categorical-pre
 sequifier preprocess --config-path tests/configs/preprocess-test-categorical-precomputed-stats-negative.yaml
 sequifier train --config-path tests/configs/train-test-resume-epoch.yaml
 sequifier train --config-path tests/configs/train-test-resume-mid-epoch.yaml
-sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-grid.yaml
-sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-sample.yaml
 sequifier visualize-training model-categorical-1 --project-root tests/project_folder
 sequifier visualize-training model-categorical-1-inf-size --project-root tests/project_folder
 sequifier visualize-training model-categorical-3 --project-root tests/project_folder

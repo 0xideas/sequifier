@@ -524,7 +524,7 @@ def run_training_from_checkpoint(
     )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def run_hp_search(
     project_root, hp_search_configs, format_configs_locally, run_preprocessing
 ):
