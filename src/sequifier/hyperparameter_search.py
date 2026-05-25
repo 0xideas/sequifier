@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 import time
+from typing import Union
 
 import optuna
 import torch._dynamo
@@ -33,7 +34,7 @@ def set_pdeathsig():
         libc.prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG = 1
 
 
-def objective(trial: optuna.Trial, config) -> float:
+def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
     """The central objective engine bridging Optuna to pure CLI execution.
 
     This function handles generating the YAML configuration for the specific
@@ -97,23 +98,27 @@ def objective(trial: optuna.Trial, config) -> float:
                         val_loss = data.get("val_loss")
                         if epoch is not None and val_loss is not None:
                             # 5. Cooperative Pruning Evaluation
-                            trial.report(val_loss, epoch)
-                            best_val_loss = min(best_val_loss, val_loss)
+                            is_multi_objective = (
+                                config.evaluation_metrics is not None
+                                and len(config.evaluation_metrics) > 1
+                            )
+                            if not is_multi_objective:
+                                trial.report(val_loss, epoch)
+                                best_val_loss = min(best_val_loss, val_loss)
 
-                            if trial.should_prune():
-                                open(prune_path, "w").close()
-                                try:
-                                    process.wait(timeout=60)
-                                except subprocess.TimeoutExpired:
-                                    process.kill()  # Escalation
-                                raise optuna.TrialPruned()
+                                if trial.should_prune():
+                                    open(prune_path, "w").close()
+                                    try:
+                                        process.wait(timeout=60)
+                                    except subprocess.TimeoutExpired:
+                                        process.kill()  # Escalation
+                                    raise optuna.TrialPruned()
 
                     except json.JSONDecodeError:
                         pass  # Incomplete line handling (fsync latency)
                 last_read_pos = f.tell()
         time.sleep(2)
 
-    # 6. Exit Code Disambiguation
     exit_code = process.returncode
     if exit_code == 143:
         if os.path.exists(prune_path):
@@ -124,6 +129,62 @@ def objective(trial: optuna.Trial, config) -> float:
             )
     elif exit_code != 0:
         raise RuntimeError(f"Training failed with exit code {exit_code}")
+
+    epochs = run_config.training_spec.epochs
+    if config.evaluation_inference_config:
+        model_type = "onnx" if run_config.export_onnx else "pt"
+        model_path = os.path.join(
+            "models", f"sequifier-{run_name}-best-{epochs}.{model_type}"
+        )
+        subprocess.run(
+            [
+                "sequifier",
+                "infer",
+                f"--config-path={config.evaluation_inference_config}",
+                f"--model-path={model_path}",
+            ],
+            check=True,
+        )
+
+    if config.evaluation_script and config.evaluation_metrics:
+        eval_script_path = config.evaluation_script
+        cmd = [sys.executable, eval_script_path, f"{run_name}-best-{epochs}"]
+
+        eval_process = subprocess.run(
+            cmd, capture_output=True, text=True, cwd=config.project_root
+        )
+
+        if eval_process.returncode != 0:
+            raise RuntimeError(
+                f"Evaluation script failed (exit code {eval_process.returncode}):\n{eval_process.stderr}"
+            )
+
+        eval_json_path = os.path.join(
+            config.project_root,
+            "outputs",
+            "evaluations",
+            f"{run_name}-best-{epochs}.json",
+        )
+        if not os.path.exists(eval_json_path):
+            raise FileNotFoundError(
+                f"Evaluation JSON not found at expected path: {eval_json_path}"
+            )
+
+        with open(eval_json_path, "r") as f:
+            eval_results = json.load(f)
+
+        metrics = []
+        for metric in config.evaluation_metrics:
+            if metric not in eval_results:
+                raise KeyError(
+                    f"Metric '{metric}' missing in {eval_json_path}. Found keys: {list(eval_results.keys())}"
+                )
+            metrics.append(float(eval_results[metric]))
+
+        if len(metrics) == 1:
+            return metrics[0]
+        else:
+            return tuple(metrics)
 
     return best_val_loss
 
@@ -163,13 +224,26 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
         config.project_root, "state", "optuna", f"{config.hp_search_name}.db"
     )
 
-    study = optuna.create_study(
-        study_name=config.hp_search_name,
-        direction="minimize",
-        sampler=sampler,
-        storage=f"sqlite:///{storage_path}",
-        load_if_exists=True,
+    is_multivariate = (
+        config.evaluation_metrics is not None and len(config.evaluation_metrics) > 1
     )
+
+    if is_multivariate:
+        study = optuna.create_study(
+            study_name=config.hp_search_name,
+            directions=config.evaluation_metric_directions,
+            sampler=sampler,
+            storage=f"sqlite:///{storage_path}",
+            load_if_exists=True,
+        )
+    else:
+        study = optuna.create_study(
+            study_name=config.hp_search_name,
+            direction="minimize",
+            sampler=sampler,
+            storage=f"sqlite:///{storage_path}",
+            load_if_exists=True,
+        )
 
     n_trials = config.n_trials
     if n_trials is None:
@@ -179,9 +253,17 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
 
     study.optimize(lambda trial: objective(trial, config), n_trials=n_trials)
 
-    print("\nBest trial:")
-    trial = study.best_trial
-    print(f"  Value: {trial.value}")
-    print("  Params: ")
-    for key, value in trial.params.items():
-        print(f"    {key}: {value}")
+    if is_multivariate:
+        print("\nBest trials (Pareto front):")
+        for trial in study.best_trials:
+            print(f"  Values: {trial.values}")
+            print("  Params: ")
+            for key, value in trial.params.items():
+                print(f"    {key}: {value}")
+    else:
+        print("\nBest trial:")
+        trial = study.best_trial
+        print(f"  Value: {trial.value}")
+        print("  Params: ")
+        for key, value in trial.params.items():
+            print(f"    {key}: {value}")

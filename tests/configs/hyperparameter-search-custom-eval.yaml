@@ -1,0 +1,90 @@
+project_root: tests/project_folder
+metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-categorical-5.json
+hp_search_name: test-hp-search-custom-eval
+model_config_write_path: configs
+
+read_format: pt
+target_columns:
+- itemId
+- supCat1
+- supCat2
+- supCat3
+- supCat4
+target_column_types:
+  itemId: categorical
+  supCat1: categorical
+  supCat2: categorical
+  supCat3: categorical
+  supCat4: categorical
+seq_length: [8]
+inference_batch_size: 10
+
+# Search Strategy
+search_strategy: bayesian
+n_samples: 4
+
+# Configuration Loading Overrides (set to null to use values from metadata)
+input_columns: null
+# Export Settings
+export_embedding_model: false
+export_generative_model: true
+export_onnx: true
+export_pt: false
+export_with_dropout: false
+
+# Model Hyperparameter Search Space
+model_hyperparameter_sampling:
+  initial_embedding_dim: [40, 80]
+  joint_embedding_dim: [null, null]
+  feature_embedding_dims: null
+  dim_model: [40, 80]
+  n_head: [2, 4]
+  dim_feedforward: [10, 12]
+  num_layers: [2]
+  activation_fn: ["swiglu"]
+  normalization: ["rmsnorm"]
+  positional_encoding: ["rope"]
+  attention_type: ["mqa", "gqa"]
+  norm_first: [ true]
+  n_kv_heads: [1]
+  rope_theta: [10000.0]
+  prediction_length: 1
+
+# Training Hyperparameter Search Space
+training_hyperparameter_sampling:
+  device: cpu
+  epochs: [1, 1]
+  save_interval_epochs: 10
+  batch_size: [5, 10]
+  learning_rate: [0.001, 0.01]
+  criterion:
+    itemId: CrossEntropyLoss
+    supCat1: CrossEntropyLoss
+    supCat2: CrossEntropyLoss
+    supCat3: CrossEntropyLoss
+    supCat4: CrossEntropyLoss
+  accumulation_steps: [1]
+  dropout: [0.0]
+  optimizer:
+    - name: Adam
+  scheduler:
+    - name: StepLR
+      step_size: 1
+      gamma: 0.99
+    - name: StepLR
+      step_size: 1
+      gamma: 0.99
+  log_interval: 5
+  continue_training: false
+
+
+evaluation_metric_directions:
+ - minimize
+ - maximize
+evaluation_metrics:
+ - max
+ - stdev
+evaluation_inference_config: tests/configs/hyperparameter-search-custom-eval-inference.yaml
+evaluation_script: scripts/hp_search_eval_script.py
+
+override_input: true

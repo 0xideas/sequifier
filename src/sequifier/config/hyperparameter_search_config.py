@@ -1,4 +1,5 @@
 import json
+import warnings
 from typing import Any, Optional, Union
 
 import yaml
@@ -566,6 +567,10 @@ class HyperparameterSearchConfig(BaseModel):
         export_with_dropout: If True, exports the model with dropout enabled.
         model_hyperparameter_sampling: The sampling configuration for model hyperparameters.
         training_hyperparameter_sampling: The sampling configuration for training hyperparameters.
+        evaluation_inference_config: The inference config to infer on for hyperparameter search optimization
+        evaluation_script: The script that outputs the evaluation metrics, typically from the inference output
+        evaluation_metrics: The evaluation metrics to optimize during hyperparameter search
+        evaluation_metric_directions: The direction to optimize evaluation_metrics in. Only 'minimize' and 'maximize' are allowed
     """
 
     project_root: str
@@ -596,10 +601,52 @@ class HyperparameterSearchConfig(BaseModel):
     export_pt: bool = False
     export_with_dropout: bool = False
 
+    evaluation_inference_config: Optional[str] = None
+    evaluation_script: Optional[str] = None
+    evaluation_metric_directions: Optional[list[str]] = None
+    evaluation_metrics: Optional[list[str]] = None
+
     model_hyperparameter_sampling: ModelSpecHyperparameterSampling
     training_hyperparameter_sampling: TrainingSpecHyperparameterSampling
 
     override_input: bool = False
+
+    @field_validator("evaluation_metrics")
+    @classmethod
+    def validate_evaluation_metrics(cls, v, info):
+        if v is not None and info.data.get("evaluation_script") is None:
+            raise ValueError(
+                "evaluation_script must be provided if evaluation_metrics is defined."
+            )
+        if v is not None:
+            if info.data.get("evaluation_metric_directions") is None:
+                raise ValueError(
+                    "evaluation_metric_directions must be provided if evaluation_metrics is defined."
+                )
+            else:
+                evaluation_metric_directions = info.data.get(
+                    "evaluation_metric_directions"
+                )
+                if len(v) != len(evaluation_metric_directions):
+                    raise ValueError(
+                        f"evaluation_metrics and evaluation_metric_directions must have the same number of values, len(evaluation_metrics) = {len(v)}, {len(evaluation_metric_directions) = }"
+                    )
+        if v is not None and info.data.get("evaluation_inference_config") is None:
+            warnings.warn(
+                "Please provide evaluation_inference_config if your evaluation_script requires inference outputs"
+            )
+        return v
+
+    @field_validator("evaluation_metric_directions")
+    @classmethod
+    def validate_evaluation_metric_directions(cls, v):
+        allowed_vals = {"minimize", "maximize"}
+        diff = set(v).difference(allowed_vals)
+        if len(diff):
+            raise ValueError(
+                f"In evaluation_metric_directions, only 'minimize' and 'maximize' are allowed, found: {diff}"
+            )
+        return v
 
     @field_validator("column_types")
     @classmethod

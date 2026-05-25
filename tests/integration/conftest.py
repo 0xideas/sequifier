@@ -243,6 +243,9 @@ def hp_search_configs():
         "bayesian": os.path.join(
             "tests", "configs", "hyperparameter-search-bayesian.yaml"
         ),
+        "custom-eval": os.path.join(
+            "tests", "configs", "hyperparameter-search-custom-eval.yaml"
+        ),
     }
 
 
@@ -319,6 +322,7 @@ def format_configs_locally(
             hp_search_configs["grid"],
             hp_search_configs["sample"],
             hp_search_configs["bayesian"],
+            hp_search_configs["custom-eval"],
         ]
         for config_path in config_paths:
             with open(config_path, "r") as f:
@@ -436,6 +440,21 @@ def run_preprocessing(
 
     shutil.copyfile(source_path, target_path)
 
+    os.makedirs(os.path.join(project_root, "scripts"))
+    source_path = os.path.join(
+        "tests", "resources", "source_scripts", "hp_search_eval_script.py"
+    )
+    target_path = os.path.join(project_root, "scripts", "hp_search_eval_script.py")
+    shutil.copyfile(source_path, target_path)
+
+    source_path = os.path.join(
+        "tests", "configs", "hyperparameter-search-custom-eval-inference.yaml"
+    )
+    target_path = os.path.join(
+        project_root, "configs", "hyperparameter-search-custom-eval-inference.yaml"
+    )
+    shutil.copyfile(source_path, target_path)
+
 
 @pytest.fixture(scope="session")
 def run_training(
@@ -542,6 +561,10 @@ def run_hp_search(
 
     run_and_log(
         f"sequifier hyperparameter-search --config-path {hp_search_configs['bayesian']}"
+    )
+
+    run_and_log(
+        f"sequifier hyperparameter-search --config-path {hp_search_configs['custom-eval']}"
     )
 
 
