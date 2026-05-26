@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import sys
 
 os.environ["TORCH_NCCL_ASYNC_ERROR_HANDLING"] = "1"
 import time  # noqa: E402
@@ -1198,7 +1199,6 @@ class TransformerModel(nn.Module):
                     cleanup()
                 if self.device.startswith("cuda"):
                     torch.cuda.empty_cache()
-                import sys
 
                 sys.exit(143)
 

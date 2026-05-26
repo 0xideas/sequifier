@@ -14,50 +14,67 @@ inference_batch_size: 10
 search_strategy: sample
 n_samples: 4
 
-# Configuration Loading Overrides (set to null to use values from metadata)
+# Configuration Loading Overrides
 input_columns: null
-# Export Settings
 export_embedding_model: false
 export_generative_model: true
 export_onnx: false
 export_pt: true
 export_with_dropout: false
 
-# Model Hyperparameter Search Space
+# Model Hyperparameter Search Space using Distributions
 model_hyperparameter_sampling:
-  initial_embedding_dim: [40, 80]
-  joint_embedding_dim: [null, null]
+  initial_embedding_dim: [40]
+  joint_embedding_dim: [null]
   feature_embedding_dims: null
-  dim_model: [40, 80]
-  n_head: [2, 4]
-  dim_feedforward: [10, 12]
-  num_layers: [2]
+  dim_model: [40]
+  n_head: [2]
+  # IntDistribution test with step
+  dim_feedforward:
+    low: 10
+    high: 20
+    step: 2
+  # IntDistribution test without step
+  num_layers:
+    low: 1
+    high: 3
   activation_fn: ["swiglu"]
   normalization: ["rmsnorm"]
   positional_encoding: ["rope"]
-  attention_type: ["mqa", "gqa"]
-  norm_first: [ true]
+  attention_type: ["mqa"]
+  norm_first: [true]
   n_kv_heads: [1]
-  rope_theta: [10000.0]
+  # FloatDistribution test with log
+  rope_theta:
+    low: 1000.0
+    high: 10000.0
+    log: true
   prediction_length: 1
 
-# Training Hyperparameter Search Space
+# Training Hyperparameter Search Space using Distributions
 training_hyperparameter_sampling:
   device: cpu
-  epochs: [1, 1]
+  epochs: [1]
   save_interval_epochs: 10
-  batch_size: [5, 10]
-  learning_rate: [0.001, 0.01]
+  # IntDistribution test
+  batch_size:
+    low: 5
+    high: 15
+    step: 5
+  learning_rate: [0.001]
   criterion:
     itemId: CrossEntropyLoss
-  accumulation_steps: [1]
-  dropout: [0.0]
+  # IntDistribution test
+  accumulation_steps:
+    low: 1
+    high: 2
+  # FloatDistribution test without log
+  dropout:
+    low: 0.1
+    high: 0.5
   optimizer:
     - name: Adam
   scheduler:
-    - name: StepLR
-      step_size: 1
-      gamma: 0.99
     - name: StepLR
       step_size: 1
       gamma: 0.99

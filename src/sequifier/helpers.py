@@ -1,7 +1,9 @@
 import glob
 import os
 import random
+import re
 import sys
+from datetime import datetime
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -461,3 +463,45 @@ def get_best_model_path(project_root: str, run_name: str, model_type: str) -> st
     )
 
     return best_model_path
+
+
+def get_last_training_batch_timedelta(
+    model_name: str, rank: int, project_root: str = "."
+) -> float:
+    """
+    Reads the level 2 log file, finds the last two mid-epoch training logs,
+    and returns the timedelta between them in seconds.
+    """
+    # Construct the path to the level 2 log file based on configure_logger()
+    log_path = os.path.join(
+        project_root, "logs", f"sequifier-{model_name}-rank{rank}-2.txt"
+    )
+
+    if not os.path.exists(log_path):
+        raise FileNotFoundError(f"Log file not found: {log_path}")
+
+    # Regex to capture the timestamp of mid-epoch training batch logs
+    # Matches lines like: "2026-05-26 15:15:39 | INFO | [INFO] Epoch   1 | Batch   10/... | Loss: ..."
+    train_log_pattern = re.compile(
+        r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\|.*?\[INFO\] Epoch.*?Batch"
+    )
+
+    timestamps = []
+
+    with open(log_path, "r", encoding="utf-8") as file:
+        for line in file:
+            match = train_log_pattern.search(line)
+            if match:
+                timestamps.append(
+                    datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+                )
+
+    if len(timestamps) < 2:
+        raise ValueError(
+            "Not enough mid-epoch training logs found in the file to calculate a timedelta."
+        )
+
+    # Get the last two chronologically recorded batch timestamps
+    t1, t2 = timestamps[-2], timestamps[-1]
+
+    return (t2 - t1).total_seconds()

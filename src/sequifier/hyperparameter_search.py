@@ -16,7 +16,10 @@ torch._dynamo.config.suppress_errors = True
 from sequifier.config.hyperparameter_search_config import (  # noqa: E402
     load_hyperparameter_search_config,
 )
-from sequifier.helpers import get_best_model_path  # noqa: E402
+from sequifier.helpers import (  # noqa: E402
+    get_best_model_path,
+    get_last_training_batch_timedelta,
+)
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 
 
@@ -108,7 +111,10 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
                                 if trial.should_prune():
                                     open(prune_path, "w").close()
                                     try:
-                                        process.wait(timeout=60)
+                                        timedelta = get_last_training_batch_timedelta(
+                                            run_name, 0, config.project_root
+                                        )
+                                        process.wait(timeout=((timedelta * 2) + 30))
                                     except subprocess.TimeoutExpired:
                                         process.kill()  # Escalation
                                     raise optuna.TrialPruned()
