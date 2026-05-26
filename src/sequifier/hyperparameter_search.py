@@ -2,7 +2,6 @@ import ctypes
 import json
 import os
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -18,13 +17,6 @@ from sequifier.config.hyperparameter_search_config import (  # noqa: E402
     load_hyperparameter_search_config,
 )
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
-
-
-def get_free_port() -> int:
-    """Dynamically binds to socket 0 to retrieve a free port for NCCL."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
 
 
 def set_pdeathsig():
@@ -65,10 +57,11 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
         yaml.dump(run_config, f, Dumper=TrainModelDumper, sort_keys=False)
 
     # 2. Dynamic Port Allocation
-    env = os.environ.copy()
-    env["MASTER_PORT"] = str(get_free_port())
 
     # 3. Subprocess Launch (Worker Isolation)
+    os.environ["SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"] = "1"
+
+    env = os.environ.copy()
     cmd = ["sequifier", "train", f"--config-path={config_path}"]
     process = subprocess.Popen(
         cmd,
@@ -91,11 +84,16 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
         if os.path.exists(metrics_path):
             with open(metrics_path, "r") as f:
                 f.seek(last_read_pos)
-                for line in f:
+                while True:
+                    line = f.readline()
+                    if not line:
+                        break  # Reached end of currently written data
+
                     try:
                         data = json.loads(line)
                         epoch = data.get("epoch")
                         val_loss = data.get("val_loss")
+
                         if epoch is not None and val_loss is not None:
                             # 5. Cooperative Pruning Evaluation
                             is_multi_objective = (
@@ -114,9 +112,10 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
                                         process.kill()  # Escalation
                                     raise optuna.TrialPruned()
 
+                        last_read_pos = f.tell()
+
                     except json.JSONDecodeError:
-                        pass  # Incomplete line handling (fsync latency)
-                last_read_pos = f.tell()
+                        break
         time.sleep(2)
 
     exit_code = process.returncode

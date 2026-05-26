@@ -1173,34 +1173,35 @@ class TransformerModel(nn.Module):
         the process cleans up its distributed process group, clears the GPU cache, and
         gracefully exits with code 143 (SIGTERM) to allow Optuna to prune the trial.
         """
-        should_prune = 0
-        if self.rank == 0:
-            time.sleep(2)
-            prune_file = os.path.join(
-                self.project_root, "logs", f"sequifier-{self.model_name}.prune"
-            )
-            if os.path.exists(prune_file):
-                should_prune = 1
-
-        if self.hparams.training_spec.distributed:
-            signal_tensor = torch.tensor(
-                [should_prune], dtype=torch.uint8, device=self.device
-            )
-            dist.broadcast(signal_tensor, src=0)
-            should_prune = signal_tensor.item()
-
-        if should_prune:
+        if os.getenv("SEQUIFIER_HYPERPARAMETER_SEARCH_RUN") is not None:
+            should_prune = 0
             if self.rank == 0:
-                self.logger.info(
-                    "[INFO] Pruning signal received from Optuna orchestrator. Tearing down cooperatively."
+                time.sleep(2)
+                prune_file = os.path.join(
+                    self.project_root, "logs", f"sequifier-{self.model_name}.prune"
                 )
-            if self.hparams.training_spec.distributed:
-                cleanup()
-            if self.device.startswith("cuda"):
-                torch.cuda.empty_cache()
-            import sys
+                if os.path.exists(prune_file):
+                    should_prune = 1
 
-            sys.exit(143)
+            if self.hparams.training_spec.distributed:
+                signal_tensor = torch.tensor(
+                    [should_prune], dtype=torch.int32, device=self.device
+                )
+                dist.broadcast(signal_tensor, src=0)
+                should_prune = signal_tensor.item()
+
+            if should_prune:
+                if self.rank == 0:
+                    self.logger.info(
+                        "[INFO] Pruning signal received from Optuna orchestrator. Tearing down cooperatively."
+                    )
+                if self.hparams.training_spec.distributed:
+                    cleanup()
+                if self.device.startswith("cuda"):
+                    torch.cuda.empty_cache()
+                import sys
+
+                sys.exit(143)
 
     @beartype
     def train_model(
@@ -1460,19 +1461,21 @@ class TransformerModel(nn.Module):
 
                 total_loss += loss.item()
                 batches_aggregated += 1
-                if (batch_count + 1) % self.log_interval == 0 and self.rank == 0:
-                    learning_rate = self.scheduler.get_last_lr()[0]
-                    s_per_batch = (time.time() - start_time) / max(
-                        1, batches_aggregated
-                    )
-                    avg_train_loss = total_loss / max(1, batches_aggregated)
-                    self.logger.info(
-                        f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
-                    )
-                    total_loss = 0.0
-                    batches_aggregated = 0
-                    self.start_batch = 0
-                    start_time = time.time()
+                if (batch_count + 1) % self.log_interval == 0:
+                    if self.rank == 0:
+                        learning_rate = self.scheduler.get_last_lr()[0]
+                        s_per_batch = (time.time() - start_time) / max(
+                            1, batches_aggregated
+                        )
+                        avg_train_loss = total_loss / max(1, batches_aggregated)
+                        self.logger.info(
+                            f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
+                        )
+                        total_loss = 0.0
+                        batches_aggregated = 0
+                        self.start_batch = 0
+                        start_time = time.time()
+                    self._check_and_terminate()
 
                 del data, targets, output, loss, losses
 
