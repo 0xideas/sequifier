@@ -72,6 +72,7 @@ training_hyperparameter_sampling:
   dropout:
     low: 0.1
     high: 0.5
+    log: true
   optimizer:
     - name: Adam
   scheduler:

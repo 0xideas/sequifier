@@ -5,6 +5,7 @@ import signal
 import subprocess
 import sys
 import time
+import warnings
 from typing import Union
 
 import optuna
@@ -188,6 +189,18 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
 
         with open(eval_json_path, "r") as f:
             eval_results = json.load(f)
+            eval_results_keys = set(list(eval_results.keys()))
+            evaluation_metrics = set(config.evaluation_metrics)
+            missing_metrics = evaluation_metrics.difference(eval_results_keys)
+            excess_metrics = eval_results_keys.difference(evaluation_metrics)
+            if len(missing_metrics):
+                raise ValueError(
+                    f"Some of the configured evaluation metrics are not in the script output: {missing_metrics}"
+                )
+            if len(excess_metrics):
+                warnings.warn(
+                    f"Some metrics output by the script are not used in hyperparameter optimization: {excess_metrics}"
+                )
 
         metrics = []
         for metric in config.evaluation_metrics:
@@ -253,9 +266,17 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
             load_if_exists=True,
         )
     else:
+        direction = (
+            config.evaluation_metric_directions[0]
+            if (
+                config.evaluation_metric_directions
+                and len(config.evaluation_metric_directions) == 1
+            )
+            else "minimize"
+        )
         study = optuna.create_study(
             study_name=config.hp_search_name,
-            direction="minimize",
+            direction=direction,
             sampler=sampler,
             storage=f"sqlite:///{storage_path}",
             load_if_exists=True,

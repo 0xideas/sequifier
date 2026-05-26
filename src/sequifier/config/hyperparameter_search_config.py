@@ -28,7 +28,17 @@ class FloatDistribution(BaseModel):
 
     low: float
     high: float
+    step: Optional[float] = None
     log: bool = False
+
+    @model_validator(mode="after")
+    def validate_step_and_log(self):
+        if self.log and self.step is not None and self.step != 1:
+            raise ValueError(
+                f"Optuna does not support setting step != 1 when log=True. "
+                f"Got step={self.step} and log={self.log}."
+            )
+        return self
 
 
 class IntDistribution(BaseModel):
@@ -339,7 +349,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             if isinstance(space, list):
                 return trial.suggest_categorical(name, space)
             elif isinstance(space, FloatDistribution):
-                return trial.suggest_float(name, space.low, space.high, log=space.log)
+                return trial.suggest_float(
+                    name, space.low, space.high, step=space.step, log=space.log
+                )
             elif isinstance(space, IntDistribution):
                 return trial.suggest_int(
                     name, space.low, space.high, step=space.step, log=space.log
@@ -492,7 +504,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
             if isinstance(space, list):
                 return trial.suggest_categorical(name, space)
             elif isinstance(space, FloatDistribution):
-                return trial.suggest_float(name, space.low, space.high, log=space.log)
+                return trial.suggest_float(
+                    name, space.low, space.high, step=space.step, log=space.log
+                )
             elif isinstance(space, IntDistribution):
                 return trial.suggest_int(
                     name, space.low, space.high, step=space.step, log=space.log
