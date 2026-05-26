@@ -53,7 +53,6 @@ def test_hp_search_inference_feedback_loop(run_hp_search, project_root):
         if f.startswith("test-hp-search-custom-eval-run-") and f.endswith(".json")
     ]
 
-    # We requested n_samples: 2, so we expect 2 evaluation JSONs
     assert len(eval_files) == 4, f"Expected 4 evaluation JSONs, found {len(eval_files)}"
 
     for f in eval_files:

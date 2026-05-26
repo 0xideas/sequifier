@@ -1176,7 +1176,6 @@ class TransformerModel(nn.Module):
         if os.getenv("SEQUIFIER_HYPERPARAMETER_SEARCH_RUN") is not None:
             should_prune = 0
             if self.rank == 0:
-                time.sleep(2)
                 prune_file = os.path.join(
                     self.project_root, "logs", f"sequifier-{self.model_name}.prune"
                 )
@@ -1240,7 +1239,9 @@ class TransformerModel(nn.Module):
                 )
                 elapsed = 0.0
 
-                self._log_epoch_results(0, 0, elapsed, total_loss, total_losses, output)
+                self._log_epoch_results(
+                    0, 0, elapsed, total_loss, total_losses, output, 0
+                )
             for epoch in range(self.start_epoch, self.hparams.training_spec.epochs + 1):
                 if (
                     self.early_stopping_epochs is None
@@ -1262,6 +1263,7 @@ class TransformerModel(nn.Module):
                     )
                     elapsed = time.time() - epoch_start_time
 
+                    total_expected_batches = epoch * len(train_loader)
                     self._log_epoch_results(
                         epoch,
                         len(train_loader),
@@ -1269,6 +1271,7 @@ class TransformerModel(nn.Module):
                         total_loss,
                         total_losses,
                         output,
+                        total_expected_batches,
                     )
 
                     if total_loss < best_val_loss:
@@ -1524,6 +1527,9 @@ class TransformerModel(nn.Module):
                         )
 
                         if not self.hparams.training_spec.distributed or self.rank == 0:
+                            current_global_step = (epoch - 1) * num_batches + (
+                                batch_count + 1
+                            )
                             self._log_epoch_results(
                                 0,
                                 batch_count + 1,
@@ -1531,6 +1537,7 @@ class TransformerModel(nn.Module):
                                 val_loss,
                                 val_losses,
                                 output,
+                                current_global_step,
                             )
                             val_loss_batch[0] = float(val_loss)
                         self._check_and_terminate()
@@ -2204,6 +2211,7 @@ class TransformerModel(nn.Module):
         total_loss: np.float32,
         total_losses: dict[str, np.float32],
         output: dict[str, Tensor],
+        global_step: int,
     ) -> None:
         """Logs the results of an epoch.
 
@@ -2237,6 +2245,7 @@ class TransformerModel(nn.Module):
                         {
                             "epoch": epoch,
                             "batch": batch,
+                            "global_step": global_step,
                             "val_loss": float(total_loss),
                             "elapsed": elapsed,
                         }

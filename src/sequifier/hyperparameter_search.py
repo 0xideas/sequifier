@@ -16,6 +16,7 @@ torch._dynamo.config.suppress_errors = True
 from sequifier.config.hyperparameter_search_config import (  # noqa: E402
     load_hyperparameter_search_config,
 )
+from sequifier.helpers import get_best_model_path  # noqa: E402
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 
 
@@ -91,17 +92,17 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
 
                     try:
                         data = json.loads(line)
-                        epoch = data.get("epoch")
                         val_loss = data.get("val_loss")
+                        global_step = data.get("global_step")
 
-                        if epoch is not None and val_loss is not None:
+                        if global_step is not None and val_loss is not None:
                             # 5. Cooperative Pruning Evaluation
                             is_multi_objective = (
                                 config.evaluation_metrics is not None
                                 and len(config.evaluation_metrics) > 1
                             )
                             if not is_multi_objective:
-                                trial.report(val_loss, epoch)
+                                trial.report(val_loss, global_step)
                                 best_val_loss = min(best_val_loss, val_loss)
 
                                 if trial.should_prune():
@@ -132,9 +133,7 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
     epochs = run_config.training_spec.epochs
     if config.evaluation_inference_config:
         model_type = "onnx" if run_config.export_onnx else "pt"
-        model_path = os.path.join(
-            "models", f"sequifier-{run_name}-best-{epochs}.{model_type}"
-        )
+        model_path = get_best_model_path(config.project_root, run_name, model_type)
         subprocess.run(
             [
                 "sequifier",
@@ -207,7 +206,7 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
 
     os.makedirs(os.path.join(config.project_root, "state", "optuna"), exist_ok=True)
     strategy = getattr(config, "search_strategy", "bayesian")
-    if strategy in ["sample", "random"]:
+    if strategy in ["sample"]:
         sampler = optuna.samplers.RandomSampler()
     elif strategy == "grid":
         if hasattr(optuna.samplers, "BruteForceSampler"):

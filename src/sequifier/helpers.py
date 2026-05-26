@@ -1,3 +1,4 @@
+import glob
 import os
 import random
 import sys
@@ -423,3 +424,40 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
         )
 
     return dtype_map[dtype_str]
+
+
+def get_best_model_path(project_root: str, run_name: str, model_type: str) -> str:
+    """
+    Searches for the exported 'best' model file for a given run and returns its path and epoch.
+
+    Args:
+        project_root: The root directory of the project.
+        run_name: The unique identifier for the hyperparameter search run.
+        model_type: The extension of the exported model (e.g., 'onnx' or 'pt').
+
+    Returns:
+        A tuple containing:
+            - The file path to the best model (str).
+            - The actual epoch at which this model was saved (int).
+
+    Raises:
+        FileNotFoundError: If no matching model files are found.
+    """
+    search_pattern = os.path.join(
+        project_root, "models", f"sequifier-{run_name}-best-*.{model_type}"
+    )
+
+    matching_models = glob.glob(search_pattern)
+
+    if not matching_models:
+        raise FileNotFoundError(
+            f"Could not find an exported 'best' model matching: {search_pattern}"
+        )
+
+    # Find the file with the highest epoch number in its name
+    best_model_path = max(
+        matching_models,
+        key=lambda p: int(os.path.splitext(os.path.basename(p))[0].split("-")[-1]),
+    )
+
+    return best_model_path

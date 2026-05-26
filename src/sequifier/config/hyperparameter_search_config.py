@@ -1,4 +1,5 @@
 import json
+import os
 import warnings
 from typing import Any, Optional, Union
 
@@ -646,6 +647,25 @@ class HyperparameterSearchConfig(BaseModel):
             raise ValueError(
                 f"In evaluation_metric_directions, only 'minimize' and 'maximize' are allowed, found: {diff}"
             )
+        return v
+
+    @field_validator("evaluation_script")
+    @classmethod
+    def validate_evaluation_script(cls, v, info):
+        if v is not None:
+            project_root = info.data.get("project_root")
+            if not os.path.exists(os.path.join(project_root, v)):
+                raise ValueError(
+                    f"evaluation_script '{v}' does not exist at '{project_root}'"
+                )
+        return v
+
+    @field_validator("evaluation_inference_config")
+    @classmethod
+    def validate_evaluation_inference_config(cls, v, info):
+        if v is not None:
+            if not os.path.exists(v):
+                raise ValueError(f"evaluation_inference_config '{v}' does not exist")
         return v
 
     @field_validator("column_types")
