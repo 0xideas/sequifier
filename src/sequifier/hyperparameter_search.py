@@ -147,10 +147,12 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
     elif exit_code != 0:
         raise RuntimeError(f"Training failed with exit code {exit_code}")
 
-    epochs = run_config.training_spec.epochs
+    model_type = "onnx" if run_config.export_onnx else "pt"
+    model_path, last_epoch = get_best_model_path(
+        config.project_root, run_name, model_type
+    )
+
     if config.evaluation_inference_config:
-        model_type = "onnx" if run_config.export_onnx else "pt"
-        model_path = get_best_model_path(config.project_root, run_name, model_type)
         subprocess.run(
             [
                 "sequifier",
@@ -163,7 +165,7 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
 
     if config.evaluation_script and config.evaluation_metrics:
         eval_script_path = config.evaluation_script
-        cmd = [sys.executable, eval_script_path, f"{run_name}-best-{epochs}"]
+        cmd = [sys.executable, eval_script_path, f"{run_name}-best-{last_epoch}"]
 
         eval_process = subprocess.run(
             cmd, capture_output=True, text=True, cwd=config.project_root
@@ -178,7 +180,7 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
             config.project_root,
             "outputs",
             "evaluations",
-            f"{run_name}-best-{epochs}.json",
+            f"{run_name}-best-{last_epoch}.json",
         )
         if not os.path.exists(eval_json_path):
             raise FileNotFoundError(

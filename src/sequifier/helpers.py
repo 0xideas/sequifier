@@ -428,7 +428,9 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
     return dtype_map[dtype_str]
 
 
-def get_best_model_path(project_root: str, run_name: str, model_type: str) -> str:
+def get_best_model_path(
+    project_root: str, run_name: str, model_type: str
+) -> tuple[str, int]:
     """
     Searches for the exported 'best' model file for a given run and returns its path and epoch.
 
@@ -461,8 +463,8 @@ def get_best_model_path(project_root: str, run_name: str, model_type: str) -> st
         matching_models,
         key=lambda p: int(os.path.splitext(os.path.basename(p))[0].split("-")[-1]),
     )
-
-    return best_model_path
+    last_epoch = int(best_model_path.split("-")[-1].split(".")[0])
+    return best_model_path, last_epoch
 
 
 def get_last_training_batch_timedelta(
