@@ -6,7 +6,7 @@ from typing import Any, Optional, Union
 import yaml
 from beartype import beartype
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from sequifier.config.train_config import (
     DotDict,
@@ -45,6 +45,15 @@ class IntDistribution(BaseModel):
     high: int
     step: int = 1
     log: bool = False
+
+    @model_validator(mode="after")
+    def validate_step_and_log(self):
+        if self.log and self.step != 1:
+            raise ValueError(
+                f"Optuna does not support setting step != 1 when log=True. "
+                f"Got step={self.step} and log={self.log}."
+            )
+        return self
 
 
 OptunaFloat = Union[list[float], FloatDistribution]
@@ -577,7 +586,7 @@ class HyperparameterSearchConfig(BaseModel):
     project_root: str
     metadata_config_path: str
     hp_search_name: str
-    search_strategy: str
+    search_strategy: str = "bayesian"
     n_trials: Optional[int] = Field(None, alias="n_samples")
     model_config_write_path: str
     training_data_path: str
