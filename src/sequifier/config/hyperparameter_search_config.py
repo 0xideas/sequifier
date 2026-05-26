@@ -650,12 +650,13 @@ class HyperparameterSearchConfig(BaseModel):
     @field_validator("evaluation_metric_directions")
     @classmethod
     def validate_evaluation_metric_directions(cls, v):
-        allowed_vals = {"minimize", "maximize"}
-        diff = set(v).difference(allowed_vals)
-        if len(diff):
-            raise ValueError(
-                f"In evaluation_metric_directions, only 'minimize' and 'maximize' are allowed, found: {diff}"
-            )
+        if v is not None:
+            allowed_vals = {"minimize", "maximize"}
+            diff = set(v).difference(allowed_vals)
+            if len(diff):
+                raise ValueError(
+                    f"In evaluation_metric_directions, only 'minimize' and 'maximize' are allowed, found: {diff}"
+                )
         return v
 
     @field_validator("evaluation_script")

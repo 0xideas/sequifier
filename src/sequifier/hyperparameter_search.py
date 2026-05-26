@@ -30,7 +30,7 @@ def set_pdeathsig():
         libc.prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG = 1
 
 
-def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
+def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
     """The central objective engine bridging Optuna to pure CLI execution.
 
     This function handles generating the YAML configuration for the specific
@@ -87,9 +87,8 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
                 f.seek(last_read_pos)
                 while True:
                     line = f.readline()
-                    if not line:
+                    if not line or (not line.endswith("\n")):
                         break  # Reached end of currently written data
-
                     try:
                         data = json.loads(line)
                         val_loss = data.get("val_loss")
