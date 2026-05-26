@@ -60,9 +60,6 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
     with open(config_path, "w") as f:
         yaml.dump(run_config, f, Dumper=TrainModelDumper, sort_keys=False)
 
-    # 2. Dynamic Port Allocation
-
-    # 3. Subprocess Launch (Worker Isolation)
     os.environ["SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"] = "1"
 
     env = os.environ.copy()
@@ -83,8 +80,8 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
     last_read_pos = 0
     best_val_loss = float("inf")
 
-    # 4. Asynchronous Polling & Caching Mitigation
-    while process.poll() is None:
+    def consume_metrics(last_read_pos: int, best_val_loss: float) -> tuple[int, float]:
+        """Helper closure to read written metrics and evaluate pruning."""
         if os.path.exists(metrics_path):
             with open(metrics_path, "r") as f:
                 f.seek(last_read_pos)
@@ -111,10 +108,17 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
                                 if trial.should_prune():
                                     open(prune_path, "w").close()
                                     try:
-                                        timedelta = get_last_training_batch_timedelta(
-                                            run_name, 0, config.project_root
-                                        )
-                                        process.wait(timeout=((timedelta * 2) + 30))
+                                        try:
+                                            timedelta = (
+                                                get_last_training_batch_timedelta(
+                                                    run_name, 0, config.project_root
+                                                )
+                                            )
+                                            timeout_val = (timedelta * 2) + 30
+                                        except (ValueError, FileNotFoundError):
+                                            timeout_val = 60.0  # Safe default fallback
+
+                                        process.wait(timeout=timeout_val)
                                     except subprocess.TimeoutExpired:
                                         process.kill()  # Escalation
                                     raise optuna.TrialPruned()
@@ -123,7 +127,14 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float]]:
 
                     except json.JSONDecodeError:
                         break
+        return last_read_pos, best_val_loss
+
+    # 4. Asynchronous Polling & Caching Mitigation
+    while process.poll() is None:
+        last_read_pos, best_val_loss = consume_metrics(last_read_pos, best_val_loss)
         time.sleep(2)
+
+    _, best_val_loss = consume_metrics(last_read_pos, best_val_loss)
 
     exit_code = process.returncode
     if exit_code == 143:
