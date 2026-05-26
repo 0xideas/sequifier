@@ -263,7 +263,7 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
         )
 
     n_trials = config.n_trials
-    if n_trials is None:
+    if n_trials is None and config.search_strategy != "grid":
         raise ValueError(
             "n_trials/n_samples must be specified for hyperparameter search."
         )

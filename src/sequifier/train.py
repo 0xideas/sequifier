@@ -440,17 +440,24 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
             )
         else:
             # Single-node multi-GPU fallback using mp.spawn
-            mp.spawn(
-                _mp_train_worker_wrapper,
-                args=(
-                    world_size,
-                    config,
-                    from_folder,
-                    config.training_spec.torch_compile,
-                ),
-                nprocs=world_size,
-                join=True,
-            )
+            try:
+                mp.spawn(
+                    _mp_train_worker_wrapper,
+                    args=(
+                        world_size,
+                        config,
+                        from_folder,
+                        config.training_spec.torch_compile,
+                    ),
+                    nprocs=world_size,
+                    join=True,
+                )
+            except mp.ProcessExitedException as e:
+                # Catch the specific PyTorch exception and check the exit_code attribute
+                if e.exit_code == 143:
+                    sys.exit(143)
+                else:
+                    raise e
     else:
         train_worker(0, 1, config, from_folder, 0, config.training_spec.torch_compile)
 
