@@ -853,10 +853,6 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `optimizer` | `list[dict]` | No | `[{'name': 'Adam'}]` | List of optimizer configs. |
 | `continue_training` | `bool` | **Yes** | - | Load model weights from the latest checkpoint to resume. |
 | `save_interval_epochs` | `int` | **Yes** | - | Checkpoint save frequency. |
-
-*(Note: Other static fields inherited from `train.yaml` like `distributed`, `layer_autocast`, `num_workers`, etc., are passed directly without sampling).*
-
----
 | `dropout` | `list[float]`| No | `[0.0]` | List of dropout probabilities. |
 | `optimizer` | `list[dict]` | No | `[{'name': 'Adam'}]`| List of optimizer configs (e.g., `[{'name': 'AdamW'}, {'name': 'AdEMAMix'}]`). |
 | `scheduler` | `list[dict]` | No | `[{'name': 'StepLR'...}]`| List of scheduler configs. `scheduler.step()` is only called if \< total\_steps, so correct configuration is essential. |
@@ -884,6 +880,7 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly `true` or `false` if data\_parallelism is 'FSDP'. |
 | `torch_compile` | `str` | No | `outer` | Controls torch.compile. Options are "outer", "inner", or "none". |
 | `float32_matmul_precision` | str | No | `highest` | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". |
+*(Note: Other static fields inherited from `train.yaml` like `distributed`, `layer_autocast`, `num_workers`, etc., are passed directly without sampling).*
 
 -----
 
