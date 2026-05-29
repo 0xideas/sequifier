@@ -302,7 +302,6 @@ def infer_embedding(
             embeddings = get_embeddings(config, inferer, data, column_types)
 
             sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
-            # --- ADDED THIS LINE ---
             subsequence_ids_for_preds = data.get_column("subsequenceId").filter(mask)
             item_positions_for_preds_base = (
                 data.get_column("startItemPosition").filter(mask).to_numpy()
@@ -783,7 +782,7 @@ def get_probs_preds_from_dict(
         for col in target_cols:
             all_preds_list[col].append(preds_for_step[col])
 
-        if i == total_steps:
+        if i == (total_steps - 1):
             break
 
         X_next = {}
@@ -1025,14 +1024,14 @@ def get_probs_preds_autoregression(
     # 4. Generate the final output arrays using the perfectly aligned bases
     item_positions_for_preds = np.concatenate(
         [
-            np.arange(start_pos, start_pos + config.autoregression_total_steps + 1)
+            np.arange(start_pos, start_pos + config.autoregression_total_steps)
             for start_pos in aligned_start_positions
         ],
         axis=0,
     )
 
     sequence_ids_for_preds = np.repeat(
-        aligned_sequence_ids, config.autoregression_total_steps + 1
+        aligned_sequence_ids, config.autoregression_total_steps
     )
 
     return probs, preds, sequence_ids_for_preds, item_positions_for_preds

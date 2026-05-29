@@ -167,7 +167,9 @@ class InfererModel(BaseModel):
 
     @field_validator("autoregression_total_steps")
     @classmethod
-    def validate_autoregression_total_steps(cls, v: bool, info: ValidationInfo) -> bool:
+    def validate_autoregression_total_steps(
+        cls, v: Optional[int], info: ValidationInfo
+    ) -> Optional[int]:
         if v is not None and v > 1:
             if not info.data.get("autoregression"):
                 raise ValueError(
