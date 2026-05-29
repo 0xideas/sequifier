@@ -33,9 +33,9 @@ class FloatDistribution(BaseModel):
 
     @model_validator(mode="after")
     def validate_step_and_log(self):
-        if self.log and self.step is not None and self.step != 1:
+        if self.log and self.step is not None:
             raise ValueError(
-                f"Optuna does not support setting step != 1 when log=True. "
+                f"Optuna does not support setting step when log=True. "
                 f"Got step={self.step} and log={self.log}."
             )
         return self
