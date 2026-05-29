@@ -66,7 +66,7 @@ def apply_rotary_pos_emb(q, k, cos, sin):
     return q_embed, k_embed
 
 
-class CustomFeedForward(nn.Module):
+class FeedForward(nn.Module):
     def __init__(self, dim_model, dim_feedforward, activation_fn, dropout):
         super().__init__()
         self.activation_fn = activation_fn
@@ -98,7 +98,7 @@ class CustomFeedForward(nn.Module):
             return self.linear2(self.dropout(self.act(self.linear1(x))))
 
 
-class CustomSelfAttention(nn.Module):
+class SelfAttention(nn.Module):
     def __init__(
         self,
         dim_model,
@@ -186,7 +186,7 @@ class SequifierEncoderLayer(nn.Module):
         self.norm2 = NormClass(dim_model)
 
         # Attention
-        self.attn = CustomSelfAttention(
+        self.attn = SelfAttention(
             dim_model=dim_model,
             n_head=n_head,
             n_kv_heads=config.n_kv_heads,
@@ -198,9 +198,7 @@ class SequifierEncoderLayer(nn.Module):
         )
 
         # Feed Forward
-        self.ff = CustomFeedForward(
-            dim_model, dim_feedforward, config.activation_fn, dropout
-        )
+        self.ff = FeedForward(dim_model, dim_feedforward, config.activation_fn, dropout)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, src, src_mask=None):
