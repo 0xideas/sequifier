@@ -237,17 +237,11 @@ If you define multiple metrics in `evaluation_metrics` (e.g., you want to maximi
 
 1. **Optuna Database:** Located at `state/optuna/[hp_search_name].db`.
       * A portable SQLite database containing the entire history of the study, enabling you to pause and resume the search at any time, or hook it into Optuna Dashboard (`optuna-dashboard sqlite:///state/optuna/...`).
-
-
 2. **Generated Configs:** Located in `model_config_write_path` (e.g., `configs/hp_search/`).
       * Valid, standalone `train.yaml` files generated for each trial.
-
-
 3. **Logs:** Located in `logs/`.
       * Includes individual training logs and JSONL files (`sequifier-[RUN]-metrics.jsonl`) tracking the validation curve.
-
 4.  **Models & Checkpoints:**
       * Saved in `models/` and `checkpoints/` with filenames including the run number (e.g., `models/sequifier-my-search-run-5-best-10.onnx`).
-
 5. **Evaluations (Optional):**
       * Saved in `outputs/evaluations/[RUN_NAME]-best-[EPOCH].json` if an evaluation script was utilized.
