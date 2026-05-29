@@ -1,7 +1,7 @@
 import json
 import os
 import warnings
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -492,20 +492,11 @@ def infer_generative(
                     raise ValueError(
                         f"prediction_length must be 1 for autoregression, got {inferer.prediction_length}"
                     )
-                if config.autoregression_extra_steps is not None:
-                    data = expand_data_by_autoregression(
-                        data,
-                        config.autoregression_extra_steps,
-                        config.seq_length,
-                    )
-                mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
-                item_positions_for_preds = (
-                    data.get_column("startItemPosition").filter(mask).to_numpy()
-                    + config.seq_length
-                )
                 # Unpack the new third return value
-                probs, preds, sequence_ids_for_preds = get_probs_preds_autoregression(
-                    config, inferer, data, column_types, config.seq_length
+                probs, preds, sequence_ids_for_preds, item_positions_for_preds = (
+                    get_probs_preds_autoregression(
+                        config, inferer, data, column_types, config.seq_length
+                    )
                 )
         elif config.read_format == "parquet" and is_folder_input:
             # Folder-based Parquet chunk logic
@@ -548,14 +539,11 @@ def infer_generative(
                     raise ValueError(
                         f"prediction_length must be 1 for autoregression, got {inferer.prediction_length}"
                     )
-                # Treat chunk file as standard autoregressive pass
-                mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
-                item_positions_for_preds = (
-                    data.get_column("startItemPosition").filter(mask).to_numpy()
-                    + config.seq_length
-                )
-                probs, preds, sequence_ids_for_preds = get_probs_preds_autoregression(
-                    config, inferer, data, column_types, config.seq_length
+
+                probs, preds, sequence_ids_for_preds, item_positions_for_preds = (
+                    get_probs_preds_autoregression(
+                        config, inferer, data, column_types, config.seq_length
+                    )
                 )
         elif config.read_format == "pt":
             sequences_dict, _, sequence_ids_tensor, _, start_positions_tensor = data
@@ -565,7 +553,6 @@ def infer_generative(
                 else config.autoregression_extra_steps
             )
 
-            # Pass prediction_length to get_probs_preds_pt
             probs, preds = get_probs_preds_pt(
                 config, inferer, sequences_dict, extra_steps
             )
@@ -701,89 +688,6 @@ def infer_generative(
             predictions_path,
             config.write_format,
         )
-
-
-@beartype
-def expand_data_by_autoregression(
-    data: pl.DataFrame, autoregression_extra_steps: int, seq_length: int
-) -> pl.DataFrame:
-    """Expands a Polars DataFrame for autoregressive inference.
-
-    This function takes a DataFrame of sequences and adds
-    `autoregression_extra_steps` new rows for each sequence. These new
-    rows represent future time steps to be predicted.
-
-    For each new step, it:
-    1. Copies the last known observation for a sequence.
-    2. Increments the `subsequenceId`.
-    3. Shifts the historical data columns (e.g., '1', '2', ..., '50') one
-       position "older" (e.g., old '1' becomes new '2', old '49' becomes
-       new '50').
-    4. Fills the "newest" columns (e.g., new '1' for the first extra
-       step) with `np.inf` as a placeholder for the prediction.
-
-    Args:
-        data: The input Polars DataFrame, sorted by `sequenceId` and
-            `subsequenceId`.
-        autoregression_extra_steps: The number of future time steps to add
-            to each sequence.
-        seq_length: The sequence length, used to identify the historical
-            data columns (named '1' through `seq_length`).
-
-    Returns:
-        A new Polars DataFrame containing all original rows plus the
-        newly generated future rows with placeholders.
-    """
-
-    data_cols = [str(c) for c in range(seq_length, 0, -1)]
-    data = data.with_columns(
-        [pl.col(c).cast(pl.Float64) for c in data_cols if c in data.columns]
-    )
-
-    data = data.sort("sequenceId", "subsequenceId")
-
-    # Identify the last observation for each sequence
-    last_obs_lazy = data.lazy().filter(
-        pl.col("subsequenceId") == pl.col("subsequenceId").max().over("sequenceId")
-    )
-
-    # Generate future rows lazily
-    future_frames = []
-    data_cols = [str(c) for c in range(seq_length, 0, -1)]
-
-    for offset in range(1, autoregression_extra_steps + 1):
-        future_df_lazy = last_obs_lazy.with_columns(
-            (pl.col("subsequenceId") + offset).alias("subsequenceId")
-        ).with_columns(
-            (pl.col("startItemPosition") + offset).alias("startItemPosition")
-        )
-
-        # Correctly shift columns to make space for future predictions
-        # Newest value (col '1') becomes a placeholder, old '1' becomes new '2', etc.
-        update_exprs = []
-        for i in range(len(data_cols)):  # e.g., i from 0 to 49 for seq_length=50
-            col_to_update = data_cols[i]  # Updates '50', '49', ..., '1'
-
-            if i < len(data_cols) - offset:
-                # Shift historical data one step further into the past
-                # e.g., new '50' gets old '49', new '2' gets old '1'
-                source_col_name = data_cols[i + offset]
-                update_exprs.append(pl.col(source_col_name).alias(col_to_update))
-            else:
-                # These are the newest 'offset' columns, which are unknown.
-                # Fill with infinity as a placeholder for the prediction.
-                # e.g., for offset=1, new col '1' becomes inf.
-                update_exprs.append(
-                    pl.lit(np.inf, dtype=pl.Float64).alias(col_to_update)
-                )
-
-        future_df_lazy = future_df_lazy.with_columns(update_exprs)
-        future_frames.append(future_df_lazy)
-
-    # Concatenate original data with all future frames
-    final_lazy = pl.concat([data.lazy()] + future_frames, how="vertical")
-
-    return final_lazy.sort("sequenceId", "subsequenceId").collect()
 
 
 @beartype
@@ -990,106 +894,6 @@ def get_probs_preds(
 
 
 @beartype
-def fill_in_predictions_pl(
-    data: pl.DataFrame,
-    preds: dict[str, np.ndarray],
-    current_subsequence_id: int,
-    sequence_ids_present: pl.Series,
-    seq_length: int,
-) -> pl.DataFrame:
-    """Fills in predictions into the main Polars DataFrame using a robust,
-    join-based approach that preserves the original DataFrame's structure.
-
-    This function broadcasts predictions to all relevant future rows via a join,
-    then uses conditional expressions to update only the specific placeholder
-    cells (`np.inf`) that correspond to the correct future time step.
-
-    Args:
-        data: The main DataFrame containing all sequences.
-        preds: A dictionary of new predictions, mapping target column names to NumPy arrays.
-        current_subsequence_id: The adjusted subsequence ID at which predictions were made.
-        sequence_ids_present: A Polars Series of the sequence IDs in the current batch.
-        seq_length: The length of the sequence.
-
-    Returns:
-        An updated Polars DataFrame with the same dimensions as the input, with
-        future placeholder values filled in.
-    """
-    if not preds or sequence_ids_present.is_empty():
-        return data
-
-    # 1. Create a "long" format DataFrame of the new predictions.
-    # This table has columns [sequenceId, inputCol, prediction].
-    pred_dfs = []
-    for input_col, pred_values in preds.items():
-        if pred_values.size > 0:
-            pred_dfs.append(
-                pl.DataFrame(
-                    {
-                        "sequenceId": sequence_ids_present,
-                        "inputCol": input_col,
-                        "prediction": pred_values.flatten(),
-                    }
-                )
-            )
-
-    # If there are no valid predictions to process, return the original data.
-    if not pred_dfs:
-        return data
-
-    preds_df = pl.concat(pred_dfs)
-
-    # 2. Left-join the predictions onto the main DataFrame.
-    # This adds a 'prediction' column. Rows that don't match the join keys
-    # (e.g., non-target columns) will have a null value for 'prediction'.
-    # A left join guarantees that no rows from the original `data` are dropped.
-    data_with_preds = data.join(preds_df, on=["sequenceId", "inputCol"], how="left")
-
-    # 3. Build a list of conditional update expressions for each future time step.
-    update_expressions = []
-    for offset in range(1, seq_length + 1):
-        col_to_update = str(offset)
-
-        # Skip if the column to update doesn't exist in the DataFrame.
-        if col_to_update not in data.columns:
-            continue
-
-        # The core logic: A prediction made at `current_subsequence_id` for a given
-        # `offset` should fill the placeholder in column `str(offset)` at the row
-        # where `subsequenceIdAdjusted` is `current_subsequence_id + offset`.
-        update_expr = (
-            pl.when(
-                # Condition 1: Is this the correct future row to update?
-                (pl.col("subsequenceIdAdjusted") == current_subsequence_id + offset)
-                # Condition 2: Does the cell contain a placeholder that needs updating?
-                & (pl.col(col_to_update).is_infinite())
-                # Condition 3: Is there a valid prediction available from the join?
-                & (pl.col("prediction").is_not_null())
-            )
-            # If all conditions are met, use the new prediction value.
-            .then(pl.col("prediction"))
-            # IMPORTANT: Otherwise, keep the column's existing value. This is crucial
-            # for preserving the integrity of the DataFrame.
-            .otherwise(pl.col(col_to_update))
-            # Overwrite the original column with the updated values.
-            .alias(col_to_update)
-        )
-        update_expressions.append(update_expr)
-
-    # 4. Apply all expressions at once and remove the temporary 'prediction' column.
-    # The `with_columns` operation does not change the number of rows.
-    if update_expressions:
-        updated_data = data_with_preds.with_columns(update_expressions).drop(
-            "prediction"
-        )
-    else:
-        # If no updates were needed, just drop the temporary join column.
-        updated_data = data_with_preds.drop("prediction")
-
-    return updated_data
-
-
-@beartype
 def fill_number(number: Union[int, float], max_length: int) -> str:
     """Pads a number with leading zeros to a specified string length.
 
@@ -1168,136 +972,49 @@ def get_probs_preds_autoregression(
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
     seq_length: int,
-) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray], np.ndarray]:
-    """Performs autoregressive inference using a time-step-based Polars loop.
-
-    This function orchestrates the autoregressive process by iterating
-    through each unique, adjusted time step (`subsequenceIdAdjusted`).
-
-    For each time step:
-    1. Filters the main DataFrame `data` to get the current slice of data
-       for all sequences at that time step.
-    2. Calls `get_probs_preds` to generate predictions for this slice.
-    3. Uses `fill_in_predictions_pl` to update the *main* `data` DataFrame,
-       filling in the `np.inf` placeholders for the *next* time steps
-       using the predictions just made.
-    4. Collects the predictions and a corresponding sort key.
-
-    After iterating through all time steps, it sorts all collected
-    predictions based on the keys (sequenceId, subsequenceId) and returns
-    the complete, ordered results.
-
-    Args:
-        config: The `InfererModel` configuration object.
-        inferer: The initialized `Inferer` instance.
-        data: The input Polars DataFrame, expanded with future rows
-            (see `expand_data_by_autoregression`).
-        column_types: A dictionary mapping column names to `torch.dtype`.
-        seq_length: The sequence length, passed to `fill_in_predictions_pl`.
-
-    Returns:
-        A tuple `(probs, preds, sequence_ids)`:
-            - `probs`: A dictionary mapping target columns to sorted NumPy
-              arrays of probabilities, or `None`.
-            - `preds`: A dictionary mapping target columns to sorted NumPy
-              arrays of final predictions.
-            - `sequence_ids`: A NumPy array of `sequenceId`s corresponding
-              to each row in the `preds` arrays.
-    """
-    data = data.sort("sequenceId", "subsequenceId")
+) -> tuple[
+    Optional[dict[str, np.ndarray]], dict[str, np.ndarray], np.ndarray, np.ndarray
+]:
     verify_variable_order(data)
 
-    # Normalize subsequenceId to start from 0 for each sequence
-    data = data.with_columns(
-        (
-            pl.col("subsequenceId") - pl.col("subsequenceId").min().over("sequenceId")
-        ).alias("subsequenceIdAdjusted")
+    distinct_cols = len(np.unique(data["inputCol"].to_numpy()))
+    tail_data = numpy_to_pytorch(
+        data.group_by("sequenceId", maintain_order=True).tail(distinct_cols),
+        column_types,
+        config.input_columns,
+        seq_length,
     )
 
-    preds_list, probs_list, sort_keys = [], [], []
-    subsequence_ids_distinct = sorted(data["subsequenceIdAdjusted"].unique().to_list())
-
-    # Ensure max_length for padding is robust for both sequence and subsequence IDs
-    max_id_val = max(
-        data["sequenceId"].max(),
-        max(subsequence_ids_distinct) if subsequence_ids_distinct else 0,
-    )
-    max_length = len(str(max_id_val))
-
-    for subsequence_id in subsequence_ids_distinct:
-        t0 = datetime.now()
-        data_subset = data.filter(pl.col("subsequenceIdAdjusted") == subsequence_id)
-
-        if data_subset.height == 0:
-            continue
-
-        sequence_ids_present = data_subset.get_column("sequenceId").unique(
-            maintain_order=True
-        )
-
-        t1 = datetime.now()
-
-        # Original sort key logic
-        sort_keys.extend(
-            [
-                f"{fill_number(int(seq_id), max_length)}-{fill_number(int(subsequence_id), max_length)}"
-                for seq_id in sequence_ids_present
-            ]
-        )
-
-        t2 = datetime.now()
-
-        probs, preds = get_probs_preds(
-            config,
-            inferer,
-            data_subset,
-            column_types,
-        )
-
-        t3 = datetime.now()
-
-        preds_list.append(preds)
-        if probs is not None:
-            probs_list.append(probs)
-
-        # Use new Polars-native function to fill predictions
-        data = fill_in_predictions_pl(
-            data,
-            preds,
-            int(subsequence_id),
-            sequence_ids_present,
-            seq_length,
-        )
-
-        t4 = datetime.now()
-
-        logger.debug(
-            f"[DEBUG] Autoregression step {subsequence_id}/{len(subsequence_ids_distinct)}: Total: {format_delta(t4-t0)}s (Filter: {format_delta(t1-t0)}s, Infer: {format_delta(t3-t2)}s, Update: {format_delta(t4-t3)}s)"
-        )
-
-    sort_order = np.argsort(sort_keys)
-
-    preds = {
-        target_column: np.concatenate([p[target_column] for p in preds_list], axis=0)[
-            sort_order
-        ]
-        for target_column in inferer.target_columns
+    seq_id_to_start_item_position = {
+        k: (v + seq_length)
+        for k, v in data.group_by("sequenceId")
+        .agg(pl.col("startItemPosition").max())
+        .iter_rows()
     }
-    if len(probs_list):
-        probs = {
-            target_column: np.concatenate(
-                [p[target_column] for p in probs_list], axis=0
-            )[sort_order, :]
-            for target_column in inferer.target_columns
-        }
-    else:
-        probs = None
+    probs, preds = get_probs_preds_pt(
+        config, inferer, tail_data, extra_steps=config.autoregression_extra_steps
+    )
 
-    # Create the corresponding sequence_id array from the sorted keys
-    sorted_keys = np.array(sort_keys)[sort_order]
-    sequence_ids_for_preds = np.array([int(key.split("-")[0]) for key in sorted_keys])
+    item_positions_for_preds = np.concatenate(
+        [
+            np.arange(
+                seq_id_to_start_item_position[v],
+                seq_id_to_start_item_position[v]
+                + config.autoregression_extra_steps
+                + 1,
+            )
+            for v in sorted(list(seq_id_to_start_item_position.keys()))
+        ],
+        axis=0,
+    )
+    sequence_ids_for_preds = np.concatenate(
+        [
+            np.repeat(seq_id, config.autoregression_extra_steps + 1)
+            for seq_id in sorted(list(seq_id_to_start_item_position.keys()))
+        ]
+    )
 
-    return probs, preds, sequence_ids_for_preds
+    return probs, preds, sequence_ids_for_preds, item_positions_for_preds
 
 
 class Inferer:
