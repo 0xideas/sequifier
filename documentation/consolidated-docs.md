@@ -925,13 +925,10 @@ All other parameters are considered **Independent**. Sequifier will test every v
   * **`bayesian` (Default - TPE Sampler):**
       * *How it works:* Tree-structured Parzen Estimator (TPE). Learns from past trials to guess which hyperparameter regions are most promising.
       * *Pros:* Vastly more efficient than grid or random search, making it the industry standard for neural network tuning.
-
-
   * **`grid` (Brute Force):**
       * *How it works:* Generates every possible combination of all provided lists.
       * *Pros:* Exhaustive.
       * *Cons:* Exponential explosion. Does not support Distribution dictionaries (cannot discretize continuous boundaries automatically).
-
   * **`sample` (Random Search):**
       * *How it works:* Randomly draws from the provided ranges.
 
