@@ -978,8 +978,8 @@ def get_probs_preds_autoregression(
     verify_variable_order(data)
 
     distinct_cols = len(np.unique(data["inputCol"].to_numpy()))
-    tail_data = numpy_to_pytorch(
-        data.group_by("sequenceId", maintain_order=True).tail(distinct_cols),
+    head_data = numpy_to_pytorch(
+        data.group_by("sequenceId", maintain_order=True).head(distinct_cols),
         column_types,
         config.input_columns,
         seq_length,
@@ -992,7 +992,7 @@ def get_probs_preds_autoregression(
         .iter_rows()
     }
     probs, preds = get_probs_preds_pt(
-        config, inferer, tail_data, extra_steps=config.autoregression_extra_steps
+        config, inferer, head_data, extra_steps=config.autoregression_extra_steps
     )
 
     item_positions_for_preds = np.concatenate(
