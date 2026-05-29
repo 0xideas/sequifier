@@ -19,7 +19,7 @@ Inference Config
 Hyperparameter Search Config
 ---------------------------------
 .. automodule:: sequifier.config.hyperparameter_search_config
-   :members: HyperparameterSearch, ModelSpecHyperparameterSampling, TrainingSpecHyperparameterSampling
+   :members: HyperparameterSearchConfig, ModelSpecHyperparameterSampling, TrainingSpecHyperparameterSampling
 
 Non-standard Optimizers
 --------------------------

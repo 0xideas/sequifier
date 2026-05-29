@@ -24,7 +24,7 @@ This gives us a number of benefits:
 - native multi-gpu support (DDP and FSDP)
 - native multi-core preprocessing
 - scales to datasets larger than RAM
-- hyperparameter search
+- hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
 - can be used for prediction, generation and embeddding on/of arbitrary sequences
 
 The only requirement is having sequifier installed, and having input data in the right format.
@@ -35,7 +35,7 @@ The only requirement is having sequifier installed, and having input data in the
 
 There are six standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, and `visualize-training`.
 
-`make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, `hyperparameter-search` executes multiple training runs to find optimal configurations, and `visualize-training` parses training logs to generate interactive HTML plots of your loss curves.
+`make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, `hyperparameter-search` executes multiple training runs using Optuna to find optimal configurations, and `visualize-training` parses training logs to generate interactive HTML plots of your loss curves.
 
 There are documentation pages for each command, except make:
 
@@ -76,13 +76,12 @@ YOUR_PROJECT_NAME/
 │   ├── probabilities(?)
 │   └── visualization/
 └── logs/
+
 ```
 
 The `sequifier` commands should typically be run in the project root.
 
 Within YOUR_PROJECT_NAME, you can also add other folders for additional steps, such as `notebooks` or `scripts` for pre- or postprocessing, and `analysis`, `visualizations` or `evals` for files you generate in other, manual steps.
-
-
 
 ### Data Transformations in Sequifier
 
@@ -170,20 +169,17 @@ sequifier infer
 While Sequifier's primary use case is training predictive or generative causal transformer models, it also supports the export of embedding models.
 
 Configuration:
+
 - Training: Set export_embedding_model: true in the training config.
 - Inference: Set model_type: embedding in the inference config.
 
 Technical Details: The generated embedding has dimensionality `dim_model` and consists of the final hidden state (activations) of the transformer's last layer corresponding to the last token in the sequence. Because the model is trained on a causal objective, this is a "forward-looking" embedding: it is optimized to compress the sequence history into a representation that maximizes information about the future state of the data.
 
-
-
 ### Distributed Training
 
 Sequifier supports distributed training using torch `DistributedDataParallel` and `FullyShardedDataParallel`. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
 
-For the full guide on how to configure a distributed run, check the [training config README](./documentation/training/multi-gpu-training.md)
-
-
+For the full guide on how to configure a distributed run, check the [training config README](https://www.google.com/search?q=./documentation/training/multi-gpu-training.md)
 
 ### System Requirements
 
@@ -203,7 +199,8 @@ Please cite with:
   title = {sequifier - causal transformer models for multivariate sequence modelling},
   year = {2025},
   publisher = {GitHub},
-  version = {v1.1.2.1},
-  url = {https://github.com/0xideas/sequifier}
+  version = {v1.1.2.2},
+  url = {[https://github.com/0xideas/sequifier](https://github.com/0xideas/sequifier)}
 }
+
 ```

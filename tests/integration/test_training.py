@@ -130,6 +130,16 @@ def test_model_files_exists(run_training, run_training_from_checkpoint, project_
                 for i in range(4)
                 for suffix in ["best", "last"]
             ]
+            + [
+                f"sequifier-test-hp-search-bayesian-run-{i}-{suffix}-1.pt"
+                for i in range(4)
+                for suffix in ["best", "last"]
+            ]
+            + [
+                f"sequifier-test-hp-search-custom-eval-run-{i}-{suffix}-1.onnx"
+                for i in range(4)
+                for suffix in ["best", "last"]
+            ]
         )
     )
 

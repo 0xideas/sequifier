@@ -497,6 +497,7 @@ def _generate_multi_model_plot(
                 SKIP_BASELINE_CHECK is None
                 and not np.isclose(baseline_val, data["base_y"][0], atol=1e-2)
                 and not (np.isnan(baseline_val) and np.isnan(data["base_y"][0]))
+                and os.getenv("SEQUIFIER_SKIP_BASELINE_CHECK") is None
             ):
                 raise DataContinuityError(
                     f"Baseline validation loss is not constant. Expected {baseline_val}, got {data['base_y'][0]} in '{model}'"

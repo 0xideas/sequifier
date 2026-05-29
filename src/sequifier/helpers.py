@@ -1,6 +1,9 @@
+import glob
 import os
 import random
+import re
 import sys
+from datetime import datetime
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -423,3 +426,84 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
         )
 
     return dtype_map[dtype_str]
+
+
+def get_best_model_path(
+    project_root: str, run_name: str, model_type: str
+) -> tuple[str, int]:
+    """
+    Searches for the exported 'best' model file for a given run and returns its path and epoch.
+
+    Args:
+        project_root: The root directory of the project.
+        run_name: The unique identifier for the hyperparameter search run.
+        model_type: The extension of the exported model (e.g., 'onnx' or 'pt').
+
+    Returns:
+        A tuple containing:
+            - The file path to the best model (str).
+            - The actual epoch at which this model was saved (int).
+
+    Raises:
+        FileNotFoundError: If no matching model files are found.
+    """
+    search_pattern = os.path.join(
+        project_root, "models", f"sequifier-{run_name}-best-*.{model_type}"
+    )
+
+    matching_models = glob.glob(search_pattern)
+
+    if not matching_models:
+        raise FileNotFoundError(
+            f"Could not find an exported 'best' model matching: {search_pattern}"
+        )
+
+    # Find the file with the highest epoch number in its name
+    best_model_path = max(
+        matching_models,
+        key=lambda p: int(os.path.splitext(os.path.basename(p))[0].split("-")[-1]),
+    )
+    last_epoch = int(best_model_path.split("-")[-1].split(".")[0])
+    return best_model_path, last_epoch
+
+
+def get_last_training_batch_timedelta(
+    model_name: str, rank: int, project_root: str = "."
+) -> float:
+    """
+    Reads the level 2 log file, finds the last two mid-epoch training logs,
+    and returns the timedelta between them in seconds.
+    """
+    # Construct the path to the level 2 log file based on configure_logger()
+    log_path = os.path.join(
+        project_root, "logs", f"sequifier-{model_name}-rank{rank}-2.txt"
+    )
+
+    if not os.path.exists(log_path):
+        raise FileNotFoundError(f"Log file not found: {log_path}")
+
+    # Regex to capture the timestamp of mid-epoch training batch logs
+    # Matches lines like: "2026-05-26 15:15:39 | INFO | [INFO] Epoch   1 | Batch   10/... | Loss: ..."
+    train_log_pattern = re.compile(
+        r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\|.*?\[INFO\] Epoch.*?Batch"
+    )
+
+    timestamps = []
+
+    with open(log_path, "r", encoding="utf-8") as file:
+        for line in file:
+            match = train_log_pattern.search(line)
+            if match:
+                timestamps.append(
+                    datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+                )
+
+    if len(timestamps) < 2:
+        raise ValueError(
+            "Not enough mid-epoch training logs found in the file to calculate a timedelta."
+        )
+
+    # Get the last two chronologically recorded batch timestamps
+    t1, t2 = timestamps[-2], timestamps[-1]
+
+    return (t2 - t1).total_seconds()

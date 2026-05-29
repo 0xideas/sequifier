@@ -1,12 +1,12 @@
 import json
-from itertools import product
-from typing import Optional, Union
+import os
+import warnings
+from typing import Any, Optional, Union
 
-import numpy as np
 import yaml
 from beartype import beartype
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from sequifier.config.train_config import (
     DotDict,
@@ -17,14 +17,67 @@ from sequifier.config.train_config import (
 from sequifier.helpers import normalize_path, try_catch_excess_keys
 
 
+class FloatDistribution(BaseModel):
+    """Pydantic model representing a floating-point hyperparameter distribution for Optuna.
+
+    Attributes:
+        low (float): The lower bound of the distribution.
+        high (float): The upper bound of the distribution.
+        log (bool): If True, sample from the distribution in the log domain. Defaults to False.
+    """
+
+    low: float
+    high: float
+    step: Optional[float] = None
+    log: bool = False
+
+    @model_validator(mode="after")
+    def validate_step_and_log(self):
+        if self.log and self.step is not None:
+            raise ValueError(
+                f"Optuna does not support setting step when log=True. "
+                f"Got step={self.step} and log={self.log}."
+            )
+        return self
+
+
+class IntDistribution(BaseModel):
+    """Pydantic model representing an integer hyperparameter distribution for Optuna.
+
+    Attributes:
+        low (int): The lower bound of the distribution.
+        high (int): The upper bound of the distribution.
+        step (int): The spacing between valid integer values. Defaults to 1.
+        log (bool): If True, sample from the distribution in the log domain. Defaults to False.
+    """
+
+    low: int
+    high: int
+    step: int = 1
+    log: bool = False
+
+    @model_validator(mode="after")
+    def validate_step_and_log(self):
+        if self.log and self.step != 1:
+            raise ValueError(
+                f"Optuna does not support setting step != 1 when log=True. "
+                f"Got step={self.step} and log={self.log}."
+            )
+        return self
+
+
+OptunaFloat = Union[list[float], FloatDistribution]
+OptunaInt = Union[list[int], IntDistribution]
+
+
 @beartype
 def load_hyperparameter_search_config(
     config_path: str, skip_metadata: bool
-) -> "HyperparameterSearch":
+) -> "HyperparameterSearchConfig":
     """Load a hyperparameter search configuration from a YAML file.
 
     This function reads a YAML configuration file, processes it to include
-    data-driven configurations if needed, and returns a HyperparameterSearch
+    data-driven configurations if needed, and returns a HyperparameterSearchConfig
     object.
 
     Args:
@@ -34,7 +87,7 @@ def load_hyperparameter_search_config(
             data-driven configurations.
 
     Returns:
-        An instance of the HyperparameterSearch class, populated with the
+        An instance of the HyperparameterSearchConfig class, populated with the
         configuration from the file.
     """
     with open(config_path, "r") as f:
@@ -95,7 +148,7 @@ def load_hyperparameter_search_config(
 
         config_values["id_maps"] = metadata_config["id_maps"]
 
-    return try_catch_excess_keys(config_path, HyperparameterSearch, config_values)
+    return try_catch_excess_keys(config_path, HyperparameterSearchConfig, config_values)
 
 
 class TrainingSpecHyperparameterSampling(BaseModel):
@@ -144,12 +197,14 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     save_batch_interval_minutes: Optional[float] = None
     save_batch_interval_minutes_val_loss: bool = True
     calculate_validation_loss_on_initialization: bool = False
-    batch_size: list[int]
-    learning_rate: list[float]
+
+    batch_size: OptunaInt
+    learning_rate: list[float]  # Kept as list to preserve coupling with epochs
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
-    accumulation_steps: list[int]
-    dropout: list[float] = [0.0]
+    accumulation_steps: OptunaInt
+    dropout: OptunaFloat = [0.0]
+
     loss_weights: Optional[dict[str, float]] = None
     optimizer: list[DotDict] = Field(
         default_factory=lambda: [DotDict({"name": "Adam"})]
@@ -263,99 +318,48 @@ class TrainingSpecHyperparameterSampling(BaseModel):
                     )
         return v
 
-    def random_sample(self):
-        """Randomly sample a set of training hyperparameters.
+    def sample_trial(self, trial: Any) -> TrainingSpecModel:
+        """Samples training hyperparameters using an Optuna trial.
 
-        This method selects a random combination of hyperparameters from the
-        defined lists of possibilities. It ensures that learning rates and
-        schedulers are paired correctly.
-
-        Returns:
-            A TrainingSpecModel instance populated with a randomly sampled set of
-            hyperparameters.
-        """
-        learning_rate_and_scheduler_index = np.random.randint(len(self.learning_rate))
-        optimizer_index = np.random.randint(len(self.optimizer))
-        batch_size = np.random.choice(self.batch_size)
-        dropout = np.random.choice(self.dropout)
-        accumulation_steps = np.random.choice(self.accumulation_steps)
-        optimizer = self.optimizer[optimizer_index]
-        learning_rate = self.learning_rate[learning_rate_and_scheduler_index]
-
-        logger.info(
-            f"{learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }"
-        )
-
-        return TrainingSpecModel(
-            device=self.device,
-            epochs=self.epochs[learning_rate_and_scheduler_index],
-            log_interval=self.log_interval,
-            class_share_log_columns=self.class_share_log_columns,
-            early_stopping_epochs=self.early_stopping_epochs,
-            save_interval_epochs=self.save_interval_epochs,
-            save_latest_interval_minutes=self.save_latest_interval_minutes,
-            save_batch_interval_minutes=self.save_batch_interval_minutes,
-            save_batch_interval_minutes_val_loss=self.save_batch_interval_minutes_val_loss,
-            calculate_validation_loss_on_initialization=self.calculate_validation_loss_on_initialization,
-            batch_size=batch_size,
-            learning_rate=learning_rate,
-            criterion=self.criterion,
-            class_weights=self.class_weights,
-            accumulation_steps=accumulation_steps,
-            dropout=dropout,
-            loss_weights=self.loss_weights,
-            optimizer=optimizer,
-            scheduler=self.scheduler[learning_rate_and_scheduler_index],
-            continue_training=self.continue_training,
-            enforce_determinism=True,
-            scheduler_step_on=self.scheduler_step_on,
-            distributed=self.distributed,
-            load_full_data_to_ram=self.load_full_data_to_ram,
-            max_ram_gb=self.max_ram_gb,
-            device_max_concat_length=self.device_max_concat_length,
-            world_size=self.world_size,
-            num_workers=self.num_workers,
-            backend=self.backend,
-            layer_type_dtypes=self.layer_type_dtypes,
-            layer_autocast=self.layer_autocast,
-            sampling_strategy=self.sampling_strategy,
-            data_parallelism=self.data_parallelism,
-            fsdp_cpu_offload=self.fsdp_cpu_offload,
-            torch_compile=self.torch_compile,
-            float32_matmul_precision=self.float32_matmul_precision,
-        )
-
-    def grid_sample(self, i):
-        """Select a set of training hyperparameters based on a grid search index.
-
-        This method generates a grid of all possible hyperparameter combinations
-        and selects the combination at the given index.
+        This method leverages the provided Optuna trial to suggest values for
+        hyperparameters like batch size, dropout, and learning rate based on the
+        defined search spaces (categorical lists or distributions).
 
         Args:
-            i: The index of the hyperparameter combination to select from the grid.
+            trial (Any): The Optuna trial object used for suggesting hyperparameters.
 
         Returns:
-            A TrainingSpecModel instance populated with the selected set of
-            hyperparameters.
+            TrainingSpecModel: A populated training specification model with the sampled hyperparameters.
         """
-        hyperparameter_combinations = list(
-            product(
-                np.arange(len(self.learning_rate)),
-                self.batch_size,
-                self.dropout,
-                self.optimizer,
-                self.accumulation_steps,
-            )
+        lr_sched_index = trial.suggest_categorical(
+            "lr_sched_index", list(range(len(self.learning_rate)))
         )
-        (
-            learning_rate_and_scheduler_index,
-            batch_size,
-            dropout,
-            optimizer,
-            accumulation_steps,
-        ) = hyperparameter_combinations[i]
+        epochs = self.epochs[lr_sched_index]
+        learning_rate = self.learning_rate[lr_sched_index]
+        scheduler = self.scheduler[lr_sched_index]
 
-        learning_rate = self.learning_rate[learning_rate_and_scheduler_index]
+        opt_index = trial.suggest_categorical(
+            "optimizer_index", list(range(len(self.optimizer)))
+        )
+        optimizer = self.optimizer[opt_index]
+
+        def sample_param(
+            name: str, space: Union[list, FloatDistribution, IntDistribution]
+        ):
+            if isinstance(space, list):
+                return trial.suggest_categorical(name, space)
+            elif isinstance(space, FloatDistribution):
+                return trial.suggest_float(
+                    name, space.low, space.high, step=space.step, log=space.log
+                )
+            elif isinstance(space, IntDistribution):
+                return trial.suggest_int(
+                    name, space.low, space.high, step=space.step, log=space.log
+                )
+
+        batch_size = sample_param("batch_size", self.batch_size)
+        dropout = sample_param("dropout", self.dropout)
+        accumulation_steps = sample_param("accumulation_steps", self.accumulation_steps)
 
         logger.info(
             f"{learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }"
@@ -363,7 +367,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
 
         return TrainingSpecModel(
             device=self.device,
-            epochs=self.epochs[learning_rate_and_scheduler_index],
+            epochs=epochs,
             log_interval=self.log_interval,
             class_share_log_columns=self.class_share_log_columns,
             early_stopping_epochs=self.early_stopping_epochs,
@@ -380,7 +384,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             dropout=dropout,
             loss_weights=self.loss_weights,
             optimizer=optimizer,
-            scheduler=self.scheduler[learning_rate_and_scheduler_index],
+            scheduler=scheduler,
             continue_training=self.continue_training,
             enforce_determinism=True,
             scheduler_step_on=self.scheduler_step_on,
@@ -398,23 +402,6 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             fsdp_cpu_offload=self.fsdp_cpu_offload,
             torch_compile=self.torch_compile,
             float32_matmul_precision=self.float32_matmul_precision,
-        )
-
-    def n_combinations(self):
-        """Calculate the total number of hyperparameter combinations.
-
-        This method computes the total number of unique hyperparameter sets that
-        can be generated by the grid search.
-
-        Returns:
-            The total number of possible hyperparameter combinations.
-        """
-        return (
-            len(self.learning_rate)
-            * len(self.batch_size)
-            * len(self.dropout)
-            * len(self.optimizer)
-            * len(self.accumulation_steps)
         )
 
 
@@ -436,8 +423,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
     dim_model: list[int]
     feature_embedding_dims: Optional[list[dict[str, int]]]
     n_head: list[int]
-    dim_feedforward: list[int]
-    num_layers: list[int]
+
+    dim_feedforward: OptunaInt
+    num_layers: OptunaInt
     prediction_length: int
 
     activation_fn: list[str]
@@ -447,7 +435,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
     norm_first: list[bool]
     n_kv_heads: list[Optional[int]]
-    rope_theta: list[float]
+    rope_theta: OptunaFloat
 
     @field_validator("n_head")
     @classmethod
@@ -482,36 +470,61 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
         return v
 
-    def random_sample(self):
-        """Randomly sample a set of model hyperparameters.
+    def sample_trial(self, trial: Any) -> ModelSpecModel:
+        """Samples model architecture hyperparameters using an Optuna trial.
 
-        This method selects a random combination of model hyperparameters from the
-        defined lists of possibilities. It ensures that dim_model, feature_embedding_dims,
-        and n_head are paired correctly, and that n_kv_heads is a valid divisor of n_head.
+        This method uses the Optuna trial to suggest structural parameters such as
+        the number of layers, feedforward dimensions, and attention heads. It ensures
+        that dependent dimensions (like `n_head` and `dim_model`) stay correctly paired
+        and that invalid key-value head combinations are filtered out.
+
+        Args:
+            trial (Any): The Optuna trial object used for suggesting hyperparameters.
 
         Returns:
-            A ModelSpecModel instance populated with a randomly sampled set of
-            hyperparameters.
+            ModelSpecModel: A populated model specification model with the sampled architecture parameters.
         """
-        dim_model_index = np.random.randint(len(self.dim_model))
+        dim_model_idx = trial.suggest_categorical(
+            "dim_model_idx", list(range(len(self.dim_model)))
+        )
+
+        initial_embedding_dim = self.initial_embedding_dim[dim_model_idx]
+        joint_embedding_dim = self.joint_embedding_dim[dim_model_idx]
+        dim_model = self.dim_model[dim_model_idx]
+        n_head = self.n_head[dim_model_idx]
         feature_embedding_dims = (
             None
             if self.feature_embedding_dims is None
-            else self.feature_embedding_dims[dim_model_index]
+            else self.feature_embedding_dims[dim_model_idx]
         )
-        initial_embedding_dim = self.initial_embedding_dim[dim_model_index]
-        joint_embedding_dim = self.joint_embedding_dim[dim_model_index]
-        dim_model = self.dim_model[dim_model_index]
-        n_head = self.n_head[dim_model_index]
-        dim_feedforward = np.random.choice(self.dim_feedforward)
-        num_layers = np.random.choice(self.num_layers)
 
-        activation_fn = np.random.choice(self.activation_fn)
-        normalization = np.random.choice(self.normalization)
-        positional_encoding = np.random.choice(self.positional_encoding)
-        attention_type = np.random.choice(self.attention_type)
-        norm_first = np.random.choice(self.norm_first)
-        rope_theta = np.random.choice(self.rope_theta)
+        def sample_param(
+            name: str, space: Union[list, FloatDistribution, IntDistribution]
+        ):
+            if isinstance(space, list):
+                return trial.suggest_categorical(name, space)
+            elif isinstance(space, FloatDistribution):
+                return trial.suggest_float(
+                    name, space.low, space.high, step=space.step, log=space.log
+                )
+            elif isinstance(space, IntDistribution):
+                return trial.suggest_int(
+                    name, space.low, space.high, step=space.step, log=space.log
+                )
+
+        dim_feedforward = sample_param("dim_feedforward", self.dim_feedforward)
+        num_layers = sample_param("num_layers", self.num_layers)
+        rope_theta = sample_param("rope_theta", self.rope_theta)
+
+        activation_fn = trial.suggest_categorical("activation_fn", self.activation_fn)
+        normalization = trial.suggest_categorical("normalization", self.normalization)
+        positional_encoding = trial.suggest_categorical(
+            "positional_encoding", self.positional_encoding
+        )
+        attention_type = trial.suggest_categorical(
+            "attention_type", self.attention_type
+        )
+        norm_first = trial.suggest_categorical("norm_first", self.norm_first)
 
         valid_kv_heads = [
             kv
@@ -525,9 +538,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             )
             n_kv_heads = None
         else:
-            # Use random.choice because valid_kv_heads might contain None
-            # and np.random.choice behaves weirdly with mixed None types.
-            n_kv_heads = np.random.choice(np.array(valid_kv_heads))
+            n_kv_heads = trial.suggest_categorical("n_kv_heads", valid_kv_heads)
 
         logger.info(
             f"{initial_embedding_dim} - {joint_embedding_dim = } - {dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
@@ -551,113 +562,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
             prediction_length=self.prediction_length,
         )
 
-    def grid_sample(self, i):
-        """Select a set of model hyperparameters based on a grid search index.
 
-        This method generates a grid of all possible model hyperparameter
-        combinations and selects the combination at the given index.
-        Includes sanitation logic to prevent invalid n_kv_heads combinations.
-
-        Args:
-            i: The index of the hyperparameter combination to select from the grid.
-
-        Returns:
-            A ModelSpecModel instance populated with the selected set of
-            hyperparameters.
-        """
-        hyperparameter_combinations = list(
-            product(
-                np.arange(len(self.dim_model)),
-                self.dim_feedforward,
-                self.num_layers,
-                self.activation_fn,
-                self.normalization,
-                self.positional_encoding,
-                self.attention_type,
-                self.norm_first,
-                self.n_kv_heads,
-                self.rope_theta,
-            )
-        )
-
-        (
-            dim_model_index,
-            dim_feedforward,
-            num_layers,
-            activation_fn,
-            normalization,
-            positional_encoding,
-            attention_type,
-            norm_first,
-            n_kv_heads,
-            rope_theta,
-        ) = hyperparameter_combinations[i]
-
-        initial_embedding_dim = self.initial_embedding_dim[dim_model_index]
-        joint_embedding_dim = self.joint_embedding_dim[dim_model_index]
-        dim_model = self.dim_model[dim_model_index]
-        n_head = self.n_head[dim_model_index]
-
-        if n_kv_heads is not None:
-            if n_head % n_kv_heads != 0 or n_kv_heads > n_head:
-                logger.debug(
-                    f"Grid sample index {i}: forcing n_kv_heads=None because {n_kv_heads} does not divide {n_head}"
-                )
-                n_kv_heads = None
-
-        logger.info(
-            f"{dim_model = } - {dim_feedforward = } - {joint_embedding_dim = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
-        )
-
-        feature_embedding_dims = (
-            None
-            if self.feature_embedding_dims is None
-            else self.feature_embedding_dims[dim_model_index]
-        )
-
-        return ModelSpecModel(
-            initial_embedding_dim=initial_embedding_dim,
-            feature_embedding_dims=feature_embedding_dims,
-            joint_embedding_dim=joint_embedding_dim,
-            dim_model=dim_model,
-            n_head=n_head,
-            dim_feedforward=dim_feedforward,
-            num_layers=num_layers,
-            activation_fn=activation_fn,
-            normalization=normalization,
-            positional_encoding=positional_encoding,
-            attention_type=attention_type,
-            norm_first=norm_first,
-            n_kv_heads=n_kv_heads,
-            rope_theta=rope_theta,
-            prediction_length=self.prediction_length,
-        )
-
-    def n_combinations(self):
-        """Calculate the total number of model hyperparameter combinations.
-
-        This method computes the total number of unique model hyperparameter sets
-        that can be generated by the grid search.
-
-        Returns:
-            The total number of possible model hyperparameter combinations.
-        """
-        return (
-            len(self.dim_model)
-            * len(self.dim_feedforward)
-            * len(self.joint_embedding_dim)
-            * len(self.num_layers)
-            * len(self.activation_fn)
-            * len(self.normalization)
-            * len(self.positional_encoding)
-            * len(self.attention_type)
-            * len(self.norm_first)
-            * len(self.n_kv_heads)
-            * len(self.rope_theta)
-        )
-
-
-class HyperparameterSearch(BaseModel):
+class HyperparameterSearchConfig(BaseModel):
     """Pydantic model for hyperparameter search configuration.
 
     Attributes:
@@ -685,13 +591,18 @@ class HyperparameterSearch(BaseModel):
         export_with_dropout: If True, exports the model with dropout enabled.
         model_hyperparameter_sampling: The sampling configuration for model hyperparameters.
         training_hyperparameter_sampling: The sampling configuration for training hyperparameters.
+        evaluation_inference_config: The inference config to infer on for hyperparameter search optimization
+        evaluation_script: The script that outputs the evaluation metrics, typically from the inference output
+        evaluation_metrics: The evaluation metrics to optimize during hyperparameter search
+        evaluation_metric_directions: The direction to optimize evaluation_metrics in. Only 'minimize' and 'maximize' are allowed
     """
 
     project_root: str
     metadata_config_path: str
     hp_search_name: str
-    search_strategy: str = "sample"  # "sample" or "grid"
-    n_samples: Optional[int]
+    search_strategy: str = "bayesian"
+    n_trials: Optional[int] = Field(None, alias="n_samples")
+    prune_trials: Optional[bool] = True
     model_config_write_path: str
     training_data_path: str
     validation_data_path: str
@@ -715,10 +626,80 @@ class HyperparameterSearch(BaseModel):
     export_pt: bool = False
     export_with_dropout: bool = False
 
+    evaluation_inference_config: Optional[str] = None
+    evaluation_script: Optional[str] = None
+    evaluation_metric_directions: Optional[list[str]] = None
+    evaluation_metrics: Optional[list[str]] = None
+
     model_hyperparameter_sampling: ModelSpecHyperparameterSampling
     training_hyperparameter_sampling: TrainingSpecHyperparameterSampling
 
     override_input: bool = False
+
+    @model_validator(mode="after")
+    def validate_prune_trials(self):
+        if self.prune_trials and self.training_hyperparameter_sampling.distributed:
+            warnings.warn(
+                "Trial pruning in distributed training settings is in beta mode."
+            )
+        return self
+
+    @field_validator("evaluation_metrics")
+    @classmethod
+    def validate_evaluation_metrics(cls, v, info):
+        if v is not None and info.data.get("evaluation_script") is None:
+            raise ValueError(
+                "evaluation_script must be provided if evaluation_metrics is defined."
+            )
+        if v is not None:
+            if info.data.get("evaluation_metric_directions") is None:
+                raise ValueError(
+                    "evaluation_metric_directions must be provided if evaluation_metrics is defined."
+                )
+            else:
+                evaluation_metric_directions = info.data.get(
+                    "evaluation_metric_directions"
+                )
+                if len(v) != len(evaluation_metric_directions):
+                    raise ValueError(
+                        f"evaluation_metrics and evaluation_metric_directions must have the same number of values, len(evaluation_metrics) = {len(v)}, {len(evaluation_metric_directions) = }"
+                    )
+        if v is not None and info.data.get("evaluation_inference_config") is None:
+            warnings.warn(
+                "Please provide evaluation_inference_config if your evaluation_script requires inference outputs"
+            )
+        return v
+
+    @field_validator("evaluation_metric_directions")
+    @classmethod
+    def validate_evaluation_metric_directions(cls, v):
+        if v is not None:
+            allowed_vals = {"minimize", "maximize"}
+            diff = set(v).difference(allowed_vals)
+            if len(diff):
+                raise ValueError(
+                    f"In evaluation_metric_directions, only 'minimize' and 'maximize' are allowed, found: {diff}"
+                )
+        return v
+
+    @field_validator("evaluation_script")
+    @classmethod
+    def validate_evaluation_script(cls, v, info):
+        if v is not None:
+            project_root = info.data.get("project_root")
+            if not os.path.exists(os.path.join(project_root, v)):
+                raise ValueError(
+                    f"evaluation_script '{v}' does not exist at '{project_root}'"
+                )
+        return v
+
+    @field_validator("evaluation_inference_config")
+    @classmethod
+    def validate_evaluation_inference_config(cls, v, info):
+        if v is not None:
+            if not os.path.exists(v):
+                raise ValueError(f"evaluation_inference_config '{v}' does not exist")
+        return v
 
     @field_validator("column_types")
     @classmethod
@@ -730,28 +711,42 @@ class HyperparameterSearch(BaseModel):
                 )
         return v
 
-    def random_sample(self, i):
-        """Randomly sample a full training configuration.
+    @field_validator("search_strategy")
+    @classmethod
+    def validate_search_strategy(cls, v: str) -> str:
+        allowed = ["sample", "grid", "bayesian"]
+        if v not in allowed:
+            raise ValueError(f"search_strategy must be one of {allowed}, got '{v}'")
+        return v
 
-        This method generates a complete training configuration by randomly
-        sampling model and training hyperparameters, as well as selecting a
-        column set and sequence length.
+    def sample_trial(self, trial: Any, run_index: int) -> TrainModel:
+        """Generates a complete training configuration using an Optuna trial.
+
+        This method orchestrates the sampling of both model and training specifications,
+        as well as data sequence parameters, combining them into a final configuration
+        ready for model execution.
 
         Args:
-            i: The index of the sample, used to create a unique model name.
+            trial (Any): The Optuna trial object used for suggesting hyperparameters.
+            run_index (int): The current run/trial index, used to assign a unique name to the model.
 
         Returns:
-            A TrainModel instance populated with a randomly sampled configuration.
+            TrainModel: A fully populated configuration instance for the current trial.
         """
-        model_spec = self.model_hyperparameter_sampling.random_sample()
-        training_spec = self.training_hyperparameter_sampling.random_sample()
-        input_columns_index = np.random.randint(len(self.input_columns))
-        seq_length = np.random.choice(self.seq_length)
+        model_spec = self.model_hyperparameter_sampling.sample_trial(trial)
+        training_spec = self.training_hyperparameter_sampling.sample_trial(trial)
+
+        input_columns_index = trial.suggest_categorical(
+            "input_columns_index", list(range(len(self.input_columns)))
+        )
+        seq_length = trial.suggest_categorical("seq_length", self.seq_length)
+
         logger.info(f"{input_columns_index = } - {seq_length = }")
+
         return TrainModel(
             project_root=self.project_root,
             metadata_config_path=self.metadata_config_path,
-            model_name=self.hp_search_name + f"-run-{i}",
+            model_name=f"{self.hp_search_name}-run-{run_index}",
             training_data_path=self.training_data_path,
             validation_data_path=self.validation_data_path,
             read_format=self.read_format,
@@ -773,100 +768,4 @@ class HyperparameterSearch(BaseModel):
             export_with_dropout=self.export_with_dropout,
             model_spec=model_spec,
             training_spec=training_spec,
-        )
-
-    def grid_sample(self, i):
-        """Select a full training configuration based on a grid search index.
-
-        This method generates a grid of all possible configurations and selects
-        the configuration at the given index.
-
-        Args:
-            i: The index of the configuration to select from the grid.
-
-        Returns:
-            A TrainModel instance populated with the selected configuration.
-        """
-        model_hyperparamter_sample = self.model_hyperparameter_sampling.n_combinations()
-        training_hyperparamter_sample = (
-            self.training_hyperparameter_sampling.n_combinations()
-        )
-        inner_combinations = model_hyperparamter_sample * training_hyperparamter_sample
-
-        i_model = i % model_hyperparamter_sample
-        i_training = (i // model_hyperparamter_sample) % training_hyperparamter_sample
-        i_outer = i // inner_combinations
-
-        model_spec = self.model_hyperparameter_sampling.grid_sample(i_model)
-        training_spec = self.training_hyperparameter_sampling.grid_sample(i_training)
-
-        hyperparameter_combinations = list(
-            product(np.arange(len(self.input_columns)), self.seq_length)
-        )
-
-        input_columns_index, seq_length = hyperparameter_combinations[i_outer]
-
-        return TrainModel(
-            project_root=self.project_root,
-            metadata_config_path=self.metadata_config_path,
-            model_name=self.hp_search_name + f"-run-{i}",
-            training_data_path=self.training_data_path,
-            validation_data_path=self.validation_data_path,
-            read_format=self.read_format,
-            input_columns=self.input_columns[input_columns_index],
-            column_types=self.column_types[input_columns_index],
-            categorical_columns=self.categorical_columns[input_columns_index],
-            real_columns=self.real_columns[input_columns_index],
-            target_columns=self.target_columns,
-            target_column_types=self.target_column_types,
-            id_maps=self.id_maps,
-            seq_length=seq_length,
-            n_classes=self.n_classes,
-            inference_batch_size=self.inference_batch_size,
-            seed=101,
-            export_embedding_model=False,
-            export_generative_model=True,
-            export_onnx=self.export_onnx,
-            export_pt=self.export_pt,
-            export_with_dropout=self.export_with_dropout,
-            model_spec=model_spec,
-            training_spec=training_spec,
-        )
-
-    def sample(self, i):
-        """Sample a configuration based on the specified search strategy.
-
-        This method delegates to either random_sample or grid_sample based on
-        the `search_strategy` attribute.
-
-        Args:
-            i: The index of the sample or grid combination to generate.
-
-        Returns:
-            A TrainModel instance with a generated configuration.
-
-        Raises:
-            Exception: If the search_strategy is not 'sample' or 'grid'.
-        """
-        if self.search_strategy == "sample":
-            return self.random_sample(i)
-        elif self.search_strategy == "grid":
-            return self.grid_sample(i)
-        else:
-            raise Exception(f"{self.search_strategy} invalid")
-
-    def n_combinations(self):
-        """Calculate the total number of possible configurations.
-
-        This method computes the total number of unique configurations that can be
-        generated by a grid search over all defined hyperparameters.
-
-        Returns:
-            The total number of possible hyperparameter configurations.
-        """
-        return (
-            len(self.input_columns)
-            * len(self.seq_length)
-            * self.model_hyperparameter_sampling.n_combinations()
-            * self.training_hyperparameter_sampling.n_combinations()
         )

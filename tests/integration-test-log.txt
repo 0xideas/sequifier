@@ -13,6 +13,8 @@ sequifier preprocess --config-path tests/configs/preprocess-test-categorical-exa
 sequifier preprocess --config-path tests/configs/preprocess-test-categorical-exact-pt.yaml
 sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-grid.yaml
 sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-sample.yaml
+sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-bayesian.yaml
+sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-custom-eval.yaml
 sequifier train --config-path tests/configs/train-test-categorical.yaml --metadata-config-path configs/metadata_configs/test-data-categorical-1.json --model-name model-categorical-1 --input-columns itemId
 sequifier train --config-path tests/configs/train-test-real.yaml --metadata-config-path configs/metadata_configs/test-data-real-1.json --model-name model-real-1 --input-columns None
 sequifier train --config-path tests/configs/train-test-categorical.yaml --metadata-config-path configs/metadata_configs/test-data-categorical-3.json --model-name model-categorical-3 --input-columns itemId supCat1
@@ -50,8 +52,6 @@ sequifier preprocess --config-path tests/configs/preprocess-test-categorical-pre
 sequifier preprocess --config-path tests/configs/preprocess-test-categorical-precomputed-stats-negative.yaml
 sequifier train --config-path tests/configs/train-test-resume-epoch.yaml
 sequifier train --config-path tests/configs/train-test-resume-mid-epoch.yaml
-sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-grid.yaml
-sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-sample.yaml
 sequifier visualize-training model-categorical-1 --project-root tests/project_folder
 sequifier visualize-training model-categorical-1-inf-size --project-root tests/project_folder
 sequifier visualize-training model-categorical-3 --project-root tests/project_folder

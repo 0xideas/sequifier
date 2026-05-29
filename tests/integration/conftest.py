@@ -240,6 +240,12 @@ def hp_search_configs():
     return {
         "grid": os.path.join("tests", "configs", "hyperparameter-search-grid.yaml"),
         "sample": os.path.join("tests", "configs", "hyperparameter-search-sample.yaml"),
+        "bayesian": os.path.join(
+            "tests", "configs", "hyperparameter-search-bayesian.yaml"
+        ),
+        "custom-eval": os.path.join(
+            "tests", "configs", "hyperparameter-search-custom-eval.yaml"
+        ),
     }
 
 
@@ -315,6 +321,8 @@ def format_configs_locally(
             inference_config_path_lazy,
             hp_search_configs["grid"],
             hp_search_configs["sample"],
+            hp_search_configs["bayesian"],
+            hp_search_configs["custom-eval"],
         ]
         for config_path in config_paths:
             with open(config_path, "r") as f:
@@ -432,6 +440,21 @@ def run_preprocessing(
 
     shutil.copyfile(source_path, target_path)
 
+    os.makedirs(os.path.join(project_root, "scripts"))
+    source_path = os.path.join(
+        "tests", "resources", "source_scripts", "hp_search_eval_script.py"
+    )
+    target_path = os.path.join(project_root, "scripts", "hp_search_eval_script.py")
+    shutil.copyfile(source_path, target_path)
+
+    source_path = os.path.join(
+        "tests", "configs", "hyperparameter-search-custom-eval-inference.yaml"
+    )
+    target_path = os.path.join(
+        project_root, "configs", "hyperparameter-search-custom-eval-inference.yaml"
+    )
+    shutil.copyfile(source_path, target_path)
+
 
 @pytest.fixture(scope="session")
 def run_training(
@@ -524,7 +547,7 @@ def run_training_from_checkpoint(
     )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def run_hp_search(
     project_root, hp_search_configs, format_configs_locally, run_preprocessing
 ):
@@ -534,6 +557,14 @@ def run_hp_search(
 
     run_and_log(
         f"sequifier hyperparameter-search --config-path {hp_search_configs['sample']}"
+    )
+
+    run_and_log(
+        f"sequifier hyperparameter-search --config-path {hp_search_configs['bayesian']}"
+    )
+
+    run_and_log(
+        f"sequifier hyperparameter-search --config-path {hp_search_configs['custom-eval']}"
     )
 
 

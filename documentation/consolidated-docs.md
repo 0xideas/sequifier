@@ -24,7 +24,7 @@ This gives us a number of benefits:
 - native multi-gpu support (DDP and FSDP)
 - native multi-core preprocessing
 - scales to datasets larger than RAM
-- hyperparameter search
+- hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
 - can be used for prediction, generation and embeddding on/of arbitrary sequences
 
 The only requirement is having sequifier installed, and having input data in the right format.
@@ -35,7 +35,7 @@ The only requirement is having sequifier installed, and having input data in the
 
 There are six standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, and `visualize-training`.
 
-`make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, `hyperparameter-search` executes multiple training runs to find optimal configurations, and `visualize-training` parses training logs to generate interactive HTML plots of your loss curves.
+`make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, `hyperparameter-search` executes multiple training runs using Optuna to find optimal configurations, and `visualize-training` parses training logs to generate interactive HTML plots of your loss curves.
 
 There are documentation pages for each command, except make:
 
@@ -76,13 +76,12 @@ YOUR_PROJECT_NAME/
 │   ├── probabilities(?)
 │   └── visualization/
 └── logs/
+
 ```
 
 The `sequifier` commands should typically be run in the project root.
 
 Within YOUR_PROJECT_NAME, you can also add other folders for additional steps, such as `notebooks` or `scripts` for pre- or postprocessing, and `analysis`, `visualizations` or `evals` for files you generate in other, manual steps.
-
-
 
 ### Data Transformations in Sequifier
 
@@ -170,20 +169,17 @@ sequifier infer
 While Sequifier's primary use case is training predictive or generative causal transformer models, it also supports the export of embedding models.
 
 Configuration:
+
 - Training: Set export_embedding_model: true in the training config.
 - Inference: Set model_type: embedding in the inference config.
 
 Technical Details: The generated embedding has dimensionality `dim_model` and consists of the final hidden state (activations) of the transformer's last layer corresponding to the last token in the sequence. Because the model is trained on a causal objective, this is a "forward-looking" embedding: it is optimized to compress the sequence history into a representation that maximizes information about the future state of the data.
 
-
-
 ### Distributed Training
 
 Sequifier supports distributed training using torch `DistributedDataParallel` and `FullyShardedDataParallel`. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
 
-For the full guide on how to configure a distributed run, check the [training config README](./documentation/training/multi-gpu-training.md)
-
-
+For the full guide on how to configure a distributed run, check the [training config README](https://www.google.com/search?q=./documentation/training/multi-gpu-training.md)
 
 ### System Requirements
 
@@ -203,9 +199,10 @@ Please cite with:
   title = {sequifier - causal transformer models for multivariate sequence modelling},
   year = {2025},
   publisher = {GitHub},
-  version = {v1.1.2.1},
-  url = {https://github.com/0xideas/sequifier}
+  version = {v1.1.2.2},
+  url = {[https://github.com/0xideas/sequifier](https://github.com/0xideas/sequifier)}
 }
+
 ```
 
 
@@ -727,92 +724,134 @@ The interactive HTML reports are saved in the `outputs/visualization/` directory
 
 # Hyperparameter Search Command Guide
 
-The `sequifier hyperparameter-search` command automates the process of finding the optimal model architecture and training configuration. It supports both **Grid Search** (exhaustive) and **Random Sampling** strategies. It creates multiple unique training configurations, executes them sequentially, and logs the results.
+The `sequifier hyperparameter-search` command automates the process of finding the optimal model architecture and training configuration. Powered by **Optuna**, it supports **Bayesian Optimization** (TPE), **Grid Search** (exhaustive), and **Random Sampling**. The engine manages trial execution, cooperatively prunes unpromising training runs, and supports multi-objective optimization using custom evaluation scripts.
 
 ## Usage
 
 ```console
 sequifier hyperparameter-search --config-path configs/hyperparameter_search.yaml
-````
+
+```
 
 ## Configuration Fields
 
-The configuration is defined in a YAML file. Unlike the `train.yaml` where fields take single values, most fields here take **lists** of values to search over.
+The configuration is defined in a YAML file. To define the search space, fields accept either **lists** of categorical choices or **distribution dictionaries** defining numerical ranges.
 
-### 1\. File System & Strategy
+### 1. File System & Strategy
 
 | Field | Type | Mandatory | Default | Description |
-| :--- | :--- | :--- | :--- | :--- |
+| --- | --- | --- | --- | --- |
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. |
-| `metadata_config_path`| `str` | **Yes** | - | Path to the JSON metadata file generated by `preprocess`. |
-| `hp_search_name` | `str` | **Yes** | - | A prefix for the generated runs (e.g., `my-search`). |
-| `model_config_write_path`| `str` | **Yes** | - | Directory to save the generated config files for each run (e.g., `configs/hp_search/`). |
-| `search_strategy` | `str` | No | `sample` | `sample` (Random Search) or `grid` (Grid Search). |
-| `n_samples` | `int` | *Conditional* | - | Required if `search_strategy` is `sample`. Number of distinct runs to execute. |
-| `override_input` | `bool` | No | `false` | If `true`, suppresses interactive confirmation prompts. Useful for CI/CD or automated scripts. |
+| `metadata_config_path` | `str` | **Yes** | - | Path to the JSON metadata file generated by `preprocess`. |
+| `hp_search_name` | `str` | **Yes** | - | A prefix for the generated runs and the Optuna database (e.g., `my-search`). |
+| `model_config_write_path` | `str` | **Yes** | - | Directory to save the generated config files for each run (e.g., `configs/hp_search/`). |
+| `search_strategy` | `str` | No | `bayesian` | `bayesian` (TPE sampler), `sample` (Random Search), or `grid` (Brute Force Grid Search). |
+| `n_samples` / `n_trials` | `int` | *Conditional* | - | Number of distinct runs to execute. Required unless `search_strategy: grid`. |
+| `prune_trials` | `bool` | No | `true` | Enables cooperative early stopping of unpromising trials via Optuna. *Beta notice: Pruning with distributed training is currently experimental.* |
+| `override_input` | `bool` | No | `false` | Suppresses interactive confirmation prompts. Useful for CI/CD. |
 | `training_data_path` | `str` | No | Metadata split 0 | Path to training data. |
-| `validation_data_path`| `str` | No | Metadata split 1 | Path to validation data. |
+| `validation_data_path` | `str` | No | Metadata split 1 | Path to validation data. |
 
-### 2\. System & Export (Fixed Values)
+### 2. Custom Evaluation & Multi-Objective Search
 
-These fields are constant across all search runs (not sampled) but are required to configure the output models.
+By default, Sequifier optimizes for the best validation loss. However, you can configure it to optimize for custom downstream metrics (like accuracy, precision, or custom business logic) by providing an evaluation script. If multiple metrics are provided, Optuna will execute a **multi-objective search** to find the Pareto front.
 
 | Field | Type | Mandatory | Default | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `export_generative_model`| `bool` | **Yes** | - | Export the standard next-token prediction model for every run. |
+| --- | --- | --- | --- | --- |
+| `evaluation_metrics` | `list[str]` | No | `null` | A list of metric names output by your script (e.g., `['accuracy', 'f1']`). |
+| `evaluation_metric_directions` | `list[str]` | *Conditional* | `null` | Required if metrics are defined. List of `minimize` or `maximize` for each metric. |
+| `evaluation_script` | `str` | *Conditional* | `null` | Required if metrics are defined. Path to a Python script that takes `[RUN_NAME]-best-[EPOCH]` as an argument and outputs a JSON file to `outputs/evaluations/` containing the metrics. |
+| `evaluation_inference_config` | `str` | No | `null` | Path to an inference config. If provided, Sequifier runs inference on the newly trained model *before* calling your evaluation script. |
+
+### 3. System & Export (Fixed Values)
+
+These fields are constant across all search runs.
+
+| Field | Type | Mandatory | Default | Description |
+| --- | --- | --- | --- | --- |
+| `export_generative_model` | `bool` | **Yes** | - | Export the standard next-token prediction model for every run. |
 | `export_embedding_model` | `bool` | **Yes** | - | Export the vector embedding model for every run. |
 | `inference_batch_size` | `int` | **Yes** | - | Batch size hardcoded into exported ONNX models. |
 | `export_onnx` | `bool` | No | `true` | Export to ONNX format. |
 | `export_pt` | `bool` | No | `false` | Export to PyTorch state dict (`.pt`). |
-| `export_with_dropout` | `bool` | No | `false` | Export models with dropout enabled (for MC Dropout inference). |
+| `export_with_dropout` | `bool` | No | `false` | Export models with dropout enabled. |
 
-### 3\. Schema & Feature Selection
-
+### 4. Schema & Feature Selection
 Sequifier allows you to search not just for model parameters, but for the best **subset of input features**.
 
 | Field | Type | Mandatory | Description |
-| :--- | :--- | :--- | :--- |
-| `input_columns` | `list[list[str]]`| **Yes** | A list of input sets. E.g., `[['col1'], ['col1', 'col2']]`. |
+| --- | --- | --- | --- |
+| `input_columns` | `list[list[str]]` | **Yes** | A list of input sets. E.g., `[['col1'], ['col1', 'col2']]`. |
 | `target_columns` | `list[str]` | **Yes** | The target column(s) to predict. Fixed across all runs. |
 | `seq_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
-| `target_column_types`| `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
-| `column_types` | `list[dict]` | *Conditional*| Required if `input_columns` varies. List of type maps corresponding to the input sets. |
+| `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
+| `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
 
-### 4\. Model Architecture Sampling (`model_hyperparameter_sampling`)
+---
 
-These fields define the search space for the Transformer architecture. All fields accept a **list** of values unless noted.
+## Defining the Search Space: Lists vs. Distributions
+
+In the architecture and training specifications below, Sequifier supports Optuna's native numerical distributions. You can define a hyperparameter as either a traditional discrete list, or as a distribution dictionary for continuous sampling.
+
+**Format 1: Discrete List (Categorical)**
+
+```yaml
+batch_size: [16, 32, 64]
+
+```
+
+**Format 2: Numerical Distribution (Optuna)**
+Requires a dictionary containing `low` and `high`. For floats, `step` and `log` scaling are supported. For integers, `step` and `log` are supported (but cannot be combined).
+
+```yaml
+# Float Distribution
+dropout:
+  low: 0.1
+  high: 0.5
+  step: 0.1
+
+# Integer Distribution with Log Sampling
+dim_feedforward:
+  low: 64
+  high: 512
+  log: true
+
+```
+
+### 5. Model Architecture Sampling (`model_hyperparameter_sampling`)
 
 | Field | Type | Mandatory | Description |
-| :--- | :--- | :--- | :--- |
+| --- | --- | --- | --- |
 | `dim_model` | `list[int]` | **Yes** | Internal dimension of the Transformer. |
-| `num_layers` | `list[int]` | **Yes** | Number of layers. |
+| `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
-| `dim_feedforward` | `list[int]` | **Yes** | Feedforward network dimension. |
-| `initial_embedding_dim`| `list[int]` | **Yes** | Feature embedding size. Usually matches `dim_model`. |
-| `feature_embedding_dims`| `list[dict]` | No | List of maps for feature embedding dimensions. Used if mixing real and categorical features. |
+| `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
+| `initial_embedding_dim` | `list[int]` | **Yes** | Feature embedding size. Usually matches `dim_model`. |
+| `feature_embedding_dims` | `list[dict]` | No | List of maps for feature embedding dimensions. Used if mixing real and categorical features. |
 | `joint_embedding_dim` | `list[int]` | **Yes** | Joint embedding size. If not null, must match `dim_model`. |
 | `prediction_length` | `int` | **Yes** | Number of steps into the future to predict simultaneously. |
-| `activation_fn` | `list[str]` | **Yes** | `['swiglu', 'gelu', 'relu']`. |
-| `attention_type` | `list[str]` | **Yes** | `['mha', 'mqa', 'gqa']`. |
+| `activation_fn` | `list[str]` | **Yes** | E.g., `['swiglu', 'gelu']`. |
+| `attention_type` | `list[str]` | **Yes** | E.g., `['mha', 'mqa']`. |
 | `n_kv_heads` | `list[int]` | **Yes** | Number of KV heads (for MQA/GQA). Use `null` for MHA. |
-| `normalization` | `list[str]` | **Yes** | `['rmsnorm', 'layer_norm']`. |
-| `norm_first` | `list[bool]` | **Yes** | `[true, false]`. Pre-LN vs Post-LN. |
+| `normalization` | `list[str]` | **Yes** | E.g., `['rmsnorm']`. |
+| `norm_first` | `list[bool]` | **Yes** | Pre-LN vs Post-LN. |
 | `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope']`. |
-| `rope_theta` | `list[float]` | **Yes** | Base frequency for RoPE (e.g., `[10000.0, 50000.0]`). |
+| `rope_theta` | `list` or `Distribution` | **Yes** | Base frequency for RoPE. |
 
-### 5\. Training Hyperparameters (`training_hyperparameter_sampling`)
-
+### 6. Training Hyperparameters (`training_hyperparameter_sampling`)
 Most fields here are lists for sampling, but some are scalar values fixed for all runs.
-
 | Field | Type | Mandatory | Default | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `device` | `str` | **Yes** | - | The device to train on (e.g., `cuda`, `cpu`). |
-| `learning_rate` | `list[float]`| **Yes** | - | List of learning rates to test. |
-| `batch_size` | `list[int]` | **Yes** | - | List of batch sizes. |
+| --- | --- | --- | --- | --- |
+| `device` | `str` | **Yes** | - | The device to train on (e.g., `cuda`). |
+| `learning_rate` | `list[float]` | **Yes** | - | List of learning rates. Linked to `epochs` and `scheduler`. |
 | `epochs` | `list[int]` | **Yes** | - | Epochs to train. Paired with `learning_rate`. |
-| `accumulation_steps` | `list[int]` | **Yes** | - | Gradient accumulation steps. |
-| `criterion` | `dict` | **Yes** | - | Map of target columns to loss functions (e.g., `{'target': 'MSELoss'}`). |
-| `continue_training` | `bool` | **Yes** | - | Load model weights and optimizer state from the latest checkpoint to continue. |
+| `scheduler` | `list[dict]` | No | `[{'name': 'StepLR'...}]` | List of scheduler configs. |
+| `batch_size` | `list` or `Distribution` | **Yes** | - | Batch sizes to test. |
+| `accumulation_steps` | `list` or `Distribution` | **Yes** | - | Gradient accumulation steps. |
+| `dropout` | `list` or `Distribution` | No | `[0.0]` | Dropout probabilities. |
+| `criterion` | `dict` | **Yes** | - | Map of target columns to loss functions. |
+| `optimizer` | `list[dict]` | No | `[{'name': 'Adam'}]` | List of optimizer configs. |
+| `continue_training` | `bool` | **Yes** | - | Load model weights from the latest checkpoint to resume. |
 | `save_interval_epochs` | `int` | **Yes** | - | Checkpoint save frequency. |
 | `dropout` | `list[float]`| No | `[0.0]` | List of dropout probabilities. |
 | `optimizer` | `list[dict]` | No | `[{'name': 'Adam'}]`| List of optimizer configs (e.g., `[{'name': 'AdamW'}, {'name': 'AdEMAMix'}]`). |
@@ -881,16 +920,18 @@ All other parameters are considered **Independent**. Sequifier will test every v
 
 ## Key Trade-offs and Decisions
 
-### 1\. `search_strategy`: `grid` vs. `sample`
+### 1. `search_strategy`: `bayesian` vs. `grid` vs. `sample`
 
-  * **`grid` (Grid Search):**
+  * **`bayesian` (Default - TPE Sampler):**
+      * *How it works:* Tree-structured Parzen Estimator (TPE). Learns from past trials to guess which hyperparameter regions are most promising.
+      * *Pros:* Vastly more efficient than grid or random search, making it the industry standard for neural network tuning.
+  * **`grid` (Brute Force):**
       * *How it works:* Generates every possible combination of all provided lists.
-      * *Pros:* Exhaustive. You are guaranteed to find the best combination within your search space.
-      * *Cons:* Exponential explosion. If you have 4 independent parameters with 5 options each, that's $5^4 = 625$ runs.
+      * *Pros:* Exhaustive.
+      * *Cons:* Exponential explosion. Does not support Distribution dictionaries (cannot discretize continuous boundaries automatically).
   * **`sample` (Random Search):**
-      * *How it works:* Randomly selects `n_samples` combinations from the defined space.
-      * *Pros:* Much faster. Research suggests random search is often as effective as grid search because neural networks are often sensitive to only a few hyperparameters, which random search explores more efficiently.
-      * *Cons:* Results are not deterministic (unless seeded) and might miss the optimal combination.
+      * *How it works:* Randomly draws from the provided ranges.
+
 
 ### 2\. Feature Selection (`input_columns`)
 
@@ -901,24 +942,30 @@ Sequifier uniquely allows you to treat "data" as a hyperparameter.
       * Run 2 might use `['sales', 'day_of_week', 'promotion_flag']`
   * **Benefit:** Helps identify if adding extra features (which increases model size and training time) actually yields better performance or simply adds noise.
 
-### 3\. Automatic Retry Logic
 
-The hyperparameter search command includes **automatic error handling for Out of Memory (OOM)** errors.
+### 3. Cooperative Trial Pruning (`prune_trials: true`)
 
-  * If a specific run crashes (e.g., CUDA OOM), Sequifier will automatically halve the `batch_size` and retry that specific configuration up to 3 times.
-  * *Implication:* You can be aggressive with your `batch_size` in the config; the system will self-correct if it hits hardware limits.
+Optuna monitors intermediate validation loss at validation loss calculation, which is every epoch and optionally every configured number of minutes. If the trajectory of the current run is definitively worse than previously completed trials, the searcher will issue a `SIGTERM` signal to the subprocess, aborting the run early.
 
------
+* *Pros:* Saves massive amounts of compute time.
+* *Cons:* Can occasionally prune a "late bloomer" model.
+
+### 4. Multi-Objective Search (Pareto Front)
+
+If you define multiple metrics in `evaluation_metrics` (e.g., you want to maximize `accuracy` but also minimize `latency`), Optuna automatically transitions to an NSGA-II algorithm to find the **Pareto Front**—a set of best models where no metric can be improved without degrading another.
 
 ## Outputs
 
-1.  **Generated Configs:** Located in `model_config_write_path` (e.g., `configs/hp_search/`).
-      * Files named `[hp_search_name]-run-0.yaml`, `[hp_search_name]-run-1.yaml`, etc.
-      * These are valid, standalone `train.yaml` files that you can inspect or re-run manually.
-2.  **Logs:** Located in `logs/`.
-      * Separate logs for each run, detailing the loss curves.
-3.  **Models & Checkpoints:**
+1. **Optuna Database:** Located at `state/optuna/[hp_search_name].db`.
+      * A portable SQLite database containing the entire history of the study, enabling you to pause and resume the search at any time, or hook it into Optuna Dashboard (`optuna-dashboard sqlite:///state/optuna/...`).
+2. **Generated Configs:** Located in `model_config_write_path` (e.g., `configs/hp_search/`).
+      * Valid, standalone `train.yaml` files generated for each trial.
+3. **Logs:** Located in `logs/`.
+      * Includes individual training logs and JSONL files (`sequifier-[RUN]-metrics.jsonl`) tracking the validation curve.
+4.  **Models & Checkpoints:**
       * Saved in `models/` and `checkpoints/` with filenames including the run number (e.g., `models/sequifier-my-search-run-5-best-10.onnx`).
+5. **Evaluations (Optional):**
+      * Saved in `outputs/evaluations/[RUN_NAME]-best-[EPOCH].json` if an evaluation script was utilized.
 
 
 # Distributed and Multi-Node Training in Sequifier
