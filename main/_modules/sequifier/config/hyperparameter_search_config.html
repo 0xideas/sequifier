@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/config/hyperparameter_search_config.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.config.hyperparameter_search_config - sequifier v1.1.2.1 documentation</title>
+        <title>sequifier.config.hyperparameter_search_config - sequifier v1.1.2.2 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v1.1.2.1 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v1.1.2.2 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.1.2.1 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.1.2.2 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -270,14 +270,14 @@
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.config.hyperparameter_search_config</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">itertools</span><span class="w"> </span><span class="kn">import</span> <span class="n">product</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">yaml</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">beartype</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span><span class="p">,</span> <span class="n">ConfigDict</span><span class="p">,</span> <span class="n">Field</span><span class="p">,</span> <span class="n">field_validator</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span><span class="p">,</span> <span class="n">ConfigDict</span><span class="p">,</span> <span class="n">Field</span><span class="p">,</span> <span class="n">field_validator</span><span class="p">,</span> <span class="n">model_validator</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">DotDict</span><span class="p">,</span>
@@ -288,14 +288,67 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">normalize_path</span><span class="p">,</span> <span class="n">try_catch_excess_keys</span>
 
 
+<span class="k">class</span><span class="w"> </span><span class="nc">FloatDistribution</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Pydantic model representing a floating-point hyperparameter distribution for Optuna.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        low (float): The lower bound of the distribution.</span>
+<span class="sd">        high (float): The upper bound of the distribution.</span>
+<span class="sd">        log (bool): If True, sample from the distribution in the log domain. Defaults to False.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">low</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">high</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">step</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">log</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_step_and_log</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">log</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">step</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Optuna does not support setting step when log=True. &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;Got step=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">step</span><span class="si">}</span><span class="s2"> and log=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">log</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">IntDistribution</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Pydantic model representing an integer hyperparameter distribution for Optuna.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        low (int): The lower bound of the distribution.</span>
+<span class="sd">        high (int): The upper bound of the distribution.</span>
+<span class="sd">        step (int): The spacing between valid integer values. Defaults to 1.</span>
+<span class="sd">        log (bool): If True, sample from the distribution in the log domain. Defaults to False.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">low</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">high</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">step</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">log</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_step_and_log</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">log</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">step</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Optuna does not support setting step != 1 when log=True. &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;Got step=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">step</span><span class="si">}</span><span class="s2"> and log=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">log</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="n">OptunaFloat</span> <span class="o">=</span> <span class="n">Union</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">],</span> <span class="n">FloatDistribution</span><span class="p">]</span>
+<span class="n">OptunaInt</span> <span class="o">=</span> <span class="n">Union</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="n">IntDistribution</span><span class="p">]</span>
+
+
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">load_hyperparameter_search_config</span><span class="p">(</span>
     <span class="n">config_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">skip_metadata</span><span class="p">:</span> <span class="nb">bool</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;HyperparameterSearch&quot;</span><span class="p">:</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;HyperparameterSearchConfig&quot;</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Load a hyperparameter search configuration from a YAML file.</span>
 
 <span class="sd">    This function reads a YAML configuration file, processes it to include</span>
-<span class="sd">    data-driven configurations if needed, and returns a HyperparameterSearch</span>
+<span class="sd">    data-driven configurations if needed, and returns a HyperparameterSearchConfig</span>
 <span class="sd">    object.</span>
 
 <span class="sd">    Args:</span>
@@ -305,7 +358,7 @@
 <span class="sd">            data-driven configurations.</span>
 
 <span class="sd">    Returns:</span>
-<span class="sd">        An instance of the HyperparameterSearch class, populated with the</span>
+<span class="sd">        An instance of the HyperparameterSearchConfig class, populated with the</span>
 <span class="sd">        configuration from the file.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
@@ -366,7 +419,7 @@
 
         <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;id_maps&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">metadata_config</span><span class="p">[</span><span class="s2">&quot;id_maps&quot;</span><span class="p">]</span>
 
-    <span class="k">return</span> <span class="n">try_catch_excess_keys</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">HyperparameterSearch</span><span class="p">,</span> <span class="n">config_values</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">try_catch_excess_keys</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">HyperparameterSearchConfig</span><span class="p">,</span> <span class="n">config_values</span><span class="p">)</span>
 
 
 <div class="viewcode-block" id="TrainingSpecHyperparameterSampling"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TrainingSpecHyperparameterSampling</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
@@ -415,12 +468,14 @@
     <span class="n">save_batch_interval_minutes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">save_batch_interval_minutes_val_loss</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">calculate_validation_loss_on_initialization</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
-    <span class="n">batch_size</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
-    <span class="n">learning_rate</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span>
+
+    <span class="n">batch_size</span><span class="p">:</span> <span class="n">OptunaInt</span>
+    <span class="n">learning_rate</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span>  <span class="c1"># Kept as list to preserve coupling with epochs</span>
     <span class="n">criterion</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>
     <span class="n">class_weights</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">accumulation_steps</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
-    <span class="n">dropout</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.0</span><span class="p">]</span>
+    <span class="n">accumulation_steps</span><span class="p">:</span> <span class="n">OptunaInt</span>
+    <span class="n">dropout</span><span class="p">:</span> <span class="n">OptunaFloat</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.0</span><span class="p">]</span>
+
     <span class="n">loss_weights</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">optimizer</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">DotDict</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="p">[</span><span class="n">DotDict</span><span class="p">({</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Adam&quot;</span><span class="p">})]</span>
@@ -534,99 +589,48 @@
                     <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-<div class="viewcode-block" id="TrainingSpecHyperparameterSampling.random_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.random_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">random_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Randomly sample a set of training hyperparameters.</span>
+<div class="viewcode-block" id="TrainingSpecHyperparameterSampling.sample_trial"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.sample_trial">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">sample_trial</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trial</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TrainingSpecModel</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Samples training hyperparameters using an Optuna trial.</span>
 
-<span class="sd">        This method selects a random combination of hyperparameters from the</span>
-<span class="sd">        defined lists of possibilities. It ensures that learning rates and</span>
-<span class="sd">        schedulers are paired correctly.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            A TrainingSpecModel instance populated with a randomly sampled set of</span>
-<span class="sd">            hyperparameters.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">learning_rate_and_scheduler_index</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">learning_rate</span><span class="p">))</span>
-        <span class="n">optimizer_index</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">))</span>
-        <span class="n">batch_size</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
-        <span class="n">dropout</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dropout</span><span class="p">)</span>
-        <span class="n">accumulation_steps</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span><span class="p">)</span>
-        <span class="n">optimizer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">[</span><span class="n">optimizer_index</span><span class="p">]</span>
-        <span class="n">learning_rate</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">learning_rate</span><span class="p">[</span><span class="n">learning_rate_and_scheduler_index</span><span class="p">]</span>
-
-        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">learning_rate</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">batch_size</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">dropout</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">optimizer</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span>
-        <span class="p">)</span>
-
-        <span class="k">return</span> <span class="n">TrainingSpecModel</span><span class="p">(</span>
-            <span class="n">device</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">,</span>
-            <span class="n">epochs</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">epochs</span><span class="p">[</span><span class="n">learning_rate_and_scheduler_index</span><span class="p">],</span>
-            <span class="n">log_interval</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">log_interval</span><span class="p">,</span>
-            <span class="n">class_share_log_columns</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">class_share_log_columns</span><span class="p">,</span>
-            <span class="n">early_stopping_epochs</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span><span class="p">,</span>
-            <span class="n">save_interval_epochs</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">save_interval_epochs</span><span class="p">,</span>
-            <span class="n">save_latest_interval_minutes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">save_latest_interval_minutes</span><span class="p">,</span>
-            <span class="n">save_batch_interval_minutes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">save_batch_interval_minutes</span><span class="p">,</span>
-            <span class="n">save_batch_interval_minutes_val_loss</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">save_batch_interval_minutes_val_loss</span><span class="p">,</span>
-            <span class="n">calculate_validation_loss_on_initialization</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">calculate_validation_loss_on_initialization</span><span class="p">,</span>
-            <span class="n">batch_size</span><span class="o">=</span><span class="n">batch_size</span><span class="p">,</span>
-            <span class="n">learning_rate</span><span class="o">=</span><span class="n">learning_rate</span><span class="p">,</span>
-            <span class="n">criterion</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">criterion</span><span class="p">,</span>
-            <span class="n">class_weights</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">class_weights</span><span class="p">,</span>
-            <span class="n">accumulation_steps</span><span class="o">=</span><span class="n">accumulation_steps</span><span class="p">,</span>
-            <span class="n">dropout</span><span class="o">=</span><span class="n">dropout</span><span class="p">,</span>
-            <span class="n">loss_weights</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">loss_weights</span><span class="p">,</span>
-            <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span>
-            <span class="n">scheduler</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="p">[</span><span class="n">learning_rate_and_scheduler_index</span><span class="p">],</span>
-            <span class="n">continue_training</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">continue_training</span><span class="p">,</span>
-            <span class="n">enforce_determinism</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-            <span class="n">scheduler_step_on</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_on</span><span class="p">,</span>
-            <span class="n">distributed</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">distributed</span><span class="p">,</span>
-            <span class="n">load_full_data_to_ram</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">load_full_data_to_ram</span><span class="p">,</span>
-            <span class="n">max_ram_gb</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">max_ram_gb</span><span class="p">,</span>
-            <span class="n">device_max_concat_length</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device_max_concat_length</span><span class="p">,</span>
-            <span class="n">world_size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">world_size</span><span class="p">,</span>
-            <span class="n">num_workers</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">num_workers</span><span class="p">,</span>
-            <span class="n">backend</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">backend</span><span class="p">,</span>
-            <span class="n">layer_type_dtypes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="p">,</span>
-            <span class="n">layer_autocast</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_autocast</span><span class="p">,</span>
-            <span class="n">sampling_strategy</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span><span class="p">,</span>
-            <span class="n">data_parallelism</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">data_parallelism</span><span class="p">,</span>
-            <span class="n">fsdp_cpu_offload</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">fsdp_cpu_offload</span><span class="p">,</span>
-            <span class="n">torch_compile</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">torch_compile</span><span class="p">,</span>
-            <span class="n">float32_matmul_precision</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">float32_matmul_precision</span><span class="p">,</span>
-        <span class="p">)</span></div>
-
-<div class="viewcode-block" id="TrainingSpecHyperparameterSampling.grid_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.grid_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">grid_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Select a set of training hyperparameters based on a grid search index.</span>
-
-<span class="sd">        This method generates a grid of all possible hyperparameter combinations</span>
-<span class="sd">        and selects the combination at the given index.</span>
+<span class="sd">        This method leverages the provided Optuna trial to suggest values for</span>
+<span class="sd">        hyperparameters like batch size, dropout, and learning rate based on the</span>
+<span class="sd">        defined search spaces (categorical lists or distributions).</span>
 
 <span class="sd">        Args:</span>
-<span class="sd">            i: The index of the hyperparameter combination to select from the grid.</span>
+<span class="sd">            trial (Any): The Optuna trial object used for suggesting hyperparameters.</span>
 
 <span class="sd">        Returns:</span>
-<span class="sd">            A TrainingSpecModel instance populated with the selected set of</span>
-<span class="sd">            hyperparameters.</span>
+<span class="sd">            TrainingSpecModel: A populated training specification model with the sampled hyperparameters.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">hyperparameter_combinations</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span>
-            <span class="n">product</span><span class="p">(</span>
-                <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">learning_rate</span><span class="p">)),</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span><span class="p">,</span>
-            <span class="p">)</span>
+        <span class="n">lr_sched_index</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span>
+            <span class="s2">&quot;lr_sched_index&quot;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">learning_rate</span><span class="p">)))</span>
         <span class="p">)</span>
-        <span class="p">(</span>
-            <span class="n">learning_rate_and_scheduler_index</span><span class="p">,</span>
-            <span class="n">batch_size</span><span class="p">,</span>
-            <span class="n">dropout</span><span class="p">,</span>
-            <span class="n">optimizer</span><span class="p">,</span>
-            <span class="n">accumulation_steps</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">hyperparameter_combinations</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+        <span class="n">epochs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">epochs</span><span class="p">[</span><span class="n">lr_sched_index</span><span class="p">]</span>
+        <span class="n">learning_rate</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">learning_rate</span><span class="p">[</span><span class="n">lr_sched_index</span><span class="p">]</span>
+        <span class="n">scheduler</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="p">[</span><span class="n">lr_sched_index</span><span class="p">]</span>
 
-        <span class="n">learning_rate</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">learning_rate</span><span class="p">[</span><span class="n">learning_rate_and_scheduler_index</span><span class="p">]</span>
+        <span class="n">opt_index</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span>
+            <span class="s2">&quot;optimizer_index&quot;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">)))</span>
+        <span class="p">)</span>
+        <span class="n">optimizer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">[</span><span class="n">opt_index</span><span class="p">]</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">sample_param</span><span class="p">(</span>
+            <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">space</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">list</span><span class="p">,</span> <span class="n">FloatDistribution</span><span class="p">,</span> <span class="n">IntDistribution</span><span class="p">]</span>
+        <span class="p">):</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">space</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+                <span class="k">return</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">space</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">space</span><span class="p">,</span> <span class="n">FloatDistribution</span><span class="p">):</span>
+                <span class="k">return</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_float</span><span class="p">(</span>
+                    <span class="n">name</span><span class="p">,</span> <span class="n">space</span><span class="o">.</span><span class="n">low</span><span class="p">,</span> <span class="n">space</span><span class="o">.</span><span class="n">high</span><span class="p">,</span> <span class="n">step</span><span class="o">=</span><span class="n">space</span><span class="o">.</span><span class="n">step</span><span class="p">,</span> <span class="n">log</span><span class="o">=</span><span class="n">space</span><span class="o">.</span><span class="n">log</span>
+                <span class="p">)</span>
+            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">space</span><span class="p">,</span> <span class="n">IntDistribution</span><span class="p">):</span>
+                <span class="k">return</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_int</span><span class="p">(</span>
+                    <span class="n">name</span><span class="p">,</span> <span class="n">space</span><span class="o">.</span><span class="n">low</span><span class="p">,</span> <span class="n">space</span><span class="o">.</span><span class="n">high</span><span class="p">,</span> <span class="n">step</span><span class="o">=</span><span class="n">space</span><span class="o">.</span><span class="n">step</span><span class="p">,</span> <span class="n">log</span><span class="o">=</span><span class="n">space</span><span class="o">.</span><span class="n">log</span>
+                <span class="p">)</span>
+
+        <span class="n">batch_size</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="s2">&quot;batch_size&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
+        <span class="n">dropout</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="s2">&quot;dropout&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span><span class="p">)</span>
+        <span class="n">accumulation_steps</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="s2">&quot;accumulation_steps&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span><span class="p">)</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">learning_rate</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">batch_size</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">dropout</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">optimizer</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span>
@@ -634,7 +638,7 @@
 
         <span class="k">return</span> <span class="n">TrainingSpecModel</span><span class="p">(</span>
             <span class="n">device</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">,</span>
-            <span class="n">epochs</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">epochs</span><span class="p">[</span><span class="n">learning_rate_and_scheduler_index</span><span class="p">],</span>
+            <span class="n">epochs</span><span class="o">=</span><span class="n">epochs</span><span class="p">,</span>
             <span class="n">log_interval</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">log_interval</span><span class="p">,</span>
             <span class="n">class_share_log_columns</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">class_share_log_columns</span><span class="p">,</span>
             <span class="n">early_stopping_epochs</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span><span class="p">,</span>
@@ -651,7 +655,7 @@
             <span class="n">dropout</span><span class="o">=</span><span class="n">dropout</span><span class="p">,</span>
             <span class="n">loss_weights</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">loss_weights</span><span class="p">,</span>
             <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span>
-            <span class="n">scheduler</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="p">[</span><span class="n">learning_rate_and_scheduler_index</span><span class="p">],</span>
+            <span class="n">scheduler</span><span class="o">=</span><span class="n">scheduler</span><span class="p">,</span>
             <span class="n">continue_training</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">continue_training</span><span class="p">,</span>
             <span class="n">enforce_determinism</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
             <span class="n">scheduler_step_on</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_on</span><span class="p">,</span>
@@ -669,23 +673,6 @@
             <span class="n">fsdp_cpu_offload</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">fsdp_cpu_offload</span><span class="p">,</span>
             <span class="n">torch_compile</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">torch_compile</span><span class="p">,</span>
             <span class="n">float32_matmul_precision</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">float32_matmul_precision</span><span class="p">,</span>
-        <span class="p">)</span></div>
-
-<div class="viewcode-block" id="TrainingSpecHyperparameterSampling.n_combinations"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.n_combinations">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">n_combinations</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculate the total number of hyperparameter combinations.</span>
-
-<span class="sd">        This method computes the total number of unique hyperparameter sets that</span>
-<span class="sd">        can be generated by the grid search.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            The total number of possible hyperparameter combinations.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="p">(</span>
-            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">learning_rate</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dropout</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span><span class="p">)</span>
         <span class="p">)</span></div></div>
 
 
@@ -707,8 +694,9 @@
     <span class="n">dim_model</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
     <span class="n">feature_embedding_dims</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]]</span>
     <span class="n">n_head</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
-    <span class="n">dim_feedforward</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
-    <span class="n">num_layers</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
+
+    <span class="n">dim_feedforward</span><span class="p">:</span> <span class="n">OptunaInt</span>
+    <span class="n">num_layers</span><span class="p">:</span> <span class="n">OptunaInt</span>
     <span class="n">prediction_length</span><span class="p">:</span> <span class="nb">int</span>
 
     <span class="n">activation_fn</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
@@ -718,7 +706,7 @@
 
     <span class="n">norm_first</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span>
     <span class="n">n_kv_heads</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span>
-    <span class="n">rope_theta</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span>
+    <span class="n">rope_theta</span><span class="p">:</span> <span class="n">OptunaFloat</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;n_head&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
@@ -753,36 +741,61 @@
 
         <span class="k">return</span> <span class="n">v</span>
 
-<div class="viewcode-block" id="ModelSpecHyperparameterSampling.random_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.random_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">random_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Randomly sample a set of model hyperparameters.</span>
+<div class="viewcode-block" id="ModelSpecHyperparameterSampling.sample_trial"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.sample_trial">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">sample_trial</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trial</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ModelSpecModel</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Samples model architecture hyperparameters using an Optuna trial.</span>
 
-<span class="sd">        This method selects a random combination of model hyperparameters from the</span>
-<span class="sd">        defined lists of possibilities. It ensures that dim_model, feature_embedding_dims,</span>
-<span class="sd">        and n_head are paired correctly, and that n_kv_heads is a valid divisor of n_head.</span>
+<span class="sd">        This method uses the Optuna trial to suggest structural parameters such as</span>
+<span class="sd">        the number of layers, feedforward dimensions, and attention heads. It ensures</span>
+<span class="sd">        that dependent dimensions (like `n_head` and `dim_model`) stay correctly paired</span>
+<span class="sd">        and that invalid key-value head combinations are filtered out.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            trial (Any): The Optuna trial object used for suggesting hyperparameters.</span>
 
 <span class="sd">        Returns:</span>
-<span class="sd">            A ModelSpecModel instance populated with a randomly sampled set of</span>
-<span class="sd">            hyperparameters.</span>
+<span class="sd">            ModelSpecModel: A populated model specification model with the sampled architecture parameters.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">dim_model_index</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">))</span>
+        <span class="n">dim_model_idx</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span>
+            <span class="s2">&quot;dim_model_idx&quot;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">)))</span>
+        <span class="p">)</span>
+
+        <span class="n">initial_embedding_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span><span class="p">[</span><span class="n">dim_model_idx</span><span class="p">]</span>
+        <span class="n">joint_embedding_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_dim</span><span class="p">[</span><span class="n">dim_model_idx</span><span class="p">]</span>
+        <span class="n">dim_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">[</span><span class="n">dim_model_idx</span><span class="p">]</span>
+        <span class="n">n_head</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_head</span><span class="p">[</span><span class="n">dim_model_idx</span><span class="p">]</span>
         <span class="n">feature_embedding_dims</span> <span class="o">=</span> <span class="p">(</span>
             <span class="kc">None</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span> <span class="ow">is</span> <span class="kc">None</span>
-            <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span><span class="p">[</span><span class="n">dim_model_index</span><span class="p">]</span>
+            <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span><span class="p">[</span><span class="n">dim_model_idx</span><span class="p">]</span>
         <span class="p">)</span>
-        <span class="n">initial_embedding_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span><span class="p">[</span><span class="n">dim_model_index</span><span class="p">]</span>
-        <span class="n">joint_embedding_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_dim</span><span class="p">[</span><span class="n">dim_model_index</span><span class="p">]</span>
-        <span class="n">dim_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">[</span><span class="n">dim_model_index</span><span class="p">]</span>
-        <span class="n">n_head</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_head</span><span class="p">[</span><span class="n">dim_model_index</span><span class="p">]</span>
-        <span class="n">dim_feedforward</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_feedforward</span><span class="p">)</span>
-        <span class="n">num_layers</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_layers</span><span class="p">)</span>
 
-        <span class="n">activation_fn</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">activation_fn</span><span class="p">)</span>
-        <span class="n">normalization</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">normalization</span><span class="p">)</span>
-        <span class="n">positional_encoding</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span><span class="p">)</span>
-        <span class="n">attention_type</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">attention_type</span><span class="p">)</span>
-        <span class="n">norm_first</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">norm_first</span><span class="p">)</span>
-        <span class="n">rope_theta</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">rope_theta</span><span class="p">)</span>
+        <span class="k">def</span><span class="w"> </span><span class="nf">sample_param</span><span class="p">(</span>
+            <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">space</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">list</span><span class="p">,</span> <span class="n">FloatDistribution</span><span class="p">,</span> <span class="n">IntDistribution</span><span class="p">]</span>
+        <span class="p">):</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">space</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+                <span class="k">return</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">space</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">space</span><span class="p">,</span> <span class="n">FloatDistribution</span><span class="p">):</span>
+                <span class="k">return</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_float</span><span class="p">(</span>
+                    <span class="n">name</span><span class="p">,</span> <span class="n">space</span><span class="o">.</span><span class="n">low</span><span class="p">,</span> <span class="n">space</span><span class="o">.</span><span class="n">high</span><span class="p">,</span> <span class="n">step</span><span class="o">=</span><span class="n">space</span><span class="o">.</span><span class="n">step</span><span class="p">,</span> <span class="n">log</span><span class="o">=</span><span class="n">space</span><span class="o">.</span><span class="n">log</span>
+                <span class="p">)</span>
+            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">space</span><span class="p">,</span> <span class="n">IntDistribution</span><span class="p">):</span>
+                <span class="k">return</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_int</span><span class="p">(</span>
+                    <span class="n">name</span><span class="p">,</span> <span class="n">space</span><span class="o">.</span><span class="n">low</span><span class="p">,</span> <span class="n">space</span><span class="o">.</span><span class="n">high</span><span class="p">,</span> <span class="n">step</span><span class="o">=</span><span class="n">space</span><span class="o">.</span><span class="n">step</span><span class="p">,</span> <span class="n">log</span><span class="o">=</span><span class="n">space</span><span class="o">.</span><span class="n">log</span>
+                <span class="p">)</span>
+
+        <span class="n">dim_feedforward</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="s2">&quot;dim_feedforward&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_feedforward</span><span class="p">)</span>
+        <span class="n">num_layers</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="s2">&quot;num_layers&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_layers</span><span class="p">)</span>
+        <span class="n">rope_theta</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="s2">&quot;rope_theta&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">rope_theta</span><span class="p">)</span>
+
+        <span class="n">activation_fn</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span><span class="s2">&quot;activation_fn&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">activation_fn</span><span class="p">)</span>
+        <span class="n">normalization</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span><span class="s2">&quot;normalization&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">normalization</span><span class="p">)</span>
+        <span class="n">positional_encoding</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span>
+            <span class="s2">&quot;positional_encoding&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span>
+        <span class="p">)</span>
+        <span class="n">attention_type</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span>
+            <span class="s2">&quot;attention_type&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">attention_type</span>
+        <span class="p">)</span>
+        <span class="n">norm_first</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span><span class="s2">&quot;norm_first&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">norm_first</span><span class="p">)</span>
 
         <span class="n">valid_kv_heads</span> <span class="o">=</span> <span class="p">[</span>
             <span class="n">kv</span>
@@ -796,9 +809,7 @@
             <span class="p">)</span>
             <span class="n">n_kv_heads</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="c1"># Use random.choice because valid_kv_heads might contain None</span>
-            <span class="c1"># and np.random.choice behaves weirdly with mixed None types.</span>
-            <span class="n">n_kv_heads</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">valid_kv_heads</span><span class="p">))</span>
+            <span class="n">n_kv_heads</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span><span class="s2">&quot;n_kv_heads&quot;</span><span class="p">,</span> <span class="n">valid_kv_heads</span><span class="p">)</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">initial_embedding_dim</span><span class="si">}</span><span class="s2"> - </span><span class="si">{</span><span class="n">joint_embedding_dim</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">dim_model</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">dim_feedforward</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">num_layers</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">activation_fn</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">normalization</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">positional_encoding</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">attention_type</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">norm_first</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">n_kv_heads</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">rope_theta</span><span class="w"> </span><span class="si">= }</span><span class="s2"> &quot;</span>
@@ -820,115 +831,10 @@
             <span class="n">n_kv_heads</span><span class="o">=</span><span class="n">n_kv_heads</span><span class="p">,</span>
             <span class="n">rope_theta</span><span class="o">=</span><span class="n">rope_theta</span><span class="p">,</span>
             <span class="n">prediction_length</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
-        <span class="p">)</span></div>
-
-<div class="viewcode-block" id="ModelSpecHyperparameterSampling.grid_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.grid_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">grid_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Select a set of model hyperparameters based on a grid search index.</span>
-
-<span class="sd">        This method generates a grid of all possible model hyperparameter</span>
-<span class="sd">        combinations and selects the combination at the given index.</span>
-<span class="sd">        Includes sanitation logic to prevent invalid n_kv_heads combinations.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            i: The index of the hyperparameter combination to select from the grid.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            A ModelSpecModel instance populated with the selected set of</span>
-<span class="sd">            hyperparameters.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">hyperparameter_combinations</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span>
-            <span class="n">product</span><span class="p">(</span>
-                <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">)),</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">dim_feedforward</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">num_layers</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">activation_fn</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">normalization</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">attention_type</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">norm_first</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">n_kv_heads</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">rope_theta</span><span class="p">,</span>
-            <span class="p">)</span>
-        <span class="p">)</span>
-
-        <span class="p">(</span>
-            <span class="n">dim_model_index</span><span class="p">,</span>
-            <span class="n">dim_feedforward</span><span class="p">,</span>
-            <span class="n">num_layers</span><span class="p">,</span>
-            <span class="n">activation_fn</span><span class="p">,</span>
-            <span class="n">normalization</span><span class="p">,</span>
-            <span class="n">positional_encoding</span><span class="p">,</span>
-            <span class="n">attention_type</span><span class="p">,</span>
-            <span class="n">norm_first</span><span class="p">,</span>
-            <span class="n">n_kv_heads</span><span class="p">,</span>
-            <span class="n">rope_theta</span><span class="p">,</span>
-        <span class="p">)</span> <span class="o">=</span> <span class="n">hyperparameter_combinations</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
-
-        <span class="n">initial_embedding_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span><span class="p">[</span><span class="n">dim_model_index</span><span class="p">]</span>
-        <span class="n">joint_embedding_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_dim</span><span class="p">[</span><span class="n">dim_model_index</span><span class="p">]</span>
-        <span class="n">dim_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">[</span><span class="n">dim_model_index</span><span class="p">]</span>
-        <span class="n">n_head</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_head</span><span class="p">[</span><span class="n">dim_model_index</span><span class="p">]</span>
-
-        <span class="k">if</span> <span class="n">n_kv_heads</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">n_head</span> <span class="o">%</span> <span class="n">n_kv_heads</span> <span class="o">!=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">n_kv_heads</span> <span class="o">&gt;</span> <span class="n">n_head</span><span class="p">:</span>
-                <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;Grid sample index </span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">: forcing n_kv_heads=None because </span><span class="si">{</span><span class="n">n_kv_heads</span><span class="si">}</span><span class="s2"> does not divide </span><span class="si">{</span><span class="n">n_head</span><span class="si">}</span><span class="s2">&quot;</span>
-                <span class="p">)</span>
-                <span class="n">n_kv_heads</span> <span class="o">=</span> <span class="kc">None</span>
-
-        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">dim_model</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">dim_feedforward</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">joint_embedding_dim</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">num_layers</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">activation_fn</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">normalization</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">positional_encoding</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">attention_type</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">norm_first</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">n_kv_heads</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">rope_theta</span><span class="w"> </span><span class="si">= }</span><span class="s2"> &quot;</span>
-        <span class="p">)</span>
-
-        <span class="n">feature_embedding_dims</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="kc">None</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span> <span class="ow">is</span> <span class="kc">None</span>
-            <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span><span class="p">[</span><span class="n">dim_model_index</span><span class="p">]</span>
-        <span class="p">)</span>
-
-        <span class="k">return</span> <span class="n">ModelSpecModel</span><span class="p">(</span>
-            <span class="n">initial_embedding_dim</span><span class="o">=</span><span class="n">initial_embedding_dim</span><span class="p">,</span>
-            <span class="n">feature_embedding_dims</span><span class="o">=</span><span class="n">feature_embedding_dims</span><span class="p">,</span>
-            <span class="n">joint_embedding_dim</span><span class="o">=</span><span class="n">joint_embedding_dim</span><span class="p">,</span>
-            <span class="n">dim_model</span><span class="o">=</span><span class="n">dim_model</span><span class="p">,</span>
-            <span class="n">n_head</span><span class="o">=</span><span class="n">n_head</span><span class="p">,</span>
-            <span class="n">dim_feedforward</span><span class="o">=</span><span class="n">dim_feedforward</span><span class="p">,</span>
-            <span class="n">num_layers</span><span class="o">=</span><span class="n">num_layers</span><span class="p">,</span>
-            <span class="n">activation_fn</span><span class="o">=</span><span class="n">activation_fn</span><span class="p">,</span>
-            <span class="n">normalization</span><span class="o">=</span><span class="n">normalization</span><span class="p">,</span>
-            <span class="n">positional_encoding</span><span class="o">=</span><span class="n">positional_encoding</span><span class="p">,</span>
-            <span class="n">attention_type</span><span class="o">=</span><span class="n">attention_type</span><span class="p">,</span>
-            <span class="n">norm_first</span><span class="o">=</span><span class="n">norm_first</span><span class="p">,</span>
-            <span class="n">n_kv_heads</span><span class="o">=</span><span class="n">n_kv_heads</span><span class="p">,</span>
-            <span class="n">rope_theta</span><span class="o">=</span><span class="n">rope_theta</span><span class="p">,</span>
-            <span class="n">prediction_length</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
-        <span class="p">)</span></div>
-
-<div class="viewcode-block" id="ModelSpecHyperparameterSampling.n_combinations"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.n_combinations">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">n_combinations</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculate the total number of model hyperparameter combinations.</span>
-
-<span class="sd">        This method computes the total number of unique model hyperparameter sets</span>
-<span class="sd">        that can be generated by the grid search.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            The total number of possible model hyperparameter combinations.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="p">(</span>
-            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_feedforward</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_dim</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_layers</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">activation_fn</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">normalization</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">attention_type</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">norm_first</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_kv_heads</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">rope_theta</span><span class="p">)</span>
         <span class="p">)</span></div></div>
 
 
-<div class="viewcode-block" id="HyperparameterSearch"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">HyperparameterSearch</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<div class="viewcode-block" id="HyperparameterSearchConfig"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">HyperparameterSearchConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Pydantic model for hyperparameter search configuration.</span>
 
 <span class="sd">    Attributes:</span>
@@ -956,13 +862,18 @@
 <span class="sd">        export_with_dropout: If True, exports the model with dropout enabled.</span>
 <span class="sd">        model_hyperparameter_sampling: The sampling configuration for model hyperparameters.</span>
 <span class="sd">        training_hyperparameter_sampling: The sampling configuration for training hyperparameters.</span>
+<span class="sd">        evaluation_inference_config: The inference config to infer on for hyperparameter search optimization</span>
+<span class="sd">        evaluation_script: The script that outputs the evaluation metrics, typically from the inference output</span>
+<span class="sd">        evaluation_metrics: The evaluation metrics to optimize during hyperparameter search</span>
+<span class="sd">        evaluation_metric_directions: The direction to optimize evaluation_metrics in. Only &#39;minimize&#39; and &#39;maximize&#39; are allowed</span>
 <span class="sd">    &quot;&quot;&quot;</span>
 
     <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">metadata_config_path</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">hp_search_name</span><span class="p">:</span> <span class="nb">str</span>
-    <span class="n">search_strategy</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;sample&quot;</span>  <span class="c1"># &quot;sample&quot; or &quot;grid&quot;</span>
-    <span class="n">n_samples</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
+    <span class="n">search_strategy</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;bayesian&quot;</span>
+    <span class="n">n_trials</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">alias</span><span class="o">=</span><span class="s2">&quot;n_samples&quot;</span><span class="p">)</span>
+    <span class="n">prune_trials</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">model_config_write_path</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">training_data_path</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">validation_data_path</span><span class="p">:</span> <span class="nb">str</span>
@@ -986,10 +897,80 @@
     <span class="n">export_pt</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">export_with_dropout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
 
+    <span class="n">evaluation_inference_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">evaluation_script</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">evaluation_metric_directions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">evaluation_metrics</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+
     <span class="n">model_hyperparameter_sampling</span><span class="p">:</span> <span class="n">ModelSpecHyperparameterSampling</span>
     <span class="n">training_hyperparameter_sampling</span><span class="p">:</span> <span class="n">TrainingSpecHyperparameterSampling</span>
 
     <span class="n">override_input</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_prune_trials</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">prune_trials</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_hyperparameter_sampling</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+                <span class="s2">&quot;Trial pruning in distributed training settings is in beta mode.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;evaluation_metrics&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_evaluation_metrics</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">info</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;evaluation_script&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;evaluation_script must be provided if evaluation_metrics is defined.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;evaluation_metric_directions&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;evaluation_metric_directions must be provided if evaluation_metrics is defined.&quot;</span>
+                <span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">evaluation_metric_directions</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+                    <span class="s2">&quot;evaluation_metric_directions&quot;</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">evaluation_metric_directions</span><span class="p">):</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="sa">f</span><span class="s2">&quot;evaluation_metrics and evaluation_metric_directions must have the same number of values, len(evaluation_metrics) = </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">v</span><span class="p">)</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">evaluation_metric_directions</span><span class="p">)</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span>
+                    <span class="p">)</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;evaluation_inference_config&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+                <span class="s2">&quot;Please provide evaluation_inference_config if your evaluation_script requires inference outputs&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;evaluation_metric_directions&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_evaluation_metric_directions</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">allowed_vals</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;minimize&quot;</span><span class="p">,</span> <span class="s2">&quot;maximize&quot;</span><span class="p">}</span>
+            <span class="n">diff</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">v</span><span class="p">)</span><span class="o">.</span><span class="n">difference</span><span class="p">(</span><span class="n">allowed_vals</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">diff</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;In evaluation_metric_directions, only &#39;minimize&#39; and &#39;maximize&#39; are allowed, found: </span><span class="si">{</span><span class="n">diff</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;evaluation_script&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_evaluation_script</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">info</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">project_root</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;project_root&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">project_root</span><span class="p">,</span> <span class="n">v</span><span class="p">)):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;evaluation_script &#39;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&#39; does not exist at &#39;</span><span class="si">{</span><span class="n">project_root</span><span class="si">}</span><span class="s2">&#39;&quot;</span>
+                <span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;evaluation_inference_config&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_evaluation_inference_config</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">info</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">v</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;evaluation_inference_config &#39;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&#39; does not exist&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;column_types&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
@@ -1001,28 +982,42 @@
                 <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-<div class="viewcode-block" id="HyperparameterSearch.random_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch.random_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">random_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Randomly sample a full training configuration.</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;search_strategy&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_search_strategy</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="n">allowed</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;sample&quot;</span><span class="p">,</span> <span class="s2">&quot;grid&quot;</span><span class="p">,</span> <span class="s2">&quot;bayesian&quot;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">allowed</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;search_strategy must be one of </span><span class="si">{</span><span class="n">allowed</span><span class="si">}</span><span class="s2">, got &#39;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
 
-<span class="sd">        This method generates a complete training configuration by randomly</span>
-<span class="sd">        sampling model and training hyperparameters, as well as selecting a</span>
-<span class="sd">        column set and sequence length.</span>
+<div class="viewcode-block" id="HyperparameterSearchConfig.sample_trial"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.sample_trial">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">sample_trial</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trial</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">run_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TrainModel</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Generates a complete training configuration using an Optuna trial.</span>
+
+<span class="sd">        This method orchestrates the sampling of both model and training specifications,</span>
+<span class="sd">        as well as data sequence parameters, combining them into a final configuration</span>
+<span class="sd">        ready for model execution.</span>
 
 <span class="sd">        Args:</span>
-<span class="sd">            i: The index of the sample, used to create a unique model name.</span>
+<span class="sd">            trial (Any): The Optuna trial object used for suggesting hyperparameters.</span>
+<span class="sd">            run_index (int): The current run/trial index, used to assign a unique name to the model.</span>
 
 <span class="sd">        Returns:</span>
-<span class="sd">            A TrainModel instance populated with a randomly sampled configuration.</span>
+<span class="sd">            TrainModel: A fully populated configuration instance for the current trial.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">model_spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_hyperparameter_sampling</span><span class="o">.</span><span class="n">random_sample</span><span class="p">()</span>
-        <span class="n">training_spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_hyperparameter_sampling</span><span class="o">.</span><span class="n">random_sample</span><span class="p">()</span>
-        <span class="n">input_columns_index</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">input_columns</span><span class="p">))</span>
-        <span class="n">seq_length</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">seq_length</span><span class="p">)</span>
+        <span class="n">model_spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_hyperparameter_sampling</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
+        <span class="n">training_spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_hyperparameter_sampling</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
+
+        <span class="n">input_columns_index</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span>
+            <span class="s2">&quot;input_columns_index&quot;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)))</span>
+        <span class="p">)</span>
+        <span class="n">seq_length</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span><span class="s2">&quot;seq_length&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">seq_length</span><span class="p">)</span>
+
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">input_columns_index</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">seq_length</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span><span class="p">)</span>
+
         <span class="k">return</span> <span class="n">TrainModel</span><span class="p">(</span>
             <span class="n">project_root</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
             <span class="n">metadata_config_path</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">metadata_config_path</span><span class="p">,</span>
-            <span class="n">model_name</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">hp_search_name</span> <span class="o">+</span> <span class="sa">f</span><span class="s2">&quot;-run-</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="n">model_name</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">hp_search_name</span><span class="si">}</span><span class="s2">-run-</span><span class="si">{</span><span class="n">run_index</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
             <span class="n">training_data_path</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">training_data_path</span><span class="p">,</span>
             <span class="n">validation_data_path</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">validation_data_path</span><span class="p">,</span>
             <span class="n">read_format</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">read_format</span><span class="p">,</span>
@@ -1044,102 +1039,6 @@
             <span class="n">export_with_dropout</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">export_with_dropout</span><span class="p">,</span>
             <span class="n">model_spec</span><span class="o">=</span><span class="n">model_spec</span><span class="p">,</span>
             <span class="n">training_spec</span><span class="o">=</span><span class="n">training_spec</span><span class="p">,</span>
-        <span class="p">)</span></div>
-
-<div class="viewcode-block" id="HyperparameterSearch.grid_sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch.grid_sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">grid_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Select a full training configuration based on a grid search index.</span>
-
-<span class="sd">        This method generates a grid of all possible configurations and selects</span>
-<span class="sd">        the configuration at the given index.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            i: The index of the configuration to select from the grid.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            A TrainModel instance populated with the selected configuration.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">model_hyperparamter_sample</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_hyperparameter_sampling</span><span class="o">.</span><span class="n">n_combinations</span><span class="p">()</span>
-        <span class="n">training_hyperparamter_sample</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">training_hyperparameter_sampling</span><span class="o">.</span><span class="n">n_combinations</span><span class="p">()</span>
-        <span class="p">)</span>
-        <span class="n">inner_combinations</span> <span class="o">=</span> <span class="n">model_hyperparamter_sample</span> <span class="o">*</span> <span class="n">training_hyperparamter_sample</span>
-
-        <span class="n">i_model</span> <span class="o">=</span> <span class="n">i</span> <span class="o">%</span> <span class="n">model_hyperparamter_sample</span>
-        <span class="n">i_training</span> <span class="o">=</span> <span class="p">(</span><span class="n">i</span> <span class="o">//</span> <span class="n">model_hyperparamter_sample</span><span class="p">)</span> <span class="o">%</span> <span class="n">training_hyperparamter_sample</span>
-        <span class="n">i_outer</span> <span class="o">=</span> <span class="n">i</span> <span class="o">//</span> <span class="n">inner_combinations</span>
-
-        <span class="n">model_spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_hyperparameter_sampling</span><span class="o">.</span><span class="n">grid_sample</span><span class="p">(</span><span class="n">i_model</span><span class="p">)</span>
-        <span class="n">training_spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_hyperparameter_sampling</span><span class="o">.</span><span class="n">grid_sample</span><span class="p">(</span><span class="n">i_training</span><span class="p">)</span>
-
-        <span class="n">hyperparameter_combinations</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span>
-            <span class="n">product</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)),</span> <span class="bp">self</span><span class="o">.</span><span class="n">seq_length</span><span class="p">)</span>
-        <span class="p">)</span>
-
-        <span class="n">input_columns_index</span><span class="p">,</span> <span class="n">seq_length</span> <span class="o">=</span> <span class="n">hyperparameter_combinations</span><span class="p">[</span><span class="n">i_outer</span><span class="p">]</span>
-
-        <span class="k">return</span> <span class="n">TrainModel</span><span class="p">(</span>
-            <span class="n">project_root</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
-            <span class="n">metadata_config_path</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">metadata_config_path</span><span class="p">,</span>
-            <span class="n">model_name</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">hp_search_name</span> <span class="o">+</span> <span class="sa">f</span><span class="s2">&quot;-run-</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-            <span class="n">training_data_path</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">training_data_path</span><span class="p">,</span>
-            <span class="n">validation_data_path</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">validation_data_path</span><span class="p">,</span>
-            <span class="n">read_format</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">read_format</span><span class="p">,</span>
-            <span class="n">input_columns</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">input_columns</span><span class="p">[</span><span class="n">input_columns_index</span><span class="p">],</span>
-            <span class="n">column_types</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">column_types</span><span class="p">[</span><span class="n">input_columns_index</span><span class="p">],</span>
-            <span class="n">categorical_columns</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">[</span><span class="n">input_columns_index</span><span class="p">],</span>
-            <span class="n">real_columns</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span><span class="p">[</span><span class="n">input_columns_index</span><span class="p">],</span>
-            <span class="n">target_columns</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">,</span>
-            <span class="n">target_column_types</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">,</span>
-            <span class="n">id_maps</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">id_maps</span><span class="p">,</span>
-            <span class="n">seq_length</span><span class="o">=</span><span class="n">seq_length</span><span class="p">,</span>
-            <span class="n">n_classes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="p">,</span>
-            <span class="n">inference_batch_size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">inference_batch_size</span><span class="p">,</span>
-            <span class="n">seed</span><span class="o">=</span><span class="mi">101</span><span class="p">,</span>
-            <span class="n">export_embedding_model</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-            <span class="n">export_generative_model</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-            <span class="n">export_onnx</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">export_onnx</span><span class="p">,</span>
-            <span class="n">export_pt</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">export_pt</span><span class="p">,</span>
-            <span class="n">export_with_dropout</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">export_with_dropout</span><span class="p">,</span>
-            <span class="n">model_spec</span><span class="o">=</span><span class="n">model_spec</span><span class="p">,</span>
-            <span class="n">training_spec</span><span class="o">=</span><span class="n">training_spec</span><span class="p">,</span>
-        <span class="p">)</span></div>
-
-<div class="viewcode-block" id="HyperparameterSearch.sample"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch.sample">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Sample a configuration based on the specified search strategy.</span>
-
-<span class="sd">        This method delegates to either random_sample or grid_sample based on</span>
-<span class="sd">        the `search_strategy` attribute.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            i: The index of the sample or grid combination to generate.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            A TrainModel instance with a generated configuration.</span>
-
-<span class="sd">        Raises:</span>
-<span class="sd">            Exception: If the search_strategy is not &#39;sample&#39; or &#39;grid&#39;.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">search_strategy</span> <span class="o">==</span> <span class="s2">&quot;sample&quot;</span><span class="p">:</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">random_sample</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">search_strategy</span> <span class="o">==</span> <span class="s2">&quot;grid&quot;</span><span class="p">:</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">grid_sample</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">search_strategy</span><span class="si">}</span><span class="s2"> invalid&quot;</span><span class="p">)</span></div>
-
-<div class="viewcode-block" id="HyperparameterSearch.n_combinations"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearch.n_combinations">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">n_combinations</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculate the total number of possible configurations.</span>
-
-<span class="sd">        This method computes the total number of unique configurations that can be</span>
-<span class="sd">        generated by a grid search over all defined hyperparameters.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            The total number of possible hyperparameter configurations.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="p">(</span>
-            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
-            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">seq_length</span><span class="p">)</span>
-            <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_hyperparameter_sampling</span><span class="o">.</span><span class="n">n_combinations</span><span class="p">()</span>
-            <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_hyperparameter_sampling</span><span class="o">.</span><span class="n">n_combinations</span><span class="p">()</span>
         <span class="p">)</span></div></div>
 </pre></div>
         </article>
@@ -1173,7 +1072,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=ab8888bc"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=9c7002d6"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

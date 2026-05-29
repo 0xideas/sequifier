@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/api.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Preprocessing Config - sequifier v1.1.2.1 documentation</title>
+        <title>Preprocessing Config - sequifier v1.1.2.2 documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="index.html"><div class="brand">sequifier v1.1.2.1 documentation</div></a>
+      <a href="index.html"><div class="brand">sequifier v1.1.2.2 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.1.2.1 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.1.2.2 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -1471,12 +1471,12 @@ The sum of proportions must be 1.0.</p>
 <section id="module-sequifier.config.hyperparameter_search_config">
 <span id="hyperparameter-search-config"></span><h1>Hyperparameter Search Config<a class="headerlink" href="#module-sequifier.config.hyperparameter_search_config" title="Permalink to this heading">¶</a></h1>
 <dl class="py class">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.config.hyperparameter_search_config.</span></span><span class="sig-name descname"><span class="pre">HyperparameterSearch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata_config_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hp_search_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search_strategy</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'sample'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_samples</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_config_write_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">training_data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">validation_data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">read_format</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'parquet'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">categorical_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">real_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">id_maps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_classes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inference_batch_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">export_generative_model</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">export_embedding_model</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">export_onnx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">export_pt</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">export_with_dropout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_hyperparameter_sampling</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling" title="sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling"><span class="pre">ModelSpecHyperparameterSampling</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">training_hyperparameter_sampling</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling" title="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling"><span class="pre">TrainingSpecHyperparameterSampling</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">override_input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#HyperparameterSearch"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.config.hyperparameter_search_config.</span></span><span class="sig-name descname"><span class="pre">HyperparameterSearchConfig</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata_config_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">hp_search_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search_strategy</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'bayesian'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_samples</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prune_trials</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_config_write_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">training_data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">validation_data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">read_format</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'parquet'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">categorical_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">real_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">id_maps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_classes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inference_batch_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">export_generative_model</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">export_embedding_model</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">export_onnx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">export_pt</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">export_with_dropout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">evaluation_inference_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">evaluation_script</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">evaluation_metric_directions</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">evaluation_metrics</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_hyperparameter_sampling</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling" title="sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling"><span class="pre">ModelSpecHyperparameterSampling</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">training_hyperparameter_sampling</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling" title="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling"><span class="pre">TrainingSpecHyperparameterSampling</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">override_input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#HyperparameterSearchConfig"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig" title="Permalink to this definition">¶</a></dt>
 <dd><p>Pydantic model for hyperparameter search configuration.</p>
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.project_root">
-<span class="sig-name descname"><span class="pre">project_root</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.project_root" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.project_root">
+<span class="sig-name descname"><span class="pre">project_root</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.project_root" title="Permalink to this definition">¶</a></dt>
 <dd><p>The path to the sequifier project directory.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1486,8 +1486,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.metadata_config_path">
-<span class="sig-name descname"><span class="pre">metadata_config_path</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.metadata_config_path" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.metadata_config_path">
+<span class="sig-name descname"><span class="pre">metadata_config_path</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.metadata_config_path" title="Permalink to this definition">¶</a></dt>
 <dd><p>The path to the data-driven configuration file.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1497,8 +1497,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.hp_search_name">
-<span class="sig-name descname"><span class="pre">hp_search_name</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.hp_search_name" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.hp_search_name">
+<span class="sig-name descname"><span class="pre">hp_search_name</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.hp_search_name" title="Permalink to this definition">¶</a></dt>
 <dd><p>The name for the hyperparameter search.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1508,8 +1508,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.search_strategy">
-<span class="sig-name descname"><span class="pre">search_strategy</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.search_strategy" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.search_strategy">
+<span class="sig-name descname"><span class="pre">search_strategy</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.search_strategy" title="Permalink to this definition">¶</a></dt>
 <dd><p>The search strategy, either “sample” or “grid”.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1519,19 +1519,14 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.n_samples">
-<span class="sig-name descname"><span class="pre">n_samples</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.n_samples" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.n_samples">
+<span class="sig-name descname"><span class="pre">n_samples</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.n_samples" title="Permalink to this definition">¶</a></dt>
 <dd><p>The number of samples to draw for the search.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>int | None</p>
-</dd>
-</dl>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.model_config_write_path">
-<span class="sig-name descname"><span class="pre">model_config_write_path</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.model_config_write_path" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.model_config_write_path">
+<span class="sig-name descname"><span class="pre">model_config_write_path</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.model_config_write_path" title="Permalink to this definition">¶</a></dt>
 <dd><p>The path to write the model configurations to.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1541,8 +1536,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.training_data_path">
-<span class="sig-name descname"><span class="pre">training_data_path</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.training_data_path" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.training_data_path">
+<span class="sig-name descname"><span class="pre">training_data_path</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.training_data_path" title="Permalink to this definition">¶</a></dt>
 <dd><p>The path to the training data.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1552,8 +1547,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.validation_data_path">
-<span class="sig-name descname"><span class="pre">validation_data_path</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.validation_data_path" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.validation_data_path">
+<span class="sig-name descname"><span class="pre">validation_data_path</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.validation_data_path" title="Permalink to this definition">¶</a></dt>
 <dd><p>The path to the validation data.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1563,8 +1558,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.read_format">
-<span class="sig-name descname"><span class="pre">read_format</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.read_format" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.read_format">
+<span class="sig-name descname"><span class="pre">read_format</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.read_format" title="Permalink to this definition">¶</a></dt>
 <dd><p>The file format of the input data.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1574,8 +1569,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.input_columns">
-<span class="sig-name descname"><span class="pre">input_columns</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.input_columns" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.input_columns">
+<span class="sig-name descname"><span class="pre">input_columns</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.input_columns" title="Permalink to this definition">¶</a></dt>
 <dd><p>A list of lists of columns to be used for training.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1585,8 +1580,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.column_types">
-<span class="sig-name descname"><span class="pre">column_types</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.column_types" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.column_types">
+<span class="sig-name descname"><span class="pre">column_types</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.column_types" title="Permalink to this definition">¶</a></dt>
 <dd><p>A list of dictionaries mapping columns to their types.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1596,8 +1591,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.categorical_columns">
-<span class="sig-name descname"><span class="pre">categorical_columns</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.categorical_columns" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.categorical_columns">
+<span class="sig-name descname"><span class="pre">categorical_columns</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.categorical_columns" title="Permalink to this definition">¶</a></dt>
 <dd><p>A list of lists of categorical columns.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1607,8 +1602,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.real_columns">
-<span class="sig-name descname"><span class="pre">real_columns</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.real_columns" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.real_columns">
+<span class="sig-name descname"><span class="pre">real_columns</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.real_columns" title="Permalink to this definition">¶</a></dt>
 <dd><p>A list of lists of real-valued columns.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1618,8 +1613,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.target_columns">
-<span class="sig-name descname"><span class="pre">target_columns</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.target_columns" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.target_columns">
+<span class="sig-name descname"><span class="pre">target_columns</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.target_columns" title="Permalink to this definition">¶</a></dt>
 <dd><p>The list of target columns for model training.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1629,8 +1624,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.target_column_types">
-<span class="sig-name descname"><span class="pre">target_column_types</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.target_column_types" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.target_column_types">
+<span class="sig-name descname"><span class="pre">target_column_types</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.target_column_types" title="Permalink to this definition">¶</a></dt>
 <dd><p>A dictionary mapping target columns to their types.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1640,8 +1635,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.id_maps">
-<span class="sig-name descname"><span class="pre">id_maps</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.id_maps" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.id_maps">
+<span class="sig-name descname"><span class="pre">id_maps</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.id_maps" title="Permalink to this definition">¶</a></dt>
 <dd><p>A dictionary mapping categorical values to their indexed representation.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1651,8 +1646,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.seq_length">
-<span class="sig-name descname"><span class="pre">seq_length</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.seq_length" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.seq_length">
+<span class="sig-name descname"><span class="pre">seq_length</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.seq_length" title="Permalink to this definition">¶</a></dt>
 <dd><p>A list of possible sequence lengths.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1662,8 +1657,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.n_classes">
-<span class="sig-name descname"><span class="pre">n_classes</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.n_classes" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.n_classes">
+<span class="sig-name descname"><span class="pre">n_classes</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.n_classes" title="Permalink to this definition">¶</a></dt>
 <dd><p>The number of classes for each categorical column.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1673,8 +1668,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.inference_batch_size">
-<span class="sig-name descname"><span class="pre">inference_batch_size</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.inference_batch_size" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.inference_batch_size">
+<span class="sig-name descname"><span class="pre">inference_batch_size</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.inference_batch_size" title="Permalink to this definition">¶</a></dt>
 <dd><p>The batch size for inference.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1684,8 +1679,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.export_onnx">
-<span class="sig-name descname"><span class="pre">export_onnx</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.export_onnx" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.export_onnx">
+<span class="sig-name descname"><span class="pre">export_onnx</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.export_onnx" title="Permalink to this definition">¶</a></dt>
 <dd><p>If True, exports the model in ONNX format.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1695,8 +1690,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.export_pt">
-<span class="sig-name descname"><span class="pre">export_pt</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.export_pt" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.export_pt">
+<span class="sig-name descname"><span class="pre">export_pt</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.export_pt" title="Permalink to this definition">¶</a></dt>
 <dd><p>If True, exports the model using torch.save.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1706,8 +1701,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.export_with_dropout">
-<span class="sig-name descname"><span class="pre">export_with_dropout</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.export_with_dropout" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.export_with_dropout">
+<span class="sig-name descname"><span class="pre">export_with_dropout</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.export_with_dropout" title="Permalink to this definition">¶</a></dt>
 <dd><p>If True, exports the model with dropout enabled.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1717,8 +1712,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.model_hyperparameter_sampling">
-<span class="sig-name descname"><span class="pre">model_hyperparameter_sampling</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.model_hyperparameter_sampling" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.model_hyperparameter_sampling">
+<span class="sig-name descname"><span class="pre">model_hyperparameter_sampling</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.model_hyperparameter_sampling" title="Permalink to this definition">¶</a></dt>
 <dd><p>The sampling configuration for model hyperparameters.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1728,8 +1723,8 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.training_hyperparameter_sampling">
-<span class="sig-name descname"><span class="pre">training_hyperparameter_sampling</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.training_hyperparameter_sampling" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.training_hyperparameter_sampling">
+<span class="sig-name descname"><span class="pre">training_hyperparameter_sampling</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.training_hyperparameter_sampling" title="Permalink to this definition">¶</a></dt>
 <dd><p>The sampling configuration for training hyperparameters.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
@@ -1738,73 +1733,75 @@ The sum of proportions must be 1.0.</p>
 </dl>
 </dd></dl>
 
-<dl class="py method">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.grid_sample">
-<span class="sig-name descname"><span class="pre">grid_sample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">i</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#HyperparameterSearch.grid_sample"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.grid_sample" title="Permalink to this definition">¶</a></dt>
-<dd><p>Select a full training configuration based on a grid search index.</p>
-<p>This method generates a grid of all possible configurations and selects
-the configuration at the given index.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.evaluation_inference_config">
+<span class="sig-name descname"><span class="pre">evaluation_inference_config</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.evaluation_inference_config" title="Permalink to this definition">¶</a></dt>
+<dd><p>The inference config to infer on for hyperparameter search optimization</p>
 <dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>i</strong> – The index of the configuration to select from the grid.</p>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>A TrainModel instance populated with the selected configuration.</p>
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>str | None</p>
 </dd>
 </dl>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.model_config">
-<span class="sig-name descname"><span class="pre">model_config</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">ClassVar</span><span class="p"><span class="pre">[</span></span><span class="pre">ConfigDict</span><span class="p"><span class="pre">]</span></span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">{}</span></em><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.model_config" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.evaluation_script">
+<span class="sig-name descname"><span class="pre">evaluation_script</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.evaluation_script" title="Permalink to this definition">¶</a></dt>
+<dd><p>The script that outputs the evaluation metrics, typically from the inference output</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>str | None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.evaluation_metrics">
+<span class="sig-name descname"><span class="pre">evaluation_metrics</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.evaluation_metrics" title="Permalink to this definition">¶</a></dt>
+<dd><p>The evaluation metrics to optimize during hyperparameter search</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>list[str] | None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.evaluation_metric_directions">
+<span class="sig-name descname"><span class="pre">evaluation_metric_directions</span></span><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.evaluation_metric_directions" title="Permalink to this definition">¶</a></dt>
+<dd><p>The direction to optimize evaluation_metrics in. Only ‘minimize’ and ‘maximize’ are allowed</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>list[str] | None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.model_config">
+<span class="sig-name descname"><span class="pre">model_config</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">ClassVar</span><span class="p"><span class="pre">[</span></span><span class="pre">ConfigDict</span><span class="p"><span class="pre">]</span></span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">{}</span></em><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.model_config" title="Permalink to this definition">¶</a></dt>
 <dd><p>Configuration for the model, should be a dictionary conforming to [<cite>ConfigDict</cite>][pydantic.config.ConfigDict].</p>
 </dd></dl>
 
 <dl class="py method">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.n_combinations">
-<span class="sig-name descname"><span class="pre">n_combinations</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#HyperparameterSearch.n_combinations"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.n_combinations" title="Permalink to this definition">¶</a></dt>
-<dd><p>Calculate the total number of possible configurations.</p>
-<p>This method computes the total number of unique configurations that can be
-generated by a grid search over all defined hyperparameters.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Returns<span class="colon">:</span></dt>
-<dd class="field-odd"><p>The total number of possible hyperparameter configurations.</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.random_sample">
-<span class="sig-name descname"><span class="pre">random_sample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">i</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#HyperparameterSearch.random_sample"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.random_sample" title="Permalink to this definition">¶</a></dt>
-<dd><p>Randomly sample a full training configuration.</p>
-<p>This method generates a complete training configuration by randomly
-sampling model and training hyperparameters, as well as selecting a
-column set and sequence length.</p>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.sample_trial">
+<span class="sig-name descname"><span class="pre">sample_trial</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">trial</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">run_index</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#sequifier.config.train_config.TrainModel" title="sequifier.config.train_config.TrainModel"><span class="pre">TrainModel</span></a></span></span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#HyperparameterSearchConfig.sample_trial"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.sample_trial" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generates a complete training configuration using an Optuna trial.</p>
+<p>This method orchestrates the sampling of both model and training specifications,
+as well as data sequence parameters, combining them into a final configuration
+ready for model execution.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>i</strong> – The index of the sample, used to create a unique model name.</p>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>trial</strong> (<em>Any</em>) – The Optuna trial object used for suggesting hyperparameters.</p></li>
+<li><p><strong>run_index</strong> (<em>int</em>) – The current run/trial index, used to assign a unique name to the model.</p></li>
+</ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>A TrainModel instance populated with a randomly sampled configuration.</p>
+<dd class="field-even"><p>A fully populated configuration instance for the current trial.</p>
 </dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.HyperparameterSearch.sample">
-<span class="sig-name descname"><span class="pre">sample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">i</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#HyperparameterSearch.sample"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.sample" title="Permalink to this definition">¶</a></dt>
-<dd><p>Sample a configuration based on the specified search strategy.</p>
-<p>This method delegates to either random_sample or grid_sample based on
-the <cite>search_strategy</cite> attribute.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>i</strong> – The index of the sample or grid combination to generate.</p>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>A TrainModel instance with a generated configuration.</p>
-</dd>
-<dt class="field-odd">Raises<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>Exception</strong> – If the search_strategy is not ‘sample’ or ‘grid’.</p>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference internal" href="#sequifier.config.train_config.TrainModel" title="sequifier.config.train_config.TrainModel">TrainModel</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1813,7 +1810,7 @@ the <cite>search_strategy</cite> attribute.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.config.hyperparameter_search_config.</span></span><span class="sig-name descname"><span class="pre">ModelSpecHyperparameterSampling</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">initial_embedding_dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">joint_embedding_dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim_model</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">feature_embedding_dims</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_head</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim_feedforward</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_layers</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prediction_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">activation_fn</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalization</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">positional_encoding</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">attention_type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">norm_first</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">bool</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_kv_heads</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rope_theta</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#ModelSpecHyperparameterSampling"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling" title="Permalink to this definition">¶</a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.config.hyperparameter_search_config.</span></span><span class="sig-name descname"><span class="pre">ModelSpecHyperparameterSampling</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">initial_embedding_dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">joint_embedding_dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim_model</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">feature_embedding_dims</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_head</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim_feedforward</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">IntDistribution</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_layers</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">IntDistribution</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prediction_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">activation_fn</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalization</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">positional_encoding</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">attention_type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">norm_first</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">bool</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_kv_heads</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rope_theta</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">FloatDistribution</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#ModelSpecHyperparameterSampling"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling" title="Permalink to this definition">¶</a></dt>
 <dd><p>Pydantic model for model specification hyperparameter sampling.</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.initial_embedding_dim">
@@ -1876,7 +1873,7 @@ the <cite>search_strategy</cite> attribute.</p>
 <dd><p>A list of possible dimensions of the feedforward network model.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>list[int]</p>
+<dd class="field-odd"><p>list[int] | sequifier.config.hyperparameter_search_config.IntDistribution</p>
 </dd>
 </dl>
 </dd></dl>
@@ -1887,25 +1884,7 @@ the <cite>search_strategy</cite> attribute.</p>
 <dd><p>A list of possible numbers of layers in the transformer model.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>list[int]</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.grid_sample">
-<span class="sig-name descname"><span class="pre">grid_sample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">i</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#ModelSpecHyperparameterSampling.grid_sample"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.grid_sample" title="Permalink to this definition">¶</a></dt>
-<dd><p>Select a set of model hyperparameters based on a grid search index.</p>
-<p>This method generates a grid of all possible model hyperparameter
-combinations and selects the combination at the given index.
-Includes sanitation logic to prevent invalid n_kv_heads combinations.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>i</strong> – The index of the hyperparameter combination to select from the grid.</p>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>A ModelSpecModel instance populated with the selected set of
-hyperparameters.</p>
+<dd class="field-odd"><p>list[int] | sequifier.config.hyperparameter_search_config.IntDistribution</p>
 </dd>
 </dl>
 </dd></dl>
@@ -1917,29 +1896,22 @@ hyperparameters.</p>
 </dd></dl>
 
 <dl class="py method">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.n_combinations">
-<span class="sig-name descname"><span class="pre">n_combinations</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#ModelSpecHyperparameterSampling.n_combinations"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.n_combinations" title="Permalink to this definition">¶</a></dt>
-<dd><p>Calculate the total number of model hyperparameter combinations.</p>
-<p>This method computes the total number of unique model hyperparameter sets
-that can be generated by the grid search.</p>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.sample_trial">
+<span class="sig-name descname"><span class="pre">sample_trial</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">trial</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#sequifier.config.train_config.ModelSpecModel" title="sequifier.config.train_config.ModelSpecModel"><span class="pre">ModelSpecModel</span></a></span></span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#ModelSpecHyperparameterSampling.sample_trial"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.sample_trial" title="Permalink to this definition">¶</a></dt>
+<dd><p>Samples model architecture hyperparameters using an Optuna trial.</p>
+<p>This method uses the Optuna trial to suggest structural parameters such as
+the number of layers, feedforward dimensions, and attention heads. It ensures
+that dependent dimensions (like <cite>n_head</cite> and <cite>dim_model</cite>) stay correctly paired
+and that invalid key-value head combinations are filtered out.</p>
 <dl class="field-list simple">
-<dt class="field-odd">Returns<span class="colon">:</span></dt>
-<dd class="field-odd"><p>The total number of possible model hyperparameter combinations.</p>
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>trial</strong> (<em>Any</em>) – The Optuna trial object used for suggesting hyperparameters.</p>
 </dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.random_sample">
-<span class="sig-name descname"><span class="pre">random_sample</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#ModelSpecHyperparameterSampling.random_sample"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.random_sample" title="Permalink to this definition">¶</a></dt>
-<dd><p>Randomly sample a set of model hyperparameters.</p>
-<p>This method selects a random combination of model hyperparameters from the
-defined lists of possibilities. It ensures that dim_model, feature_embedding_dims,
-and n_head are paired correctly, and that n_kv_heads is a valid divisor of n_head.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Returns<span class="colon">:</span></dt>
-<dd class="field-odd"><p>A ModelSpecModel instance populated with a randomly sampled set of
-hyperparameters.</p>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A populated model specification model with the sampled architecture parameters.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference internal" href="#sequifier.config.train_config.ModelSpecModel" title="sequifier.config.train_config.ModelSpecModel">ModelSpecModel</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1948,7 +1920,7 @@ hyperparameters.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.config.hyperparameter_search_config.</span></span><span class="sig-name descname"><span class="pre">TrainingSpecHyperparameterSampling</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">*,</span> <span class="pre">device:</span> <span class="pre">str,</span> <span class="pre">epochs:</span> <span class="pre">list[int],</span> <span class="pre">log_interval:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">10,</span> <span class="pre">class_share_log_columns:</span> <span class="pre">list[str]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">early_stopping_epochs:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">save_interval_epochs:</span> <span class="pre">int,</span> <span class="pre">save_latest_interval_minutes:</span> <span class="pre">float</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">save_batch_interval_minutes:</span> <span class="pre">float</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">save_batch_interval_minutes_val_loss:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">calculate_validation_loss_on_initialization:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">batch_size:</span> <span class="pre">list[int],</span> <span class="pre">learning_rate:</span> <span class="pre">list[float],</span> <span class="pre">criterion:</span> <span class="pre">dict[str,</span> <span class="pre">str],</span> <span class="pre">class_weights:</span> <span class="pre">dict[str,</span> <span class="pre">list[float]]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">accumulation_steps:</span> <span class="pre">list[int],</span> <span class="pre">dropout:</span> <span class="pre">list[float]</span> <span class="pre">=</span> <span class="pre">[0.0],</span> <span class="pre">loss_weights:</span> <span class="pre">dict[str,</span> <span class="pre">float]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">optimizer:</span> <span class="pre">list[sequifier.config.train_config.DotDict]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">scheduler:</span> <span class="pre">list[sequifier.config.train_config.DotDict]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">continue_training:</span> <span class="pre">bool,</span> <span class="pre">scheduler_step_on:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'epoch',</span> <span class="pre">distributed:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">load_full_data_to_ram:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">max_ram_gb:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">16,</span> <span class="pre">device_max_concat_length:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">12,</span> <span class="pre">world_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">1,</span> <span class="pre">num_workers:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0,</span> <span class="pre">backend:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'nccl',</span> <span class="pre">layer_type_dtypes:</span> <span class="pre">dict[str,</span> <span class="pre">str]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">layer_autocast:</span> <span class="pre">bool</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">sampling_strategy:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'exact',</span> <span class="pre">data_parallelism:</span> <span class="pre">str</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">fsdp_cpu_offload:</span> <span class="pre">bool</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">torch_compile:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'outer',</span> <span class="pre">float32_matmul_precision:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'highest'</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#TrainingSpecHyperparameterSampling"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling" title="Permalink to this definition">¶</a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.config.hyperparameter_search_config.</span></span><span class="sig-name descname"><span class="pre">TrainingSpecHyperparameterSampling</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">*,</span> <span class="pre">device:</span> <span class="pre">str,</span> <span class="pre">epochs:</span> <span class="pre">list[int],</span> <span class="pre">log_interval:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">10,</span> <span class="pre">class_share_log_columns:</span> <span class="pre">list[str]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">early_stopping_epochs:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">save_interval_epochs:</span> <span class="pre">int,</span> <span class="pre">save_latest_interval_minutes:</span> <span class="pre">float</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">save_batch_interval_minutes:</span> <span class="pre">float</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">save_batch_interval_minutes_val_loss:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">calculate_validation_loss_on_initialization:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">batch_size:</span> <span class="pre">list[int]</span> <span class="pre">|</span> <span class="pre">~sequifier.config.hyperparameter_search_config.IntDistribution,</span> <span class="pre">learning_rate:</span> <span class="pre">list[float],</span> <span class="pre">criterion:</span> <span class="pre">dict[str,</span> <span class="pre">str],</span> <span class="pre">class_weights:</span> <span class="pre">dict[str,</span> <span class="pre">list[float]]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">accumulation_steps:</span> <span class="pre">list[int]</span> <span class="pre">|</span> <span class="pre">~sequifier.config.hyperparameter_search_config.IntDistribution,</span> <span class="pre">dropout:</span> <span class="pre">list[float]</span> <span class="pre">|</span> <span class="pre">~sequifier.config.hyperparameter_search_config.FloatDistribution</span> <span class="pre">=</span> <span class="pre">[0.0],</span> <span class="pre">loss_weights:</span> <span class="pre">dict[str,</span> <span class="pre">float]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">optimizer:</span> <span class="pre">list[sequifier.config.train_config.DotDict]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">scheduler:</span> <span class="pre">list[sequifier.config.train_config.DotDict]</span> <span class="pre">=</span> <span class="pre">&lt;factory&gt;,</span> <span class="pre">continue_training:</span> <span class="pre">bool,</span> <span class="pre">scheduler_step_on:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'epoch',</span> <span class="pre">distributed:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">load_full_data_to_ram:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">max_ram_gb:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">16,</span> <span class="pre">device_max_concat_length:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">12,</span> <span class="pre">world_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">1,</span> <span class="pre">num_workers:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0,</span> <span class="pre">backend:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'nccl',</span> <span class="pre">layer_type_dtypes:</span> <span class="pre">dict[str,</span> <span class="pre">str]</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">layer_autocast:</span> <span class="pre">bool</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">sampling_strategy:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'exact',</span> <span class="pre">data_parallelism:</span> <span class="pre">str</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">fsdp_cpu_offload:</span> <span class="pre">bool</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">torch_compile:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'outer',</span> <span class="pre">float32_matmul_precision:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'highest'</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#TrainingSpecHyperparameterSampling"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling" title="Permalink to this definition">¶</a></dt>
 <dd><p>Pydantic model for training specification hyperparameter sampling.</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.device">
@@ -2066,7 +2038,7 @@ hyperparameters.</p>
 <dd><p>A list of possible batch sizes.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>list[int]</p>
+<dd class="field-odd"><p>list[int] | sequifier.config.hyperparameter_search_config.IntDistribution</p>
 </dd>
 </dl>
 </dd></dl>
@@ -2110,7 +2082,7 @@ hyperparameters.</p>
 <dd><p>A list of possible gradient accumulation steps.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>list[int]</p>
+<dd class="field-odd"><p>list[int] | sequifier.config.hyperparameter_search_config.IntDistribution</p>
 </dd>
 </dl>
 </dd></dl>
@@ -2121,7 +2093,7 @@ hyperparameters.</p>
 <dd><p>A list of possible dropout rates.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>list[float]</p>
+<dd class="field-odd"><p>list[float] | sequifier.config.hyperparameter_search_config.FloatDistribution</p>
 </dd>
 </dl>
 </dd></dl>
@@ -2263,23 +2235,6 @@ to be lists of dictionaries.</p>
 </dl>
 </dd></dl>
 
-<dl class="py method">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.grid_sample">
-<span class="sig-name descname"><span class="pre">grid_sample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">i</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#TrainingSpecHyperparameterSampling.grid_sample"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.grid_sample" title="Permalink to this definition">¶</a></dt>
-<dd><p>Select a set of training hyperparameters based on a grid search index.</p>
-<p>This method generates a grid of all possible hyperparameter combinations
-and selects the combination at the given index.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>i</strong> – The index of the hyperparameter combination to select from the grid.</p>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>A TrainingSpecModel instance populated with the selected set of
-hyperparameters.</p>
-</dd>
-</dl>
-</dd></dl>
-
 <dl class="py attribute">
 <dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.model_config">
 <span class="sig-name descname"><span class="pre">model_config</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">ClassVar</span><span class="p"><span class="pre">[</span></span><span class="pre">ConfigDict</span><span class="p"><span class="pre">]</span></span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">{'arbitrary_types_allowed':</span> <span class="pre">True,</span> <span class="pre">'extra':</span> <span class="pre">'forbid'}</span></em><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.model_config" title="Permalink to this definition">¶</a></dt>
@@ -2287,29 +2242,21 @@ hyperparameters.</p>
 </dd></dl>
 
 <dl class="py method">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.n_combinations">
-<span class="sig-name descname"><span class="pre">n_combinations</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#TrainingSpecHyperparameterSampling.n_combinations"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.n_combinations" title="Permalink to this definition">¶</a></dt>
-<dd><p>Calculate the total number of hyperparameter combinations.</p>
-<p>This method computes the total number of unique hyperparameter sets that
-can be generated by the grid search.</p>
+<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.sample_trial">
+<span class="sig-name descname"><span class="pre">sample_trial</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">trial</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#sequifier.config.train_config.TrainingSpecModel" title="sequifier.config.train_config.TrainingSpecModel"><span class="pre">TrainingSpecModel</span></a></span></span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#TrainingSpecHyperparameterSampling.sample_trial"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.sample_trial" title="Permalink to this definition">¶</a></dt>
+<dd><p>Samples training hyperparameters using an Optuna trial.</p>
+<p>This method leverages the provided Optuna trial to suggest values for
+hyperparameters like batch size, dropout, and learning rate based on the
+defined search spaces (categorical lists or distributions).</p>
 <dl class="field-list simple">
-<dt class="field-odd">Returns<span class="colon">:</span></dt>
-<dd class="field-odd"><p>The total number of possible hyperparameter combinations.</p>
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>trial</strong> (<em>Any</em>) – The Optuna trial object used for suggesting hyperparameters.</p>
 </dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.random_sample">
-<span class="sig-name descname"><span class="pre">random_sample</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/hyperparameter_search_config.html#TrainingSpecHyperparameterSampling.random_sample"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.random_sample" title="Permalink to this definition">¶</a></dt>
-<dd><p>Randomly sample a set of training hyperparameters.</p>
-<p>This method selects a random combination of hyperparameters from the
-defined lists of possibilities. It ensures that learning rates and
-schedulers are paired correctly.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Returns<span class="colon">:</span></dt>
-<dd class="field-odd"><p>A TrainingSpecModel instance populated with a randomly sampled set of
-hyperparameters.</p>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A populated training specification model with the sampled hyperparameters.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference internal" href="#sequifier.config.train_config.TrainingSpecModel" title="sequifier.config.train_config.TrainingSpecModel">TrainingSpecModel</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -4126,61 +4073,60 @@ class indices.</p>
 </dl>
 </dd></dl>
 
-<span class="target" id="module-sequifier.hyperparameter_search"></span><dl class="py class">
-<dt class="sig sig-object py" id="sequifier.hyperparameter_search.HyperparameterSearcher">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.hyperparameter_search.</span></span><span class="sig-name descname"><span class="pre">HyperparameterSearcher</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hyperparameter_search_config</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/hyperparameter_search.html#HyperparameterSearcher"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.hyperparameter_search.HyperparameterSearcher" title="Permalink to this definition">¶</a></dt>
-<dd><p>A class for performing hyperparameter search.</p>
-<p>Manages the hyperparameter search process based on a given configuration.
-This class handles sampling hyperparameters, creating training configurations,
-launching training subprocesses, and logging results.</p>
-<dl class="py method">
-<dt class="sig sig-object py" id="sequifier.hyperparameter_search.HyperparameterSearcher.__init__">
-<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hyperparameter_search_config</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/hyperparameter_search.html#HyperparameterSearcher.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.hyperparameter_search.HyperparameterSearcher.__init__" title="Permalink to this definition">¶</a></dt>
-<dd><p>Initializes the HyperparameterSearcher instance.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>hyperparameter_search_config</strong> (<em>HyperparameterSearchConfig</em>) – An object
-containing the configuration for the hyperparameter search,
-loaded via <cite>load_hyperparameter_search_config</cite>.</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="sequifier.hyperparameter_search.HyperparameterSearcher.hyperparameter_search">
-<span class="sig-name descname"><span class="pre">hyperparameter_search</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/sequifier/hyperparameter_search.html#HyperparameterSearcher.hyperparameter_search"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.hyperparameter_search.HyperparameterSearcher.hyperparameter_search" title="Permalink to this definition">¶</a></dt>
-<dd><p>Performs the hyperparameter search loop.</p>
-<p>It iterates from the <cite>start_run</cite> number up to the total <cite>n_samples</cite>,
-generating a unique seed for each run and calling
-<cite>_create_config_and_run</cite> to execute it.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Returns<span class="colon">:</span></dt>
-<dd class="field-odd"><p>None</p>
-</dd>
-</dl>
-</dd></dl>
-
-</dd></dl>
-
-<dl class="py function">
+<span class="target" id="module-sequifier.hyperparameter_search"></span><dl class="py function">
 <dt class="sig sig-object py" id="sequifier.hyperparameter_search.hyperparameter_search">
-<span class="sig-prename descclassname"><span class="pre">sequifier.hyperparameter_search.</span></span><span class="sig-name descname"><span class="pre">hyperparameter_search</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config_path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">skip_metadata</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/sequifier/hyperparameter_search.html#hyperparameter_search"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.hyperparameter_search.hyperparameter_search" title="Permalink to this definition">¶</a></dt>
-<dd><p>Main function for initiating a hyperparameter search process.</p>
-<p>This function loads the hyperparameter search configuration, initializes
-the searcher, and starts the search.</p>
+<span class="sig-prename descclassname"><span class="pre">sequifier.hyperparameter_search.</span></span><span class="sig-name descname"><span class="pre">hyperparameter_search</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">skip_metadata</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/sequifier/hyperparameter_search.html#hyperparameter_search"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.hyperparameter_search.hyperparameter_search" title="Permalink to this definition">¶</a></dt>
+<dd><p>Main function for initiating an Optuna-based hyperparameter search process.</p>
+<p>This function loads the configuration, initializes the Optuna study with a
+minimization direction, and kicks off the optimization loop. Once the configured
+number of trials is complete, it prints out the best trial’s value and hyperparameters.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>config_path</strong> (<em>str</em>) – Path to the hyperparameter search YAML
-configuration file.</p></li>
-<li><p><strong>skip_metadata</strong> (<em>bool</em>) – Flag indicating whether to run the search
-on unprocessed data.</p></li>
+<li><p><strong>config_path</strong> (<em>str</em>) – Path to the hyperparameter search YAML configuration file.</p></li>
+<li><p><strong>skip_metadata</strong> (<em>bool</em>) – Flag indicating whether to skip loading/processing data metadata.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>ValueError</strong> – If <cite>n_trials</cite> is not defined in the configuration.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.hyperparameter_search.objective">
+<span class="sig-prename descclassname"><span class="pre">sequifier.hyperparameter_search.</span></span><span class="sig-name descname"><span class="pre">objective</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">trial</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Trial</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/hyperparameter_search.html#objective"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.hyperparameter_search.objective" title="Permalink to this definition">¶</a></dt>
+<dd><p>The central objective engine bridging Optuna to pure CLI execution.</p>
+<p>This function handles generating the YAML configuration for the specific
+trial, dynamically allocating a port for distributed training, launching the
+training subprocess, asynchronously polling the validation metrics, and reporting
+them back to Optuna for potential pruning.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>trial</strong> (<em>optuna.Trial</em>) – The Optuna trial object managing the current hyperparameter combination.</p></li>
+<li><p><strong>config</strong> (<a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig" title="sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig"><em>HyperparameterSearchConfig</em></a>) – The parsed hyperparameter search configuration.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>None</p>
+<dd class="field-even"><p>The best validation loss achieved during the trial.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>float</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><strong>optuna.TrialPruned</strong> – If the trial is pruned by the Optuna orchestrator.</p></li>
+<li><p><strong>RuntimeError</strong> – If the training subprocess fails or is externally preempted.</p></li>
+</ul>
 </dd>
 </dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.hyperparameter_search.set_pdeathsig">
+<span class="sig-prename descclassname"><span class="pre">sequifier.hyperparameter_search.</span></span><span class="sig-name descname"><span class="pre">set_pdeathsig</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/hyperparameter_search.html#set_pdeathsig"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.hyperparameter_search.set_pdeathsig" title="Permalink to this definition">¶</a></dt>
+<dd><p>Binds child process lifecycle to the parent orchestrator via Linux prctl.</p>
 </dd></dl>
 
 <span class="target" id="module-sequifier.helpers"></span><dl class="py function">
@@ -4239,6 +4185,41 @@ is not True.</p>
 </ul>
 </dd>
 </dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.helpers.get_best_model_path">
+<span class="sig-prename descclassname"><span class="pre">sequifier.helpers.</span></span><span class="sig-name descname"><span class="pre">get_best_model_path</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">run_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/helpers.html#get_best_model_path"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.helpers.get_best_model_path" title="Permalink to this definition">¶</a></dt>
+<dd><p>Searches for the exported ‘best’ model file for a given run and returns its path and epoch.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>project_root</strong> – The root directory of the project.</p></li>
+<li><p><strong>run_name</strong> – The unique identifier for the hyperparameter search run.</p></li>
+<li><p><strong>model_type</strong> – The extension of the exported model (e.g., ‘onnx’ or ‘pt’).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><ul class="simple">
+<li><p>The file path to the best model (str).</p></li>
+<li><p>The actual epoch at which this model was saved (int).</p></li>
+</ul>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A tuple containing</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>FileNotFoundError</strong> – If no matching model files are found.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.helpers.get_last_training_batch_timedelta">
+<span class="sig-prename descclassname"><span class="pre">sequifier.helpers.</span></span><span class="sig-name descname"><span class="pre">get_last_training_batch_timedelta</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'.'</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">float</span></span></span><a class="reference internal" href="_modules/sequifier/helpers.html#get_last_training_batch_timedelta"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.helpers.get_last_training_batch_timedelta" title="Permalink to this definition">¶</a></dt>
+<dd><p>Reads the level 2 log file, finds the last two mid-epoch training logs,
+and returns the timedelta between them in seconds.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -4692,36 +4673,37 @@ rank and worker ID.</p>
 </ul>
 </li>
 <li><a class="reference internal" href="#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a><ul>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch</span></code></a><ul>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.project_root"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.project_root</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.metadata_config_path"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.metadata_config_path</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.hp_search_name"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.hp_search_name</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.search_strategy"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.search_strategy</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.n_samples"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.n_samples</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.model_config_write_path"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.model_config_write_path</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.training_data_path"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.training_data_path</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.validation_data_path"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.validation_data_path</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.read_format"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.read_format</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.input_columns"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.input_columns</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.column_types"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.column_types</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.categorical_columns"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.categorical_columns</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.real_columns"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.real_columns</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.target_columns"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.target_columns</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.target_column_types"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.target_column_types</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.id_maps"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.id_maps</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.seq_length"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.seq_length</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.n_classes"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.n_classes</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.inference_batch_size"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.inference_batch_size</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.export_onnx"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.export_onnx</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.export_pt"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.export_pt</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.export_with_dropout"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.export_with_dropout</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.model_hyperparameter_sampling"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.model_hyperparameter_sampling</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.training_hyperparameter_sampling"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.training_hyperparameter_sampling</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.grid_sample"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.grid_sample()</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.model_config"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.model_config</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.n_combinations"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.n_combinations()</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.random_sample"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.random_sample()</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearch.sample"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearch.sample()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig</span></code></a><ul>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.project_root"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.project_root</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.metadata_config_path"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.metadata_config_path</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.hp_search_name"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.hp_search_name</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.search_strategy"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.search_strategy</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.n_samples"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.n_samples</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.model_config_write_path"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.model_config_write_path</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.training_data_path"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.training_data_path</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.validation_data_path"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.validation_data_path</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.read_format"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.read_format</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.input_columns"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.input_columns</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.column_types"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.column_types</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.categorical_columns"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.categorical_columns</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.real_columns"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.real_columns</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.target_columns"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.target_columns</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.target_column_types"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.target_column_types</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.id_maps"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.id_maps</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.seq_length"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.seq_length</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.n_classes"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.n_classes</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.inference_batch_size"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.inference_batch_size</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.export_onnx"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.export_onnx</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.export_pt"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.export_pt</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.export_with_dropout"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.export_with_dropout</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.model_hyperparameter_sampling"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.model_hyperparameter_sampling</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.training_hyperparameter_sampling"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.training_hyperparameter_sampling</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.evaluation_inference_config"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.evaluation_inference_config</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.evaluation_script"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.evaluation_script</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.evaluation_metrics"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.evaluation_metrics</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.evaluation_metric_directions"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.evaluation_metric_directions</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.model_config"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.model_config</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.sample_trial"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearchConfig.sample_trial()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling"><code class="docutils literal notranslate"><span class="pre">ModelSpecHyperparameterSampling</span></code></a><ul>
@@ -4732,10 +4714,8 @@ rank and worker ID.</p>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.n_head"><code class="docutils literal notranslate"><span class="pre">ModelSpecHyperparameterSampling.n_head</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.dim_feedforward"><code class="docutils literal notranslate"><span class="pre">ModelSpecHyperparameterSampling.dim_feedforward</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.num_layers"><code class="docutils literal notranslate"><span class="pre">ModelSpecHyperparameterSampling.num_layers</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.grid_sample"><code class="docutils literal notranslate"><span class="pre">ModelSpecHyperparameterSampling.grid_sample()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.model_config"><code class="docutils literal notranslate"><span class="pre">ModelSpecHyperparameterSampling.model_config</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.n_combinations"><code class="docutils literal notranslate"><span class="pre">ModelSpecHyperparameterSampling.n_combinations()</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.random_sample"><code class="docutils literal notranslate"><span class="pre">ModelSpecHyperparameterSampling.random_sample()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.sample_trial"><code class="docutils literal notranslate"><span class="pre">ModelSpecHyperparameterSampling.sample_trial()</span></code></a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling</span></code></a><ul>
@@ -4767,10 +4747,8 @@ rank and worker ID.</p>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.torch_compile"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.torch_compile</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.float32_matmul_precision"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.float32_matmul_precision</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.__init__"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.__init__()</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.grid_sample"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.grid_sample()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.model_config"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.model_config</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.n_combinations"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.n_combinations()</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.random_sample"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.random_sample()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.sample_trial"><code class="docutils literal notranslate"><span class="pre">TrainingSpecHyperparameterSampling.sample_trial()</span></code></a></li>
 </ul>
 </li>
 </ul>
@@ -4884,15 +4862,14 @@ rank and worker ID.</p>
 <li><a class="reference internal" href="#sequifier.infer.sample_with_cumsum"><code class="docutils literal notranslate"><span class="pre">sample_with_cumsum()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.infer.verify_variable_order"><code class="docutils literal notranslate"><span class="pre">verify_variable_order()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.make.make"><code class="docutils literal notranslate"><span class="pre">make()</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.hyperparameter_search.HyperparameterSearcher"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearcher</span></code></a><ul>
-<li><a class="reference internal" href="#sequifier.hyperparameter_search.HyperparameterSearcher.__init__"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearcher.__init__()</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.hyperparameter_search.HyperparameterSearcher.hyperparameter_search"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearcher.hyperparameter_search()</span></code></a></li>
-</ul>
-</li>
 <li><a class="reference internal" href="#sequifier.hyperparameter_search.hyperparameter_search"><code class="docutils literal notranslate"><span class="pre">hyperparameter_search()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.hyperparameter_search.objective"><code class="docutils literal notranslate"><span class="pre">objective()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.hyperparameter_search.set_pdeathsig"><code class="docutils literal notranslate"><span class="pre">set_pdeathsig()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.configure_determinism"><code class="docutils literal notranslate"><span class="pre">configure_determinism()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.configure_logger"><code class="docutils literal notranslate"><span class="pre">configure_logger()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.construct_index_maps"><code class="docutils literal notranslate"><span class="pre">construct_index_maps()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.helpers.get_best_model_path"><code class="docutils literal notranslate"><span class="pre">get_best_model_path()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.helpers.get_last_training_batch_timedelta"><code class="docutils literal notranslate"><span class="pre">get_last_training_batch_timedelta()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.get_torch_dtype"><code class="docutils literal notranslate"><span class="pre">get_torch_dtype()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.normalize_path"><code class="docutils literal notranslate"><span class="pre">normalize_path()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.helpers.numpy_to_pytorch"><code class="docutils literal notranslate"><span class="pre">numpy_to_pytorch()</span></code></a></li>
@@ -4925,7 +4902,7 @@ rank and worker ID.</p>
       
     </aside>
   </div>
-</div><script data-url_root="./" id="documentation_options" src="_static/documentation_options.js?v=ab8888bc"></script>
+</div><script data-url_root="./" id="documentation_options" src="_static/documentation_options.js?v=9c7002d6"></script>
     <script src="_static/doctools.js?v=888ff710"></script>
     <script src="_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>

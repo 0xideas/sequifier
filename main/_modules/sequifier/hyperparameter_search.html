@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/hyperparameter_search.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.hyperparameter_search - sequifier v1.1.2.1 documentation</title>
+        <title>sequifier.hyperparameter_search - sequifier v1.1.2.2 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v1.1.2.1 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v1.1.2.2 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.1.2.1 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.1.2.2 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -269,14 +269,17 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.hyperparameter_search</h1><div class="highlight"><pre>
-<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">glob</span>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ctypes</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">signal</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">subprocess</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Union</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">optuna</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch._dynamo</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">yaml</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">beartype</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
@@ -285,244 +288,293 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.hyperparameter_search_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
     <span class="n">load_hyperparameter_search_config</span><span class="p">,</span>
 <span class="p">)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModel</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">configure_logger</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">normalize_path</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
+    <span class="n">get_best_model_path</span><span class="p">,</span>
+    <span class="n">get_last_training_batch_timedelta</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.yaml</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModelDumper</span>  <span class="c1"># noqa: E402</span>
 
 
-<div class="viewcode-block" id="hyperparameter_search"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.hyperparameter_search">[docs]</a><span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">hyperparameter_search</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">skip_metadata</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Main function for initiating a hyperparameter search process.</span>
+<div class="viewcode-block" id="set_pdeathsig"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.set_pdeathsig">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">set_pdeathsig</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Binds child process lifecycle to the parent orchestrator via Linux prctl.&quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">sys</span><span class="o">.</span><span class="n">platform</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;linux&quot;</span><span class="p">):</span>
+        <span class="n">libc</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">CDLL</span><span class="p">(</span><span class="s2">&quot;libc.so.6&quot;</span><span class="p">)</span>
+        <span class="n">libc</span><span class="o">.</span><span class="n">prctl</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">signal</span><span class="o">.</span><span class="n">SIGTERM</span><span class="p">)</span>  <span class="c1"># PR_SET_PDEATHSIG = 1</span></div>
 
-<span class="sd">    This function loads the hyperparameter search configuration, initializes</span>
-<span class="sd">    the searcher, and starts the search.</span>
+
+<div class="viewcode-block" id="objective"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.objective">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">objective</span><span class="p">(</span><span class="n">trial</span><span class="p">:</span> <span class="n">optuna</span><span class="o">.</span><span class="n">Trial</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;The central objective engine bridging Optuna to pure CLI execution.</span>
+
+<span class="sd">    This function handles generating the YAML configuration for the specific</span>
+<span class="sd">    trial, dynamically allocating a port for distributed training, launching the</span>
+<span class="sd">    training subprocess, asynchronously polling the validation metrics, and reporting</span>
+<span class="sd">    them back to Optuna for potential pruning.</span>
 
 <span class="sd">    Args:</span>
-<span class="sd">        config_path (str): Path to the hyperparameter search YAML</span>
-<span class="sd">            configuration file.</span>
-<span class="sd">        skip_metadata (bool): Flag indicating whether to run the search</span>
-<span class="sd">            on unprocessed data.</span>
+<span class="sd">        trial (optuna.Trial): The Optuna trial object managing the current hyperparameter combination.</span>
+<span class="sd">        config (HyperparameterSearchConfig): The parsed hyperparameter search configuration.</span>
 
 <span class="sd">    Returns:</span>
-<span class="sd">        None</span>
+<span class="sd">        float: The best validation loss achieved during the trial.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        optuna.TrialPruned: If the trial is pruned by the Optuna orchestrator.</span>
+<span class="sd">        RuntimeError: If the training subprocess fails or is externally preempted.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">hyperparameter_search_config</span> <span class="o">=</span> <span class="n">load_hyperparameter_search_config</span><span class="p">(</span>
-        <span class="n">config_path</span><span class="p">,</span> <span class="n">skip_metadata</span>
+    <span class="n">run_config</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">trial</span><span class="o">.</span><span class="n">number</span><span class="p">)</span>
+    <span class="n">run_name</span> <span class="o">=</span> <span class="n">run_config</span><span class="o">.</span><span class="n">model_name</span>
+
+    <span class="c1"># 1. YAML Generation</span>
+    <span class="n">config_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">model_config_write_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">.yaml&quot;</span>
+    <span class="p">)</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">config_path</span><span class="p">),</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">yaml</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">run_config</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="n">Dumper</span><span class="o">=</span><span class="n">TrainModelDumper</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+    <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;SEQUIFIER_HYPERPARAMETER_SEARCH_RUN&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
+
+    <span class="n">env</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">cmd</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;sequifier&quot;</span><span class="p">,</span> <span class="s2">&quot;train&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;--config-path=</span><span class="si">{</span><span class="n">config_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">]</span>
+    <span class="n">process</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">(</span>
+        <span class="n">cmd</span><span class="p">,</span>
+        <span class="n">env</span><span class="o">=</span><span class="n">env</span><span class="p">,</span>
+        <span class="n">preexec_fn</span><span class="o">=</span><span class="n">set_pdeathsig</span> <span class="k">if</span> <span class="n">sys</span><span class="o">.</span><span class="n">platform</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;linux&quot;</span><span class="p">)</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span>
 
-    <span class="n">hyperparameter_searcher</span> <span class="o">=</span> <span class="n">HyperparameterSearcher</span><span class="p">(</span><span class="n">hyperparameter_search_config</span><span class="p">)</span>
+    <span class="n">metrics_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;logs&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;sequifier-</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">-metrics.jsonl&quot;</span>
+    <span class="p">)</span>
+    <span class="n">prune_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;logs&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;sequifier-</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">.prune&quot;</span>
+    <span class="p">)</span>
 
-    <span class="n">hyperparameter_searcher</span><span class="o">.</span><span class="n">hyperparameter_search</span><span class="p">()</span></div>
+    <span class="n">last_read_pos</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">best_val_loss</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">consume_metrics</span><span class="p">(</span><span class="n">last_read_pos</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Helper closure to read written metrics and evaluate pruning.&quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">metrics_path</span><span class="p">):</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">metrics_path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">f</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="n">last_read_pos</span><span class="p">)</span>
+                <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+                    <span class="n">line</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">readline</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="ow">not</span> <span class="n">line</span> <span class="ow">or</span> <span class="p">(</span><span class="ow">not</span> <span class="n">line</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)):</span>
+                        <span class="k">break</span>  <span class="c1"># Reached end of currently written data</span>
+                    <span class="k">try</span><span class="p">:</span>
+                        <span class="n">data</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">line</span><span class="p">)</span>
+                        <span class="n">val_loss</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;val_loss&quot;</span><span class="p">)</span>
+                        <span class="n">global_step</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;global_step&quot;</span><span class="p">)</span>
+
+                        <span class="k">if</span> <span class="n">global_step</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">val_loss</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                            <span class="c1"># 5. Cooperative Pruning Evaluation</span>
+                            <span class="n">is_multi_objective</span> <span class="o">=</span> <span class="p">(</span>
+                                <span class="n">config</span><span class="o">.</span><span class="n">evaluation_metrics</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                                <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">evaluation_metrics</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span>
+                            <span class="p">)</span>
+                            <span class="k">if</span> <span class="ow">not</span> <span class="n">is_multi_objective</span><span class="p">:</span>
+                                <span class="n">trial</span><span class="o">.</span><span class="n">report</span><span class="p">(</span><span class="n">val_loss</span><span class="p">,</span> <span class="n">global_step</span><span class="p">)</span>
+                                <span class="n">best_val_loss</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">best_val_loss</span><span class="p">,</span> <span class="n">val_loss</span><span class="p">)</span>
+
+                                <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">prune_trials</span> <span class="ow">and</span> <span class="n">trial</span><span class="o">.</span><span class="n">should_prune</span><span class="p">():</span>
+                                    <span class="nb">open</span><span class="p">(</span><span class="n">prune_path</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+                                    <span class="k">try</span><span class="p">:</span>
+                                        <span class="k">try</span><span class="p">:</span>
+                                            <span class="n">timedelta</span> <span class="o">=</span> <span class="p">(</span>
+                                                <span class="n">get_last_training_batch_timedelta</span><span class="p">(</span>
+                                                    <span class="n">run_name</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span>
+                                                <span class="p">)</span>
+                                            <span class="p">)</span>
+                                            <span class="n">timeout_val</span> <span class="o">=</span> <span class="p">(</span><span class="n">timedelta</span> <span class="o">*</span> <span class="mi">2</span><span class="p">)</span> <span class="o">+</span> <span class="mi">30</span>
+                                        <span class="k">except</span> <span class="p">(</span><span class="ne">ValueError</span><span class="p">,</span> <span class="ne">FileNotFoundError</span><span class="p">):</span>
+                                            <span class="n">timeout_val</span> <span class="o">=</span> <span class="mf">60.0</span>  <span class="c1"># Safe default fallback</span>
+
+                                        <span class="n">process</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="n">timeout_val</span><span class="p">)</span>
+                                    <span class="k">except</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">TimeoutExpired</span><span class="p">:</span>
+                                        <span class="n">process</span><span class="o">.</span><span class="n">kill</span><span class="p">()</span>  <span class="c1"># Escalation</span>
+                                    <span class="k">raise</span> <span class="n">optuna</span><span class="o">.</span><span class="n">TrialPruned</span><span class="p">()</span>
+
+                        <span class="n">last_read_pos</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">tell</span><span class="p">()</span>
+
+                    <span class="k">except</span> <span class="n">json</span><span class="o">.</span><span class="n">JSONDecodeError</span><span class="p">:</span>
+                        <span class="k">break</span>
+        <span class="k">return</span> <span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span>
+
+    <span class="c1"># 4. Asynchronous Polling &amp; Caching Mitigation</span>
+    <span class="k">while</span> <span class="n">process</span><span class="o">.</span><span class="n">poll</span><span class="p">()</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span> <span class="o">=</span> <span class="n">consume_metrics</span><span class="p">(</span><span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+
+    <span class="n">_</span><span class="p">,</span> <span class="n">best_val_loss</span> <span class="o">=</span> <span class="n">consume_metrics</span><span class="p">(</span><span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">)</span>
+
+    <span class="n">exit_code</span> <span class="o">=</span> <span class="n">process</span><span class="o">.</span><span class="n">returncode</span>
+    <span class="k">if</span> <span class="n">exit_code</span> <span class="o">==</span> <span class="mi">143</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">prune_path</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="n">optuna</span><span class="o">.</span><span class="n">TrialPruned</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Trial pre-empted externally by cluster (SIGTERM). Exit code: </span><span class="si">{</span><span class="n">exit_code</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+    <span class="k">elif</span> <span class="n">exit_code</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Training failed with exit code </span><span class="si">{</span><span class="n">exit_code</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">model_type</span> <span class="o">=</span> <span class="s2">&quot;onnx&quot;</span> <span class="k">if</span> <span class="n">run_config</span><span class="o">.</span><span class="n">export_onnx</span> <span class="k">else</span> <span class="s2">&quot;pt&quot;</span>
+    <span class="n">model_path</span><span class="p">,</span> <span class="n">last_epoch</span> <span class="o">=</span> <span class="n">get_best_model_path</span><span class="p">(</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="n">run_name</span><span class="p">,</span> <span class="n">model_type</span>
+    <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">evaluation_inference_config</span><span class="p">:</span>
+        <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="s2">&quot;sequifier&quot;</span><span class="p">,</span>
+                <span class="s2">&quot;infer&quot;</span><span class="p">,</span>
+                <span class="sa">f</span><span class="s2">&quot;--config-path=</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">evaluation_inference_config</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                <span class="sa">f</span><span class="s2">&quot;--model-path=</span><span class="si">{</span><span class="n">model_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="p">],</span>
+            <span class="n">check</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">evaluation_script</span> <span class="ow">and</span> <span class="n">config</span><span class="o">.</span><span class="n">evaluation_metrics</span><span class="p">:</span>
+        <span class="n">eval_script_path</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">evaluation_script</span>
+        <span class="n">cmd</span> <span class="o">=</span> <span class="p">[</span><span class="n">sys</span><span class="o">.</span><span class="n">executable</span><span class="p">,</span> <span class="n">eval_script_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">-best-</span><span class="si">{</span><span class="n">last_epoch</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">]</span>
+
+        <span class="n">eval_process</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+            <span class="n">cmd</span><span class="p">,</span> <span class="n">capture_output</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">cwd</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">eval_process</span><span class="o">.</span><span class="n">returncode</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Evaluation script failed (exit code </span><span class="si">{</span><span class="n">eval_process</span><span class="o">.</span><span class="n">returncode</span><span class="si">}</span><span class="s2">):</span><span class="se">\n</span><span class="si">{</span><span class="n">eval_process</span><span class="o">.</span><span class="n">stderr</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+
+        <span class="n">eval_json_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
+            <span class="s2">&quot;outputs&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;evaluations&quot;</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">-best-</span><span class="si">{</span><span class="n">last_epoch</span><span class="si">}</span><span class="s2">.json&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">eval_json_path</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Evaluation JSON not found at expected path: </span><span class="si">{</span><span class="n">eval_json_path</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">eval_json_path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">eval_results</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+            <span class="n">eval_results_keys</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">eval_results</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
+            <span class="n">evaluation_metrics</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">evaluation_metrics</span><span class="p">)</span>
+            <span class="n">missing_metrics</span> <span class="o">=</span> <span class="n">evaluation_metrics</span><span class="o">.</span><span class="n">difference</span><span class="p">(</span><span class="n">eval_results_keys</span><span class="p">)</span>
+            <span class="n">excess_metrics</span> <span class="o">=</span> <span class="n">eval_results_keys</span><span class="o">.</span><span class="n">difference</span><span class="p">(</span><span class="n">evaluation_metrics</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">missing_metrics</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Some of the configured evaluation metrics are not in the script output: </span><span class="si">{</span><span class="n">missing_metrics</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">excess_metrics</span><span class="p">):</span>
+                <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Some metrics output by the script are not used in hyperparameter optimization: </span><span class="si">{</span><span class="n">excess_metrics</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+
+        <span class="n">metrics</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">metric</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">evaluation_metrics</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">metric</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">eval_results</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">KeyError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Metric &#39;</span><span class="si">{</span><span class="n">metric</span><span class="si">}</span><span class="s2">&#39; missing in </span><span class="si">{</span><span class="n">eval_json_path</span><span class="si">}</span><span class="s2">. Found keys: </span><span class="si">{</span><span class="nb">list</span><span class="p">(</span><span class="n">eval_results</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+            <span class="n">metrics</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">eval_results</span><span class="p">[</span><span class="n">metric</span><span class="p">]))</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">metrics</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">metrics</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">metrics</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">best_val_loss</span></div>
 
 
-<div class="viewcode-block" id="HyperparameterSearcher"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.HyperparameterSearcher">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">HyperparameterSearcher</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;A class for performing hyperparameter search.</span>
+<div class="viewcode-block" id="hyperparameter_search"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.hyperparameter_search">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">hyperparameter_search</span><span class="p">(</span><span class="n">config_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">skip_metadata</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Main function for initiating an Optuna-based hyperparameter search process.</span>
 
-<span class="sd">    Manages the hyperparameter search process based on a given configuration.</span>
-<span class="sd">    This class handles sampling hyperparameters, creating training configurations,</span>
-<span class="sd">    launching training subprocesses, and logging results.</span>
+<span class="sd">    This function loads the configuration, initializes the Optuna study with a</span>
+<span class="sd">    minimization direction, and kicks off the optimization loop. Once the configured</span>
+<span class="sd">    number of trials is complete, it prints out the best trial&#39;s value and hyperparameters.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        config_path (str): Path to the hyperparameter search YAML configuration file.</span>
+<span class="sd">        skip_metadata (bool): Flag indicating whether to skip loading/processing data metadata.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If `n_trials` is not defined in the configuration.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="n">load_hyperparameter_search_config</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">skip_metadata</span><span class="p">)</span>
 
-<div class="viewcode-block" id="HyperparameterSearcher.__init__"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.HyperparameterSearcher.__init__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hyperparameter_search_config</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initializes the HyperparameterSearcher instance.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            hyperparameter_search_config (HyperparameterSearchConfig): An object</span>
-<span class="sd">                containing the configuration for the hyperparameter search,</span>
-<span class="sd">                loaded via `load_hyperparameter_search_config`.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">config</span> <span class="o">=</span> <span class="n">hyperparameter_search_config</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">normalized_config_path</span> <span class="o">=</span> <span class="n">normalize_path</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">model_config_write_path</span><span class="p">,</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">start_run</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_start_run</span><span class="p">()</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_initialize_log_file</span><span class="p">()</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_n_samples</span><span class="p">(</span>
-            <span class="n">hyperparameter_search_config</span><span class="o">.</span><span class="n">override_input</span>
-        <span class="p">)</span></div>
-
-    <span class="nd">@beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_get_start_run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Determines the starting run number by checking existing config files.</span>
-
-<span class="sd">        This allows for resuming a search. It finds the highest existing run</span>
-<span class="sd">        number (e.g., &#39;hp_search_name-run-10.yaml&#39;) and returns the next</span>
-<span class="sd">        integer (e.g., 11). If no previous runs are found, it starts from 0.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            int: The integer run number to start the search from (e.g., 1 for a</span>
-<span class="sd">                new search, or `n+1` if `n` is the last completed run).</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">file_root</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">hp_search_name</span><span class="si">}</span><span class="s2">-run-&quot;</span>
-        <span class="n">search_pattern</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">normalized_config_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">file_root</span><span class="si">}</span><span class="s2">*.yaml&quot;</span><span class="p">)</span>
-        <span class="n">files</span> <span class="o">=</span> <span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">file</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span> <span class="k">for</span> <span class="n">file</span> <span class="ow">in</span> <span class="n">glob</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="n">search_pattern</span><span class="p">)]</span>
-        <span class="n">files</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span>
-            <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">filename</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">filename</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">file_root</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">])</span>
-        <span class="p">)</span>
-
-        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">files</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="n">last_iter</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">files</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">file_root</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
-            <span class="k">return</span> <span class="n">last_iter</span> <span class="o">+</span> <span class="mi">1</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;state&quot;</span><span class="p">,</span> <span class="s2">&quot;optuna&quot;</span><span class="p">),</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">strategy</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">&quot;search_strategy&quot;</span><span class="p">,</span> <span class="s2">&quot;bayesian&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">strategy</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;sample&quot;</span><span class="p">]:</span>
+        <span class="n">sampler</span> <span class="o">=</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">RandomSampler</span><span class="p">()</span>
+    <span class="k">elif</span> <span class="n">strategy</span> <span class="o">==</span> <span class="s2">&quot;grid&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="p">,</span> <span class="s2">&quot;BruteForceSampler&quot;</span><span class="p">):</span>
+            <span class="n">sampler</span> <span class="o">=</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">BruteForceSampler</span><span class="p">()</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">return</span> <span class="mi">0</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+                <span class="s2">&quot;Grid search requires Optuna &gt;= 3.1 for BruteForceSampler.&quot;</span>
+            <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>  <span class="c1"># &quot;bayesian&quot;</span>
+        <span class="n">sampler</span> <span class="o">=</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">TPESampler</span><span class="p">()</span>
 
-    <span class="nd">@beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_initialize_log_file</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Sets up the log file for the hyperparameter search.</span>
+    <span class="n">storage_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;state&quot;</span><span class="p">,</span> <span class="s2">&quot;optuna&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">hp_search_name</span><span class="si">}</span><span class="s2">.db&quot;</span>
+    <span class="p">)</span>
 
-<span class="sd">        It creates the &#39;logs&#39; directory if it doesn&#39;t exist and opens a log file.</span>
-<span class="sd">        If starting from run 1, it overwrites (mode &#39;w&#39;); otherwise, it appends</span>
-<span class="sd">        (mode &#39;a&#39;) to the existing log.</span>
+    <span class="n">is_multivariate</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">evaluation_metrics</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">evaluation_metrics</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span>
+    <span class="p">)</span>
 
-<span class="sd">        Returns:</span>
-<span class="sd">            None</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">configure_logger</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">hp_search_name</span>
+    <span class="k">if</span> <span class="n">is_multivariate</span><span class="p">:</span>
+        <span class="n">study</span> <span class="o">=</span> <span class="n">optuna</span><span class="o">.</span><span class="n">create_study</span><span class="p">(</span>
+            <span class="n">study_name</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">hp_search_name</span><span class="p">,</span>
+            <span class="n">directions</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">evaluation_metric_directions</span><span class="p">,</span>
+            <span class="n">sampler</span><span class="o">=</span><span class="n">sampler</span><span class="p">,</span>
+            <span class="n">storage</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;sqlite:///</span><span class="si">{</span><span class="n">storage_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="n">load_if_exists</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">direction</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">evaluation_metric_directions</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">if</span> <span class="p">(</span>
+                <span class="n">config</span><span class="o">.</span><span class="n">evaluation_metric_directions</span>
+                <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">evaluation_metric_directions</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span>
+            <span class="p">)</span>
+            <span class="k">else</span> <span class="s2">&quot;minimize&quot;</span>
+        <span class="p">)</span>
+        <span class="n">study</span> <span class="o">=</span> <span class="n">optuna</span><span class="o">.</span><span class="n">create_study</span><span class="p">(</span>
+            <span class="n">study_name</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">hp_search_name</span><span class="p">,</span>
+            <span class="n">direction</span><span class="o">=</span><span class="n">direction</span><span class="p">,</span>
+            <span class="n">sampler</span><span class="o">=</span><span class="n">sampler</span><span class="p">,</span>
+            <span class="n">storage</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;sqlite:///</span><span class="si">{</span><span class="n">storage_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="n">load_if_exists</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
         <span class="p">)</span>
 
-    <span class="nd">@beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_calculate_n_samples</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">override_input</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculates the total number of hyperparameter combinations to sample.</span>
-
-<span class="sd">        Based on the `search_strategy` (&#39;grid&#39; or &#39;sample&#39;), it either</span>
-<span class="sd">        calculates the total number of combinations or uses the specified</span>
-<span class="sd">        `n_samples`. It includes interactive prompts for user confirmation if</span>
-<span class="sd">        the strategy is &#39;grid&#39; or if &#39;sample&#39; exceeds the total combinations.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            int: The total number of samples (runs) to execute.</span>
-
-<span class="sd">        Raises:</span>
-<span class="sd">            Exception: If the `search_strategy` in the config is not &#39;grid&#39;</span>
-<span class="sd">                or &#39;sample&#39;.</span>
-<span class="sd">            AssertionError: If `n_samples` is not set when `search_strategy`</span>
-<span class="sd">                is &#39;sample&#39;.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">n_combinations</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">n_combinations</span><span class="p">()</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Found </span><span class="si">{</span><span class="n">n_combinations</span><span class="si">}</span><span class="s2"> hyperparameter combinations&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">search_strategy</span> <span class="o">==</span> <span class="s2">&quot;sample&quot;</span><span class="p">:</span>
-            <span class="n">n_samples</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">n_samples</span>
-            <span class="k">if</span> <span class="n">n_samples</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;n_samples must be defined for &#39;sample&#39; strategy&quot;</span><span class="p">)</span>
-            <span class="k">if</span> <span class="n">n_samples</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">n_combinations</span><span class="p">():</span>
-                <span class="k">if</span> <span class="ow">not</span> <span class="n">override_input</span><span class="p">:</span>
-                    <span class="nb">input</span><span class="p">(</span>
-                        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">n_samples</span><span class="si">}</span><span class="s2"> is above the number of combinations of hyperparameters. Press any key to continue with grid search or abort to reconfigure&quot;</span>
-                    <span class="p">)</span>
-                <span class="n">n_samples</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">n_combinations</span><span class="p">()</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">search_strategy</span> <span class="o">=</span> <span class="s2">&quot;grid&quot;</span>
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">search_strategy</span> <span class="o">==</span> <span class="s2">&quot;grid&quot;</span><span class="p">:</span>
-            <span class="n">n_samples</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">n_combinations</span><span class="p">()</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="n">override_input</span><span class="p">:</span>
-                <span class="nb">input</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;Found </span><span class="si">{</span><span class="n">n_samples</span><span class="si">}</span><span class="s2"> hyperparameter combinations. Please enter any key to confirm, or change search strategy to &#39;sample&#39;&quot;</span>
-                <span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;search strategy &#39;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">search_strategy</span><span class="si">}</span><span class="s2">&#39; is not valid. Allowed values are &#39;grid&#39; and &#39;sample&#39;&quot;</span>
-            <span class="p">)</span>
-
-        <span class="k">if</span> <span class="n">n_samples</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;n_samples must be defined for &#39;sample&#39; strategy&quot;</span><span class="p">)</span>
-
-        <span class="k">return</span> <span class="n">n_samples</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">_create_config_and_run</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span> <span class="n">i</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">TrainModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">attempt</span><span class="o">=</span><span class="mi">0</span>
-    <span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Creates a specific training configuration file and executes the run.</span>
-
-<span class="sd">        This method samples a configuration (if not provided), writes it to a</span>
-<span class="sd">        YAML file, and then launches the `sequifier train` command as a</span>
-<span class="sd">        subprocess. It includes retry logic: if a run fails (e.g., CUDA out</span>
-<span class="sd">        of memory), it recursively calls itself with a halved batch size,</span>
-<span class="sd">        retrying up to 3 times.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            i (int): The current run number (e.g., 1, 2, 3...).</span>
-<span class="sd">            seed (int): The random seed to use for this specific run.</span>
-<span class="sd">            config (Optional[TrainModel]): A specific `TrainModel` config to</span>
-<span class="sd">                use. If `None`, a new config will be sampled using</span>
-<span class="sd">                `self.config.sample(i)`. Defaults to `None`.</span>
-<span class="sd">            attempt (int): The current retry attempt number (0 for the first</span>
-<span class="sd">                try). Defaults to 0.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            None</span>
-
-<span class="sd">        Raises:</span>
-<span class="sd">            AssertionError: If the batch size becomes non-positive after</span>
-<span class="sd">                halving during a retry.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="n">config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">config</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
-        <span class="n">full_config_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">normalized_config_path</span><span class="p">,</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">hp_search_name</span><span class="si">}</span><span class="s2">-run-</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">.yaml&quot;</span><span class="p">,</span>
+    <span class="n">n_trials</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">n_trials</span>
+    <span class="k">if</span> <span class="n">n_trials</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">config</span><span class="o">.</span><span class="n">search_strategy</span> <span class="o">!=</span> <span class="s2">&quot;grid&quot;</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">&quot;n_trials/n_samples must be specified for hyperparameter search.&quot;</span>
         <span class="p">)</span>
-        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">full_config_path</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-            <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span>
-                <span class="n">yaml</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span>
-                    <span class="n">config</span><span class="p">,</span>
-                    <span class="n">Dumper</span><span class="o">=</span><span class="n">TrainModelDumper</span><span class="p">,</span>
-                    <span class="n">sort_keys</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                    <span class="n">default_flow_style</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                <span class="p">)</span>
-            <span class="p">)</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;--- Starting Hyperparameter Search Run </span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2"> with seed </span><span class="si">{</span><span class="n">seed</span><span class="si">}</span><span class="s2"> ---&quot;</span>
-        <span class="p">)</span>
-        <span class="k">try</span><span class="p">:</span>
-            <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
-                <span class="p">[</span>
-                    <span class="s2">&quot;sequifier&quot;</span><span class="p">,</span>
-                    <span class="s2">&quot;train&quot;</span><span class="p">,</span>
-                    <span class="sa">f</span><span class="s2">&quot;--config-path=</span><span class="si">{</span><span class="n">full_config_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-                    <span class="sa">f</span><span class="s2">&quot;--seed=</span><span class="si">{</span><span class="n">seed</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-                <span class="p">],</span>
-                <span class="n">check</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-            <span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;--- Finished Hyperparameter Search Run </span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2"> ---&quot;</span><span class="p">)</span>
+    <span class="n">study</span><span class="o">.</span><span class="n">optimize</span><span class="p">(</span><span class="k">lambda</span> <span class="n">trial</span><span class="p">:</span> <span class="n">objective</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">config</span><span class="p">),</span> <span class="n">n_trials</span><span class="o">=</span><span class="n">n_trials</span><span class="p">)</span>
 
-        <span class="k">except</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">CalledProcessError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">attempt</span> <span class="o">&lt;</span> <span class="mi">3</span><span class="p">:</span>
-                <span class="k">if</span> <span class="n">config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-                    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Config object lost during retry logic.&quot;</span><span class="p">)</span>
-                <span class="n">new_batch_size</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span>
-
-                <span class="k">if</span> <span class="n">new_batch_size</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
-                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                        <span class="s2">&quot;Batch size reduced to 0 or less during retry logic.&quot;</span>
-                    <span class="p">)</span>
-                <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">=</span> <span class="n">new_batch_size</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;ERROR: Run </span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2"> failed with exit code </span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">returncode</span><span class="si">}</span><span class="s2">. Halving batch size to </span><span class="si">{</span><span class="n">new_batch_size</span><span class="si">}</span><span class="s2"> in attempt </span><span class="si">{</span><span class="n">attempt</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2">&quot;</span>
-                <span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">_create_config_and_run</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">seed</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">attempt</span><span class="o">=</span><span class="n">attempt</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;ERROR: Run </span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2"> failed with exit code </span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">returncode</span><span class="si">}</span><span class="s2">. Stopping run </span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span>
-                <span class="p">)</span>
-
-<div class="viewcode-block" id="HyperparameterSearcher.hyperparameter_search"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.HyperparameterSearcher.hyperparameter_search">[docs]</a>    <span class="nd">@beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">hyperparameter_search</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Performs the hyperparameter search loop.</span>
-
-<span class="sd">        It iterates from the `start_run` number up to the total `n_samples`,</span>
-<span class="sd">        generating a unique seed for each run and calling</span>
-<span class="sd">        `_create_config_and_run` to execute it.</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            None</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">start_run</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="p">):</span>
-            <span class="n">seed</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="o">.</span><span class="n">timestamp</span><span class="p">()</span> <span class="o">*</span> <span class="mf">1e6</span><span class="p">)</span> <span class="o">%</span> <span class="p">(</span><span class="mi">2</span><span class="o">**</span><span class="mi">32</span><span class="p">)</span>
-            <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">seed</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_create_config_and_run</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">)</span></div></div>
+    <span class="k">if</span> <span class="n">is_multivariate</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Best trials (Pareto front):&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">trial</span> <span class="ow">in</span> <span class="n">study</span><span class="o">.</span><span class="n">best_trials</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  Values: </span><span class="si">{</span><span class="n">trial</span><span class="o">.</span><span class="n">values</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;  Params: &quot;</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">trial</span><span class="o">.</span><span class="n">params</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;    </span><span class="si">{</span><span class="n">key</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Best trial:&quot;</span><span class="p">)</span>
+        <span class="n">trial</span> <span class="o">=</span> <span class="n">study</span><span class="o">.</span><span class="n">best_trial</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  Value: </span><span class="si">{</span><span class="n">trial</span><span class="o">.</span><span class="n">value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;  Params: &quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">trial</span><span class="o">.</span><span class="n">params</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;    </span><span class="si">{</span><span class="n">key</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
 </pre></div>
         </article>
       </div>
@@ -555,7 +607,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=ab8888bc"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=9c7002d6"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
     <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
