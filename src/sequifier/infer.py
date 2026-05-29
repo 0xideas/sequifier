@@ -507,8 +507,8 @@ def infer_generative(
             # Folder-based inference can accept autoregression extra steps similar to .pt layout
             extra_steps = (
                 0
-                if config.autoregression_extra_steps is None
-                else config.autoregression_extra_steps
+                if config.autoregression_total_steps is None
+                else config.autoregression_total_steps
             )
 
             if extra_steps == 0:
@@ -549,8 +549,8 @@ def infer_generative(
             sequences_dict, _, sequence_ids_tensor, _, start_positions_tensor = data
             extra_steps = (
                 0
-                if config.autoregression_extra_steps is None
-                else config.autoregression_extra_steps
+                if config.autoregression_total_steps is None
+                else config.autoregression_total_steps
             )
 
             probs, preds = get_probs_preds_pt(
@@ -978,40 +978,43 @@ def get_probs_preds_autoregression(
     verify_variable_order(data)
 
     distinct_cols = len(np.unique(data["inputCol"].to_numpy()))
+    head_data_df = data.group_by("sequenceId", maintain_order=True).head(distinct_cols)
+
+    aligned_sequence_ids = (
+        head_data_df.get_column("sequenceId").unique(maintain_order=True).to_numpy()
+    )
+
+    aligned_start_positions = (
+        head_data_df.group_by("sequenceId", maintain_order=True)
+        .agg(pl.col("startItemPosition").max())
+        .get_column("startItemPosition")
+        .to_numpy()
+        + seq_length
+    )
+
     head_data = numpy_to_pytorch(
-        data.group_by("sequenceId", maintain_order=True).head(distinct_cols),
+        head_data_df,
         column_types,
         config.input_columns,
         seq_length,
     )
 
-    seq_id_to_start_item_position = {
-        k: (v + seq_length)
-        for k, v in data.group_by("sequenceId")
-        .agg(pl.col("startItemPosition").max())
-        .iter_rows()
-    }
+    # Run the autoregressive PyTorch inference
     probs, preds = get_probs_preds_pt(
-        config, inferer, head_data, extra_steps=config.autoregression_extra_steps
+        config, inferer, head_data, extra_steps=config.autoregression_total_steps
     )
 
+    # 4. Generate the final output arrays using the perfectly aligned bases
     item_positions_for_preds = np.concatenate(
         [
-            np.arange(
-                seq_id_to_start_item_position[v],
-                seq_id_to_start_item_position[v]
-                + config.autoregression_extra_steps
-                + 1,
-            )
-            for v in sorted(list(seq_id_to_start_item_position.keys()))
+            np.arange(start_pos, start_pos + config.autoregression_total_steps + 1)
+            for start_pos in aligned_start_positions
         ],
         axis=0,
     )
-    sequence_ids_for_preds = np.concatenate(
-        [
-            np.repeat(seq_id, config.autoregression_extra_steps + 1)
-            for seq_id in sorted(list(seq_id_to_start_item_position.keys()))
-        ]
+
+    sequence_ids_for_preds = np.repeat(
+        aligned_sequence_ids, config.autoregression_total_steps + 1
     )
 
     return probs, preds, sequence_ids_for_preds, item_positions_for_preds

@@ -606,7 +606,7 @@ These fields tell the inference engine which columns to extract from the new dat
 | `prediction_length` | `int` | No | `1` | Number of steps to predict *simultaneously*. **Must be 1** if `autoregression: true`. |
 | `inference_batch_size`| `int` | **Yes** | - | Number of sequences to process at once. |
 | `autoregression` | `bool` | No | `false` | If `true`, feeds predictions back into the model to predict further into the future. |
-| `autoregression_extra_steps`| `int` | No | `null` | If `autoregression: true`, how many *additional* future steps to predict beyond the first. |
+| `autoregression_total_steps`| `int` | No | `null` | If `autoregression: true`, how many total steps to predict, starting from the *first* subsequence in the inference data. |
 | `output_probabilities`| `bool` | No | `false` | If `true`, outputs the full probability distribution for categorical targets. |
 | `sample_from_distribution_columns`| `Optional[list[str]]`| No | `null` | If set, the model **samples** from the predicted distribution for these columns instead of taking the top-1 (argmax). Essential for diversity in generation. |
 | `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). |
@@ -630,21 +630,13 @@ These fields tell the inference engine which columns to extract from the new dat
   * **`embedding`:** Use this when you want to represent the sequence as a fixed-size vector. This uses the output of the Transformer's last layer *before* the decoding head.
       * *Output:* A file in `outputs/embeddings/` containing vectors (e.g., 128 floats) for each sequence. Useful for clustering, similarity search, or downstream ML tasks.
 
-### 2\. Autoregression (`autoregression: true`)
-
-Standard inference predicts the next step ($t+1$) based on history ($t-n \dots t$). Autoregression allows you to predict $t+1$, append that prediction to the history, and then predict $t+2$, and so on.
-
-  * **Pros:** Allows multi-step forecasting (e.g., predicting the next 30 days of sales) using a model trained only to predict the *next* step.
-  * **Cons:** Errors accumulate. If the prediction for $t+1$ is slightly wrong, the prediction for $t+2$ relies on bad data. Inference is also significantly slower because steps must be calculated sequentially, not in parallel.
-  * **Config:** Set `autoregression_extra_steps` to determine how far into the future to generate.
-
-### 3\. Sampling vs. Argmax
+### 2\. Sampling vs. Argmax
 
   * **Default (Argmax):** The model selects the class with the highest probability. Best for accuracy metrics and "most likely" forecasts.
   * **Sampling (`sample_from_distribution_columns`):** The model picks the next token randomly based on the probability distribution.
       * *Use Case:* Creative generation or simulation where you want diversity. If `Probability(A)=0.6` and `Probability(B)=0.4`, Argmax always picks A. Sampling picks B 40% of the time.
 
-### 4\. Input Format (`read_format`)
+### 3\. Input Format (`read_format`)
 
   * **`csv`:** Best for standard inference on small data. The inferer will filter the data to `input_columns` automatically.
   * **`parquet`** Best for most use cases. Can be used with lazy loading, will use less disk space but more CPU than `pt`

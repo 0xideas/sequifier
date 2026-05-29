@@ -37,4 +37,4 @@ enforce_determinism: true
 
 # Autoregression
 autoregression: true
-autoregression_extra_steps: 30
+autoregression_total_steps: 30

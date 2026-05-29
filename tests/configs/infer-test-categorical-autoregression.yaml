@@ -21,4 +21,4 @@ enforce_determinism: true
 
 sample_from_distribution_columns: null
 autoregression: true
-autoregression_extra_steps: 20
+autoregression_total_steps: 20
