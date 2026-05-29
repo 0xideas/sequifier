@@ -880,7 +880,6 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly `true` or `false` if data\_parallelism is 'FSDP'. |
 | `torch_compile` | `str` | No | `outer` | Controls torch.compile. Options are "outer", "inner", or "none". |
 | `float32_matmul_precision` | str | No | `highest` | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". |
-*(Note: Other static fields inherited from `train.yaml` like `distributed`, `layer_autocast`, `num_workers`, etc., are passed directly without sampling).*
 
 -----
 
@@ -963,8 +962,6 @@ Optuna monitors intermediate validation loss at validation loss calculation, whi
 ### 4. Multi-Objective Search (Pareto Front)
 
 If you define multiple metrics in `evaluation_metrics` (e.g., you want to maximize `accuracy` but also minimize `latency`), Optuna automatically transitions to an NSGA-II algorithm to find the **Pareto Front**—a set of best models where no metric can be improved without degrading another.
-
----
 
 ## Outputs
 
