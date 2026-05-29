@@ -922,19 +922,18 @@ All other parameters are considered **Independent**. Sequifier will test every v
 
 ### 1. `search_strategy`: `bayesian` vs. `grid` vs. `sample`
 
-* **`bayesian` (Default - TPE Sampler):**
-* *How it works:* Tree-structured Parzen Estimator (TPE). Learns from past trials to guess which hyperparameter regions are most promising.
-* *Pros:* Vastly more efficient than grid or random search, making it the industry standard for neural network tuning.
+  * **`bayesian` (Default - TPE Sampler):**
+      * *How it works:* Tree-structured Parzen Estimator (TPE). Learns from past trials to guess which hyperparameter regions are most promising.
+      * *Pros:* Vastly more efficient than grid or random search, making it the industry standard for neural network tuning.
 
 
-* **`grid` (Brute Force):**
-* *How it works:* Generates every possible combination of all provided lists.
-* *Pros:* Exhaustive.
-* *Cons:* Exponential explosion. Does not support Distribution dictionaries (cannot discretize continuous boundaries automatically).
+  * **`grid` (Brute Force):**
+      * *How it works:* Generates every possible combination of all provided lists.
+      * *Pros:* Exhaustive.
+      * *Cons:* Exponential explosion. Does not support Distribution dictionaries (cannot discretize continuous boundaries automatically).
 
-
-* **`sample` (Random Search):**
-* *How it works:* Randomly draws from the provided ranges.
+  * **`sample` (Random Search):**
+      * *How it works:* Randomly draws from the provided ranges.
 
 
 ### 2\. Feature Selection (`input_columns`)
@@ -961,19 +960,21 @@ If you define multiple metrics in `evaluation_metrics` (e.g., you want to maximi
 ## Outputs
 
 1. **Optuna Database:** Located at `state/optuna/[hp_search_name].db`.
-* A portable SQLite database containing the entire history of the study, enabling you to pause and resume the search at any time, or hook it into Optuna Dashboard (`optuna-dashboard sqlite:///state/optuna/...`).
+      * A portable SQLite database containing the entire history of the study, enabling you to pause and resume the search at any time, or hook it into Optuna Dashboard (`optuna-dashboard sqlite:///state/optuna/...`).
 
 
 2. **Generated Configs:** Located in `model_config_write_path` (e.g., `configs/hp_search/`).
-* Valid, standalone `train.yaml` files generated for each trial.
+      * Valid, standalone `train.yaml` files generated for each trial.
 
 
 3. **Logs:** Located in `logs/`.
-* Includes individual training logs and JSONL files (`sequifier-[RUN]-metrics.jsonl`) tracking the validation curve.
+      * Includes individual training logs and JSONL files (`sequifier-[RUN]-metrics.jsonl`) tracking the validation curve.
 
+4.  **Models & Checkpoints:**
+      * Saved in `models/` and `checkpoints/` with filenames including the run number (e.g., `models/sequifier-my-search-run-5-best-10.onnx`).
 
-4. **Models & Checkpoints:** Saved in `models/` and `checkpoints/`.
-5. **Evaluations (Optional):** Saved in `outputs/evaluations/[RUN_NAME]-best-[EPOCH].json` if an evaluation script was utilized.
+5. **Evaluations (Optional):**
+      * Saved in `outputs/evaluations/[RUN_NAME]-best-[EPOCH].json` if an evaluation script was utilized.
 
 
 # Distributed and Multi-Node Training in Sequifier
