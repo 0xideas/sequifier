@@ -553,7 +553,9 @@ def infer_generative(
                 else config.autoregression_total_steps
             )
 
-            probs, preds = get_probs_preds_from_dict(config, inferer, sequences_dict, 1)
+            probs, preds = get_probs_preds_from_dict(
+                config, inferer, sequences_dict, total_steps
+            )
 
             prediction_length = inferer.prediction_length  # Get prediction_length
 
