@@ -2,8 +2,15 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+import torch
 
-from sequifier.infer import Inferer, normalize, sample_with_cumsum
+from sequifier.config.infer_config import InfererModel
+from sequifier.infer import (
+    Inferer,
+    get_probs_preds_from_dict,
+    normalize,
+    sample_with_cumsum,
+)
 
 
 def test_normalize():
@@ -143,3 +150,151 @@ def test_inferer_prepare_inference_batches_split(mock_inferer):
     assert batches[1]["cat_col"].shape == (2, 1)
     assert batches[2]["cat_col"].shape == (1, 1)  # The remainder
     np.testing.assert_array_equal(batches[2]["cat_col"], [[5]])
+
+
+# ==========================================
+# Test Autoregressive Tensor Inference
+# ==========================================
+
+
+@pytest.fixture
+def ar_config():
+    """Provides an actual InfererModel configuration for autoregressive inference."""
+    return InfererModel(
+        project_root=".",
+        metadata_config_path="dummy.json",
+        model_path="dummy.onnx",
+        model_type="generative",
+        data_path="tests/unit/data/dummy.parquet",
+        input_columns=["target_col"],
+        categorical_columns=[],
+        real_columns=["target_col"],
+        target_columns=["target_col"],
+        column_types={"target_col": "float64"},
+        target_column_types={"target_col": "real"},
+        seed=42,
+        device="cpu",
+        seq_length=3,
+        inference_batch_size=2,
+        output_probabilities=False,
+        map_to_id=False,  # Set to False to bypass ID mapping requirements
+        autoregression=True,
+        autoregression_total_steps=1,
+    )
+
+
+@pytest.fixture
+def ar_inferer(ar_config):
+    """Sets up an actual Inferer instance with mocked heavy dependencies."""
+    with patch("sequifier.infer.onnxruntime.InferenceSession"), patch(
+        "sequifier.infer.load_inference_model"
+    ):
+        return Inferer(
+            model_type=ar_config.model_type,
+            model_path=ar_config.model_path,
+            project_root=ar_config.project_root,
+            id_maps=None,
+            selected_columns_statistics={"target_col": {"mean": 0.0, "std": 1.0}},
+            map_to_id=ar_config.map_to_id,
+            categorical_columns=ar_config.categorical_columns,
+            real_columns=ar_config.real_columns,
+            input_columns=ar_config.input_columns,
+            target_columns=ar_config.target_columns,
+            target_column_types=ar_config.target_column_types,
+            sample_from_distribution_columns=ar_config.sample_from_distribution_columns,
+            infer_with_dropout=ar_config.infer_with_dropout,
+            prediction_length=ar_config.prediction_length,
+            inference_batch_size=ar_config.inference_batch_size,
+            device=ar_config.device,
+            args_config={},
+            training_config_path=ar_config.training_config_path,
+        )
+
+
+def test_get_probs_preds_from_dict_shifting_and_looping(ar_config, ar_inferer):
+    """
+    Tests that the autoregressive loop calls the model the correct number of times
+    and accurately shifts the input tensor to append the latest prediction.
+    """
+    initial_data = {"target_col": torch.tensor([[1.0, 2.0, 3.0], [10.0, 20.0, 30.0]])}
+
+    # Patch the method on the actual instance
+    with patch.object(ar_inferer, "infer_generative") as mock_infer:
+        # Step 0: Predicts 4.0 for row 0, 40.0 for row 1
+        # Step 1: Predicts 5.0 for row 0, 50.0 for row 1
+        mock_infer.side_effect = [
+            {"target_col": np.array([[4.0], [40.0]])},
+            {"target_col": np.array([[5.0], [50.0]])},
+        ]
+
+        total_steps = 2
+        probs, preds = get_probs_preds_from_dict(
+            ar_config, ar_inferer, initial_data, total_steps=total_steps
+        )
+
+        # 1. Verify Loop Count
+        assert mock_infer.call_count == 2
+
+        # 2. Verify Tensor Shifting
+        expected_shifted_x = {
+            "target_col": np.array([[2.0, 3.0, 4.0], [20.0, 30.0, 40.0]])
+        }
+        second_call_args = mock_infer.call_args_list[1][0][0]
+
+        np.testing.assert_array_equal(
+            second_call_args["target_col"], expected_shifted_x["target_col"]
+        )
+
+        # 3. Verify Output Reshaping
+        assert "target_col" in preds
+        np.testing.assert_array_equal(preds["target_col"], [4.0, 5.0, 40.0, 50.0])
+
+
+def test_get_probs_preds_from_dict_with_probabilities(ar_config, ar_inferer):
+    """
+    Tests the probability branching logic. When output_probabilities=True,
+    `infer_generative` is called twice per step: once for probs, once for preds.
+    """
+    ar_config.output_probabilities = True
+
+    initial_data = {"target_col": torch.tensor([[1.0, 2.0]])}
+
+    # Corrected shape: (batch_size, n_classes) -> (1, 2)
+    dummy_probs = {"target_col": np.array([[0.1, 0.9]])}
+    dummy_preds = {"target_col": np.array([[1]])}
+
+    with patch.object(ar_inferer, "infer_generative") as mock_infer:
+        mock_infer.side_effect = [dummy_probs, dummy_preds]
+
+        probs, preds = get_probs_preds_from_dict(
+            ar_config, ar_inferer, initial_data, total_steps=1
+        )
+
+        # 1 initial step * 2 calls per step = 2 calls
+        assert mock_infer.call_count == 2
+        assert probs is not None
+        assert "target_col" in probs
+        np.testing.assert_array_equal(preds["target_col"], [1])
+
+
+def test_get_probs_preds_from_dict_ignores_unselected_columns(ar_config, ar_inferer):
+    """
+    Tests that columns not explicitly defined in `config.input_columns`
+    are filtered out before inference.
+    """
+    initial_data = {
+        "target_col": torch.tensor([[1.0, 2.0]]),
+        "ignored_col": torch.tensor([[9.0, 9.0]]),
+    }
+
+    with patch.object(ar_inferer, "infer_generative") as mock_infer:
+        mock_infer.return_value = {"target_col": np.array([[3.0]])}
+
+        _, _ = get_probs_preds_from_dict(
+            ar_config, ar_inferer, initial_data, total_steps=1
+        )
+
+        first_call_args = mock_infer.call_args_list[0][0][0]
+
+        assert "target_col" in first_call_args
+        assert "ignored_col" not in first_call_args

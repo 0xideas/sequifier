@@ -503,13 +503,13 @@ def infer_generative(
             n_input_cols = data.get_column("inputCol").n_unique()
 
             # Folder-based inference can accept autoregression extra steps similar to .pt layout
-            extra_steps = (
-                0
+            total_steps = (
+                1
                 if config.autoregression_total_steps is None
                 else config.autoregression_total_steps
             )
 
-            if extra_steps == 0:
+            if total_steps == 1:
                 probs, preds = get_probs_preds_from_df(
                     config, inferer, data, column_types
                 )
@@ -547,19 +547,17 @@ def infer_generative(
                 )
         elif config.read_format == "pt":
             sequences_dict, _, sequence_ids_tensor, _, start_positions_tensor = data
-            extra_steps = (
-                0
+            total_steps = (
+                1
                 if config.autoregression_total_steps is None
                 else config.autoregression_total_steps
             )
 
-            probs, preds = get_probs_preds_from_dict(
-                config, inferer, sequences_dict, extra_steps
-            )
+            probs, preds = get_probs_preds_from_dict(config, inferer, sequences_dict, 1)
 
             prediction_length = inferer.prediction_length  # Get prediction_length
 
-            if extra_steps == 0:
+            if total_steps == 1:
                 # Non-autoregressive path: Apply prediction_length logic
                 sequence_ids_for_preds_base = sequence_ids_tensor.numpy()
                 item_positions_for_preds_base = (
@@ -581,11 +579,11 @@ def infer_generative(
 
             else:
                 sequence_ids_for_preds = np.repeat(
-                    sequence_ids_tensor.numpy(), extra_steps + 1
+                    sequence_ids_tensor.numpy(), total_steps
                 )
                 item_position_boundaries = zip(
                     list(start_positions_tensor + config.seq_length),
-                    list(start_positions_tensor + config.seq_length + extra_steps + 1),
+                    list(start_positions_tensor + config.seq_length + total_steps),
                 )
                 item_positions_for_preds = np.concatenate(
                     [np.arange(start, end) for start, end in item_position_boundaries],
@@ -724,7 +722,7 @@ def get_probs_preds_from_dict(
     config: Any,
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
-    extra_steps: int = 0,
+    total_steps: int = 1,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """Generates predictions from PyTorch tensor data, supporting autoregression.
 
@@ -733,7 +731,7 @@ def get_probs_preds_from_dict(
     sequence_ids, subsequence_ids, and start_positions). It implements an
     autoregressive loop:
     1. Runs inference on the initial data `X` (sequences).
-    2. For each subsequent step (`i` in `extra_steps`):
+    2. For each subsequent step:
        a. Creates the next input `X_next` by shifting the previous input
           `X` and appending the prediction from the last step.
        b. Runs inference on `X_next`.
@@ -746,8 +744,8 @@ def get_probs_preds_from_dict(
         inferer: The initialized `Inferer` instance.
         data: A dictionary mapping column/feature names to `torch.Tensor`s
               (the sequences part loaded from the .pt file).
-        extra_steps: The number of additional autoregressive steps to
-            perform. A value of 0 means simple, non-autoregressive
+        total_steps: The number of total autoregressive steps to
+            perform. A value of 1 means simple, non-autoregressive
             inference.
 
     Returns:
@@ -771,8 +769,7 @@ def get_probs_preds_from_dict(
     all_preds_list = {col: [] for col in target_cols}
 
     # 3. Autoregressive loop
-    # The loop runs `extra_steps + 1` times to get the initial prediction plus all extra steps.
-    for i in range(extra_steps + 1):
+    for i in range(total_steps):
         if config.output_probabilities:
             probs_for_step = inferer.infer_generative(X, return_probs=True)
             preds_for_step = inferer.infer_generative(None, probs_for_step)
@@ -784,7 +781,7 @@ def get_probs_preds_from_dict(
         for col in target_cols:
             all_preds_list[col].append(preds_for_step[col])
 
-        if i == extra_steps:
+        if i == total_steps:
             break
 
         X_next = {}
@@ -1020,7 +1017,7 @@ def get_probs_preds_autoregression(
 
     # Run the autoregressive PyTorch inference
     probs, preds = get_probs_preds_from_dict(
-        config, inferer, head_data, extra_steps=config.autoregression_total_steps
+        config, inferer, head_data, total_steps=config.autoregression_total_steps
     )
 
     # 4. Generate the final output arrays using the perfectly aligned bases
