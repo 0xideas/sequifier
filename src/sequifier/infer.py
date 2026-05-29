@@ -421,31 +421,27 @@ def infer_generative(
     dataset: Union[list[Any], Iterator[Any]],
     column_types: dict[str, torch.dtype],
 ):
-    """Performs inference with a generative model and saves the results.
+    """Executes the generative inference pipeline and exports results to disk.
 
-    This function manages the generative inference workflow:
-    1. Iterates through the dataset (chunks).
-    2. Handles data preparation, including expanding data for autoregression
-       if configured (`expand_data_by_autoregression`). It also calculates
-       the corresponding `itemPosition` for each prediction.
-    3. Calls the correct function to get probabilities and predictions
-       based on data format and autoregression settings (e.g.,
-       `get_probs_preds_autoregression`, `get_probs_preds_from_dict`).
-    4. Post-processes predictions:
-       - Maps integer predictions back to original IDs if `map_to_id` is True.
-       - Inverts normalization for real-valued target columns.
-    5. Saves probabilities to disk (if `config.output_probabilities` is True).
-    6. Saves the final predictions to disk, formatted as a Polars DataFrame
-       with `sequenceId`, `itemPosition`, and target columns.
+    This function processes the input dataset in chunks to accommodate large data
+    volumes. It handles various input formats (standalone CSV/Parquet, folder-based
+    Parquet, or PyTorch tensors) and routes the data to the appropriate inference
+    logic (standard sequence prediction or step-by-step autoregression). After
+    obtaining raw model outputs, it calculates aligned sequence IDs and absolute
+    item positions, applies necessary post-processing (such as reverse-mapping
+    categorical IDs and denormalizing real values), and writes the final
+    probabilities and predictions to the configured output directory.
 
     Args:
-        config: The `InfererModel` configuration object.
-        inferer: The initialized `Inferer` instance.
-        model_id: A string identifier for the model, used for naming
-            output files.
-        dataset: A list containing a Polars DataFrame (for parquet/csv) or
-            an iterator of loaded PyTorch data (for .pt files).
-        column_types: A dictionary mapping column names to their
+        config: The inference configuration object dictating I/O paths,
+            autoregression settings, and output formats.
+        inferer: The initialized `Inferer` instance responsible for executing
+            the underlying model logic.
+        model_id: A string identifier for the current model, used to construct
+            the names of the generated output files and directories.
+        dataset: A list or iterator yielding data chunks, typically containing
+            either Polars DataFrames or PyTorch tensor dictionaries.
+        column_types: A dictionary mapping input column names to their expected
             `torch.dtype`.
     """
     for data_id, data in enumerate(dataset):
@@ -979,6 +975,25 @@ def get_probs_preds_autoregression(
 ) -> tuple[
     Optional[dict[str, np.ndarray]], dict[str, np.ndarray], np.ndarray, np.ndarray
 ]:
+    """Generates autoregressive predictions and aligns them with sequence IDs and positions.
+
+    Extracts the initial sequence context from the sorted input DataFrame, maps it
+    to PyTorch tensors, and executes step-by-step autoregressive inference.
+
+    Args:
+        config: Inference configuration object.
+        inferer: Initialized `Inferer` instance.
+        data: Input DataFrame, sorted globally by `sequenceId` and locally by `subsequenceId`.
+        column_types: Mapping of input column names to their `torch.dtype`.
+        seq_length: Length of the input sequence context.
+
+    Returns:
+        A tuple containing:
+            - probs: Dict of probability arrays per target column (None if disabled).
+            - preds: Dict of final prediction arrays per target column.
+            - sequence_ids_for_preds: 1D array of sequence IDs matching the output shape.
+            - item_positions_for_preds: 1D array of absolute item positions for each step.
+    """
     verify_variable_order(data)
 
     distinct_cols = len(np.unique(data["inputCol"].to_numpy()))
