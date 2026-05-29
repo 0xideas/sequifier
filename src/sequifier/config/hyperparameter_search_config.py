@@ -602,6 +602,7 @@ class HyperparameterSearchConfig(BaseModel):
     hp_search_name: str
     search_strategy: str = "bayesian"
     n_trials: Optional[int] = Field(None, alias="n_samples")
+    prune_trials: Optional[bool] = True
     model_config_write_path: str
     training_data_path: str
     validation_data_path: str
@@ -634,6 +635,14 @@ class HyperparameterSearchConfig(BaseModel):
     training_hyperparameter_sampling: TrainingSpecHyperparameterSampling
 
     override_input: bool = False
+
+    @model_validator(mode="after")
+    def validate_prune_trials(self):
+        if self.prune_trials and self.training_hyperparameter_sampling.distributed:
+            warnings.warn(
+                "Trial pruning in distributed training settings is in beta mode."
+            )
+        return self
 
     @field_validator("evaluation_metrics")
     @classmethod

@@ -105,7 +105,7 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
                                 trial.report(val_loss, global_step)
                                 best_val_loss = min(best_val_loss, val_loss)
 
-                                if trial.should_prune():
+                                if config.prune_trials and trial.should_prune():
                                     open(prune_path, "w").close()
                                     try:
                                         try:
