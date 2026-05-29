@@ -430,7 +430,7 @@ def infer_generative(
        the corresponding `itemPosition` for each prediction.
     3. Calls the correct function to get probabilities and predictions
        based on data format and autoregression settings (e.g.,
-       `get_probs_preds_autoregression`, `get_probs_preds_pt`).
+       `get_probs_preds_autoregression`, `get_probs_preds_from_dict`).
     4. Post-processes predictions:
        - Maps integer predictions back to original IDs if `map_to_id` is True.
        - Inverts normalization for real-valued target columns.
@@ -460,7 +460,9 @@ def infer_generative(
             n_input_cols = data.get_column("inputCol").n_unique()
             if not config.autoregression:
                 # For the non-autoregressive case, apply inference size logic
-                probs, preds = get_probs_preds(config, inferer, data, column_types)
+                probs, preds = get_probs_preds_from_df(
+                    config, inferer, data, column_types
+                )
 
                 mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
 
@@ -512,7 +514,9 @@ def infer_generative(
             )
 
             if extra_steps == 0:
-                probs, preds = get_probs_preds(config, inferer, data, column_types)
+                probs, preds = get_probs_preds_from_df(
+                    config, inferer, data, column_types
+                )
                 mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
                 sequence_ids_for_preds_base = (
                     data.get_column("sequenceId").filter(mask).to_numpy()
@@ -553,7 +557,7 @@ def infer_generative(
                 else config.autoregression_total_steps
             )
 
-            probs, preds = get_probs_preds_pt(
+            probs, preds = get_probs_preds_from_dict(
                 config, inferer, sequences_dict, extra_steps
             )
 
@@ -720,7 +724,7 @@ def get_embeddings_pt(
 
 
 @beartype
-def get_probs_preds_pt(
+def get_probs_preds_from_dict(
     config: Any,
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
@@ -849,7 +853,7 @@ def get_embeddings(
 
 
 @beartype
-def get_probs_preds(
+def get_probs_preds_from_df(
     config: Any,
     inferer: "Inferer",
     data: pl.DataFrame,
@@ -1000,7 +1004,7 @@ def get_probs_preds_autoregression(
     )
 
     # Run the autoregressive PyTorch inference
-    probs, preds = get_probs_preds_pt(
+    probs, preds = get_probs_preds_from_dict(
         config, inferer, head_data, extra_steps=config.autoregression_total_steps
     )
 
