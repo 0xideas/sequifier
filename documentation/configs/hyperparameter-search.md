@@ -161,11 +161,6 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 
 ## Parameter Linkage vs. Independence
 
-To prevent mathematical incompatibilities (e.g., dimension mismatches) and illogical training schedules, specific parameters are **linked by index** rather than sampled independently.
-
-### 1. Linked Parameters (Coupled by List Index)
-
-
 To prevent mathematical incompatibilities (e.g., dimension mismatches) and illogical training schedules, the hyperparameter search does **not** perform a simple Cartesian product of every field. Instead, specific parameters are **linked by index**, while others remain **independent**.
 
 ### 1\. Linked Parameters (Coupled by List Index)
