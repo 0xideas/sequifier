@@ -44,7 +44,7 @@ These fields tell the inference engine which columns to extract from the new dat
 | `prediction_length` | `int` | No | `1` | Number of steps to predict *simultaneously*. **Must be 1** if `autoregression: true`. |
 | `inference_batch_size`| `int` | **Yes** | - | Number of sequences to process at once. |
 | `autoregression` | `bool` | No | `false` | If `true`, feeds predictions back into the model to predict further into the future. |
-| `autoregression_extra_steps`| `int` | No | `null` | If `autoregression: true`, how many *additional* future steps to predict beyond the first. |
+| `autoregression_total_steps`| `int` | No | `null` | If `autoregression: true`, how many total steps to predict, starting from the *first* subsequence in the inference data. |
 | `output_probabilities`| `bool` | No | `false` | If `true`, outputs the full probability distribution for categorical targets. |
 | `sample_from_distribution_columns`| `Optional[list[str]]`| No | `null` | If set, the model **samples** from the predicted distribution for these columns instead of taking the top-1 (argmax). Essential for diversity in generation. |
 | `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). |
@@ -61,20 +61,18 @@ These fields tell the inference engine which columns to extract from the new dat
 
 ## Key Trade-offs and Decisions
 
-### 1\. `model_type`: `generative` vs. `embedding`
+### 1\. Input Format (`read_format`)
+
+  * **`csv`:** Best for standard inference on small data. The inferer will filter the data to `input_columns` automatically.
+  * **`parquet`** Best for most use cases. Can be used with lazy loading, will use less disk space but more CPU than `pt`
+  * **`pt`** Optimized for lazy loading, uses more disk space but less CPU than `parquet`
+
+### 2\. `model_type`: `generative` vs. `embedding`
 
   * **`generative`:** Use this when you want to predict the next value in a sequence (forecasting, classification, next-token prediction).
       * *Output:* A file in `outputs/predictions/` containing the predicted values for specific item positions.
   * **`embedding`:** Use this when you want to represent the sequence as a fixed-size vector. This uses the output of the Transformer's last layer *before* the decoding head.
       * *Output:* A file in `outputs/embeddings/` containing vectors (e.g., 128 floats) for each sequence. Useful for clustering, similarity search, or downstream ML tasks.
-
-### 2\. Autoregression (`autoregression: true`)
-
-Standard inference predicts the next step ($t+1$) based on history ($t-n \dots t$). Autoregression allows you to predict $t+1$, append that prediction to the history, and then predict $t+2$, and so on.
-
-  * **Pros:** Allows multi-step forecasting (e.g., predicting the next 30 days of sales) using a model trained only to predict the *next* step.
-  * **Cons:** Errors accumulate. If the prediction for $t+1$ is slightly wrong, the prediction for $t+2$ relies on bad data. Inference is also significantly slower because steps must be calculated sequentially, not in parallel.
-  * **Config:** Set `autoregression_extra_steps` to determine how far into the future to generate.
 
 ### 3\. Sampling vs. Argmax
 
@@ -82,11 +80,16 @@ Standard inference predicts the next step ($t+1$) based on history ($t-n \dots t
   * **Sampling (`sample_from_distribution_columns`):** The model picks the next token randomly based on the probability distribution.
       * *Use Case:* Creative generation or simulation where you want diversity. If `Probability(A)=0.6` and `Probability(B)=0.4`, Argmax always picks A. Sampling picks B 40% of the time.
 
-### 4\. Input Format (`read_format`)
 
-  * **`csv`:** Best for standard inference on small data. The inferer will filter the data to `input_columns` automatically.
-  * **`parquet`** Best for most use cases. Can be used with lazy loading, will use less disk space but more CPU than `pt`
-  * **`pt`** Optimized for lazy loading, uses more disk space but less CPU than `parquet`
+### 4\. Autoregressive Inference
+
+### Autoregressive Inference
+
+When performing multi-step forecasting (`autoregression: true`), the model feeds its own predictions back into itself to generate future time steps. If you are configuring this feature, note the following strict behavioral rules for how generation is handled:
+
+* **Uniform Step Count:** The model will generate the exact same number of predictions (defined by `autoregression_total_steps`) for **all** `sequenceId`s in your dataset.
+* **Independent of Ground Truth:** The length of the generated forecast is completely independent of how many actual ground truth values or historical rows exist for a given sequence.
+* **Fixed Starting Point:** Generation strictly begins from the **first** subsequence encountered in the inference data for each sequence. The model will anchor to that initial starting point and forecast forward sequentially, meaning any subsequent historical data provided for that specific `sequenceId` will not alter the trajectory of that specific autoregressive loop.
 
 -----
 

@@ -102,7 +102,7 @@ class InfererModel(BaseModel):
         sample_from_distribution_columns: A list of columns from which to sample from the distribution.
         infer_with_dropout: If True, applies dropout during inference.
         autoregression: If True, performs autoregressive inference.
-        autoregression_extra_steps: The number of additional steps for autoregressive inference.
+        autoregression_total_steps: The number of total steps for autoregressive inference.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -135,7 +135,7 @@ class InfererModel(BaseModel):
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
     autoregression: bool = Field(default=False)
-    autoregression_extra_steps: Optional[int] = Field(default=None)
+    autoregression_total_steps: Optional[int] = Field(default=None)
 
     @field_validator("model_type")
     @classmethod
@@ -165,13 +165,21 @@ class InfererModel(BaseModel):
             raise ValueError(f"{v} does not exist")
         return v
 
-    @field_validator("autoregression_extra_steps")
+    @field_validator("autoregression_total_steps")
     @classmethod
-    def validate_autoregression_extra_steps(cls, v: bool, info: ValidationInfo) -> bool:
-        if v is not None and v > 0:
+    def validate_autoregression_total_steps(
+        cls, v: Optional[int], info: ValidationInfo
+    ) -> Optional[int]:
+        if v is None and info.data.get("autoregression") is True:
+            raise ValueError(
+                "If autoregression==True, 'autoregression_total_steps' needs to be set to an integer value."
+            )
+        if v is not None and v < 1:
+            raise ValueError("autoregression_total_steps must by >= 1.")
+        if v is not None and v > 1:
             if not info.data.get("autoregression"):
                 raise ValueError(
-                    f"'autoregression_extra_steps' can only be larger than 0 if 'autoregression' is true: {info.data.get('autoregression')}"
+                    f"'autoregression_total_steps' can only be larger than 1 if 'autoregression' is true: {info.data.get('autoregression')}"
                 )
 
             if not np.all(
@@ -179,7 +187,7 @@ class InfererModel(BaseModel):
                 == np.array(sorted(info.data.get("target_columns")))
             ):
                 raise ValueError(
-                    "'autoregression_extra_steps' can only be larger than 0 if 'input_columns' and 'target_columns' are identical"
+                    "'autoregression_total_steps' can only be larger than 1 if 'input_columns' and 'target_columns' are identical"
                 )
 
         return v
@@ -200,6 +208,7 @@ class InfererModel(BaseModel):
             raise ValueError(
                 "Autoregressive inference with non-identical 'input_columns' and 'target_columns' is possible but should not be performed"
             )
+
         return v
 
     @field_validator("data_path")

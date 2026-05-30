@@ -1,7 +1,6 @@
 import json
 import os
 import warnings
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -302,7 +301,6 @@ def infer_embedding(
             embeddings = get_embeddings(config, inferer, data, column_types)
 
             sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
-            # --- ADDED THIS LINE ---
             subsequence_ids_for_preds = data.get_column("subsequenceId").filter(mask)
             item_positions_for_preds_base = (
                 data.get_column("startItemPosition").filter(mask).to_numpy()
@@ -421,31 +419,27 @@ def infer_generative(
     dataset: Union[list[Any], Iterator[Any]],
     column_types: dict[str, torch.dtype],
 ):
-    """Performs inference with a generative model and saves the results.
+    """Executes the generative inference pipeline and exports results to disk.
 
-    This function manages the generative inference workflow:
-    1. Iterates through the dataset (chunks).
-    2. Handles data preparation, including expanding data for autoregression
-       if configured (`expand_data_by_autoregression`). It also calculates
-       the corresponding `itemPosition` for each prediction.
-    3. Calls the correct function to get probabilities and predictions
-       based on data format and autoregression settings (e.g.,
-       `get_probs_preds_autoregression`, `get_probs_preds_pt`).
-    4. Post-processes predictions:
-       - Maps integer predictions back to original IDs if `map_to_id` is True.
-       - Inverts normalization for real-valued target columns.
-    5. Saves probabilities to disk (if `config.output_probabilities` is True).
-    6. Saves the final predictions to disk, formatted as a Polars DataFrame
-       with `sequenceId`, `itemPosition`, and target columns.
+    This function processes the input dataset in chunks to accommodate large data
+    volumes. It handles various input formats (standalone CSV/Parquet, folder-based
+    Parquet, or PyTorch tensors) and routes the data to the appropriate inference
+    logic (standard sequence prediction or step-by-step autoregression). After
+    obtaining raw model outputs, it calculates aligned sequence IDs and absolute
+    item positions, applies necessary post-processing (such as reverse-mapping
+    categorical IDs and denormalizing real values), and writes the final
+    probabilities and predictions to the configured output directory.
 
     Args:
-        config: The `InfererModel` configuration object.
-        inferer: The initialized `Inferer` instance.
-        model_id: A string identifier for the model, used for naming
-            output files.
-        dataset: A list containing a Polars DataFrame (for parquet/csv) or
-            an iterator of loaded PyTorch data (for .pt files).
-        column_types: A dictionary mapping column names to their
+        config: The inference configuration object dictating I/O paths,
+            autoregression settings, and output formats.
+        inferer: The initialized `Inferer` instance responsible for executing
+            the underlying model logic.
+        model_id: A string identifier for the current model, used to construct
+            the names of the generated output files and directories.
+        dataset: A list or iterator yielding data chunks, typically containing
+            either Polars DataFrames or PyTorch tensor dictionaries.
+        column_types: A dictionary mapping input column names to their expected
             `torch.dtype`.
     """
     for data_id, data in enumerate(dataset):
@@ -460,7 +454,9 @@ def infer_generative(
             n_input_cols = data.get_column("inputCol").n_unique()
             if not config.autoregression:
                 # For the non-autoregressive case, apply inference size logic
-                probs, preds = get_probs_preds(config, inferer, data, column_types)
+                probs, preds = get_probs_preds_from_df(
+                    config, inferer, data, column_types
+                )
 
                 mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
 
@@ -492,20 +488,11 @@ def infer_generative(
                     raise ValueError(
                         f"prediction_length must be 1 for autoregression, got {inferer.prediction_length}"
                     )
-                if config.autoregression_extra_steps is not None:
-                    data = expand_data_by_autoregression(
-                        data,
-                        config.autoregression_extra_steps,
-                        config.seq_length,
-                    )
-                mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
-                item_positions_for_preds = (
-                    data.get_column("startItemPosition").filter(mask).to_numpy()
-                    + config.seq_length
-                )
                 # Unpack the new third return value
-                probs, preds, sequence_ids_for_preds = get_probs_preds_autoregression(
-                    config, inferer, data, column_types, config.seq_length
+                probs, preds, sequence_ids_for_preds, item_positions_for_preds = (
+                    get_probs_preds_autoregression(
+                        config, inferer, data, column_types, config.seq_length
+                    )
                 )
         elif config.read_format == "parquet" and is_folder_input:
             # Folder-based Parquet chunk logic
@@ -513,15 +500,16 @@ def infer_generative(
                 data = subset_to_input_columns(data, config.input_columns)
             n_input_cols = data.get_column("inputCol").n_unique()
 
-            # Folder-based inference can accept autoregression extra steps similar to .pt layout
-            extra_steps = (
-                0
-                if config.autoregression_extra_steps is None
-                else config.autoregression_extra_steps
+            total_steps = (
+                1
+                if config.autoregression_total_steps is None
+                else config.autoregression_total_steps
             )
 
-            if extra_steps == 0:
-                probs, preds = get_probs_preds(config, inferer, data, column_types)
+            if total_steps == 1:
+                probs, preds = get_probs_preds_from_df(
+                    config, inferer, data, column_types
+                )
                 mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
                 sequence_ids_for_preds_base = (
                     data.get_column("sequenceId").filter(mask).to_numpy()
@@ -548,31 +536,27 @@ def infer_generative(
                     raise ValueError(
                         f"prediction_length must be 1 for autoregression, got {inferer.prediction_length}"
                     )
-                # Treat chunk file as standard autoregressive pass
-                mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
-                item_positions_for_preds = (
-                    data.get_column("startItemPosition").filter(mask).to_numpy()
-                    + config.seq_length
-                )
-                probs, preds, sequence_ids_for_preds = get_probs_preds_autoregression(
-                    config, inferer, data, column_types, config.seq_length
+
+                probs, preds, sequence_ids_for_preds, item_positions_for_preds = (
+                    get_probs_preds_autoregression(
+                        config, inferer, data, column_types, config.seq_length
+                    )
                 )
         elif config.read_format == "pt":
             sequences_dict, _, sequence_ids_tensor, _, start_positions_tensor = data
-            extra_steps = (
-                0
-                if config.autoregression_extra_steps is None
-                else config.autoregression_extra_steps
+            total_steps = (
+                1
+                if config.autoregression_total_steps is None
+                else config.autoregression_total_steps
             )
 
-            # Pass prediction_length to get_probs_preds_pt
-            probs, preds = get_probs_preds_pt(
-                config, inferer, sequences_dict, extra_steps
+            probs, preds = get_probs_preds_from_dict(
+                config, inferer, sequences_dict, total_steps
             )
 
             prediction_length = inferer.prediction_length  # Get prediction_length
 
-            if extra_steps == 0:
+            if total_steps == 1:
                 # Non-autoregressive path: Apply prediction_length logic
                 sequence_ids_for_preds_base = sequence_ids_tensor.numpy()
                 item_positions_for_preds_base = (
@@ -594,11 +578,11 @@ def infer_generative(
 
             else:
                 sequence_ids_for_preds = np.repeat(
-                    sequence_ids_tensor.numpy(), extra_steps + 1
+                    sequence_ids_tensor.numpy(), total_steps
                 )
                 item_position_boundaries = zip(
                     list(start_positions_tensor + config.seq_length),
-                    list(start_positions_tensor + config.seq_length + extra_steps + 1),
+                    list(start_positions_tensor + config.seq_length + total_steps),
                 )
                 item_positions_for_preds = np.concatenate(
                     [np.arange(start, end) for start, end in item_position_boundaries],
@@ -704,89 +688,6 @@ def infer_generative(
 
 
 @beartype
-def expand_data_by_autoregression(
-    data: pl.DataFrame, autoregression_extra_steps: int, seq_length: int
-) -> pl.DataFrame:
-    """Expands a Polars DataFrame for autoregressive inference.
-
-    This function takes a DataFrame of sequences and adds
-    `autoregression_extra_steps` new rows for each sequence. These new
-    rows represent future time steps to be predicted.
-
-    For each new step, it:
-    1. Copies the last known observation for a sequence.
-    2. Increments the `subsequenceId`.
-    3. Shifts the historical data columns (e.g., '1', '2', ..., '50') one
-       position "older" (e.g., old '1' becomes new '2', old '49' becomes
-       new '50').
-    4. Fills the "newest" columns (e.g., new '1' for the first extra
-       step) with `np.inf` as a placeholder for the prediction.
-
-    Args:
-        data: The input Polars DataFrame, sorted by `sequenceId` and
-            `subsequenceId`.
-        autoregression_extra_steps: The number of future time steps to add
-            to each sequence.
-        seq_length: The sequence length, used to identify the historical
-            data columns (named '1' through `seq_length`).
-
-    Returns:
-        A new Polars DataFrame containing all original rows plus the
-        newly generated future rows with placeholders.
-    """
-
-    data_cols = [str(c) for c in range(seq_length, 0, -1)]
-    data = data.with_columns(
-        [pl.col(c).cast(pl.Float64) for c in data_cols if c in data.columns]
-    )
-
-    data = data.sort("sequenceId", "subsequenceId")
-
-    # Identify the last observation for each sequence
-    last_obs_lazy = data.lazy().filter(
-        pl.col("subsequenceId") == pl.col("subsequenceId").max().over("sequenceId")
-    )
-
-    # Generate future rows lazily
-    future_frames = []
-    data_cols = [str(c) for c in range(seq_length, 0, -1)]
-
-    for offset in range(1, autoregression_extra_steps + 1):
-        future_df_lazy = last_obs_lazy.with_columns(
-            (pl.col("subsequenceId") + offset).alias("subsequenceId")
-        ).with_columns(
-            (pl.col("startItemPosition") + offset).alias("startItemPosition")
-        )
-
-        # Correctly shift columns to make space for future predictions
-        # Newest value (col '1') becomes a placeholder, old '1' becomes new '2', etc.
-        update_exprs = []
-        for i in range(len(data_cols)):  # e.g., i from 0 to 49 for seq_length=50
-            col_to_update = data_cols[i]  # Updates '50', '49', ..., '1'
-
-            if i < len(data_cols) - offset:
-                # Shift historical data one step further into the past
-                # e.g., new '50' gets old '49', new '2' gets old '1'
-                source_col_name = data_cols[i + offset]
-                update_exprs.append(pl.col(source_col_name).alias(col_to_update))
-            else:
-                # These are the newest 'offset' columns, which are unknown.
-                # Fill with infinity as a placeholder for the prediction.
-                # e.g., for offset=1, new col '1' becomes inf.
-                update_exprs.append(
-                    pl.lit(np.inf, dtype=pl.Float64).alias(col_to_update)
-                )
-
-        future_df_lazy = future_df_lazy.with_columns(update_exprs)
-        future_frames.append(future_df_lazy)
-
-    # Concatenate original data with all future frames
-    final_lazy = pl.concat([data.lazy()] + future_frames, how="vertical")
-
-    return final_lazy.sort("sequenceId", "subsequenceId").collect()
-
-
-@beartype
 def get_embeddings_pt(
     config: Any,
     inferer: "Inferer",
@@ -816,11 +717,11 @@ def get_embeddings_pt(
 
 
 @beartype
-def get_probs_preds_pt(
+def get_probs_preds_from_dict(
     config: Any,
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
-    extra_steps: int = 0,
+    total_steps: int = 1,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """Generates predictions from PyTorch tensor data, supporting autoregression.
 
@@ -829,7 +730,7 @@ def get_probs_preds_pt(
     sequence_ids, subsequence_ids, and start_positions). It implements an
     autoregressive loop:
     1. Runs inference on the initial data `X` (sequences).
-    2. For each subsequent step (`i` in `extra_steps`):
+    2. For each subsequent step:
        a. Creates the next input `X_next` by shifting the previous input
           `X` and appending the prediction from the last step.
        b. Runs inference on `X_next`.
@@ -842,8 +743,8 @@ def get_probs_preds_pt(
         inferer: The initialized `Inferer` instance.
         data: A dictionary mapping column/feature names to `torch.Tensor`s
               (the sequences part loaded from the .pt file).
-        extra_steps: The number of additional autoregressive steps to
-            perform. A value of 0 means simple, non-autoregressive
+        total_steps: The number of total autoregressive steps to
+            perform. A value of 1 means simple, non-autoregressive
             inference.
 
     Returns:
@@ -867,8 +768,7 @@ def get_probs_preds_pt(
     all_preds_list = {col: [] for col in target_cols}
 
     # 3. Autoregressive loop
-    # The loop runs `extra_steps + 1` times to get the initial prediction plus all extra steps.
-    for i in range(extra_steps + 1):
+    for i in range(total_steps):
         if config.output_probabilities:
             probs_for_step = inferer.infer_generative(X, return_probs=True)
             preds_for_step = inferer.infer_generative(None, probs_for_step)
@@ -880,7 +780,7 @@ def get_probs_preds_pt(
         for col in target_cols:
             all_preds_list[col].append(preds_for_step[col])
 
-        if i == extra_steps:
+        if i == (total_steps - 1):
             break
 
         X_next = {}
@@ -945,7 +845,7 @@ def get_embeddings(
 
 
 @beartype
-def get_probs_preds(
+def get_probs_preds_from_df(
     config: Any,
     inferer: "Inferer",
     data: pl.DataFrame,
@@ -987,106 +887,6 @@ def get_probs_preds(
         preds = inferer.infer_generative(X)
 
     return (probs, preds)
-
-
-@beartype
-def fill_in_predictions_pl(
-    data: pl.DataFrame,
-    preds: dict[str, np.ndarray],
-    current_subsequence_id: int,
-    sequence_ids_present: pl.Series,
-    seq_length: int,
-) -> pl.DataFrame:
-    """Fills in predictions into the main Polars DataFrame using a robust,
-    join-based approach that preserves the original DataFrame's structure.
-
-    This function broadcasts predictions to all relevant future rows via a join,
-    then uses conditional expressions to update only the specific placeholder
-    cells (`np.inf`) that correspond to the correct future time step.
-
-    Args:
-        data: The main DataFrame containing all sequences.
-        preds: A dictionary of new predictions, mapping target column names to NumPy arrays.
-        current_subsequence_id: The adjusted subsequence ID at which predictions were made.
-        sequence_ids_present: A Polars Series of the sequence IDs in the current batch.
-        seq_length: The length of the sequence.
-
-    Returns:
-        An updated Polars DataFrame with the same dimensions as the input, with
-        future placeholder values filled in.
-    """
-    if not preds or sequence_ids_present.is_empty():
-        return data
-
-    # 1. Create a "long" format DataFrame of the new predictions.
-    # This table has columns [sequenceId, inputCol, prediction].
-    pred_dfs = []
-    for input_col, pred_values in preds.items():
-        if pred_values.size > 0:
-            pred_dfs.append(
-                pl.DataFrame(
-                    {
-                        "sequenceId": sequence_ids_present,
-                        "inputCol": input_col,
-                        "prediction": pred_values.flatten(),
-                    }
-                )
-            )
-
-    # If there are no valid predictions to process, return the original data.
-    if not pred_dfs:
-        return data
-
-    preds_df = pl.concat(pred_dfs)
-
-    # 2. Left-join the predictions onto the main DataFrame.
-    # This adds a 'prediction' column. Rows that don't match the join keys
-    # (e.g., non-target columns) will have a null value for 'prediction'.
-    # A left join guarantees that no rows from the original `data` are dropped.
-    data_with_preds = data.join(preds_df, on=["sequenceId", "inputCol"], how="left")
-
-    # 3. Build a list of conditional update expressions for each future time step.
-    update_expressions = []
-    for offset in range(1, seq_length + 1):
-        col_to_update = str(offset)
-
-        # Skip if the column to update doesn't exist in the DataFrame.
-        if col_to_update not in data.columns:
-            continue
-
-        # The core logic: A prediction made at `current_subsequence_id` for a given
-        # `offset` should fill the placeholder in column `str(offset)` at the row
-        # where `subsequenceIdAdjusted` is `current_subsequence_id + offset`.
-        update_expr = (
-            pl.when(
-                # Condition 1: Is this the correct future row to update?
-                (pl.col("subsequenceIdAdjusted") == current_subsequence_id + offset)
-                # Condition 2: Does the cell contain a placeholder that needs updating?
-                & (pl.col(col_to_update).is_infinite())
-                # Condition 3: Is there a valid prediction available from the join?
-                & (pl.col("prediction").is_not_null())
-            )
-            # If all conditions are met, use the new prediction value.
-            .then(pl.col("prediction"))
-            # IMPORTANT: Otherwise, keep the column's existing value. This is crucial
-            # for preserving the integrity of the DataFrame.
-            .otherwise(pl.col(col_to_update))
-            # Overwrite the original column with the updated values.
-            .alias(col_to_update)
-        )
-        update_expressions.append(update_expr)
-
-    # 4. Apply all expressions at once and remove the temporary 'prediction' column.
-    # The `with_columns` operation does not change the number of rows.
-    if update_expressions:
-        updated_data = data_with_preds.with_columns(update_expressions).drop(
-            "prediction"
-        )
-    else:
-        # If no updates were needed, just drop the temporary join column.
-        updated_data = data_with_preds.drop("prediction")
-
-    return updated_data
 
 
 @beartype
@@ -1147,157 +947,77 @@ def verify_variable_order(data: pl.DataFrame) -> None:
 
 
 @beartype
-def format_delta(time_delta: timedelta) -> str:
-    """Formats a `timedelta` object into a human-readable string (seconds).
-
-    Args:
-        time_delta: The `timedelta` object to format.
-
-    Returns:
-        A string representing the total seconds with 3 decimal places.
-    """
-    seconds = time_delta.seconds
-    microseconds = time_delta.microseconds
-    return f"{(seconds + (microseconds/1e6)):.3}"
-
-
-@beartype
 def get_probs_preds_autoregression(
     config: Any,
     inferer: "Inferer",
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
     seq_length: int,
-) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray], np.ndarray]:
-    """Performs autoregressive inference using a time-step-based Polars loop.
+) -> tuple[
+    Optional[dict[str, np.ndarray]], dict[str, np.ndarray], np.ndarray, np.ndarray
+]:
+    """Generates autoregressive predictions and aligns them with sequence IDs and positions.
 
-    This function orchestrates the autoregressive process by iterating
-    through each unique, adjusted time step (`subsequenceIdAdjusted`).
-
-    For each time step:
-    1. Filters the main DataFrame `data` to get the current slice of data
-       for all sequences at that time step.
-    2. Calls `get_probs_preds` to generate predictions for this slice.
-    3. Uses `fill_in_predictions_pl` to update the *main* `data` DataFrame,
-       filling in the `np.inf` placeholders for the *next* time steps
-       using the predictions just made.
-    4. Collects the predictions and a corresponding sort key.
-
-    After iterating through all time steps, it sorts all collected
-    predictions based on the keys (sequenceId, subsequenceId) and returns
-    the complete, ordered results.
+    Extracts the initial sequence context from the sorted input DataFrame, maps it
+    to PyTorch tensors, and executes step-by-step autoregressive inference.
 
     Args:
-        config: The `InfererModel` configuration object.
-        inferer: The initialized `Inferer` instance.
-        data: The input Polars DataFrame, expanded with future rows
-            (see `expand_data_by_autoregression`).
-        column_types: A dictionary mapping column names to `torch.dtype`.
-        seq_length: The sequence length, passed to `fill_in_predictions_pl`.
+        config: Inference configuration object.
+        inferer: Initialized `Inferer` instance.
+        data: Input DataFrame, sorted globally by `sequenceId` and locally by `subsequenceId`.
+        column_types: Mapping of input column names to their `torch.dtype`.
+        seq_length: Length of the input sequence context.
 
     Returns:
-        A tuple `(probs, preds, sequence_ids)`:
-            - `probs`: A dictionary mapping target columns to sorted NumPy
-              arrays of probabilities, or `None`.
-            - `preds`: A dictionary mapping target columns to sorted NumPy
-              arrays of final predictions.
-            - `sequence_ids`: A NumPy array of `sequenceId`s corresponding
-              to each row in the `preds` arrays.
+        A tuple containing:
+            - probs: Dict of probability arrays per target column (None if disabled).
+            - preds: Dict of final prediction arrays per target column.
+            - sequence_ids_for_preds: 1D array of sequence IDs matching the output shape.
+            - item_positions_for_preds: 1D array of absolute item positions for each step.
     """
-    data = data.sort("sequenceId", "subsequenceId")
     verify_variable_order(data)
 
-    # Normalize subsequenceId to start from 0 for each sequence
-    data = data.with_columns(
-        (
-            pl.col("subsequenceId") - pl.col("subsequenceId").min().over("sequenceId")
-        ).alias("subsequenceIdAdjusted")
+    distinct_cols = len(np.unique(data["inputCol"].to_numpy()))
+    head_data_df = data.group_by("sequenceId", maintain_order=True).head(distinct_cols)
+
+    aligned_sequence_ids = (
+        head_data_df.get_column("sequenceId").unique(maintain_order=True).to_numpy()
     )
 
-    preds_list, probs_list, sort_keys = [], [], []
-    subsequence_ids_distinct = sorted(data["subsequenceIdAdjusted"].unique().to_list())
-
-    # Ensure max_length for padding is robust for both sequence and subsequence IDs
-    max_id_val = max(
-        data["sequenceId"].max(),
-        max(subsequence_ids_distinct) if subsequence_ids_distinct else 0,
+    aligned_start_positions = (
+        head_data_df.group_by("sequenceId", maintain_order=True)
+        .agg(pl.col("startItemPosition").max())
+        .get_column("startItemPosition")
+        .to_numpy()
+        + seq_length
     )
-    max_length = len(str(max_id_val))
 
-    for subsequence_id in subsequence_ids_distinct:
-        t0 = datetime.now()
-        data_subset = data.filter(pl.col("subsequenceIdAdjusted") == subsequence_id)
+    head_data = numpy_to_pytorch(
+        head_data_df,
+        column_types,
+        config.input_columns,
+        seq_length,
+    )
 
-        if data_subset.height == 0:
-            continue
+    # Run the autoregressive PyTorch inference
+    probs, preds = get_probs_preds_from_dict(
+        config, inferer, head_data, total_steps=config.autoregression_total_steps
+    )
 
-        sequence_ids_present = data_subset.get_column("sequenceId").unique(
-            maintain_order=True
-        )
+    # 4. Generate the final output arrays using the perfectly aligned bases
+    item_positions_for_preds = np.concatenate(
+        [
+            np.arange(start_pos, start_pos + config.autoregression_total_steps)
+            for start_pos in aligned_start_positions
+        ],
+        axis=0,
+    )
 
-        t1 = datetime.now()
+    sequence_ids_for_preds = np.repeat(
+        aligned_sequence_ids, config.autoregression_total_steps
+    )
 
-        # Original sort key logic
-        sort_keys.extend(
-            [
-                f"{fill_number(int(seq_id), max_length)}-{fill_number(int(subsequence_id), max_length)}"
-                for seq_id in sequence_ids_present
-            ]
-        )
-
-        t2 = datetime.now()
-
-        probs, preds = get_probs_preds(
-            config,
-            inferer,
-            data_subset,
-            column_types,
-        )
-
-        t3 = datetime.now()
-
-        preds_list.append(preds)
-        if probs is not None:
-            probs_list.append(probs)
-
-        # Use new Polars-native function to fill predictions
-        data = fill_in_predictions_pl(
-            data,
-            preds,
-            int(subsequence_id),
-            sequence_ids_present,
-            seq_length,
-        )
-
-        t4 = datetime.now()
-
-        logger.debug(
-            f"[DEBUG] Autoregression step {subsequence_id}/{len(subsequence_ids_distinct)}: Total: {format_delta(t4-t0)}s (Filter: {format_delta(t1-t0)}s, Infer: {format_delta(t3-t2)}s, Update: {format_delta(t4-t3)}s)"
-        )
-
-    sort_order = np.argsort(sort_keys)
-
-    preds = {
-        target_column: np.concatenate([p[target_column] for p in preds_list], axis=0)[
-            sort_order
-        ]
-        for target_column in inferer.target_columns
-    }
-    if len(probs_list):
-        probs = {
-            target_column: np.concatenate(
-                [p[target_column] for p in probs_list], axis=0
-            )[sort_order, :]
-            for target_column in inferer.target_columns
-        }
-    else:
-        probs = None
-
-    # Create the corresponding sequence_id array from the sorted keys
-    sorted_keys = np.array(sort_keys)[sort_order]
-    sequence_ids_for_preds = np.array([int(key.split("-")[0]) for key in sorted_keys])
-
-    return probs, preds, sequence_ids_for_preds
+    return probs, preds, sequence_ids_for_preds, item_positions_for_preds
 
 
 class Inferer:
@@ -1544,7 +1264,9 @@ class Inferer:
                 ):
                     outs[target_column] = outs[target_column].argmax(1)
                 else:
-                    outs[target_column] = sample_with_cumsum(outs[target_column])
+                    outs[target_column] = sample_with_cumsum(
+                        outs[target_column], is_log_probs=(probs is None)
+                    )
 
         return outs
 
@@ -1753,7 +1475,7 @@ def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
 
 
 @beartype
-def sample_with_cumsum(probs: np.ndarray) -> np.ndarray:
+def sample_with_cumsum(probs: np.ndarray, is_log_probs: bool = True) -> np.ndarray:
     """Samples from a probability distribution using the inverse CDF method.
 
     Takes an array of logits, computes the cumulative probability
@@ -1761,14 +1483,18 @@ def sample_with_cumsum(probs: np.ndarray) -> np.ndarray:
     the index of the first class `i` where `cumsum[i] > r`.
 
     Args:
-        probs: A 2D NumPy array of *logits* (not normalized probabilities).
+        probs: A 2D NumPy array of logits or normalized probabilities.
                Shape is (batch_size, num_classes).
-
+        is_log_probs: Boolean flag indicating if the passed array are logits or
+               probabilities
     Returns:
         A 1D NumPy array of shape (batch_size,) containing the sampled
         class indices.
     """
-    cumulative_probs = np.cumsum(np.exp(probs), axis=1)
+    if is_log_probs:
+        cumulative_probs = np.cumsum(np.exp(probs), axis=1)
+    else:
+        cumulative_probs = np.cumsum(probs, axis=1)
     random_threshold = np.random.rand(cumulative_probs.shape[0], 1)
     random_threshold = np.repeat(random_threshold, probs.shape[1], axis=1)
     return (random_threshold < cumulative_probs).argmax(axis=1)

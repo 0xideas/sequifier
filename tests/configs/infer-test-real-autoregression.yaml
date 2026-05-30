@@ -22,4 +22,4 @@ enforce_determinism: false
 sample_from_distribution_columns: [itemValue]
 infer_with_dropout: true
 autoregression: true
-autoregression_extra_steps: 20
+autoregression_total_steps: 20

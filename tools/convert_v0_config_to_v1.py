@@ -4,14 +4,14 @@ import yaml
 
 
 # Helper to rename keys while preserving insertion order
-def rename_key(d, old, new):
+def rename_key(d, old, new, transform=None):
     if old not in d:
         return
     # Create a new dict to preserve order
     new_d = {}
     for k, v in d.items():
         if k == old:
-            new_d[new] = v
+            new_d[new] = transform(v) if transform is not None else v
         else:
             new_d[k] = v
     d.clear()
@@ -134,6 +134,12 @@ def convert_infer(config):
     rename_key(config, "project_path", "project_root")
     rename_key(config, "ddconfig_path", "metadata_config_path")
     rename_key(config, "selected_columns", "input_columns")
+    rename_key(
+        config,
+        "autoregression_extra_steps",
+        "autoregression_total_steps",
+        lambda val: val + 1 if val is not None else val,
+    )
 
     if "inference_size" in config:
         rename_key(config, "inference_size", "prediction_length")
