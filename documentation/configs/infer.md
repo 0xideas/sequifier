@@ -61,24 +61,35 @@ These fields tell the inference engine which columns to extract from the new dat
 
 ## Key Trade-offs and Decisions
 
-### 1\. `model_type`: `generative` vs. `embedding`
+### 1\. Input Format (`read_format`)
+
+  * **`csv`:** Best for standard inference on small data. The inferer will filter the data to `input_columns` automatically.
+  * **`parquet`** Best for most use cases. Can be used with lazy loading, will use less disk space but more CPU than `pt`
+  * **`pt`** Optimized for lazy loading, uses more disk space but less CPU than `parquet`
+
+### 2\. `model_type`: `generative` vs. `embedding`
 
   * **`generative`:** Use this when you want to predict the next value in a sequence (forecasting, classification, next-token prediction).
       * *Output:* A file in `outputs/predictions/` containing the predicted values for specific item positions.
   * **`embedding`:** Use this when you want to represent the sequence as a fixed-size vector. This uses the output of the Transformer's last layer *before* the decoding head.
       * *Output:* A file in `outputs/embeddings/` containing vectors (e.g., 128 floats) for each sequence. Useful for clustering, similarity search, or downstream ML tasks.
 
-### 2\. Sampling vs. Argmax
+### 3\. Sampling vs. Argmax
 
   * **Default (Argmax):** The model selects the class with the highest probability. Best for accuracy metrics and "most likely" forecasts.
   * **Sampling (`sample_from_distribution_columns`):** The model picks the next token randomly based on the probability distribution.
       * *Use Case:* Creative generation or simulation where you want diversity. If `Probability(A)=0.6` and `Probability(B)=0.4`, Argmax always picks A. Sampling picks B 40% of the time.
 
-### 3\. Input Format (`read_format`)
 
-  * **`csv`:** Best for standard inference on small data. The inferer will filter the data to `input_columns` automatically.
-  * **`parquet`** Best for most use cases. Can be used with lazy loading, will use less disk space but more CPU than `pt`
-  * **`pt`** Optimized for lazy loading, uses more disk space but less CPU than `parquet`
+### 4\. Autoregressive Inference
+
+### Autoregressive Inference
+
+When performing multi-step forecasting (`autoregression: true`), the model feeds its own predictions back into itself to generate future time steps. If you are configuring this feature, note the following strict behavioral rules for how generation is handled:
+
+* **Uniform Step Count:** The model will generate the exact same number of predictions (defined by `autoregression_total_steps`) for **all** `sequenceId`s in your dataset.
+* **Independent of Ground Truth:** The length of the generated forecast is completely independent of how many actual ground truth values or historical rows exist for a given sequence.
+* **Fixed Starting Point:** Generation strictly begins from the **first** subsequence encountered in the inference data for each sequence. The model will anchor to that initial starting point and forecast forward sequentially, meaning any subsequent historical data provided for that specific `sequenceId` will not alter the trajectory of that specific autoregressive loop.
 
 -----
 

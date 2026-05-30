@@ -40,21 +40,19 @@ def test_normalize():
 
 @patch("numpy.random.rand")
 def test_sample_with_cumsum(mock_rand):
-    """Tests inverse CDF sampling based on logits."""
-    # We supply raw logits that translate roughly to probabilities:
-    # Row 0: ~[0.1, 0.9] -> Cumsum: ~[0.1, 1.0]
-    # Row 1: ~[0.8, 0.2] -> Cumsum: ~[0.8, 1.0]
-    logits = np.array([[np.log(0.1), np.log(0.9)], [np.log(0.8), np.log(0.2)]])
-
+    """Tests inverse CDF sampling with both raw logits and pure probabilities."""
     # Mock the random thresholds to strictly control the sampling outcome.
-    # Shape must be (batch_size, 1) -> (2, 1)
     mock_rand.return_value = np.array([[0.05], [0.90]])
 
-    sampled_indices = sample_with_cumsum(logits)
+    # Path 1: Test with logits=True (default)
+    raw_logits = np.array([[np.log(0.1), np.log(0.9)], [np.log(0.8), np.log(0.2)]])
+    sampled_from_logits = sample_with_cumsum(raw_logits, logits=True)
+    np.testing.assert_array_equal(sampled_from_logits, [0, 1])
 
-    # Row 0: threshold 0.05 < 0.1 (cumsum index 0), so it picks class 0
-    # Row 1: threshold 0.90 > 0.8 (cumsum index 0) but < 1.0 (cumsum index 1), so it picks class 1
-    np.testing.assert_array_equal(sampled_indices, [0, 1])
+    # Path 2: Test with logits=False (pre-normalized probabilities)
+    pure_probs = np.array([[0.1, 0.9], [0.8, 0.2]])
+    sampled_from_probs = sample_with_cumsum(pure_probs, logits=False)
+    np.testing.assert_array_equal(sampled_from_probs, [0, 1])
 
 
 @pytest.fixture
@@ -250,30 +248,55 @@ def test_get_probs_preds_from_dict_shifting_and_looping(ar_config, ar_inferer):
         np.testing.assert_array_equal(preds["target_col"], [4.0, 5.0, 40.0, 50.0])
 
 
-def test_get_probs_preds_from_dict_with_probabilities(ar_config, ar_inferer):
+@patch("sequifier.infer.sample_with_cumsum")
+def test_get_probs_preds_from_dict_with_probabilities(
+    mock_sample, ar_config, ar_inferer
+):
     """
     Tests the probability branching logic. When output_probabilities=True,
-    `infer_generative` is called twice per step: once for probs, once for preds.
+    `infer_generative` normalizes outputs, and passes them as probabilities
+    to the second call which triggers sampling with logits=False.
     """
+    # 1. Override the config and inferer to treat the column as categorical
+    ar_config.target_column_types["target_col"] = "categorical"
+    ar_inferer.target_column_types["target_col"] = "categorical"
+
+    # 2. Force it to route to the sampling branch
     ar_config.output_probabilities = True
+    ar_config.sample_from_distribution_columns = ["target_col"]
+    ar_inferer.sample_from_distribution_columns = ["target_col"]
 
     initial_data = {"target_col": torch.tensor([[1.0, 2.0]])}
 
-    # Corrected shape: (batch_size, n_classes) -> (1, 2)
-    dummy_probs = {"target_col": np.array([[0.1, 0.9]])}
-    dummy_preds = {"target_col": np.array([[1]])}
+    # Raw model output (Logits)
+    dummy_logits = {"target_col": np.array([[np.log(0.2), np.log(0.8)]])}
 
-    with patch.object(ar_inferer, "infer_generative") as mock_infer:
-        mock_infer.side_effect = [dummy_probs, dummy_preds]
+    # What we want our mock sample_with_cumsum to return
+    mock_sample.return_value = np.array([1])
 
+    # Mock the *inner* backend call, allowing infer_generative to execute its actual logic
+    with patch.object(
+        ar_inferer, "adjust_and_infer_generative", return_value=dummy_logits
+    ) as mock_adjust:
         probs, preds = get_probs_preds_from_dict(
             ar_config, ar_inferer, initial_data, total_steps=1
         )
 
-        # 1 initial step * 2 calls per step = 2 calls
-        assert mock_infer.call_count == 2
+        assert mock_adjust.call_count == 1
+
+        # Verify sample_with_cumsum was called correctly during the second pass
+        mock_sample.assert_called_once()
+        args, kwargs = mock_sample.call_args
+
+        # 1. Assert it was passed the normalized probabilities, NOT the raw logits
+        np.testing.assert_allclose(args[0], [[0.2, 0.8]])
+
+        # 2. Assert the new flag was toggled correctly based on (probs is None)
+        assert kwargs.get("logits") is False
+
+        # Verify final outputs
         assert probs is not None
-        assert "target_col" in probs
+        np.testing.assert_allclose(probs["target_col"], [[0.2, 0.8]])
         np.testing.assert_array_equal(preds["target_col"], [1])
 
 

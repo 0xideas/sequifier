@@ -1281,7 +1281,9 @@ class Inferer:
                 ):
                     outs[target_column] = outs[target_column].argmax(1)
                 else:
-                    outs[target_column] = sample_with_cumsum(outs[target_column])
+                    outs[target_column] = sample_with_cumsum(
+                        outs[target_column], logits=(probs is None)
+                    )
 
         return outs
 
@@ -1490,7 +1492,7 @@ def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
 
 
 @beartype
-def sample_with_cumsum(probs: np.ndarray) -> np.ndarray:
+def sample_with_cumsum(probs: np.ndarray, logits: bool = True) -> np.ndarray:
     """Samples from a probability distribution using the inverse CDF method.
 
     Takes an array of logits, computes the cumulative probability
@@ -1500,12 +1502,16 @@ def sample_with_cumsum(probs: np.ndarray) -> np.ndarray:
     Args:
         probs: A 2D NumPy array of *logits* (not normalized probabilities).
                Shape is (batch_size, num_classes).
-
+        logits: Boolean flag indicating if the passed array are logits or
+               probabilities
     Returns:
         A 1D NumPy array of shape (batch_size,) containing the sampled
         class indices.
     """
-    cumulative_probs = np.cumsum(np.exp(probs), axis=1)
+    if logits:
+        cumulative_probs = np.cumsum(np.exp(probs), axis=1)
+    else:
+        cumulative_probs = np.cumsum(probs, axis=1)
     random_threshold = np.random.rand(cumulative_probs.shape[0], 1)
     random_threshold = np.repeat(random_threshold, probs.shape[1], axis=1)
     return (random_threshold < cumulative_probs).argmax(axis=1)
