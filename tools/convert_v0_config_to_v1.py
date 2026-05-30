@@ -10,14 +10,10 @@ def rename_key(d, old, new, transform=None):
     # Create a new dict to preserve order
     new_d = {}
     for k, v in d.items():
-        if transform is not None:
-            vv = transform(v)
-        else:
-            vv = v
         if k == old:
-            new_d[new] = vv
+            new_d[new] = transform(v) if transform is not None else v
         else:
-            new_d[k] = vv
+            new_d[k] = v
     d.clear()
     d.update(new_d)
 

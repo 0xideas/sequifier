@@ -1,7 +1,6 @@
 import json
 import os
 import warnings
-from datetime import timedelta
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -501,7 +500,6 @@ def infer_generative(
                 data = subset_to_input_columns(data, config.input_columns)
             n_input_cols = data.get_column("inputCol").n_unique()
 
-            # Folder-based inference can accept autoregression extra steps similar to .pt layout
             total_steps = (
                 1
                 if config.autoregression_total_steps is None
@@ -946,21 +944,6 @@ def verify_variable_order(data: pl.DataFrame) -> None:
 
     if not is_group_sorted:
         raise ValueError("subsequenceId must be sorted within sequenceId groups")
-
-
-@beartype
-def format_delta(time_delta: timedelta) -> str:
-    """Formats a `timedelta` object into a human-readable string (seconds).
-
-    Args:
-        time_delta: The `timedelta` object to format.
-
-    Returns:
-        A string representing the total seconds with 3 decimal places.
-    """
-    seconds = time_delta.seconds
-    microseconds = time_delta.microseconds
-    return f"{(seconds + (microseconds/1e6)):.3}"
 
 
 @beartype
@@ -1500,7 +1483,7 @@ def sample_with_cumsum(probs: np.ndarray, logits: bool = True) -> np.ndarray:
     the index of the first class `i` where `cumsum[i] > r`.
 
     Args:
-        probs: A 2D NumPy array of *logits* (not normalized probabilities).
+        probs: A 2D NumPy array of logits or normalized probabilities.
                Shape is (batch_size, num_classes).
         logits: Boolean flag indicating if the passed array are logits or
                probabilities
