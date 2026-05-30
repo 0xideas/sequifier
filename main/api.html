@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/api.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Preprocessing Config - sequifier v1.1.2.2 documentation</title>
+        <title>Preprocessing Config - sequifier v1.2.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="index.html"><div class="brand">sequifier v1.1.2.2 documentation</div></a>
+      <a href="index.html"><div class="brand">sequifier v1.2.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.1.2.2 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.2.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -1194,7 +1194,7 @@ The sum of proportions must be 1.0.</p>
 <span id="inference-config"></span><h1>Inference Config<a class="headerlink" href="#module-sequifier.config.infer_config" title="Permalink to this heading">¶</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="sequifier.config.infer_config.InfererModel">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.config.infer_config.</span></span><span class="sig-name descname"><span class="pre">InfererModel</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata_config_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">training_config_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'configs/train.yaml'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">read_format</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'parquet'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_format</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'csv'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">categorical_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">real_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">enforce_determinism</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_probabilities</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">map_to_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prediction_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inference_batch_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sample_from_distribution_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">infer_with_dropout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">autoregression</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">autoregression_extra_steps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/infer_config.html#InfererModel"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.infer_config.InfererModel" title="Permalink to this definition">¶</a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.config.infer_config.</span></span><span class="sig-name descname"><span class="pre">InfererModel</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata_config_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">training_config_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'configs/train.yaml'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">read_format</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'parquet'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_format</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'csv'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">categorical_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">real_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">enforce_determinism</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_probabilities</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">map_to_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prediction_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inference_batch_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sample_from_distribution_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">infer_with_dropout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">autoregression</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">autoregression_total_steps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/config/infer_config.html#InfererModel"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.config.infer_config.InfererModel" title="Permalink to this definition">¶</a></dt>
 <dd><p>Pydantic model for inference configuration.</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="sequifier.config.infer_config.InfererModel.project_root">
@@ -1450,9 +1450,9 @@ The sum of proportions must be 1.0.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="sequifier.config.infer_config.InfererModel.autoregression_extra_steps">
-<span class="sig-name descname"><span class="pre">autoregression_extra_steps</span></span><a class="headerlink" href="#sequifier.config.infer_config.InfererModel.autoregression_extra_steps" title="Permalink to this definition">¶</a></dt>
-<dd><p>The number of additional steps for autoregressive inference.</p>
+<dt class="sig sig-object py" id="sequifier.config.infer_config.InfererModel.autoregression_total_steps">
+<span class="sig-name descname"><span class="pre">autoregression_total_steps</span></span><a class="headerlink" href="#sequifier.config.infer_config.InfererModel.autoregression_total_steps" title="Permalink to this definition">¶</a></dt>
+<dd><p>The number of total steps for autoregressive inference.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
 <dd class="field-odd"><p>int | None</p>
@@ -3560,68 +3560,6 @@ ready for inference.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="sequifier.infer.expand_data_by_autoregression">
-<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">expand_data_by_autoregression</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">autoregression_extra_steps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">DataFrame</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#expand_data_by_autoregression"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.expand_data_by_autoregression" title="Permalink to this definition">¶</a></dt>
-<dd><p>Expands a Polars DataFrame for autoregressive inference.</p>
-<p>This function takes a DataFrame of sequences and adds
-<cite>autoregression_extra_steps</cite> new rows for each sequence. These new
-rows represent future time steps to be predicted.</p>
-<p>For each new step, it:
-1. Copies the last known observation for a sequence.
-2. Increments the <cite>subsequenceId</cite>.
-3. Shifts the historical data columns (e.g., ‘1’, ‘2’, …, ‘50’) one</p>
-<blockquote>
-<div><p>position “older” (e.g., old ‘1’ becomes new ‘2’, old ‘49’ becomes
-new ‘50’).</p>
-</div></blockquote>
-<ol class="arabic simple" start="4">
-<li><p>Fills the “newest” columns (e.g., new ‘1’ for the first extra
-step) with <cite>np.inf</cite> as a placeholder for the prediction.</p></li>
-</ol>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>data</strong> – The input Polars DataFrame, sorted by <cite>sequenceId</cite> and
-<cite>subsequenceId</cite>.</p></li>
-<li><p><strong>autoregression_extra_steps</strong> – The number of future time steps to add
-to each sequence.</p></li>
-<li><p><strong>seq_length</strong> – The sequence length, used to identify the historical
-data columns (named ‘1’ through <cite>seq_length</cite>).</p></li>
-</ul>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>A new Polars DataFrame containing all original rows plus the
-newly generated future rows with placeholders.</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="sequifier.infer.fill_in_predictions_pl">
-<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">fill_in_predictions_pl</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">preds</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">current_subsequence_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sequence_ids_present</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Series</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">DataFrame</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#fill_in_predictions_pl"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.fill_in_predictions_pl" title="Permalink to this definition">¶</a></dt>
-<dd><p>Fills in predictions into the main Polars DataFrame using a robust,
-join-based approach that preserves the original DataFrame’s structure.</p>
-<p>This function broadcasts predictions to all relevant future rows via a join,
-then uses conditional expressions to update only the specific placeholder
-cells (<cite>np.inf</cite>) that correspond to the correct future time step.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>data</strong> – The main DataFrame containing all sequences.</p></li>
-<li><p><strong>preds</strong> – A dictionary of new predictions, mapping target column names to NumPy arrays.</p></li>
-<li><p><strong>current_subsequence_id</strong> – The adjusted subsequence ID at which predictions were made.</p></li>
-<li><p><strong>sequence_ids_present</strong> – A Polars Series of the sequence IDs in the current batch.</p></li>
-<li><p><strong>seq_length</strong> – The length of the sequence.</p></li>
-</ul>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>An updated Polars DataFrame with the same dimensions as the input, with
-future placeholder values filled in.</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py function">
 <dt class="sig sig-object py" id="sequifier.infer.fill_number">
 <span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">fill_number</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">number</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#fill_number"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.fill_number" title="Permalink to this definition">¶</a></dt>
 <dd><p>Pads a number with leading zeros to a specified string length.</p>
@@ -3635,20 +3573,6 @@ future placeholder values filled in.</p>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
 <dd class="field-even"><p>A string representation of the number, padded with leading zeros.</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="sequifier.infer.format_delta">
-<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">format_delta</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">time_delta</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">timedelta</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#format_delta"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.format_delta" title="Permalink to this definition">¶</a></dt>
-<dd><p>Formats a <cite>timedelta</cite> object into a human-readable string (seconds).</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>time_delta</strong> – The <cite>timedelta</cite> object to format.</p>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>A string representing the total seconds with 3 decimal places.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -3702,8 +3626,39 @@ kept for consistent function signature).</p></li>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="sequifier.infer.get_probs_preds">
-<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">get_probs_preds</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.dtype</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#get_probs_preds"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.get_probs_preds" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.infer.get_probs_preds_autoregression">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">get_probs_preds_autoregression</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.dtype</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#get_probs_preds_autoregression"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.get_probs_preds_autoregression" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generates autoregressive predictions and aligns them with sequence IDs and positions.</p>
+<p>Extracts the initial sequence context from the sorted input DataFrame, maps it
+to PyTorch tensors, and executes step-by-step autoregressive inference.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>config</strong> – Inference configuration object.</p></li>
+<li><p><strong>inferer</strong> – Initialized <cite>Inferer</cite> instance.</p></li>
+<li><p><strong>data</strong> – Input DataFrame, sorted globally by <cite>sequenceId</cite> and locally by <cite>subsequenceId</cite>.</p></li>
+<li><p><strong>column_types</strong> – Mapping of input column names to their <cite>torch.dtype</cite>.</p></li>
+<li><p><strong>seq_length</strong> – Length of the input sequence context.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><ul class="simple">
+<li><p>probs: Dict of probability arrays per target column (None if disabled).</p></li>
+<li><p>preds: Dict of final prediction arrays per target column.</p></li>
+<li><p>sequence_ids_for_preds: 1D array of sequence IDs matching the output shape.</p></li>
+<li><p>item_positions_for_preds: 1D array of absolute item positions for each step.</p></li>
+</ul>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A tuple containing</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.get_probs_preds_from_df">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">get_probs_preds_from_df</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.dtype</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#get_probs_preds_from_df"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.get_probs_preds_from_df" title="Permalink to this definition">¶</a></dt>
 <dd><p>Generates predictions from a Polars DataFrame (non-autoregressive).</p>
 <p>This function converts a Polars DataFrame into the NumPy array dictionary
 format expected by the <cite>Inferer</cite>. It’s used for standard,
@@ -3736,64 +3691,15 @@ of final predictions.</p></li>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="sequifier.infer.get_probs_preds_autoregression">
-<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">get_probs_preds_autoregression</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.dtype</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#get_probs_preds_autoregression"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.get_probs_preds_autoregression" title="Permalink to this definition">¶</a></dt>
-<dd><p>Performs autoregressive inference using a time-step-based Polars loop.</p>
-<p>This function orchestrates the autoregressive process by iterating
-through each unique, adjusted time step (<cite>subsequenceIdAdjusted</cite>).</p>
-<p>For each time step:
-1. Filters the main DataFrame <cite>data</cite> to get the current slice of data</p>
-<blockquote>
-<div><p>for all sequences at that time step.</p>
-</div></blockquote>
-<ol class="arabic simple" start="2">
-<li><p>Calls <cite>get_probs_preds</cite> to generate predictions for this slice.</p></li>
-<li><p>Uses <cite>fill_in_predictions_pl</cite> to update the <em>main</em> <cite>data</cite> DataFrame,
-filling in the <cite>np.inf</cite> placeholders for the <em>next</em> time steps
-using the predictions just made.</p></li>
-<li><p>Collects the predictions and a corresponding sort key.</p></li>
-</ol>
-<p>After iterating through all time steps, it sorts all collected
-predictions based on the keys (sequenceId, subsequenceId) and returns
-the complete, ordered results.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>config</strong> – The <cite>InfererModel</cite> configuration object.</p></li>
-<li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance.</p></li>
-<li><p><strong>data</strong> – The input Polars DataFrame, expanded with future rows
-(see <cite>expand_data_by_autoregression</cite>).</p></li>
-<li><p><strong>column_types</strong> – A dictionary mapping column names to <cite>torch.dtype</cite>.</p></li>
-<li><p><strong>seq_length</strong> – The sequence length, passed to <cite>fill_in_predictions_pl</cite>.</p></li>
-</ul>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p><ul class="simple">
-<li><p><cite>probs</cite>: A dictionary mapping target columns to sorted NumPy
-arrays of probabilities, or <cite>None</cite>.</p></li>
-<li><p><cite>preds</cite>: A dictionary mapping target columns to sorted NumPy
-arrays of final predictions.</p></li>
-<li><p><cite>sequence_ids</cite>: A NumPy array of <cite>sequenceId`s corresponding
-to each row in the `preds</cite> arrays.</p></li>
-</ul>
-</p>
-</dd>
-<dt class="field-odd">Return type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>A tuple <cite>(probs, preds, sequence_ids)</cite></p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="sequifier.infer.get_probs_preds_pt">
-<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">get_probs_preds_pt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.Tensor</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extra_steps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#get_probs_preds_pt"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.get_probs_preds_pt" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="sequifier.infer.get_probs_preds_from_dict">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">get_probs_preds_from_dict</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.Tensor</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">total_steps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#get_probs_preds_from_dict"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.get_probs_preds_from_dict" title="Permalink to this definition">¶</a></dt>
 <dd><p>Generates predictions from PyTorch tensor data, supporting autoregression.</p>
 <p>This function performs generative inference on a batch of PyTorch tensor
 data loaded from <cite>.pt</cite> files (which contain sequences, targets,
 sequence_ids, subsequence_ids, and start_positions). It implements an
 autoregressive loop:
 1. Runs inference on the initial data <cite>X</cite> (sequences).
-2. For each subsequent step (<cite>i</cite> in <cite>extra_steps</cite>):</p>
+2. For each subsequent step:</p>
 <blockquote>
 <div><ol class="loweralpha simple">
 <li><p>Creates the next input <cite>X_next</cite> by shifting the previous input
@@ -3813,8 +3719,8 @@ steps into a single flat batch, ordered by original sample index, then by step.<
 <li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance.</p></li>
 <li><p><strong>data</strong> – A dictionary mapping column/feature names to <a href="#id3"><span class="problematic" id="id4">`</span></a>torch.Tensor`s
 (the sequences part loaded from the .pt file).</p></li>
-<li><p><strong>extra_steps</strong> – The number of additional autoregressive steps to
-perform. A value of 0 means simple, non-autoregressive
+<li><p><strong>total_steps</strong> – The number of total autoregressive steps to
+perform. A value of 1 means simple, non-autoregressive
 inference.</p></li>
 </ul>
 </dd>
@@ -3886,35 +3792,27 @@ an iterator of loaded PyTorch data (for .pt files).</p></li>
 <dl class="py function">
 <dt class="sig sig-object py" id="sequifier.infer.infer_generative">
 <span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">infer_generative</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.infer_config.InfererModel" title="sequifier.config.infer_config.InfererModel"><span class="pre">InfererModel</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dataset</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Iterator</span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.dtype</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/infer.html#infer_generative"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.infer_generative" title="Permalink to this definition">¶</a></dt>
-<dd><p>Performs inference with a generative model and saves the results.</p>
-<p>This function manages the generative inference workflow:
-1. Iterates through the dataset (chunks).
-2. Handles data preparation, including expanding data for autoregression</p>
-<blockquote>
-<div><p>if configured (<cite>expand_data_by_autoregression</cite>). It also calculates
-the corresponding <cite>itemPosition</cite> for each prediction.</p>
-</div></blockquote>
-<ol class="arabic simple" start="3">
-<li><p>Calls the correct function to get probabilities and predictions
-based on data format and autoregression settings (e.g.,
-<cite>get_probs_preds_autoregression</cite>, <cite>get_probs_preds_pt</cite>).</p></li>
-<li><p>Post-processes predictions:
-- Maps integer predictions back to original IDs if <cite>map_to_id</cite> is True.
-- Inverts normalization for real-valued target columns.</p></li>
-<li><p>Saves probabilities to disk (if <cite>config.output_probabilities</cite> is True).</p></li>
-<li><p>Saves the final predictions to disk, formatted as a Polars DataFrame
-with <cite>sequenceId</cite>, <cite>itemPosition</cite>, and target columns.</p></li>
-</ol>
+<dd><p>Executes the generative inference pipeline and exports results to disk.</p>
+<p>This function processes the input dataset in chunks to accommodate large data
+volumes. It handles various input formats (standalone CSV/Parquet, folder-based
+Parquet, or PyTorch tensors) and routes the data to the appropriate inference
+logic (standard sequence prediction or step-by-step autoregression). After
+obtaining raw model outputs, it calculates aligned sequence IDs and absolute
+item positions, applies necessary post-processing (such as reverse-mapping
+categorical IDs and denormalizing real values), and writes the final
+probabilities and predictions to the configured output directory.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>config</strong> – The <cite>InfererModel</cite> configuration object.</p></li>
-<li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance.</p></li>
-<li><p><strong>model_id</strong> – A string identifier for the model, used for naming
-output files.</p></li>
-<li><p><strong>dataset</strong> – A list containing a Polars DataFrame (for parquet/csv) or
-an iterator of loaded PyTorch data (for .pt files).</p></li>
-<li><p><strong>column_types</strong> – A dictionary mapping column names to their
+<li><p><strong>config</strong> – The inference configuration object dictating I/O paths,
+autoregression settings, and output formats.</p></li>
+<li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance responsible for executing
+the underlying model logic.</p></li>
+<li><p><strong>model_id</strong> – A string identifier for the current model, used to construct
+the names of the generated output files and directories.</p></li>
+<li><p><strong>dataset</strong> – A list or iterator yielding data chunks, typically containing
+either Polars DataFrames or PyTorch tensor dictionaries.</p></li>
+<li><p><strong>column_types</strong> – A dictionary mapping input column names to their expected
 <cite>torch.dtype</cite>.</p></li>
 </ul>
 </dd>
@@ -4025,15 +3923,19 @@ of probabilities.</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="sequifier.infer.sample_with_cumsum">
-<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">sample_with_cumsum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">probs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#sample_with_cumsum"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.sample_with_cumsum" title="Permalink to this definition">¶</a></dt>
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">sample_with_cumsum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">probs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_log_probs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#sample_with_cumsum"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.sample_with_cumsum" title="Permalink to this definition">¶</a></dt>
 <dd><p>Samples from a probability distribution using the inverse CDF method.</p>
 <p>Takes an array of logits, computes the cumulative probability
 distribution, draws a random number <cite>r</cite> from [0, 1), and returns
 the index of the first class <cite>i</cite> where <cite>cumsum[i] &gt; r</cite>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><p><strong>probs</strong> – A 2D NumPy array of <em>logits</em> (not normalized probabilities).
-Shape is (batch_size, num_classes).</p>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>probs</strong> – A 2D NumPy array of logits or normalized probabilities.
+Shape is (batch_size, num_classes).</p></li>
+<li><p><strong>is_log_probs</strong> – Boolean flag indicating if the passed array are logits or
+probabilities</p></li>
+</ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
 <dd class="field-even"><p>A 1D NumPy array of shape (batch_size,) containing the sampled
@@ -4667,7 +4569,7 @@ rank and worker ID.</p>
 <li><a class="reference internal" href="#sequifier.config.infer_config.InfererModel.sample_from_distribution_columns"><code class="docutils literal notranslate"><span class="pre">InfererModel.sample_from_distribution_columns</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.infer_config.InfererModel.infer_with_dropout"><code class="docutils literal notranslate"><span class="pre">InfererModel.infer_with_dropout</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.infer_config.InfererModel.autoregression"><code class="docutils literal notranslate"><span class="pre">InfererModel.autoregression</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.config.infer_config.InfererModel.autoregression_extra_steps"><code class="docutils literal notranslate"><span class="pre">InfererModel.autoregression_extra_steps</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.config.infer_config.InfererModel.autoregression_total_steps"><code class="docutils literal notranslate"><span class="pre">InfererModel.autoregression_total_steps</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.config.infer_config.InfererModel.model_config"><code class="docutils literal notranslate"><span class="pre">InfererModel.model_config</span></code></a></li>
 </ul>
 </li>
@@ -4844,15 +4746,12 @@ rank and worker ID.</p>
 <li><a class="reference internal" href="#sequifier.infer.Inferer.prepare_inference_batches"><code class="docutils literal notranslate"><span class="pre">Inferer.prepare_inference_batches()</span></code></a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#sequifier.infer.expand_data_by_autoregression"><code class="docutils literal notranslate"><span class="pre">expand_data_by_autoregression()</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.infer.fill_in_predictions_pl"><code class="docutils literal notranslate"><span class="pre">fill_in_predictions_pl()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.infer.fill_number"><code class="docutils literal notranslate"><span class="pre">fill_number()</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.infer.format_delta"><code class="docutils literal notranslate"><span class="pre">format_delta()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.infer.get_embeddings"><code class="docutils literal notranslate"><span class="pre">get_embeddings()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.infer.get_embeddings_pt"><code class="docutils literal notranslate"><span class="pre">get_embeddings_pt()</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.infer.get_probs_preds"><code class="docutils literal notranslate"><span class="pre">get_probs_preds()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.infer.get_probs_preds_autoregression"><code class="docutils literal notranslate"><span class="pre">get_probs_preds_autoregression()</span></code></a></li>
-<li><a class="reference internal" href="#sequifier.infer.get_probs_preds_pt"><code class="docutils literal notranslate"><span class="pre">get_probs_preds_pt()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.get_probs_preds_from_df"><code class="docutils literal notranslate"><span class="pre">get_probs_preds_from_df()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.get_probs_preds_from_dict"><code class="docutils literal notranslate"><span class="pre">get_probs_preds_from_dict()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.infer.infer"><code class="docutils literal notranslate"><span class="pre">infer()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.infer.infer_embedding"><code class="docutils literal notranslate"><span class="pre">infer_embedding()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.infer.infer_generative"><code class="docutils literal notranslate"><span class="pre">infer_generative()</span></code></a></li>
@@ -4903,7 +4802,7 @@ rank and worker ID.</p>
       
     </aside>
   </div>
-</div><script data-url_root="./" id="documentation_options" src="_static/documentation_options.js?v=9c7002d6"></script>
+</div><script data-url_root="./" id="documentation_options" src="_static/documentation_options.js?v=30bbdf9c"></script>
     <script src="_static/doctools.js?v=888ff710"></script>
     <script src="_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>

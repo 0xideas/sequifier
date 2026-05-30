@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/infer.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.infer - sequifier v1.1.2.2 documentation</title>
+        <title>sequifier.infer - sequifier v1.2.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v1.1.2.2 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v1.2.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.1.2.2 documentation</span>
+  <span class="sidebar-brand-text">sequifier v1.2.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -273,7 +273,6 @@
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span><span class="p">,</span> <span class="n">timedelta</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
 
@@ -574,7 +573,6 @@
             <span class="n">embeddings</span> <span class="o">=</span> <span class="n">get_embeddings</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">)</span>
 
             <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
-            <span class="c1"># --- ADDED THIS LINE ---</span>
             <span class="n">subsequence_ids_for_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
             <span class="n">item_positions_for_preds_base</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
@@ -693,31 +691,27 @@
     <span class="n">dataset</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Any</span><span class="p">],</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Any</span><span class="p">]],</span>
     <span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
 <span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Performs inference with a generative model and saves the results.</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Executes the generative inference pipeline and exports results to disk.</span>
 
-<span class="sd">    This function manages the generative inference workflow:</span>
-<span class="sd">    1. Iterates through the dataset (chunks).</span>
-<span class="sd">    2. Handles data preparation, including expanding data for autoregression</span>
-<span class="sd">       if configured (`expand_data_by_autoregression`). It also calculates</span>
-<span class="sd">       the corresponding `itemPosition` for each prediction.</span>
-<span class="sd">    3. Calls the correct function to get probabilities and predictions</span>
-<span class="sd">       based on data format and autoregression settings (e.g.,</span>
-<span class="sd">       `get_probs_preds_autoregression`, `get_probs_preds_pt`).</span>
-<span class="sd">    4. Post-processes predictions:</span>
-<span class="sd">       - Maps integer predictions back to original IDs if `map_to_id` is True.</span>
-<span class="sd">       - Inverts normalization for real-valued target columns.</span>
-<span class="sd">    5. Saves probabilities to disk (if `config.output_probabilities` is True).</span>
-<span class="sd">    6. Saves the final predictions to disk, formatted as a Polars DataFrame</span>
-<span class="sd">       with `sequenceId`, `itemPosition`, and target columns.</span>
+<span class="sd">    This function processes the input dataset in chunks to accommodate large data</span>
+<span class="sd">    volumes. It handles various input formats (standalone CSV/Parquet, folder-based</span>
+<span class="sd">    Parquet, or PyTorch tensors) and routes the data to the appropriate inference</span>
+<span class="sd">    logic (standard sequence prediction or step-by-step autoregression). After</span>
+<span class="sd">    obtaining raw model outputs, it calculates aligned sequence IDs and absolute</span>
+<span class="sd">    item positions, applies necessary post-processing (such as reverse-mapping</span>
+<span class="sd">    categorical IDs and denormalizing real values), and writes the final</span>
+<span class="sd">    probabilities and predictions to the configured output directory.</span>
 
 <span class="sd">    Args:</span>
-<span class="sd">        config: The `InfererModel` configuration object.</span>
-<span class="sd">        inferer: The initialized `Inferer` instance.</span>
-<span class="sd">        model_id: A string identifier for the model, used for naming</span>
-<span class="sd">            output files.</span>
-<span class="sd">        dataset: A list containing a Polars DataFrame (for parquet/csv) or</span>
-<span class="sd">            an iterator of loaded PyTorch data (for .pt files).</span>
-<span class="sd">        column_types: A dictionary mapping column names to their</span>
+<span class="sd">        config: The inference configuration object dictating I/O paths,</span>
+<span class="sd">            autoregression settings, and output formats.</span>
+<span class="sd">        inferer: The initialized `Inferer` instance responsible for executing</span>
+<span class="sd">            the underlying model logic.</span>
+<span class="sd">        model_id: A string identifier for the current model, used to construct</span>
+<span class="sd">            the names of the generated output files and directories.</span>
+<span class="sd">        dataset: A list or iterator yielding data chunks, typically containing</span>
+<span class="sd">            either Polars DataFrames or PyTorch tensor dictionaries.</span>
+<span class="sd">        column_types: A dictionary mapping input column names to their expected</span>
 <span class="sd">            `torch.dtype`.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="k">for</span> <span class="n">data_id</span><span class="p">,</span> <span class="n">data</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">dataset</span><span class="p">):</span>
@@ -732,7 +726,9 @@
             <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
             <span class="k">if</span> <span class="ow">not</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression</span><span class="p">:</span>
                 <span class="c1"># For the non-autoregressive case, apply inference size logic</span>
-                <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">)</span>
+                <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds_from_df</span><span class="p">(</span>
+                    <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span>
+                <span class="p">)</span>
 
                 <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
 
@@ -764,20 +760,11 @@
                     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                         <span class="sa">f</span><span class="s2">&quot;prediction_length must be 1 for autoregression, got </span><span class="si">{</span><span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">&quot;</span>
                     <span class="p">)</span>
-                <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_extra_steps</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-                    <span class="n">data</span> <span class="o">=</span> <span class="n">expand_data_by_autoregression</span><span class="p">(</span>
-                        <span class="n">data</span><span class="p">,</span>
-                        <span class="n">config</span><span class="o">.</span><span class="n">autoregression_extra_steps</span><span class="p">,</span>
-                        <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span><span class="p">,</span>
-                    <span class="p">)</span>
-                <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
-                <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
-                    <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
-                <span class="p">)</span>
                 <span class="c1"># Unpack the new third return value</span>
-                <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">get_probs_preds_autoregression</span><span class="p">(</span>
-                    <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
+                <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span><span class="p">,</span> <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">get_probs_preds_autoregression</span><span class="p">(</span>
+                        <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
+                    <span class="p">)</span>
                 <span class="p">)</span>
         <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span> <span class="ow">and</span> <span class="n">is_folder_input</span><span class="p">:</span>
             <span class="c1"># Folder-based Parquet chunk logic</span>
@@ -785,15 +772,16 @@
                 <span class="n">data</span> <span class="o">=</span> <span class="n">subset_to_input_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
             <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
 
-            <span class="c1"># Folder-based inference can accept autoregression extra steps similar to .pt layout</span>
-            <span class="n">extra_steps</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="mi">0</span>
-                <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_extra_steps</span> <span class="ow">is</span> <span class="kc">None</span>
-                <span class="k">else</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_extra_steps</span>
+            <span class="n">total_steps</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="mi">1</span>
+                <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span> <span class="ow">is</span> <span class="kc">None</span>
+                <span class="k">else</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span>
             <span class="p">)</span>
 
-            <span class="k">if</span> <span class="n">extra_steps</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-                <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">total_steps</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds_from_df</span><span class="p">(</span>
+                    <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span>
+                <span class="p">)</span>
                 <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
                 <span class="n">sequence_ids_for_preds_base</span> <span class="o">=</span> <span class="p">(</span>
                     <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
@@ -820,31 +808,27 @@
                     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                         <span class="sa">f</span><span class="s2">&quot;prediction_length must be 1 for autoregression, got </span><span class="si">{</span><span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">&quot;</span>
                     <span class="p">)</span>
-                <span class="c1"># Treat chunk file as standard autoregressive pass</span>
-                <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
-                <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
-                    <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
-                <span class="p">)</span>
-                <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">get_probs_preds_autoregression</span><span class="p">(</span>
-                    <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
+
+                <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span><span class="p">,</span> <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">get_probs_preds_autoregression</span><span class="p">(</span>
+                        <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
+                    <span class="p">)</span>
                 <span class="p">)</span>
         <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
             <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">sequence_ids_tensor</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">start_positions_tensor</span> <span class="o">=</span> <span class="n">data</span>
-            <span class="n">extra_steps</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="mi">0</span>
-                <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_extra_steps</span> <span class="ow">is</span> <span class="kc">None</span>
-                <span class="k">else</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_extra_steps</span>
+            <span class="n">total_steps</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="mi">1</span>
+                <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span> <span class="ow">is</span> <span class="kc">None</span>
+                <span class="k">else</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span>
             <span class="p">)</span>
 
-            <span class="c1"># Pass prediction_length to get_probs_preds_pt</span>
-            <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds_pt</span><span class="p">(</span>
-                <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">extra_steps</span>
+            <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds_from_dict</span><span class="p">(</span>
+                <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">total_steps</span>
             <span class="p">)</span>
 
             <span class="n">prediction_length</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span>  <span class="c1"># Get prediction_length</span>
 
-            <span class="k">if</span> <span class="n">extra_steps</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">total_steps</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
                 <span class="c1"># Non-autoregressive path: Apply prediction_length logic</span>
                 <span class="n">sequence_ids_for_preds_base</span> <span class="o">=</span> <span class="n">sequence_ids_tensor</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
                 <span class="n">item_positions_for_preds_base</span> <span class="o">=</span> <span class="p">(</span>
@@ -866,11 +850,11 @@
 
             <span class="k">else</span><span class="p">:</span>
                 <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span>
-                    <span class="n">sequence_ids_tensor</span><span class="o">.</span><span class="n">numpy</span><span class="p">(),</span> <span class="n">extra_steps</span> <span class="o">+</span> <span class="mi">1</span>
+                    <span class="n">sequence_ids_tensor</span><span class="o">.</span><span class="n">numpy</span><span class="p">(),</span> <span class="n">total_steps</span>
                 <span class="p">)</span>
                 <span class="n">item_position_boundaries</span> <span class="o">=</span> <span class="nb">zip</span><span class="p">(</span>
                     <span class="nb">list</span><span class="p">(</span><span class="n">start_positions_tensor</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span><span class="p">),</span>
-                    <span class="nb">list</span><span class="p">(</span><span class="n">start_positions_tensor</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span> <span class="o">+</span> <span class="n">extra_steps</span> <span class="o">+</span> <span class="mi">1</span><span class="p">),</span>
+                    <span class="nb">list</span><span class="p">(</span><span class="n">start_positions_tensor</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span> <span class="o">+</span> <span class="n">total_steps</span><span class="p">),</span>
                 <span class="p">)</span>
                 <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span>
                     <span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">)</span> <span class="k">for</span> <span class="n">start</span><span class="p">,</span> <span class="n">end</span> <span class="ow">in</span> <span class="n">item_position_boundaries</span><span class="p">],</span>
@@ -975,89 +959,6 @@
         <span class="p">)</span></div>
 
 
-<div class="viewcode-block" id="expand_data_by_autoregression"><a class="viewcode-back" href="../../api.html#sequifier.infer.expand_data_by_autoregression">[docs]</a><span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">expand_data_by_autoregression</span><span class="p">(</span>
-    <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">autoregression_extra_steps</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">seq_length</span><span class="p">:</span> <span class="nb">int</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Expands a Polars DataFrame for autoregressive inference.</span>
-
-<span class="sd">    This function takes a DataFrame of sequences and adds</span>
-<span class="sd">    `autoregression_extra_steps` new rows for each sequence. These new</span>
-<span class="sd">    rows represent future time steps to be predicted.</span>
-
-<span class="sd">    For each new step, it:</span>
-<span class="sd">    1. Copies the last known observation for a sequence.</span>
-<span class="sd">    2. Increments the `subsequenceId`.</span>
-<span class="sd">    3. Shifts the historical data columns (e.g., &#39;1&#39;, &#39;2&#39;, ..., &#39;50&#39;) one</span>
-<span class="sd">       position &quot;older&quot; (e.g., old &#39;1&#39; becomes new &#39;2&#39;, old &#39;49&#39; becomes</span>
-<span class="sd">       new &#39;50&#39;).</span>
-<span class="sd">    4. Fills the &quot;newest&quot; columns (e.g., new &#39;1&#39; for the first extra</span>
-<span class="sd">       step) with `np.inf` as a placeholder for the prediction.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        data: The input Polars DataFrame, sorted by `sequenceId` and</span>
-<span class="sd">            `subsequenceId`.</span>
-<span class="sd">        autoregression_extra_steps: The number of future time steps to add</span>
-<span class="sd">            to each sequence.</span>
-<span class="sd">        seq_length: The sequence length, used to identify the historical</span>
-<span class="sd">            data columns (named &#39;1&#39; through `seq_length`).</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        A new Polars DataFrame containing all original rows plus the</span>
-<span class="sd">        newly generated future rows with placeholders.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-
-    <span class="n">data_cols</span> <span class="o">=</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">seq_length</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)]</span>
-    <span class="n">data</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
-        <span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="n">c</span><span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">Float64</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">data_cols</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">columns</span><span class="p">]</span>
-    <span class="p">)</span>
-
-    <span class="n">data</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span>
-
-    <span class="c1"># Identify the last observation for each sequence</span>
-    <span class="n">last_obs_lazy</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">lazy</span><span class="p">()</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
-        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span>
-    <span class="p">)</span>
-
-    <span class="c1"># Generate future rows lazily</span>
-    <span class="n">future_frames</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="n">data_cols</span> <span class="o">=</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">seq_length</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)]</span>
-
-    <span class="k">for</span> <span class="n">offset</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">autoregression_extra_steps</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
-        <span class="n">future_df_lazy</span> <span class="o">=</span> <span class="n">last_obs_lazy</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
-            <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="n">offset</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span>
-        <span class="p">)</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
-            <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="n">offset</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span>
-        <span class="p">)</span>
-
-        <span class="c1"># Correctly shift columns to make space for future predictions</span>
-        <span class="c1"># Newest value (col &#39;1&#39;) becomes a placeholder, old &#39;1&#39; becomes new &#39;2&#39;, etc.</span>
-        <span class="n">update_exprs</span> <span class="o">=</span> <span class="p">[]</span>
-        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">data_cols</span><span class="p">)):</span>  <span class="c1"># e.g., i from 0 to 49 for seq_length=50</span>
-            <span class="n">col_to_update</span> <span class="o">=</span> <span class="n">data_cols</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>  <span class="c1"># Updates &#39;50&#39;, &#39;49&#39;, ..., &#39;1&#39;</span>
-
-            <span class="k">if</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">data_cols</span><span class="p">)</span> <span class="o">-</span> <span class="n">offset</span><span class="p">:</span>
-                <span class="c1"># Shift historical data one step further into the past</span>
-                <span class="c1"># e.g., new &#39;50&#39; gets old &#39;49&#39;, new &#39;2&#39; gets old &#39;1&#39;</span>
-                <span class="n">source_col_name</span> <span class="o">=</span> <span class="n">data_cols</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="n">offset</span><span class="p">]</span>
-                <span class="n">update_exprs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="n">source_col_name</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="n">col_to_update</span><span class="p">))</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="c1"># These are the newest &#39;offset&#39; columns, which are unknown.</span>
-                <span class="c1"># Fill with infinity as a placeholder for the prediction.</span>
-                <span class="c1"># e.g., for offset=1, new col &#39;1&#39; becomes inf.</span>
-                <span class="n">update_exprs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                    <span class="n">pl</span><span class="o">.</span><span class="n">lit</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">inf</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">pl</span><span class="o">.</span><span class="n">Float64</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="n">col_to_update</span><span class="p">)</span>
-                <span class="p">)</span>
-
-        <span class="n">future_df_lazy</span> <span class="o">=</span> <span class="n">future_df_lazy</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">update_exprs</span><span class="p">)</span>
-        <span class="n">future_frames</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">future_df_lazy</span><span class="p">)</span>
-
-    <span class="c1"># Concatenate original data with all future frames</span>
-    <span class="n">final_lazy</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="n">data</span><span class="o">.</span><span class="n">lazy</span><span class="p">()]</span> <span class="o">+</span> <span class="n">future_frames</span><span class="p">,</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;vertical&quot;</span><span class="p">)</span>
-
-    <span class="k">return</span> <span class="n">final_lazy</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span></div>
-
-
 <div class="viewcode-block" id="get_embeddings_pt"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_embeddings_pt">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_embeddings_pt</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
@@ -1087,12 +988,12 @@
     <span class="k">return</span> <span class="n">embeddings</span></div>
 
 
-<div class="viewcode-block" id="get_probs_preds_pt"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_pt">[docs]</a><span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds_pt</span><span class="p">(</span>
+<div class="viewcode-block" id="get_probs_preds_from_dict"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_from_dict">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds_from_dict</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
-    <span class="n">extra_steps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="n">total_steps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]],</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Generates predictions from PyTorch tensor data, supporting autoregression.</span>
 
@@ -1101,7 +1002,7 @@
 <span class="sd">    sequence_ids, subsequence_ids, and start_positions). It implements an</span>
 <span class="sd">    autoregressive loop:</span>
 <span class="sd">    1. Runs inference on the initial data `X` (sequences).</span>
-<span class="sd">    2. For each subsequent step (`i` in `extra_steps`):</span>
+<span class="sd">    2. For each subsequent step:</span>
 <span class="sd">       a. Creates the next input `X_next` by shifting the previous input</span>
 <span class="sd">          `X` and appending the prediction from the last step.</span>
 <span class="sd">       b. Runs inference on `X_next`.</span>
@@ -1114,8 +1015,8 @@
 <span class="sd">        inferer: The initialized `Inferer` instance.</span>
 <span class="sd">        data: A dictionary mapping column/feature names to `torch.Tensor`s</span>
 <span class="sd">              (the sequences part loaded from the .pt file).</span>
-<span class="sd">        extra_steps: The number of additional autoregressive steps to</span>
-<span class="sd">            perform. A value of 0 means simple, non-autoregressive</span>
+<span class="sd">        total_steps: The number of total autoregressive steps to</span>
+<span class="sd">            perform. A value of 1 means simple, non-autoregressive</span>
 <span class="sd">            inference.</span>
 
 <span class="sd">    Returns:</span>
@@ -1139,8 +1040,7 @@
     <span class="n">all_preds_list</span> <span class="o">=</span> <span class="p">{</span><span class="n">col</span><span class="p">:</span> <span class="p">[]</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">target_cols</span><span class="p">}</span>
 
     <span class="c1"># 3. Autoregressive loop</span>
-    <span class="c1"># The loop runs `extra_steps + 1` times to get the initial prediction plus all extra steps.</span>
-    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">extra_steps</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">total_steps</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">output_probabilities</span><span class="p">:</span>
             <span class="n">probs_for_step</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">infer_generative</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">return_probs</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
             <span class="n">preds_for_step</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">infer_generative</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">probs_for_step</span><span class="p">)</span>
@@ -1152,7 +1052,7 @@
         <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">target_cols</span><span class="p">:</span>
             <span class="n">all_preds_list</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">preds_for_step</span><span class="p">[</span><span class="n">col</span><span class="p">])</span>
 
-        <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="n">extra_steps</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="p">(</span><span class="n">total_steps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
             <span class="k">break</span>
 
         <span class="n">X_next</span> <span class="o">=</span> <span class="p">{}</span>
@@ -1216,8 +1116,8 @@
     <span class="k">return</span> <span class="n">embeddings</span></div>
 
 
-<div class="viewcode-block" id="get_probs_preds"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds">[docs]</a><span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds</span><span class="p">(</span>
+<div class="viewcode-block" id="get_probs_preds_from_df"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_from_df">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds_from_df</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
@@ -1259,106 +1159,6 @@
         <span class="n">preds</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">infer_generative</span><span class="p">(</span><span class="n">X</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="p">(</span><span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">)</span></div>
-
-
-<div class="viewcode-block" id="fill_in_predictions_pl"><a class="viewcode-back" href="../../api.html#sequifier.infer.fill_in_predictions_pl">[docs]</a><span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">fill_in_predictions_pl</span><span class="p">(</span>
-    <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
-    <span class="n">preds</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span>
-    <span class="n">current_subsequence_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">sequence_ids_present</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span>
-    <span class="n">seq_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Fills in predictions into the main Polars DataFrame using a robust,</span>
-<span class="sd">    join-based approach that preserves the original DataFrame&#39;s structure.</span>
-
-<span class="sd">    This function broadcasts predictions to all relevant future rows via a join,</span>
-<span class="sd">    then uses conditional expressions to update only the specific placeholder</span>
-<span class="sd">    cells (`np.inf`) that correspond to the correct future time step.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        data: The main DataFrame containing all sequences.</span>
-<span class="sd">        preds: A dictionary of new predictions, mapping target column names to NumPy arrays.</span>
-<span class="sd">        current_subsequence_id: The adjusted subsequence ID at which predictions were made.</span>
-<span class="sd">        sequence_ids_present: A Polars Series of the sequence IDs in the current batch.</span>
-<span class="sd">        seq_length: The length of the sequence.</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        An updated Polars DataFrame with the same dimensions as the input, with</span>
-<span class="sd">        future placeholder values filled in.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">preds</span> <span class="ow">or</span> <span class="n">sequence_ids_present</span><span class="o">.</span><span class="n">is_empty</span><span class="p">():</span>
-        <span class="k">return</span> <span class="n">data</span>
-
-    <span class="c1"># 1. Create a &quot;long&quot; format DataFrame of the new predictions.</span>
-    <span class="c1"># This table has columns [sequenceId, inputCol, prediction].</span>
-    <span class="n">pred_dfs</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="k">for</span> <span class="n">input_col</span><span class="p">,</span> <span class="n">pred_values</span> <span class="ow">in</span> <span class="n">preds</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-        <span class="k">if</span> <span class="n">pred_values</span><span class="o">.</span><span class="n">size</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="n">pred_dfs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
-                    <span class="p">{</span>
-                        <span class="s2">&quot;sequenceId&quot;</span><span class="p">:</span> <span class="n">sequence_ids_present</span><span class="p">,</span>
-                        <span class="s2">&quot;inputCol&quot;</span><span class="p">:</span> <span class="n">input_col</span><span class="p">,</span>
-                        <span class="s2">&quot;prediction&quot;</span><span class="p">:</span> <span class="n">pred_values</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span>
-                    <span class="p">}</span>
-                <span class="p">)</span>
-            <span class="p">)</span>
-
-    <span class="c1"># If there are no valid predictions to process, return the original data.</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">pred_dfs</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">data</span>
-
-    <span class="n">preds_df</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">pred_dfs</span><span class="p">)</span>
-
-    <span class="c1"># 2. Left-join the predictions onto the main DataFrame.</span>
-    <span class="c1"># This adds a &#39;prediction&#39; column. Rows that don&#39;t match the join keys</span>
-    <span class="c1"># (e.g., non-target columns) will have a null value for &#39;prediction&#39;.</span>
-    <span class="c1"># A left join guarantees that no rows from the original `data` are dropped.</span>
-    <span class="n">data_with_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">preds_df</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="s2">&quot;inputCol&quot;</span><span class="p">],</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
-
-    <span class="c1"># 3. Build a list of conditional update expressions for each future time step.</span>
-    <span class="n">update_expressions</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="k">for</span> <span class="n">offset</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">seq_length</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
-        <span class="n">col_to_update</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">offset</span><span class="p">)</span>
-
-        <span class="c1"># Skip if the column to update doesn&#39;t exist in the DataFrame.</span>
-        <span class="k">if</span> <span class="n">col_to_update</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
-            <span class="k">continue</span>
-
-        <span class="c1"># The core logic: A prediction made at `current_subsequence_id` for a given</span>
-        <span class="c1"># `offset` should fill the placeholder in column `str(offset)` at the row</span>
-        <span class="c1"># where `subsequenceIdAdjusted` is `current_subsequence_id + offset`.</span>
-        <span class="n">update_expr</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">pl</span><span class="o">.</span><span class="n">when</span><span class="p">(</span>
-                <span class="c1"># Condition 1: Is this the correct future row to update?</span>
-                <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;subsequenceIdAdjusted&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">current_subsequence_id</span> <span class="o">+</span> <span class="n">offset</span><span class="p">)</span>
-                <span class="c1"># Condition 2: Does the cell contain a placeholder that needs updating?</span>
-                <span class="o">&amp;</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="n">col_to_update</span><span class="p">)</span><span class="o">.</span><span class="n">is_infinite</span><span class="p">())</span>
-                <span class="c1"># Condition 3: Is there a valid prediction available from the join?</span>
-                <span class="o">&amp;</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;prediction&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_not_null</span><span class="p">())</span>
-            <span class="p">)</span>
-            <span class="c1"># If all conditions are met, use the new prediction value.</span>
-            <span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;prediction&quot;</span><span class="p">))</span>
-            <span class="c1"># IMPORTANT: Otherwise, keep the column&#39;s existing value. This is crucial</span>
-            <span class="c1"># for preserving the integrity of the DataFrame.</span>
-            <span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="n">col_to_update</span><span class="p">))</span>
-            <span class="c1"># Overwrite the original column with the updated values.</span>
-            <span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="n">col_to_update</span><span class="p">)</span>
-        <span class="p">)</span>
-        <span class="n">update_expressions</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">update_expr</span><span class="p">)</span>
-
-    <span class="c1"># 4. Apply all expressions at once and remove the temporary &#39;prediction&#39; column.</span>
-    <span class="c1"># The `with_columns` operation does not change the number of rows.</span>
-    <span class="k">if</span> <span class="n">update_expressions</span><span class="p">:</span>
-        <span class="n">updated_data</span> <span class="o">=</span> <span class="n">data_with_preds</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">update_expressions</span><span class="p">)</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span>
-            <span class="s2">&quot;prediction&quot;</span>
-        <span class="p">)</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="c1"># If no updates were needed, just drop the temporary join column.</span>
-        <span class="n">updated_data</span> <span class="o">=</span> <span class="n">data_with_preds</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="s2">&quot;prediction&quot;</span><span class="p">)</span>
-
-    <span class="k">return</span> <span class="n">updated_data</span></div>
 
 
 <div class="viewcode-block" id="fill_number"><a class="viewcode-back" href="../../api.html#sequifier.infer.fill_number">[docs]</a><span class="nd">@beartype</span>
@@ -1418,21 +1218,6 @@
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;subsequenceId must be sorted within sequenceId groups&quot;</span><span class="p">)</span></div>
 
 
-<div class="viewcode-block" id="format_delta"><a class="viewcode-back" href="../../api.html#sequifier.infer.format_delta">[docs]</a><span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">format_delta</span><span class="p">(</span><span class="n">time_delta</span><span class="p">:</span> <span class="n">timedelta</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Formats a `timedelta` object into a human-readable string (seconds).</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        time_delta: The `timedelta` object to format.</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        A string representing the total seconds with 3 decimal places.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">seconds</span> <span class="o">=</span> <span class="n">time_delta</span><span class="o">.</span><span class="n">seconds</span>
-    <span class="n">microseconds</span> <span class="o">=</span> <span class="n">time_delta</span><span class="o">.</span><span class="n">microseconds</span>
-    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="p">(</span><span class="n">seconds</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">(</span><span class="n">microseconds</span><span class="o">/</span><span class="mf">1e6</span><span class="p">))</span><span class="si">:</span><span class="s2">.3</span><span class="si">}</span><span class="s2">&quot;</span></div>
-
-
 <div class="viewcode-block" id="get_probs_preds_autoregression"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_autoregression">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds_autoregression</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
@@ -1440,136 +1225,71 @@
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
     <span class="n">seq_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]],</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Performs autoregressive inference using a time-step-based Polars loop.</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span>
+    <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]],</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+<span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generates autoregressive predictions and aligns them with sequence IDs and positions.</span>
 
-<span class="sd">    This function orchestrates the autoregressive process by iterating</span>
-<span class="sd">    through each unique, adjusted time step (`subsequenceIdAdjusted`).</span>
-
-<span class="sd">    For each time step:</span>
-<span class="sd">    1. Filters the main DataFrame `data` to get the current slice of data</span>
-<span class="sd">       for all sequences at that time step.</span>
-<span class="sd">    2. Calls `get_probs_preds` to generate predictions for this slice.</span>
-<span class="sd">    3. Uses `fill_in_predictions_pl` to update the *main* `data` DataFrame,</span>
-<span class="sd">       filling in the `np.inf` placeholders for the *next* time steps</span>
-<span class="sd">       using the predictions just made.</span>
-<span class="sd">    4. Collects the predictions and a corresponding sort key.</span>
-
-<span class="sd">    After iterating through all time steps, it sorts all collected</span>
-<span class="sd">    predictions based on the keys (sequenceId, subsequenceId) and returns</span>
-<span class="sd">    the complete, ordered results.</span>
+<span class="sd">    Extracts the initial sequence context from the sorted input DataFrame, maps it</span>
+<span class="sd">    to PyTorch tensors, and executes step-by-step autoregressive inference.</span>
 
 <span class="sd">    Args:</span>
-<span class="sd">        config: The `InfererModel` configuration object.</span>
-<span class="sd">        inferer: The initialized `Inferer` instance.</span>
-<span class="sd">        data: The input Polars DataFrame, expanded with future rows</span>
-<span class="sd">            (see `expand_data_by_autoregression`).</span>
-<span class="sd">        column_types: A dictionary mapping column names to `torch.dtype`.</span>
-<span class="sd">        seq_length: The sequence length, passed to `fill_in_predictions_pl`.</span>
+<span class="sd">        config: Inference configuration object.</span>
+<span class="sd">        inferer: Initialized `Inferer` instance.</span>
+<span class="sd">        data: Input DataFrame, sorted globally by `sequenceId` and locally by `subsequenceId`.</span>
+<span class="sd">        column_types: Mapping of input column names to their `torch.dtype`.</span>
+<span class="sd">        seq_length: Length of the input sequence context.</span>
 
 <span class="sd">    Returns:</span>
-<span class="sd">        A tuple `(probs, preds, sequence_ids)`:</span>
-<span class="sd">            - `probs`: A dictionary mapping target columns to sorted NumPy</span>
-<span class="sd">              arrays of probabilities, or `None`.</span>
-<span class="sd">            - `preds`: A dictionary mapping target columns to sorted NumPy</span>
-<span class="sd">              arrays of final predictions.</span>
-<span class="sd">            - `sequence_ids`: A NumPy array of `sequenceId`s corresponding</span>
-<span class="sd">              to each row in the `preds` arrays.</span>
+<span class="sd">        A tuple containing:</span>
+<span class="sd">            - probs: Dict of probability arrays per target column (None if disabled).</span>
+<span class="sd">            - preds: Dict of final prediction arrays per target column.</span>
+<span class="sd">            - sequence_ids_for_preds: 1D array of sequence IDs matching the output shape.</span>
+<span class="sd">            - item_positions_for_preds: 1D array of absolute item positions for each step.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">data</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span>
     <span class="n">verify_variable_order</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
 
-    <span class="c1"># Normalize subsequenceId to start from 0 for each sequence</span>
-    <span class="n">data</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
-        <span class="p">(</span>
-            <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span>
-        <span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;subsequenceIdAdjusted&quot;</span><span class="p">)</span>
+    <span class="n">distinct_cols</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;inputCol&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()))</span>
+    <span class="n">head_data_df</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="n">maintain_order</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="n">distinct_cols</span><span class="p">)</span>
+
+    <span class="n">aligned_sequence_ids</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">head_data_df</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">maintain_order</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
     <span class="p">)</span>
 
-    <span class="n">preds_list</span><span class="p">,</span> <span class="n">probs_list</span><span class="p">,</span> <span class="n">sort_keys</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[],</span> <span class="p">[]</span>
-    <span class="n">subsequence_ids_distinct</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;subsequenceIdAdjusted&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">()</span><span class="o">.</span><span class="n">to_list</span><span class="p">())</span>
-
-    <span class="c1"># Ensure max_length for padding is robust for both sequence and subsequence IDs</span>
-    <span class="n">max_id_val</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span>
-        <span class="n">data</span><span class="p">[</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span>
-        <span class="nb">max</span><span class="p">(</span><span class="n">subsequence_ids_distinct</span><span class="p">)</span> <span class="k">if</span> <span class="n">subsequence_ids_distinct</span> <span class="k">else</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="n">aligned_start_positions</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">head_data_df</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="n">maintain_order</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
+        <span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+        <span class="o">+</span> <span class="n">seq_length</span>
     <span class="p">)</span>
-    <span class="n">max_length</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">max_id_val</span><span class="p">))</span>
 
-    <span class="k">for</span> <span class="n">subsequence_id</span> <span class="ow">in</span> <span class="n">subsequence_ids_distinct</span><span class="p">:</span>
-        <span class="n">t0</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span>
-        <span class="n">data_subset</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;subsequenceIdAdjusted&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">subsequence_id</span><span class="p">)</span>
+    <span class="n">head_data</span> <span class="o">=</span> <span class="n">numpy_to_pytorch</span><span class="p">(</span>
+        <span class="n">head_data_df</span><span class="p">,</span>
+        <span class="n">column_types</span><span class="p">,</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">,</span>
+        <span class="n">seq_length</span><span class="p">,</span>
+    <span class="p">)</span>
 
-        <span class="k">if</span> <span class="n">data_subset</span><span class="o">.</span><span class="n">height</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="k">continue</span>
+    <span class="c1"># Run the autoregressive PyTorch inference</span>
+    <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds_from_dict</span><span class="p">(</span>
+        <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">head_data</span><span class="p">,</span> <span class="n">total_steps</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span>
+    <span class="p">)</span>
 
-        <span class="n">sequence_ids_present</span> <span class="o">=</span> <span class="n">data_subset</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span>
-            <span class="n">maintain_order</span><span class="o">=</span><span class="kc">True</span>
-        <span class="p">)</span>
+    <span class="c1"># 4. Generate the final output arrays using the perfectly aligned bases</span>
+    <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span>
+        <span class="p">[</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">start_pos</span><span class="p">,</span> <span class="n">start_pos</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">start_pos</span> <span class="ow">in</span> <span class="n">aligned_start_positions</span>
+        <span class="p">],</span>
+        <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+    <span class="p">)</span>
 
-        <span class="n">t1</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span>
+    <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span>
+        <span class="n">aligned_sequence_ids</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span>
+    <span class="p">)</span>
 
-        <span class="c1"># Original sort key logic</span>
-        <span class="n">sort_keys</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
-            <span class="p">[</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">fill_number</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">seq_id</span><span class="p">),</span><span class="w"> </span><span class="n">max_length</span><span class="p">)</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">fill_number</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">subsequence_id</span><span class="p">),</span><span class="w"> </span><span class="n">max_length</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
-                <span class="k">for</span> <span class="n">seq_id</span> <span class="ow">in</span> <span class="n">sequence_ids_present</span>
-            <span class="p">]</span>
-        <span class="p">)</span>
-
-        <span class="n">t2</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span>
-
-        <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds</span><span class="p">(</span>
-            <span class="n">config</span><span class="p">,</span>
-            <span class="n">inferer</span><span class="p">,</span>
-            <span class="n">data_subset</span><span class="p">,</span>
-            <span class="n">column_types</span><span class="p">,</span>
-        <span class="p">)</span>
-
-        <span class="n">t3</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span>
-
-        <span class="n">preds_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">preds</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">probs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">probs_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">probs</span><span class="p">)</span>
-
-        <span class="c1"># Use new Polars-native function to fill predictions</span>
-        <span class="n">data</span> <span class="o">=</span> <span class="n">fill_in_predictions_pl</span><span class="p">(</span>
-            <span class="n">data</span><span class="p">,</span>
-            <span class="n">preds</span><span class="p">,</span>
-            <span class="nb">int</span><span class="p">(</span><span class="n">subsequence_id</span><span class="p">),</span>
-            <span class="n">sequence_ids_present</span><span class="p">,</span>
-            <span class="n">seq_length</span><span class="p">,</span>
-        <span class="p">)</span>
-
-        <span class="n">t4</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span>
-
-        <span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;[DEBUG] Autoregression step </span><span class="si">{</span><span class="n">subsequence_id</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">subsequence_ids_distinct</span><span class="p">)</span><span class="si">}</span><span class="s2">: Total: </span><span class="si">{</span><span class="n">format_delta</span><span class="p">(</span><span class="n">t4</span><span class="o">-</span><span class="n">t0</span><span class="p">)</span><span class="si">}</span><span class="s2">s (Filter: </span><span class="si">{</span><span class="n">format_delta</span><span class="p">(</span><span class="n">t1</span><span class="o">-</span><span class="n">t0</span><span class="p">)</span><span class="si">}</span><span class="s2">s, Infer: </span><span class="si">{</span><span class="n">format_delta</span><span class="p">(</span><span class="n">t3</span><span class="o">-</span><span class="n">t2</span><span class="p">)</span><span class="si">}</span><span class="s2">s, Update: </span><span class="si">{</span><span class="n">format_delta</span><span class="p">(</span><span class="n">t4</span><span class="o">-</span><span class="n">t3</span><span class="p">)</span><span class="si">}</span><span class="s2">s)&quot;</span>
-        <span class="p">)</span>
-
-    <span class="n">sort_order</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argsort</span><span class="p">(</span><span class="n">sort_keys</span><span class="p">)</span>
-
-    <span class="n">preds</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="n">target_column</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">p</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">preds_list</span><span class="p">],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)[</span>
-            <span class="n">sort_order</span>
-        <span class="p">]</span>
-        <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_columns</span>
-    <span class="p">}</span>
-    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">probs_list</span><span class="p">):</span>
-        <span class="n">probs</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="n">target_column</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span>
-                <span class="p">[</span><span class="n">p</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">probs_list</span><span class="p">],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span>
-            <span class="p">)[</span><span class="n">sort_order</span><span class="p">,</span> <span class="p">:]</span>
-            <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_columns</span>
-        <span class="p">}</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="n">probs</span> <span class="o">=</span> <span class="kc">None</span>
-
-    <span class="c1"># Create the corresponding sequence_id array from the sorted keys</span>
-    <span class="n">sorted_keys</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">sort_keys</span><span class="p">)[</span><span class="n">sort_order</span><span class="p">]</span>
-    <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="nb">int</span><span class="p">(</span><span class="n">key</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;-&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">])</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">sorted_keys</span><span class="p">])</span>
-
-    <span class="k">return</span> <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span></div>
+    <span class="k">return</span> <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span><span class="p">,</span> <span class="n">item_positions_for_preds</span></div>
 
 
 <div class="viewcode-block" id="Inferer"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">Inferer</span><span class="p">:</span>
@@ -1816,7 +1536,9 @@
                 <span class="p">):</span>
                     <span class="n">outs</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">outs</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
                 <span class="k">else</span><span class="p">:</span>
-                    <span class="n">outs</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">sample_with_cumsum</span><span class="p">(</span><span class="n">outs</span><span class="p">[</span><span class="n">target_column</span><span class="p">])</span>
+                    <span class="n">outs</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">sample_with_cumsum</span><span class="p">(</span>
+                        <span class="n">outs</span><span class="p">[</span><span class="n">target_column</span><span class="p">],</span> <span class="n">is_log_probs</span><span class="o">=</span><span class="p">(</span><span class="n">probs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">)</span>
+                    <span class="p">)</span>
 
         <span class="k">return</span> <span class="n">outs</span></div>
 
@@ -2025,7 +1747,7 @@
 
 
 <div class="viewcode-block" id="sample_with_cumsum"><a class="viewcode-back" href="../../api.html#sequifier.infer.sample_with_cumsum">[docs]</a><span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">sample_with_cumsum</span><span class="p">(</span><span class="n">probs</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">sample_with_cumsum</span><span class="p">(</span><span class="n">probs</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">is_log_probs</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Samples from a probability distribution using the inverse CDF method.</span>
 
 <span class="sd">    Takes an array of logits, computes the cumulative probability</span>
@@ -2033,14 +1755,18 @@
 <span class="sd">    the index of the first class `i` where `cumsum[i] &gt; r`.</span>
 
 <span class="sd">    Args:</span>
-<span class="sd">        probs: A 2D NumPy array of *logits* (not normalized probabilities).</span>
+<span class="sd">        probs: A 2D NumPy array of logits or normalized probabilities.</span>
 <span class="sd">               Shape is (batch_size, num_classes).</span>
-
+<span class="sd">        is_log_probs: Boolean flag indicating if the passed array are logits or</span>
+<span class="sd">               probabilities</span>
 <span class="sd">    Returns:</span>
 <span class="sd">        A 1D NumPy array of shape (batch_size,) containing the sampled</span>
 <span class="sd">        class indices.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">cumulative_probs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">probs</span><span class="p">),</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">is_log_probs</span><span class="p">:</span>
+        <span class="n">cumulative_probs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">probs</span><span class="p">),</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">cumulative_probs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">probs</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
     <span class="n">random_threshold</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">cumulative_probs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">1</span><span class="p">)</span>
     <span class="n">random_threshold</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">random_threshold</span><span class="p">,</span> <span class="n">probs</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
     <span class="k">return</span> <span class="p">(</span><span class="n">random_threshold</span> <span class="o">&lt;</span> <span class="n">cumulative_probs</span><span class="p">)</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></div>
@@ -2076,7 +1802,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=9c7002d6"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=30bbdf9c"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
     <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
