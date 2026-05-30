@@ -170,6 +170,12 @@ class InfererModel(BaseModel):
     def validate_autoregression_total_steps(
         cls, v: Optional[int], info: ValidationInfo
     ) -> Optional[int]:
+        if v is None and info.data.get("autoregression") is True:
+            raise ValueError(
+                "If autoregression==True, 'autoregression_total_steps' needs to be set to an integer value."
+            )
+        if v is not None and v < 1:
+            raise ValueError("autoregression_total_steps must by >= 1.")
         if v is not None and v > 1:
             if not info.data.get("autoregression"):
                 raise ValueError(
@@ -202,6 +208,7 @@ class InfererModel(BaseModel):
             raise ValueError(
                 "Autoregressive inference with non-identical 'input_columns' and 'target_columns' is possible but should not be performed"
             )
+
         return v
 
     @field_validator("data_path")
