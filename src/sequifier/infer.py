@@ -1265,7 +1265,7 @@ class Inferer:
                     outs[target_column] = outs[target_column].argmax(1)
                 else:
                     outs[target_column] = sample_with_cumsum(
-                        outs[target_column], logits=(probs is None)
+                        outs[target_column], is_log_probs=(probs is None)
                     )
 
         return outs
@@ -1475,7 +1475,7 @@ def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
 
 
 @beartype
-def sample_with_cumsum(probs: np.ndarray, logits: bool = True) -> np.ndarray:
+def sample_with_cumsum(probs: np.ndarray, is_log_probs: bool = True) -> np.ndarray:
     """Samples from a probability distribution using the inverse CDF method.
 
     Takes an array of logits, computes the cumulative probability
@@ -1485,13 +1485,13 @@ def sample_with_cumsum(probs: np.ndarray, logits: bool = True) -> np.ndarray:
     Args:
         probs: A 2D NumPy array of logits or normalized probabilities.
                Shape is (batch_size, num_classes).
-        logits: Boolean flag indicating if the passed array are logits or
+        is_log_probs: Boolean flag indicating if the passed array are logits or
                probabilities
     Returns:
         A 1D NumPy array of shape (batch_size,) containing the sampled
         class indices.
     """
-    if logits:
+    if is_log_probs:
         cumulative_probs = np.cumsum(np.exp(probs), axis=1)
     else:
         cumulative_probs = np.cumsum(probs, axis=1)

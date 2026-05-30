@@ -46,12 +46,12 @@ def test_sample_with_cumsum(mock_rand):
 
     # Path 1: Test with logits=True (default)
     raw_logits = np.array([[np.log(0.1), np.log(0.9)], [np.log(0.8), np.log(0.2)]])
-    sampled_from_logits = sample_with_cumsum(raw_logits, logits=True)
+    sampled_from_logits = sample_with_cumsum(raw_logits, is_log_probs=True)
     np.testing.assert_array_equal(sampled_from_logits, [0, 1])
 
     # Path 2: Test with logits=False (pre-normalized probabilities)
     pure_probs = np.array([[0.1, 0.9], [0.8, 0.2]])
-    sampled_from_probs = sample_with_cumsum(pure_probs, logits=False)
+    sampled_from_probs = sample_with_cumsum(pure_probs, is_log_probs=False)
     np.testing.assert_array_equal(sampled_from_probs, [0, 1])
 
 
@@ -292,7 +292,7 @@ def test_get_probs_preds_from_dict_with_probabilities(
         np.testing.assert_allclose(args[0], [[0.2, 0.8]])
 
         # 2. Assert the new flag was toggled correctly based on (probs is None)
-        assert kwargs.get("logits") is False
+        assert kwargs.get("is_log_probs") is False
 
         # Verify final outputs
         assert probs is not None
