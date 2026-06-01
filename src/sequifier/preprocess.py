@@ -835,9 +835,7 @@ class Preprocessor:
         for file_path in files:
             try:
                 if write_format == "pt":
-                    sequences_dict, _, _, _, _ = torch.load(
-                        file_path, weights_only=False
-                    )
+                    sequences_dict, _, _, _ = torch.load(file_path, weights_only=False)
                     if sequences_dict:
                         n_samples = sequences_dict[
                             list(sequences_dict.keys())[0]
@@ -1620,7 +1618,6 @@ def process_and_write_data_pt(
         aggregated_data.get_column("startItemPosition").to_numpy(), dtype=torch.int64
     )
     sequences_dict = {}
-    targets_dict = {}
 
     for col_name in all_feature_cols:
         torch_dtype = PANDAS_TO_TORCH_TYPES[column_types[col_name]]
@@ -1629,8 +1626,7 @@ def process_and_write_data_pt(
             aggregated_data.get_column(f"seq_{col_name}").to_numpy(writable=True)
         )
 
-        sequences_dict[col_name] = torch.tensor(sequences_np[:, :-1], dtype=torch_dtype)
-        targets_dict[col_name] = torch.tensor(sequences_np[:, 1:], dtype=torch_dtype)
+        sequences_dict[col_name] = torch.tensor(sequences_np, dtype=torch_dtype)
 
     if not sequences_dict:
         return
@@ -1638,7 +1634,6 @@ def process_and_write_data_pt(
     logger.info(f"Writing preprocessed data to '{path}'...")
     data_to_save = (
         sequences_dict,
-        targets_dict,
         sequence_ids_tensor,
         subsequence_ids_tensor,
         start_item_positions_tensor,

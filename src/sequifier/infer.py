@@ -328,7 +328,6 @@ def infer_embedding(
         elif config.read_format == "pt":
             (
                 sequences_dict,
-                _,
                 sequence_ids_tensor,
                 subsequence_ids_tensor,
                 start_positions_tensor,
@@ -543,12 +542,18 @@ def infer_generative(
                     )
                 )
         elif config.read_format == "pt":
-            sequences_dict, _, sequence_ids_tensor, _, start_positions_tensor = data
+            sequences_dict, sequence_ids_tensor, _, start_positions_tensor = data
             total_steps = (
                 1
                 if config.autoregression_total_steps is None
                 else config.autoregression_total_steps
             )
+
+            sequences_dict = {
+                key: tensor[:, :-1]
+                for key, tensor in sequences_dict.items()
+                if key in config.input_columns
+            }
 
             probs, preds = get_probs_preds_from_dict(
                 config, inferer, sequences_dict, total_steps
@@ -711,7 +716,7 @@ def get_embeddings_pt(
     Returns:
         A NumPy array containing the computed embeddings for the batch.
     """
-    X = {key: val.numpy() for key, val in data.items()}
+    X = {key: val[:, :-1].numpy() for key, val in data.items()}
     embeddings = inferer.infer_embedding(X)
     return embeddings
 

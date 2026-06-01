@@ -49,37 +49,21 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         all_sequences: Dict[str, list[torch.Tensor]] = {
             col: [] for col in config.input_columns
         }
-        all_targets: Dict[str, list[torch.Tensor]] = {
-            col: [] for col in config.target_columns
-        }
 
         # Load all data files into RAM
         for file_info in metadata["batch_files"]:
             file_path = os.path.join(self.data_dir, file_info["path"])
-            (sequences_batch, targets_batch, _, _, _) = torch.load(
+            (sequences_batch, _, _, _) = torch.load(
                 file_path, map_location="cpu", weights_only=False
             )
-
             for col in all_sequences.keys():
                 if col in sequences_batch:
                     all_sequences[col].append(sequences_batch[col])
 
-            for col in all_targets.keys():
-                if col in targets_batch:
-                    all_targets[col].append(targets_batch[col])
-
-        # Concatenate into massive tensors
         self.sequences: Dict[str, torch.Tensor] = {
             col: torch.cat(tensors) for col, tensors in all_sequences.items() if tensors
         }
-        self.targets: Dict[str, torch.Tensor] = {
-            col: torch.cat(tensors) for col, tensors in all_targets.items() if tensors
-        }
-
-        # Share memory so DataLoader workers don't copy the data
         for tensor in self.sequences.values():
-            tensor.share_memory_()
-        for tensor in self.targets.values():
             tensor.share_memory_()
 
         self.target_samples = self._get_target_samples()
@@ -166,12 +150,13 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             batch_indices = indices_for_worker[i : i + self.batch_size]
 
             data_batch = {
-                key: tensor[batch_indices, -train_seq_len:]
+                key: tensor[batch_indices, -(train_seq_len + 1) : -1]
                 for key, tensor in self.sequences.items()
             }
             targets_batch = {
                 key: tensor[batch_indices, -train_seq_len:]
-                for key, tensor in self.targets.items()
+                for key, tensor in self.sequences.items()
+                if key in self.config.target_columns
             }
 
             yield data_batch, targets_batch, None, None, None
