@@ -716,7 +716,11 @@ def get_embeddings_pt(
     Returns:
         A NumPy array containing the computed embeddings for the batch.
     """
-    X = {key: val[:, :-1].numpy() for key, val in data.items()}
+    X = {
+        key: val[:, :-1].numpy()
+        for key, val in data.items()
+        if key in config.input_columns
+    }
     embeddings = inferer.infer_embedding(X)
     return embeddings
 

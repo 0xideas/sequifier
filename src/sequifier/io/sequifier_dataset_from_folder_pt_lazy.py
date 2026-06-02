@@ -249,6 +249,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             new_seq = {
                 k: v[worker_indices, -(train_seq_len + 1) : -1]
                 for k, v in sequences_batch.items()
+                if k in self.config.input_columns
             }
             new_tgt = {
                 k: v[worker_indices, -train_seq_len:]

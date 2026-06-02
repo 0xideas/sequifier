@@ -47,7 +47,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         )
 
         all_sequences: Dict[str, list[torch.Tensor]] = {
-            col: [] for col in config.input_columns
+            col: [] for col in set(config.input_columns + config.target_columns)
         }
 
         # Load all data files into RAM

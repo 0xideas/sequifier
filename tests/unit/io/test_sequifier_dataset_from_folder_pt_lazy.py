@@ -20,8 +20,8 @@ def mock_config(tmp_path):
     config.training_spec.num_workers = 0
     config.seed = 42
     config.seq_length = 5
+    config.input_columns = ["col1"]  # <-- ADD THIS LINE
     config.target_columns = ["col1", "tgt1"]
-
     return config
 
 
@@ -99,9 +99,9 @@ def test_iteration_yields_correct_batches(mock_config, dataset_path, mock_torch_
     # Verify the structure of a yielded batch
     seq_dict, tgt_dict, _, _, _ = batches[0]
 
-    assert "col1" in seq_dict
+    assert "col1" in seq_dict, f"{seq_dict = }"
 
-    assert "col1" in tgt_dict
+    assert "tgt1" in tgt_dict, f"{tgt_dict = }"
     # Check that batch size and sequence length truncation works properly
     assert seq_dict["col1"].shape == (5, 5)
     assert tgt_dict["tgt1"].shape == (5, 5)
