@@ -55,7 +55,6 @@ def mock_torch_load():
     with patch("torch.load") as mock_load:
 
         def side_effect(path, map_location, weights_only):
-            # Create dummy return tuple: (sequences, targets, ids, ids, pos)
             # Tensors size: (10 samples per file, sequence length 10 to allow slicing)
             dummy_seq = {"col1": torch.ones((10, 10)), "tgt1": torch.zeros((10, 10))}
 

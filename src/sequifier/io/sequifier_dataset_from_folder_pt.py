@@ -152,6 +152,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             data_batch = {
                 key: tensor[batch_indices, -(train_seq_len + 1) : -1]
                 for key, tensor in self.sequences.items()
+                if key in self.config.input_columns
             }
             targets_batch = {
                 key: tensor[batch_indices, -train_seq_len:]
