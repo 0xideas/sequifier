@@ -600,7 +600,6 @@
         <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
             <span class="p">(</span>
                 <span class="n">sequences_dict</span><span class="p">,</span>
-                <span class="n">_</span><span class="p">,</span>
                 <span class="n">sequence_ids_tensor</span><span class="p">,</span>
                 <span class="n">subsequence_ids_tensor</span><span class="p">,</span>
                 <span class="n">start_positions_tensor</span><span class="p">,</span>
@@ -815,12 +814,18 @@
                     <span class="p">)</span>
                 <span class="p">)</span>
         <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
-            <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">sequence_ids_tensor</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">start_positions_tensor</span> <span class="o">=</span> <span class="n">data</span>
+            <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">sequence_ids_tensor</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">start_positions_tensor</span> <span class="o">=</span> <span class="n">data</span>
             <span class="n">total_steps</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="mi">1</span>
                 <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span> <span class="ow">is</span> <span class="kc">None</span>
                 <span class="k">else</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span>
             <span class="p">)</span>
+
+            <span class="n">sequences_dict</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[:,</span> <span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+                <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">sequences_dict</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span>
+            <span class="p">}</span>
 
             <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds_from_dict</span><span class="p">(</span>
                 <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">total_steps</span>
@@ -983,7 +988,11 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        A NumPy array containing the computed embeddings for the batch.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">X</span> <span class="o">=</span> <span class="p">{</span><span class="n">key</span><span class="p">:</span> <span class="n">val</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span> <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+    <span class="n">X</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">key</span><span class="p">:</span> <span class="n">val</span><span class="p">[:,</span> <span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span>
+    <span class="p">}</span>
     <span class="n">embeddings</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">infer_embedding</span><span class="p">(</span><span class="n">X</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">embeddings</span></div>
 
