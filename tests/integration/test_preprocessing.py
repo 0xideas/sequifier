@@ -90,16 +90,13 @@ def load_pt_outputs(path):
             if file.endswith("pt"):
                 (
                     sequences,
-                    targets,
                     sequence_id,
                     subsequence_id,
                     start_item_position,
                 ) = torch.load(os.path.join(root, file))
                 sequences2 = {}
                 for col, vals in sequences.items():
-                    vals2 = np.concatenate(
-                        [vals.numpy(), targets[col][:, -1:].numpy()], axis=1
-                    )
+                    vals2 = vals.numpy()
 
                     for offset in range(vals2.shape[1] - 1, -1, -1):
                         sequences2[str(offset)] = np.concatenate(

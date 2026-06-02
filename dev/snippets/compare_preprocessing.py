@@ -13,11 +13,6 @@ def reconstruct_data(contents, cols):
         col_vals = {}
         for col in cols:
             vals = np.array(contents[file][0][col])
-            target_vals = np.array(contents[file][1][col])
-
-            assert np.all(vals[:, 1:] == target_vals[:, :-1])
-
-            vals = np.concatenate([vals, target_vals[:, -1:]], axis=1)
             col_vals[col] = vals
 
         for i in range(vals.shape[0]):

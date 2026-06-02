@@ -223,7 +223,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
 
             # This file overlaps with our worker's assigned boundary. Load it.
             file_path = os.path.join(self.data_dir, self.batch_files_info[f_id]["path"])
-            (sequences_batch, targets_batch, _, _, _) = torch.load(
+            (sequences_batch, _, _, _) = torch.load(
                 file_path, map_location="cpu", weights_only=False
             )
 
@@ -242,20 +242,23 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             num_new_samples = len(worker_indices)
 
             if num_new_samples == 0:
-                del sequences_batch, targets_batch
+                del sequences_batch
                 continue
 
             # Extract the data subset for this worker (Advanced indexing copies the data)
             new_seq = {
-                k: v[worker_indices, -train_seq_len:]
+                k: v[worker_indices, -(train_seq_len + 1) : -1]
                 for k, v in sequences_batch.items()
+                if k in self.config.input_columns
             }
             new_tgt = {
-                k: v[worker_indices, -train_seq_len:] for k, v in targets_batch.items()
+                k: v[worker_indices, -train_seq_len:]
+                for k, v in sequences_batch.items()
+                if k in self.config.target_columns
             }
 
             # Free the large file immediately to keep RAM down
-            del sequences_batch, targets_batch
+            del sequences_batch
 
             # Append the new slice to the cross-file buffer
             if buffer_len == 0:

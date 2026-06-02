@@ -20,6 +20,8 @@ def mock_config(tmp_path):
     config.training_spec.num_workers = 0
     config.seed = 42
     config.seq_length = 5
+    config.input_columns = ["col1"]  # <-- ADD THIS LINE
+    config.target_columns = ["col1", "tgt1"]
     return config
 
 
@@ -53,14 +55,11 @@ def mock_torch_load():
     with patch("torch.load") as mock_load:
 
         def side_effect(path, map_location, weights_only):
-            # Create dummy return tuple: (sequences, targets, ids, ids, pos)
             # Tensors size: (10 samples per file, sequence length 10 to allow slicing)
-            dummy_seq = {"col1": torch.ones((10, 10))}
-            dummy_tgt = {"tgt1": torch.zeros((10, 10))}
+            dummy_seq = {"col1": torch.ones((10, 10)), "tgt1": torch.zeros((10, 10))}
 
             return (
                 dummy_seq,
-                dummy_tgt,
                 None,
                 None,
                 None,
@@ -99,9 +98,9 @@ def test_iteration_yields_correct_batches(mock_config, dataset_path, mock_torch_
     # Verify the structure of a yielded batch
     seq_dict, tgt_dict, _, _, _ = batches[0]
 
-    assert "col1" in seq_dict
-    assert "tgt1" in tgt_dict
+    assert "col1" in seq_dict, f"{seq_dict = }"
 
+    assert "tgt1" in tgt_dict, f"{tgt_dict = }"
     # Check that batch size and sequence length truncation works properly
     assert seq_dict["col1"].shape == (5, 5)
     assert tgt_dict["tgt1"].shape == (5, 5)
