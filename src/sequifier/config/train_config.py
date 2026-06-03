@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import os
 import warnings
 from typing import Any, Optional, Union
@@ -10,9 +11,10 @@ import torch_optimizer
 import yaml
 from beartype import beartype
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 import sequifier
+from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.helpers import normalize_path, try_catch_excess_keys
 
 AnyType = str | int | float
@@ -310,6 +312,27 @@ class TrainingSpecModel(BaseModel):
         return v
 
 
+class ReplacementDistribution(BaseModel):
+    masked: float = Field(..., gt=0.0, le=1.0)
+    random: float = Field(..., gt=0.0, le=1.0)
+    identical: float = Field(..., gt=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_sum(self):
+        total = self.masked + self.random + self.identical
+        if not math.isclose(total, 1.0, abs_tol=1e-5):
+            raise ValueError(
+                f"Replacement distribution probabilities must sum to 1.0, got {total}"
+            )
+        return self
+
+
+class BERTSpecModel(BaseModel):
+    masking_probability: float = Field(..., gt=0.0, le=1.0)
+    replacement_distribution: ReplacementDistribution
+    span_masking: ProbabilityDistribution
+
+
 class ModelSpecModel(BaseModel):
     """Pydantic model for model specifications.
 
@@ -324,6 +347,7 @@ class ModelSpecModel(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
+    training_objective: str = "causal"
     initial_embedding_dim: int
     feature_embedding_dims: Optional[dict[str, int]] = None
     joint_embedding_dim: Optional[int] = None
@@ -344,6 +368,28 @@ class ModelSpecModel(BaseModel):
     rope_theta: float = 10000.0
 
     prediction_length: int
+    bert_spec: Optional[BERTSpecModel] = None
+
+    @field_validator("training_objective")
+    @classmethod
+    def validate_training_objective(cls, v):
+        if v not in ["causal", "bert"]:
+            raise ValueError(f"Only 'causal' and 'bert' are allowed, found {v}")
+        return v
+
+    @field_validator("bert_spec")
+    @classmethod
+    def validate_bert_spec(cls, v, info):
+        training_objective = info.data.get("training_objective")
+        if v and not training_objective == "bert":
+            raise ValueError(
+                "The BERT hyperparameters should only be configured if the training objective is 'bert'"
+            )
+        if not v and training_objective == "bert":
+            raise ValueError(
+                "If the training_objective is 'bert', the BERT hyperparameters must be set"
+            )
+        return v
 
     @field_validator("dim_model")
     @classmethod
@@ -463,6 +509,7 @@ class TrainModel(BaseModel):
         n_classes: The number of classes for each categorical column.
         inference_batch_size: The batch size to be used for inference after model export.
         seed: The random seed for numpy and PyTorch.
+        model_type: Causal or BERT model type
         export_generative_model: If True, exports the generative model.
         export_embedding_model: If True, exports the embedding model.
         export_onnx: If True, exports the model in ONNX format.
@@ -664,6 +711,23 @@ class TrainModel(BaseModel):
                 raise ValueError(
                     f"If only categorical variables are included and feature_embedding_dims is not set, "
                     f"initial_embedding_dim ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical}: {categorical_columns})."
+                )
+
+        export_generative_model = info.data.get("export_generative_model")
+        export_embedding_model = info.data.get("export_embedding_model")
+        if v.training_objective == "bert":
+            if export_generative_model:
+                raise ValueError(
+                    "'training_objective: bert' is incompatible with generative model export"
+                )
+            if not export_embedding_model:
+                raise ValueError(
+                    "'training_objective: bert' requires embedding model export"
+                )
+        if v.training_objective == "causal":
+            if not export_generative_model and not export_embedding_model:
+                warnings.warn(
+                    "At least one of 'export_generative_model' and 'export_embedding_model' should be true"
                 )
 
         return v
