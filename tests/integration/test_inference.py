@@ -26,7 +26,7 @@ def test_predictions_real(predictions):
 
 
 def test_predictions_cat(predictions):
-    valid_values = [str(x) for x in np.arange(100, 130)] + ["unknown"]
+    valid_values = [str(x) for x in np.arange(100, 130)] + ["unknown", "other", "mask"]
     for model_name, model_predictions in predictions.items():
         if "categorical" in model_name or "multitarget" in model_name:
             assert np.all(
@@ -42,6 +42,7 @@ def test_predictions_cat(predictions):
                 admssible_vals = [str(x) for x in np.arange(0, 10)] + [
                     "unknown",
                     "other",
+                    "mask",
                 ]
                 assert np.all(
                     [
@@ -81,9 +82,9 @@ def test_predictions_cat(predictions):
 def test_probabilities(probabilities):
     for model_name, model_probabilities in probabilities.items():
         if "itemId" in model_name:
-            assert model_probabilities.shape[1] == 32
+            assert model_probabilities.shape[1] == 33
         elif "supCat1" in model_name:
-            assert model_probabilities.shape[1] == 12
+            assert model_probabilities.shape[1] == 13
 
         np.testing.assert_almost_equal(
             model_probabilities.sum_horizontal(),
@@ -101,7 +102,11 @@ def test_multi_pred(predictions):
         assert preds.shape[0] > 0, f"{model_name} has no predictions"
         assert preds.shape[1] == 5, f"{model_name} should have 5 columns"
 
-        admssible_vals = [str(x) for x in np.arange(0, 10)] + ["unknown", "other"]
+        admssible_vals = [str(x) for x in np.arange(0, 10)] + [
+            "unknown",
+            "other",
+            "mask",
+        ]
 
         assert np.all(
             [v in admssible_vals for v in preds["supCat1"]]

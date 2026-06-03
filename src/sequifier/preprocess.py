@@ -973,9 +973,9 @@ def load_precomputed_id_maps(
                     if not len(m) > 0:
                         raise ValueError(f"map in {file} does not contain any values")
                     min_val = min(m.values())
-                    if min_val != 2:
+                    if min_val != 3:
                         raise ValueError(
-                            f"minimum value in map {file} is {min_val}, must be 2."
+                            f"minimum value in map {file} is {min_val}, must be 3."
                         )
                     custom_maps[col_name] = m
     if required_maps:
@@ -1461,7 +1461,7 @@ def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]
     ids = sorted(
         [int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]
     )  # type: ignore
-    id_map = {id_: i + 2 for i, id_ in enumerate(ids)}
+    id_map = {id_: i + 3 for i, id_ in enumerate(ids)}
     return dict(id_map)
 
 
@@ -1529,7 +1529,7 @@ def combine_maps(
         A new, combined, and re-indexed ID map.
     """
     combined_keys = sorted(list(set(list(map1.keys())).union(list(set(map2.keys())))))
-    id_map = {id_: i + 2 for i, id_ in enumerate(combined_keys)}
+    id_map = {id_: i + 3 for i, id_ in enumerate(combined_keys)}
     return id_map
 
 

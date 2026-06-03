@@ -198,6 +198,6 @@ def test_create_id_map():
     mapping = create_id_map(df, "A")
 
     # Sorted unique values: x, y, z -> 2, 3, 4
-    assert mapping["x"] == 2
-    assert mapping["y"] == 3
-    assert mapping["z"] == 4
+    assert mapping["x"] == 3
+    assert mapping["y"] == 4
+    assert mapping["z"] == 5

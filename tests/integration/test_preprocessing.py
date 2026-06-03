@@ -45,7 +45,7 @@ def test_metadata_config(metadata_configs):
 
         if "itemId" in metadata_config["n_classes"]:
             assert len(metadata_config["id_maps"]["itemId"]) == 30
-            assert metadata_config["n_classes"]["itemId"] == 32
+            assert metadata_config["n_classes"]["itemId"] == 33
 
             id_map_keys = np.array(
                 sorted(list(metadata_config["id_maps"]["itemId"].keys()))
@@ -59,7 +59,7 @@ def test_metadata_config(metadata_configs):
             )
             # assert False, id_map_values
             assert np.all(
-                id_map_values == np.arange(2, len(id_map_values) + 2)
+                id_map_values == np.arange(3, len(id_map_values) + 3)
             ), id_map_values
 
         if "itemValue" in metadata_config["selected_columns_statistics"]:
