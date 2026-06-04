@@ -259,6 +259,41 @@ def infer_worker(
     logger.info("--- Inference Complete ---")
 
 
+def calculate_item_positions(
+    start_positions: np.ndarray,
+    seq_length: int,
+    prediction_length: int,
+    training_objective: str,
+) -> np.ndarray:
+    """
+    Calculates absolute item positions for inference outputs based on the training objective.
+
+    Args:
+        start_positions: 1D array of base start positions for each sequence in the batch.
+        seq_length: The length of the input sequence window.
+        prediction_length: The total number of predicted tokens per sequence.
+        training_objective: Either "causal" or "bert".
+
+    Returns:
+        A 1D array of absolute item positions mapped to every flattened prediction row.
+    """
+    if training_objective == "bert":
+        # Anchor positions to the start of the input sequence and tile forwards
+        base_positions = start_positions
+        position_offsets = np.arange(0, prediction_length)
+    else:
+        # Anchor positions to the future token step and tile backwards
+        base_positions = start_positions + seq_length
+        position_offsets = np.arange(-prediction_length + 1, 1)
+
+    # Repeat base anchors to match the number of predictions per sequence window
+    repeated_bases = np.repeat(base_positions, prediction_length)
+    # Tile the relative step offsets across all sequences in the batch chunk
+    tiled_offsets = np.tile(position_offsets, len(start_positions))
+
+    return repeated_bases + tiled_offsets
+
+
 @beartype
 def infer_embedding(
     config: "InfererModel",
@@ -468,26 +503,23 @@ def infer_generative(
 
                 # Get base IDs and positions (shape: batch_size)
                 sequence_ids_for_preds_base = data.get_column("sequenceId").filter(mask)
-                item_positions_for_preds_base = (
+                item_positions_base_raw = (
                     data.get_column("startItemPosition").filter(mask).to_numpy()
-                    + config.seq_length
                 )
-
                 prediction_length = inferer.prediction_length
 
-                # Expand IDs and positions to match model output shape (batch_size * prediction_length)
+                # Expand IDs to match model output shape
                 sequence_ids_for_preds = np.repeat(
                     sequence_ids_for_preds_base, prediction_length
                 )
 
-                item_positions_repeated = np.repeat(
-                    item_positions_for_preds_base, prediction_length
+                # Invoke the unified positioning engine
+                item_positions_for_preds = calculate_item_positions(
+                    item_positions_base_raw,
+                    config.seq_length,
+                    prediction_length,
+                    config.training_objective,
                 )
-                position_offsets = np.tile(
-                    np.arange(-prediction_length + 1, 1),
-                    len(item_positions_for_preds_base),
-                )
-                item_positions_for_preds = item_positions_repeated + position_offsets
 
             else:
                 if inferer.prediction_length != 1:
@@ -520,23 +552,22 @@ def infer_generative(
                 sequence_ids_for_preds_base = (
                     data.get_column("sequenceId").filter(mask).to_numpy()
                 )
-                item_positions_for_preds_base = (
+                item_positions_base_raw = (
                     data.get_column("startItemPosition").filter(mask).to_numpy()
-                    + config.seq_length
                 )
-
                 prediction_length = inferer.prediction_length
+
                 sequence_ids_for_preds = np.repeat(
                     sequence_ids_for_preds_base, prediction_length
                 )
-                item_positions_repeated = np.repeat(
-                    item_positions_for_preds_base, prediction_length
+
+                # Invoke the unified positioning engine
+                item_positions_for_preds = calculate_item_positions(
+                    item_positions_base_raw,
+                    config.seq_length,
+                    prediction_length,
+                    config.training_objective,
                 )
-                position_offsets = np.tile(
-                    np.arange(-prediction_length + 1, 1),
-                    len(item_positions_for_preds_base),
-                )
-                item_positions_for_preds = item_positions_repeated + position_offsets
             else:
                 if inferer.prediction_length != 1:
                     raise ValueError(
@@ -571,22 +602,19 @@ def infer_generative(
             if total_steps == 1:
                 # Non-autoregressive path: Apply prediction_length logic
                 sequence_ids_for_preds_base = sequence_ids_tensor.numpy()
-                item_positions_for_preds_base = (
-                    start_positions_tensor.numpy() + config.seq_length
-                )
+                item_positions_base_raw = start_positions_tensor.numpy()
 
                 sequence_ids_for_preds = np.repeat(
                     sequence_ids_for_preds_base, prediction_length
                 )
 
-                item_positions_repeated = np.repeat(
-                    item_positions_for_preds_base, prediction_length
+                # Invoke the unified positioning engine
+                item_positions_for_preds = calculate_item_positions(
+                    item_positions_base_raw,
+                    config.seq_length,
+                    prediction_length,
+                    config.training_objective,
                 )
-                position_offsets = np.tile(
-                    np.arange(-prediction_length + 1, 1),
-                    len(item_positions_for_preds_base),
-                )
-                item_positions_for_preds = item_positions_repeated + position_offsets
 
             else:
                 sequence_ids_for_preds = np.repeat(
