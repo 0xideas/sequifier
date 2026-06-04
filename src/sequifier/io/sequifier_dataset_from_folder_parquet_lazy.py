@@ -209,9 +209,22 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         train_seq_len = self.config.seq_length
         global_file_start_sample = 0
 
-        # Sequence formatting configurations
-        input_seq_cols = [str(c) for c in range(train_seq_len, 0, -1)]
-        target_seq_cols = [str(c) for c in range(train_seq_len - 1, -1, -1)]
+        input_seq_cols = [
+            str(c)
+            for c in range(
+                train_seq_len - 1 + self.config.training_spec.data_offset,
+                (-1 + self.config.training_spec.data_offset),
+                -1,
+            )
+        ]
+        target_seq_cols = [
+            str(c)
+            for c in range(
+                train_seq_len - 1 + self.config.training_spec.target_offset,
+                (-1 + self.config.training_spec.target_offset),
+                -1,
+            )
+        ]
 
         # Initialize cross-file buffers
         seq_buffer: Dict[str, torch.Tensor] = {}
@@ -234,7 +247,6 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             # This file overlaps with our worker's assigned boundary. Load it.
             file_path = os.path.join(self.data_dir, self.batch_files_info[f_id]["path"])
             df = pl.read_parquet(file_path)
-            feature_names = df["inputCol"].unique().to_list()
 
             # Generate indices for the whole file using torch (matching pt_lazy)
             indices = torch.arange(file_samples)
@@ -264,44 +276,39 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             }
 
             # Dynamic feature names fallback to gracefully handle MagicMock objects in unit tests
-            feature_names = list(feature_partitions.keys())
-            cols_to_process = (
-                self.config.input_columns
-                if isinstance(getattr(self.config, "input_columns", None), list)
-                else feature_names
-            )
 
             # Process Long format data structures into PyTorch Tensors
             new_seq, new_tgt = {}, {}
             expected_samples = len(worker_indices_np)
 
             # 2. Iterate over the expected config columns, not the dynamically found ones
-            for col_name in cols_to_process:
-                # Gracefully handle MagicMock column_torch_types dictionaries
-                torch_type = self.column_torch_types[col_name]
-
+            # Process inputs
+            for col_name in self.config.input_columns:
                 if col_name in feature_partitions:
-                    # Positional advanced selection using the coordinated indices
                     feature_chunk = feature_partitions[col_name][worker_indices_np]
-
                     new_seq[col_name] = torch.tensor(
                         feature_chunk.select(input_seq_cols).to_numpy(),
-                        dtype=torch_type,
-                    )
-                    new_tgt[col_name] = torch.tensor(
-                        feature_chunk.select(target_seq_cols).to_numpy(),
-                        dtype=torch_type,
+                        dtype=self.column_torch_types[col_name],
                     )
                 else:
-                    # 3. Graceful fallback: Pad with zeros if a chunk is mysteriously missing a feature
                     new_seq[col_name] = torch.zeros(
-                        (expected_samples, train_seq_len), dtype=torch_type
-                    )
-                    new_tgt[col_name] = torch.zeros(
-                        (expected_samples, train_seq_len), dtype=torch_type
+                        (expected_samples, train_seq_len),
+                        dtype=self.column_torch_types[col_name],
                     )
 
-            # Free the DataFrame immediately to keep RAM down
+            # Process targets
+            for col_name in self.config.target_columns:
+                if col_name in feature_partitions:
+                    feature_chunk = feature_partitions[col_name][worker_indices_np]
+                    new_tgt[col_name] = torch.tensor(
+                        feature_chunk.select(target_seq_cols).to_numpy(),
+                        dtype=self.column_torch_types[col_name],
+                    )
+                else:
+                    raise RuntimeError(
+                        f"Missing required column {col_name} in Parquet partition"
+                    )
+
             del df
 
             # Append the new slice to the cross-file buffer

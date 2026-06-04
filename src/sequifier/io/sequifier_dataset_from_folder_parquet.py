@@ -54,9 +54,22 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
 
         # Sequence formatting structures matching long-format schema boundaries
         train_seq_len = self.config.seq_length
-        input_seq_cols = [str(c) for c in range(train_seq_len, 0, -1)]
-        target_seq_cols = [str(c) for c in range(train_seq_len - 1, -1, -1)]
-
+        input_seq_cols = [
+            str(c)
+            for c in range(
+                train_seq_len - 1 + self.config.training_spec.data_offset,
+                (-1 + self.config.training_spec.data_offset),
+                -1,
+            )
+        ]
+        target_seq_cols = [
+            str(c)
+            for c in range(
+                train_seq_len - 1 + self.config.training_spec.target_offset,
+                (-1 + self.config.training_spec.target_offset),
+                -1,
+            )
+        ]
         all_sequences: Dict[str, list[torch.Tensor]] = {
             col: [] for col in config.input_columns
         }

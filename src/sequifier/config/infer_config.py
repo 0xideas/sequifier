@@ -221,6 +221,14 @@ class InfererModel(BaseModel):
                 "Autoregressive inference with non-identical 'input_columns' and 'target_columns' is possible but should not be performed"
             )
 
+        if (
+            info.data.get("training_objective") is not None
+            and info.data.get("training_objective") == "bert"
+        ):
+            raise ValueError(
+                "Autoregressive inference is not possible with BERT-style models."
+            )
+
         return v
 
     @field_validator("data_path")

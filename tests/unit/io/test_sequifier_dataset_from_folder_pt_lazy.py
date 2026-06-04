@@ -20,8 +20,10 @@ def mock_config(tmp_path):
     config.training_spec.num_workers = 0
     config.seed = 42
     config.seq_length = 5
-    config.input_columns = ["col1"]  # <-- ADD THIS LINE
+    config.input_columns = ["col1"]
     config.target_columns = ["col1", "tgt1"]
+    config.training_spec.data_offset = 1
+    config.training_spec.target_offset = 0
     return config
 
 

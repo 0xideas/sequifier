@@ -1443,7 +1443,7 @@ class TransformerModel(nn.Module):
                     if k in self.target_column_types
                 }
                 if self.hparams.training_spec.training_objective == "bert":
-                    data, targets = apply_bert_masking(data, self.hparams)
+                    data, targets = apply_bert_masking(data, targets, self.hparams)
 
                 # Only use standard torch.autocast if FSDP MixedPrecision is NOT handling it natively
                 if (
@@ -1771,7 +1771,7 @@ class TransformerModel(nn.Module):
                     if k in self.target_column_types
                 }
                 if self.hparams.training_spec.training_objective == "bert":
-                    data, targets = apply_bert_masking(data, self.hparams)
+                    data, targets = apply_bert_masking(data, targets, self.hparams)
 
                 if (
                     self.hparams.training_spec.layer_autocast

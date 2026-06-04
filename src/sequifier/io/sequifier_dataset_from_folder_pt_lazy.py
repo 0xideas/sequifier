@@ -246,13 +246,25 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 continue
 
             # Extract the data subset for this worker (Advanced indexing copies the data)
+            data_offset = self.config.training_spec.data_offset
+            target_offset = self.config.training_spec.target_offset
             new_seq = {
-                k: v[worker_indices, -(train_seq_len + 1) : -1]
+                k: v[
+                    worker_indices,
+                    -(train_seq_len + data_offset) : (
+                        -data_offset if data_offset > 0 else None
+                    ),
+                ]
                 for k, v in sequences_batch.items()
                 if k in self.config.input_columns
             }
             new_tgt = {
-                k: v[worker_indices, -train_seq_len:]
+                k: v[
+                    worker_indices,
+                    -(train_seq_len + target_offset) : (
+                        -target_offset if target_offset > 0 else None
+                    ),
+                ]
                 for k, v in sequences_batch.items()
                 if k in self.config.target_columns
             }

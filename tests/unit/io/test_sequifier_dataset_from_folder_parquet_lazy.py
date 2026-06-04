@@ -20,6 +20,11 @@ def mock_config():
     config.training_spec.batch_size = 5
     config.training_spec.num_workers = 0
     config.training_spec.sampling_strategy = "exact"
+    config.training_spec.data_offset = 1
+    config.training_spec.target_offset = 0
+    config.input_columns = ["item"]
+    config.target_columns = ["item"]
+
     return config
 
 

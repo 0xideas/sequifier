@@ -11,7 +11,14 @@ import torch_optimizer
 import yaml
 from beartype import beartype
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 import sequifier
 from sequifier.config.probabilities import ProbabilityDistribution
@@ -225,6 +232,16 @@ class TrainingSpecModel(BaseModel):
         self.optimizer = DotDict(kwargs["optimizer"])
         self.validate_scheduler_config(kwargs["scheduler"], kwargs)
         self.scheduler = DotDict(kwargs["scheduler"])
+
+    @computed_field
+    @property
+    def data_offset(self) -> int:
+        return 1
+
+    @computed_field
+    @property
+    def target_offset(self) -> int:
+        return 0 if self.training_objective == "causal" else 1
 
     @field_validator("layer_type_dtypes")
     @classmethod
@@ -663,20 +680,14 @@ class TrainModel(BaseModel):
 
         export_generative_model = info.data.get("export_generative_model")
         export_embedding_model = info.data.get("export_embedding_model")
-        if v.training_objective == "bert":
-            if export_generative_model:
-                raise ValueError(
-                    "'training_objective: bert' is incompatible with generative model export"
-                )
-            if not export_embedding_model:
-                raise ValueError(
-                    "'training_objective: bert' requires embedding model export"
-                )
-        if v.training_objective == "causal":
-            if not export_generative_model and not export_embedding_model:
-                warnings.warn(
-                    "At least one of 'export_generative_model' and 'export_embedding_model' should be true"
-                )
+        if (
+            not export_generative_model
+            and not export_embedding_model
+            and os.getenv("SEQUIFIER_PREVENT_EXPORT") is None
+        ):
+            raise ValueError(
+                "At least one of 'export_generative_model' and 'export_embedding_model' must be true. If you want to override this, set the env variable 'SEQUIFIER_PREVENT_EXPORT' to any value"
+            )
 
         return v
 

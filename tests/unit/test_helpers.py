@@ -80,7 +80,9 @@ def test_numpy_to_pytorch_shapes_and_shifting():
     all_columns = ["A"]
     seq_length = 3
 
-    tensors = numpy_to_pytorch(data, column_types, all_columns, seq_length)
+    tensors = numpy_to_pytorch(
+        data, column_types, all_columns, seq_length, data_offset=1, target_offset=0
+    )
 
     # 1. Check Keys
     assert "A" in tensors
@@ -110,13 +112,23 @@ def test_numpy_to_pytorch_dtypes():
     # Case 1: Integer
     data_int = pl.DataFrame({"inputCol": ["int_col"], "1": [10], "0": [20]})
     tensors_int = numpy_to_pytorch(
-        data_int, {"int_col": torch.int64}, ["int_col"], seq_length=1
+        data_int,
+        {"int_col": torch.int64},
+        ["int_col"],
+        seq_length=1,
+        data_offset=1,
+        target_offset=0,
     )
     assert tensors_int["int_col"].dtype == torch.int64
 
     # Case 2: Float
     data_float = pl.DataFrame({"inputCol": ["float_col"], "1": [10.5], "0": [20.5]})
     tensors_float = numpy_to_pytorch(
-        data_float, {"float_col": torch.float32}, ["float_col"], seq_length=1
+        data_float,
+        {"float_col": torch.float32},
+        ["float_col"],
+        seq_length=1,
+        data_offset=1,
+        target_offset=0,
     )
     assert tensors_float["float_col"].dtype == torch.float32

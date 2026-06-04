@@ -248,6 +248,8 @@ def numpy_to_pytorch(
     column_types: dict[str, torch.dtype],
     all_columns: list[str],
     seq_length: int,
+    data_offset: int,
+    target_offset: int,
 ) -> dict[str, Tensor]:
     """Converts a long-format Polars DataFrame to a dict of sequence tensors.
 
@@ -281,8 +283,12 @@ def numpy_to_pytorch(
         tensors. Target tensors are stored with a `_target` suffix
         (e.g., `{'price': <tensor>, 'price_target': <tensor>}`).
     """
-    input_seq_cols = [str(c) for c in range(seq_length, 0, -1)]
-    target_seq_cols = [str(c) for c in range(seq_length - 1, -1, -1)]
+    input_seq_cols = [
+        str(c) for c in range(seq_length - 1 + data_offset, (-1 + data_offset), -1)
+    ]
+    target_seq_cols = [
+        str(c) for c in range(seq_length - 1 + target_offset, (-1 + target_offset), -1)
+    ]
 
     # We will create a unified dictionary
     unified_tensors = {}
@@ -515,13 +521,14 @@ def get_last_training_batch_timedelta(
 
 def apply_bert_masking(
     data_batch: Dict[str, torch.Tensor],
+    targets_batch: Dict[str, torch.Tensor],
     config: Any,  # TrainConfig
 ) -> tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
     """
     Applies BERT-style span corruption to the input data using custom distributions.
     Explicitly passes the boolean prediction mask via the targets dictionary.
     """
-    targets_batch = {k: tensor.clone().detach() for k, tensor in data_batch.items()}
+    targets_batch = {k: tensor.clone().detach() for k, tensor in targets_batch.items()}
     batch_size, seq_len = config.training_spec.batch_size, config.seq_length
 
     # 1. Identify valid tokens (Renamed from padding_mask to valid_mask for clarity)
@@ -547,8 +554,8 @@ def apply_bert_masking(
     sampled_lengths = config.training_spec.bert_spec.span_masking.sample(
         (batch_size, max_spans), device=device
     )
-    sampled_starts_pct = torch.rand((batch_size, max_spans), device=device)
 
+    sampled_starts_pct = torch.rand((batch_size, max_spans), device=device)
     # 3. Span Masking Loop
     for i in range(batch_size):
         budget = budgets[i].item()
@@ -557,13 +564,18 @@ def apply_bert_masking(
         if budget < 1 or valid_len < 1:
             continue
 
+        sampled_starts = (sampled_starts_pct[i] * valid_len).long().tolist()
+
+        sampled_lengths_list = sampled_lengths[i].tolist()
+
         current_masked = 0
         span_idx = 0
 
         # Apply spans until budget is hit
         while current_masked < budget and span_idx < max_spans:
-            span_len = sampled_lengths[i, span_idx].item()
-            start_idx = int(sampled_starts_pct[i, span_idx].item() * valid_len)
+            span_len = sampled_lengths_list[span_idx]
+            start_idx = sampled_starts[span_idx]
+
             end_idx = min(start_idx + span_len, valid_len)
 
             span_view = bert_mask[i, start_idx:end_idx]

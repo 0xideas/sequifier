@@ -879,7 +879,10 @@ def get_embeddings(
         A NumPy array containing the computed embeddings for the batch.
     """
     all_columns = sorted(list(set(config.input_columns + config.target_columns)))
-    X = numpy_to_pytorch(data, column_types, all_columns, config.seq_length)
+    target_offset = 0 if config.training_objective == "causal" else 1
+    X = numpy_to_pytorch(
+        data, column_types, all_columns, config.seq_length, 1, target_offset
+    )
     X = {col: X_col.numpy() for col, X_col in X.items()}
     del data
 
@@ -919,7 +922,11 @@ def get_probs_preds_from_df(
     """
     all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
-    X = numpy_to_pytorch(data, column_types, all_columns, config.seq_length)
+    target_offset = 0 if config.training_objective == "causal" else 1
+
+    X = numpy_to_pytorch(
+        data, column_types, all_columns, config.seq_length, 1, target_offset
+    )
     X = {col: X_col.numpy() for col, X_col in X.items()}
     del data
 
@@ -1041,6 +1048,8 @@ def get_probs_preds_autoregression(
         column_types,
         config.input_columns,
         seq_length,
+        data_offset=1,
+        target_offset=0,
     )
 
     # Run the autoregressive PyTorch inference
