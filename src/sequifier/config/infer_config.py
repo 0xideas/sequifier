@@ -111,6 +111,7 @@ class InfererModel(BaseModel):
     metadata_config_path: str
     model_path: Union[str, list[str]]
     model_type: str
+    training_objective: str = "causal"
     data_path: str
     training_config_path: str = Field(default="configs/train.yaml")
     read_format: str = Field(default="parquet")
@@ -129,13 +130,20 @@ class InfererModel(BaseModel):
     seed: int
     device: str
     seq_length: int
-    prediction_length: int = Field(default=1)
+    prediction_length: Optional[int] = None
     inference_batch_size: int
 
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
     autoregression: bool = Field(default=False)
     autoregression_total_steps: Optional[int] = Field(default=None)
+
+    @field_validator("training_objective")
+    @classmethod
+    def validate_training_objective(cls, v):
+        if v not in ["causal", "bert"]:
+            raise ValueError(f"Only 'causal' and 'bert' are allowed, found {v}")
+        return v
 
     @field_validator("model_type")
     @classmethod
@@ -197,7 +205,11 @@ class InfererModel(BaseModel):
     def validate_autoregression(cls, v: bool, info: ValidationInfo):
         if v and info.data.get("model_type") == "embedding":
             raise ValueError("Autoregression is not possible for embedding models")
-        if v and info.data.get("prediction_length") > 1:
+        if (
+            v
+            and info.data.get("prediction_length") is not None
+            and info.data.get("prediction_length") > 1
+        ):
             raise ValueError(
                 "Autoregressive inference is not possible for models with prediction_length > 1"
             )

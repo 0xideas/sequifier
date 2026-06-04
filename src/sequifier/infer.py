@@ -213,6 +213,13 @@ def infer_worker(
                 f"Unsupported input type or read format: {config.read_format}"
             )
 
+        default_prediction_length = {"causal": 1, "bert": config.seq_length}
+        prediction_length = (
+            config.prediction_length
+            if config.prediction_length is not None
+            else default_prediction_length[config.training_objective]
+        )
+
         inferer = Inferer(
             config.model_type,
             model_path,
@@ -227,7 +234,7 @@ def infer_worker(
             config.target_column_types,
             config.sample_from_distribution_columns,
             config.infer_with_dropout,
-            config.prediction_length,
+            prediction_length,
             config.inference_batch_size,
             config.device,
             args_config=args_config,

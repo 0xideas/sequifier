@@ -515,13 +515,13 @@ def get_last_training_batch_timedelta(
 
 def apply_bert_masking(
     data_batch: Dict[str, torch.Tensor],
-    targets_batch: Dict[str, torch.Tensor],
     config: Any,  # TrainConfig
 ) -> tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
     """
     Applies BERT-style span corruption to the input data using custom distributions.
     Explicitly passes the boolean prediction mask via the targets dictionary.
     """
+    targets_batch = {k: tensor.clone().detach() for k, tensor in data_batch.items()}
     batch_size, seq_len = config.training_spec.batch_size, config.seq_length
 
     # 1. Identify valid tokens (Renamed from padding_mask to valid_mask for clarity)
@@ -554,7 +554,7 @@ def apply_bert_masking(
         budget = budgets[i].item()
         valid_len = valid_mask[i].sum().item()
 
-        if budget == 0 or valid_len == 0:
+        if budget < 1 or valid_len < 1:
             continue
 
         current_masked = 0

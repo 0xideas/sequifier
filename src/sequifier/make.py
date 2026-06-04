@@ -82,6 +82,7 @@ target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
 target_column_types:
   EXAMPLE_TARGET_COLUMN_NAME: real
 
+training_objective: causal
 output_probabilities: false
 map_to_id: true
 device: cpu
