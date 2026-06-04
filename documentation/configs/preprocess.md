@@ -116,7 +116,7 @@ After running `preprocess`, the following are generated:
 
 ## 5\. Advanced: Custom ID Mapping
 
-By default, Sequifier automatically generates integer IDs for categorical columns starting from index 2 (indices 0 and 1 are reserved for system use, such as "unknown" values).
+By default, Sequifier automatically generates integer IDs for categorical columns starting from index 2 (indices 0 and 1 are reserved for system use, such as "[unknown]" values).
 
 If you need to enforce specific integer mappings (e.g., to maintain consistency across different training runs or datasets), you can provide **precomputed ID maps**.
 

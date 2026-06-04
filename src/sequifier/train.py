@@ -54,13 +54,14 @@ torch._dynamo.config.suppress_errors = True
 
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
-from sequifier.helpers import normalize_path  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
+    apply_bert_masking,
     conditional_beartype,
     configure_determinism,
     configure_logger,
     construct_index_maps,
     get_torch_dtype,
+    normalize_path,
 )
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
@@ -709,11 +710,20 @@ class TransformerModel(nn.Module):
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
 
-        self.register_buffer(
-            "src_mask",
-            self._generate_square_subsequent_mask(self.seq_length),
-            persistent=False,  # Optional: prevents the mask from being saved in your checkpoints
-        )
+        if hparams.training_spec.training_objective == "causal":
+            self.register_buffer(
+                "src_mask",
+                self._generate_square_subsequent_mask(self.seq_length),
+                persistent=False,  # Optional: prevents the mask from being saved in your checkpoints
+            )
+        elif hparams.training_spec.training_objective == "bert":
+            self.register_buffer(
+                "src_mask",
+                torch.zeros(self.seq_length, self.seq_length),
+                persistent=False,
+            )
+        else:
+            pass
 
         self._init_weights()
 
@@ -1432,6 +1442,8 @@ class TransformerModel(nn.Module):
                     for k, v in targets.items()
                     if k in self.target_column_types
                 }
+                if self.hparams.training_spec.training_objective == "bert":
+                    data, targets = apply_bert_masking(data, targets, self.hparams)
 
                 # Only use standard torch.autocast if FSDP MixedPrecision is NOT handling it natively
                 if (
@@ -1613,10 +1625,13 @@ class TransformerModel(nn.Module):
         else:
             seq_mask_2d = targets[mask_col] != 0
 
+        if "_bert_mask" in targets:
+            seq_mask_2d = seq_mask_2d & targets["_bert_mask"]
+
         mask = seq_mask_2d.T.contiguous().reshape(-1)
 
         losses = {}
-        for target_column in targets.keys():
+        for target_column in [k for k in targets.keys() if k != "_bert_mask"]:
             target_column_type = self.target_column_types[target_column]
             if target_column_type == "categorical":
                 output[target_column] = (
@@ -1755,6 +1770,8 @@ class TransformerModel(nn.Module):
                     for k, v in targets.items()
                     if k in self.target_column_types
                 }
+                if self.hparams.training_spec.training_objective == "bert":
+                    data, targets = apply_bert_masking(data, targets, self.hparams)
 
                 if (
                     self.hparams.training_spec.layer_autocast

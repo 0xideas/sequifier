@@ -26,7 +26,11 @@ def test_predictions_real(predictions):
 
 
 def test_predictions_cat(predictions):
-    valid_values = [str(x) for x in np.arange(100, 130)] + ["unknown", "other", "mask"]
+    valid_values = [str(x) for x in np.arange(100, 130)] + [
+        "[unknown]",
+        "[other]",
+        "[mask]",
+    ]
     for model_name, model_predictions in predictions.items():
         if "categorical" in model_name or "multitarget" in model_name:
             assert np.all(
@@ -40,9 +44,9 @@ def test_predictions_cat(predictions):
 
             if "multitarget" in model_name:
                 admssible_vals = [str(x) for x in np.arange(0, 10)] + [
-                    "unknown",
-                    "other",
-                    "mask",
+                    "[unknown]",
+                    "[other]",
+                    "[mask]",
                 ]
                 assert np.all(
                     [
@@ -103,9 +107,9 @@ def test_multi_pred(predictions):
         assert preds.shape[1] == 5, f"{model_name} should have 5 columns"
 
         admssible_vals = [str(x) for x in np.arange(0, 10)] + [
-            "unknown",
-            "other",
-            "mask",
+            "[unknown]",
+            "[other]",
+            "[mask]",
         ]
 
         assert np.all(

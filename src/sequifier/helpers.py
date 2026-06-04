@@ -4,7 +4,7 @@ import random
 import re
 import sys
 from datetime import datetime
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import polars as pl
@@ -84,9 +84,9 @@ def construct_index_maps(
     operation if `map_to_id` is True and `id_maps` is provided.
 
     A special mapping for these indices are added:
-    - If original IDs are strings, 0 maps to "unknown".
-    - If original IDs are strings, 1 maps to "other".
-    - If original IDs are strings, 2 maps to "unknown".
+    - If original IDs are strings, 0 maps to "[unknown]".
+    - If original IDs are strings, 1 maps to "[other]".
+    - If original IDs are strings, 2 maps to "[unknown]".
     - If original IDs are integers, 0 maps to (minimum original ID) - 3.
     - If original IDs are integers, 1 maps to (minimum original ID) - 2.
     - If original IDs are integers, 2 maps to (minimum original ID) - 1.
@@ -120,9 +120,9 @@ def construct_index_maps(
             map_ = {v: k for k, v in id_maps[target_column].items()}
             val = next(iter(map_.values()))
             if isinstance(val, str):
-                map_[0] = "unknown"
-                map_[1] = "other"
-                map_[2] = "mask"
+                map_[0] = "[unknown]"
+                map_[1] = "[other]"
+                map_[2] = "[mask]"
             else:
                 if not isinstance(val, int):
                     raise TypeError(f"Expected integer ID in map, got {type(val)}")
@@ -511,3 +511,122 @@ def get_last_training_batch_timedelta(
     t1, t2 = timestamps[-2], timestamps[-1]
 
     return (t2 - t1).total_seconds()
+
+
+def apply_bert_masking(
+    data_batch: Dict[str, torch.Tensor],
+    targets_batch: Dict[str, torch.Tensor],
+    config: Any,  # TrainConfig
+) -> tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+    """
+    Applies BERT-style span corruption to the input data using custom distributions.
+    Explicitly passes the boolean prediction mask via the targets dictionary.
+    """
+    batch_size, seq_len = config.training_spec.batch_size, config.seq_length
+
+    # 1. Identify valid tokens (Renamed from padding_mask to valid_mask for clarity)
+    if len(config.categorical_columns):
+        ref_col = config.categorical_columns[0]
+        valid_mask = data_batch[ref_col] != 0
+    else:
+        ref_col = list(data_batch.keys())[0]
+        valid_mask = (data_batch[ref_col] != 0.0).long().cumsum(dim=1) > 0
+
+    device = valid_mask.device
+
+    # Calculate exact number of tokens to mask per sequence based on valid length
+    masking_prob = config.training_spec.bert_spec.masking_probability
+    budgets = (valid_mask.sum(dim=1) * masking_prob).long()
+
+    bert_mask = torch.zeros((batch_size, seq_len), dtype=torch.bool, device=device)
+
+    # 2. Pre-sample lengths and start positions to avoid massive GPU-CPU sync overhead
+    # We sample more spans than needed to account for overlaps
+    max_spans = int(seq_len * masking_prob) + 10
+
+    sampled_lengths = config.training_spec.bert_spec.span_masking.sample(
+        (batch_size, max_spans), device=device
+    )
+    sampled_starts_pct = torch.rand((batch_size, max_spans), device=device)
+
+    # 3. Span Masking Loop
+    for i in range(batch_size):
+        budget = budgets[i].item()
+        valid_len = valid_mask[i].sum().item()
+
+        if budget == 0 or valid_len == 0:
+            continue
+
+        current_masked = 0
+        span_idx = 0
+
+        # Apply spans until budget is hit
+        while current_masked < budget and span_idx < max_spans:
+            span_len = sampled_lengths[i, span_idx].item()
+            start_idx = int(sampled_starts_pct[i, span_idx].item() * valid_len)
+            end_idx = min(start_idx + span_len, valid_len)
+
+            span_view = bert_mask[i, start_idx:end_idx]
+            newly_masked = (~span_view).sum().item()
+
+            # Truncate the span if adding it exceeds our exact masking budget
+            if current_masked + newly_masked > budget:
+                allowance = budget - current_masked
+                unmasked_indices = (~span_view).nonzero(as_tuple=True)[0]
+                if len(unmasked_indices) > allowance:
+                    end_idx = start_idx + unmasked_indices[allowance - 1].item() + 1
+
+            bert_mask[i, start_idx:end_idx] = True
+            current_masked = bert_mask[i].sum().item()
+            span_idx += 1
+
+        # Fallback: if heavy overlaps exhausted our max_spans, uniformly mask the remainder
+        if current_masked < budget:
+            remaining = budget - current_masked
+            unmasked_valid = (valid_mask[i] & ~bert_mask[i]).nonzero(as_tuple=True)[0]
+            if len(unmasked_valid) > 0:
+                idx = torch.randperm(len(unmasked_valid), device=device)[:remaining]
+                bert_mask[i, unmasked_valid[idx]] = True
+
+    # 4. Create the replacement split masks (e.g., 80% Mask, 10% Random, 10% Identical)
+    replacement_probs = torch.rand((batch_size, seq_len), device=device)
+
+    p_masked = config.training_spec.bert_spec.replacement_distribution.masked
+    p_random = config.training_spec.bert_spec.replacement_distribution.random
+
+    mask_token_mask = bert_mask & (replacement_probs < p_masked)
+    random_token_mask = (
+        bert_mask
+        & (replacement_probs >= p_masked)
+        & (replacement_probs < (p_masked + p_random))
+    )
+
+    # 5. Apply corruption to data_batch
+    for col, tensor in data_batch.items():
+        if col in config.categorical_columns:
+            mask_id = 2
+
+            random_tokens = torch.randint(
+                low=3,
+                high=config.n_classes[col],
+                size=(batch_size, seq_len),
+                device=device,
+                dtype=tensor.dtype,
+            )
+
+            tensor[mask_token_mask] = mask_id
+            tensor[random_token_mask] = random_tokens[random_token_mask]
+
+        elif col in config.real_columns:
+            mask_val = 0.0
+            random_noise = torch.randn(
+                (batch_size, seq_len), device=device, dtype=tensor.dtype
+            )
+
+            tensor[mask_token_mask] = mask_val
+            tensor[random_token_mask] = random_noise[random_token_mask]
+
+    # 6. Append the explicit prediction mask
+    targets_batch["_bert_mask"] = bert_mask
+
+    return data_batch, targets_batch

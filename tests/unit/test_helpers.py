@@ -9,7 +9,7 @@ from sequifier.helpers import construct_index_maps, numpy_to_pytorch
 
 
 def test_construct_index_maps_string():
-    """Tests reversing a string-to-int map, ensuring 0 maps to 'unknown'."""
+    """Tests reversing a string-to-int map, ensuring 0 maps to '[unknown]'."""
     id_maps: dict[str, dict[str | int, int]] = {"itemId": {"apple": 3, "banana": 4}}
     target_cols = ["itemId"]
 
@@ -20,9 +20,9 @@ def test_construct_index_maps_string():
     assert result["itemId"][4] == "banana"
 
     # Check the special 0 index for strings
-    assert result["itemId"][0] == "unknown"
-    assert result["itemId"][1] == "other"
-    assert result["itemId"][2] == "mask"
+    assert result["itemId"][0] == "[unknown]"
+    assert result["itemId"][1] == "[other]"
+    assert result["itemId"][2] == "[mask]"
 
 
 def test_construct_index_maps_integer():
