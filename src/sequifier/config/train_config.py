@@ -111,6 +111,27 @@ class DotDict(dict):
         self.update(state)
 
 
+class ReplacementDistribution(BaseModel):
+    masked: float = Field(..., gt=0.0, le=1.0)
+    random: float = Field(..., gt=0.0, le=1.0)
+    identical: float = Field(..., gt=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_sum(self):
+        total = self.masked + self.random + self.identical
+        if not math.isclose(total, 1.0, abs_tol=1e-5):
+            raise ValueError(
+                f"Replacement distribution probabilities must sum to 1.0, got {total}"
+            )
+        return self
+
+
+class BERTSpecModel(BaseModel):
+    masking_probability: float = Field(..., gt=0.0, le=1.0)
+    replacement_distribution: ReplacementDistribution
+    span_masking: ProbabilityDistribution
+
+
 class TrainingSpecModel(BaseModel):
     """Pydantic model for training specifications.
 
@@ -151,6 +172,7 @@ class TrainingSpecModel(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
+    training_objective: str = "causal"
     device: str
     device_max_concat_length: int = 12
     epochs: int
@@ -176,6 +198,8 @@ class TrainingSpecModel(BaseModel):
         )
     )
     scheduler_step_on: str = "epoch"
+    bert_spec: Optional[BERTSpecModel] = None
+
     continue_training: bool = True
     enforce_determinism: bool = False
     distributed: bool = False
@@ -293,83 +317,6 @@ class TrainingSpecModel(BaseModel):
             )
         return v
 
-    @field_validator("sampling_strategy")
-    @classmethod
-    def validate_sampling_strategy(cls, v):
-        if v not in ["exact", "oversampling", "undersampling"]:
-            raise ValueError(
-                f"sampling_strategy must be 'exact', 'oversampling', or 'undersampling', got '{v}'"
-            )
-        return v
-
-    @field_validator("data_parallelism")
-    @classmethod
-    def validate_data_parallelism(cls, v):
-        if v is not None and v not in ["DDP", "FSDP"]:
-            raise ValueError(
-                f"data_parallelism must be None, or 'DDP' or 'FSDP', got '{v}'"
-            )
-        return v
-
-
-class ReplacementDistribution(BaseModel):
-    masked: float = Field(..., gt=0.0, le=1.0)
-    random: float = Field(..., gt=0.0, le=1.0)
-    identical: float = Field(..., gt=0.0, le=1.0)
-
-    @model_validator(mode="after")
-    def validate_sum(self):
-        total = self.masked + self.random + self.identical
-        if not math.isclose(total, 1.0, abs_tol=1e-5):
-            raise ValueError(
-                f"Replacement distribution probabilities must sum to 1.0, got {total}"
-            )
-        return self
-
-
-class BERTSpecModel(BaseModel):
-    masking_probability: float = Field(..., gt=0.0, le=1.0)
-    replacement_distribution: ReplacementDistribution
-    span_masking: ProbabilityDistribution
-
-
-class ModelSpecModel(BaseModel):
-    """Pydantic model for model specifications.
-
-    Attributes:
-        initial_embedding_dim: The size of the input embedding. Must be equal to dim_model if joint_embedding_dim is None.
-        feature_embedding_dims: The embedding dimensions for each input column. Must sum to initial_embedding_dim.
-        joint_embedding_dim: Joint embedding layer after initial embedding. Must be equal to dim_model if specified.
-        n_head: The number of heads in the multi-head attention models.
-        dim_feedforward: The dimension of the feedforward network model.
-        num_layers: The number of layers in the transformer model.
-    """
-
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
-
-    training_objective: str = "causal"
-    initial_embedding_dim: int
-    feature_embedding_dims: Optional[dict[str, int]] = None
-    joint_embedding_dim: Optional[int] = None
-    dim_model: int
-    n_head: int
-    dim_feedforward: int
-    num_layers: int
-
-    activation_fn: str = "swiglu"  # Options: "relu", "gelu", "swiglu"
-    normalization: str = "rmsnorm"  # Options: "layer_norm", "rmsnorm"
-    positional_encoding: str = "learned"  # Options: "learned", "rope" (Rotary)
-    attention_type: str = (
-        "mha"  # Options: "mha" (Multi-Head), "mqa" (Multi-Query), "gqa" (Grouped-Query)
-    )
-
-    norm_first: bool = True
-    n_kv_heads: Optional[int] = None
-    rope_theta: float = 10000.0
-
-    prediction_length: int
-    bert_spec: Optional[BERTSpecModel] = None
-
     @field_validator("training_objective")
     @classmethod
     def validate_training_objective(cls, v):
@@ -390,6 +337,60 @@ class ModelSpecModel(BaseModel):
                 "If the training_objective is 'bert', the BERT hyperparameters must be set"
             )
         return v
+
+    @field_validator("sampling_strategy")
+    @classmethod
+    def validate_sampling_strategy(cls, v):
+        if v not in ["exact", "oversampling", "undersampling"]:
+            raise ValueError(
+                f"sampling_strategy must be 'exact', 'oversampling', or 'undersampling', got '{v}'"
+            )
+        return v
+
+    @field_validator("data_parallelism")
+    @classmethod
+    def validate_data_parallelism(cls, v):
+        if v is not None and v not in ["DDP", "FSDP"]:
+            raise ValueError(
+                f"data_parallelism must be None, or 'DDP' or 'FSDP', got '{v}'"
+            )
+        return v
+
+
+class ModelSpecModel(BaseModel):
+    """Pydantic model for model specifications.
+
+    Attributes:
+        initial_embedding_dim: The size of the input embedding. Must be equal to dim_model if joint_embedding_dim is None.
+        feature_embedding_dims: The embedding dimensions for each input column. Must sum to initial_embedding_dim.
+        joint_embedding_dim: Joint embedding layer after initial embedding. Must be equal to dim_model if specified.
+        n_head: The number of heads in the multi-head attention models.
+        dim_feedforward: The dimension of the feedforward network model.
+        num_layers: The number of layers in the transformer model.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    initial_embedding_dim: int
+    feature_embedding_dims: Optional[dict[str, int]] = None
+    joint_embedding_dim: Optional[int] = None
+    dim_model: int
+    n_head: int
+    dim_feedforward: int
+    num_layers: int
+
+    activation_fn: str = "swiglu"  # Options: "relu", "gelu", "swiglu"
+    normalization: str = "rmsnorm"  # Options: "layer_norm", "rmsnorm"
+    positional_encoding: str = "learned"  # Options: "learned", "rope" (Rotary)
+    attention_type: str = (
+        "mha"  # Options: "mha" (Multi-Head), "mqa" (Multi-Query), "gqa" (Grouped-Query)
+    )
+
+    norm_first: bool = True
+    n_kv_heads: Optional[int] = None
+    rope_theta: float = 10000.0
+
+    prediction_length: int
 
     @field_validator("dim_model")
     @classmethod
@@ -660,6 +661,23 @@ class TrainModel(BaseModel):
                 "If 'distributed' is True, data_parallelism cannot be 'None'"
             )
 
+        export_generative_model = info.data.get("export_generative_model")
+        export_embedding_model = info.data.get("export_embedding_model")
+        if v.training_objective == "bert":
+            if export_generative_model:
+                raise ValueError(
+                    "'training_objective: bert' is incompatible with generative model export"
+                )
+            if not export_embedding_model:
+                raise ValueError(
+                    "'training_objective: bert' requires embedding model export"
+                )
+        if v.training_objective == "causal":
+            if not export_generative_model and not export_embedding_model:
+                warnings.warn(
+                    "At least one of 'export_generative_model' and 'export_embedding_model' should be true"
+                )
+
         return v
 
     @field_validator("column_types")
@@ -711,23 +729,6 @@ class TrainModel(BaseModel):
                 raise ValueError(
                     f"If only categorical variables are included and feature_embedding_dims is not set, "
                     f"initial_embedding_dim ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical}: {categorical_columns})."
-                )
-
-        export_generative_model = info.data.get("export_generative_model")
-        export_embedding_model = info.data.get("export_embedding_model")
-        if v.training_objective == "bert":
-            if export_generative_model:
-                raise ValueError(
-                    "'training_objective: bert' is incompatible with generative model export"
-                )
-            if not export_embedding_model:
-                raise ValueError(
-                    "'training_objective: bert' requires embedding model export"
-                )
-        if v.training_objective == "causal":
-            if not export_generative_model and not export_embedding_model:
-                warnings.warn(
-                    "At least one of 'export_generative_model' and 'export_embedding_model' should be true"
                 )
 
         return v

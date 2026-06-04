@@ -36,7 +36,6 @@ export_embedding_model: PLEASE FILL # true or false
 export_onnx: true
 
 model_spec:
-  training_objective: causal
   initial_embedding_dim: 128
   feature_embedding_dims: # the size of the embedding of individual variables, must sum to dim_model
     EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical
@@ -47,6 +46,7 @@ model_spec:
   num_layers: 3
   prediction_length: 1
 training_spec:
+  training_objective: causal
   device: cuda
   epochs: 10
   save_interval_epochs: 10

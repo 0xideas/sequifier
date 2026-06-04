@@ -14,7 +14,6 @@ def model_config(tmp_path):
     (tmp_path / "logs").mkdir(exist_ok=True)
 
     model_spec = ModelSpecModel(
-        training_objective="causal",
         initial_embedding_dim=16,
         dim_model=16,
         n_head=4,
@@ -26,6 +25,7 @@ def model_config(tmp_path):
     )
 
     training_spec = TrainingSpecModel(
+        training_objective="causal",
         device="cpu",
         epochs=1,
         save_interval_epochs=1,
