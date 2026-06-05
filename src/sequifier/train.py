@@ -974,6 +974,70 @@ class TransformerModel(nn.Module):
             return self._recursive_concat(srcs_inner)
 
     @conditional_beartype
+    def _infer_attention_valid_mask(self, src: dict[str, Tensor]) -> Tensor:
+        """
+        Returns a boolean mask of shape (batch_size, seq_length).
+
+        True means valid/non-padding token.
+        False means padding token.
+        """
+        if "_attention_valid_mask" in src:
+            return src["_attention_valid_mask"].bool()
+
+        # Prefer categorical columns because padding is unambiguously encoded as 0.
+        for col in self.categorical_columns:
+            if col in src:
+                return src[col] != 0
+
+        # Fallback for real-only data.
+        # This matches the existing heuristic used in BERT masking.
+        ref_col = next(col for col in self.input_columns if col in src)
+        return (src[ref_col] != 0.0).long().cumsum(dim=1) > 0
+
+    @conditional_beartype
+    def _build_attention_mask(self, valid_mask: Tensor, dtype: torch.dtype) -> Tensor:
+        batch_size, seq_length = valid_mask.shape
+        device = valid_mask.device
+
+        expected_seq_length = self.src_mask.shape[-1]
+        if seq_length != expected_seq_length:
+            raise ValueError(
+                f"valid_mask sequence length ({seq_length}) must match "
+                f"model sequence length ({expected_seq_length})."
+            )
+
+        base_mask = self.src_mask.to(device=device, dtype=dtype)
+        base_mask = base_mask.view(1, 1, seq_length, seq_length)
+
+        invalid_keys = ~valid_mask.bool()
+
+        padding_mask = torch.zeros(
+            batch_size,
+            1,
+            1,
+            seq_length,
+            device=device,
+            dtype=dtype,
+        )
+
+        padding_mask = padding_mask.masked_fill(
+            invalid_keys[:, None, None, :],
+            torch.finfo(dtype).min,
+        )
+
+        return base_mask + padding_mask
+
+    @conditional_beartype
+    def _zero_padding_positions(self, x: Tensor, valid_mask: Tensor) -> Tensor:
+        """
+        x shape:
+            (batch_size, seq_length, dim_model)
+
+        Zeroes padded query positions so padded rows do not keep evolving.
+        """
+        return x * valid_mask[:, :, None].to(dtype=x.dtype)
+
+    @conditional_beartype
     def forward_inner(self, src: dict[str, Tensor]) -> Tensor:
         """The inner forward pass of the model.
 
@@ -1043,11 +1107,17 @@ class TransformerModel(nn.Module):
         if self.joint_embedding_layer is not None:
             src2 = self.joint_embedding_layer(src2)
 
-        mask = self.src_mask.to(dtype=src2.dtype)
+        valid_mask = self._infer_attention_valid_mask(src).to(device=src2.device)
+        src2 = self._zero_padding_positions(src2, valid_mask)
+
+        mask = self._build_attention_mask(valid_mask, dtype=src2.dtype)
+
         for layer in self.layers:
             src2 = layer(src2, src_mask=mask)
+            src2 = self._zero_padding_positions(src2, valid_mask)
 
         src2 = self.final_norm(src2)
+        src2 = self._zero_padding_positions(src2, valid_mask)
 
         return src2.transpose(0, 1)
 

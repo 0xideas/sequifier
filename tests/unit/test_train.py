@@ -1,3 +1,5 @@
+import copy
+
 import pytest
 import torch
 
@@ -67,6 +69,20 @@ def model_config(tmp_path):
 def model(model_config):
     """Instantiates the TransformerModel with the mock config."""
     return TransformerModel(model_config)
+
+
+@pytest.fixture
+def causal_model(model_config):
+    config = copy.deepcopy(model_config)
+    config.training_spec.training_objective = "causal"
+    return TransformerModel(config)
+
+
+@pytest.fixture
+def bert_model(model_config):
+    config = copy.deepcopy(model_config)
+    config.training_spec.training_objective = "bert"
+    return TransformerModel(config)
 
 
 def test_transformer_model_initialization(model, model_config):
@@ -184,3 +200,95 @@ def test_calculate_loss(model, model_config):
     assert total_loss.item() > 0  # Valid loss value
     assert "cat_col" in component_losses
     assert "real_col" in component_losses
+
+
+def test_padding_keys_are_masked(bert_model):
+    seq_len = bert_model.seq_length
+
+    valid_mask = torch.ones(
+        2,
+        seq_len,
+        dtype=torch.bool,
+        device=bert_model.src_mask.device,
+    )
+
+    valid_mask[0, :2] = False
+    valid_mask[1, :1] = False
+
+    attn_mask = bert_model._build_attention_mask(valid_mask, dtype=torch.float32)
+
+    assert attn_mask.shape == (2, 1, seq_len, seq_len)
+
+    # Batch 0: keys 0 and 1 are padding.
+    assert torch.all(attn_mask[0, :, :, 0] < -1e20)
+    assert torch.all(attn_mask[0, :, :, 1] < -1e20)
+
+    # Batch 0: keys 2 onward are not padding-masked.
+    assert torch.all(attn_mask[0, :, :, 2:] > -1e20)
+
+    # Batch 1: key 0 is padding.
+    assert torch.all(attn_mask[1, :, :, 0] < -1e20)
+    assert torch.all(attn_mask[1, :, :, 1:] > -1e20)
+
+
+def test_causal_and_padding_masks_are_combined(causal_model):
+    seq_len = causal_model.seq_length
+
+    valid_mask = torch.ones(
+        1,
+        seq_len,
+        dtype=torch.bool,
+        device=causal_model.src_mask.device,
+    )
+
+    valid_mask[0, 0] = False
+
+    attn_mask = causal_model._build_attention_mask(
+        valid_mask,
+        dtype=torch.float32,
+    )
+
+    assert attn_mask.shape == (1, 1, seq_len, seq_len)
+
+    # Padding key 0 is masked for every query.
+    assert torch.all(attn_mask[0, :, :, 0] < -1e20)
+
+    # Causal future positions are masked.
+    assert attn_mask[0, 0, 1, 2] < -1e20
+    assert attn_mask[0, 0, 1, seq_len - 1] < -1e20
+
+    # A past valid key should not be masked by causal masking.
+    assert attn_mask[0, 0, 1, 1] > -1e20
+    assert attn_mask[0, 0, 2, 1] > -1e20
+    assert attn_mask[0, 0, seq_len - 1, seq_len - 1] > -1e20
+
+
+@pytest.fixture
+def batch(model):
+    seq_len = model.seq_length
+
+    return {
+        "cat_col": torch.tensor(
+            [
+                [0, 0] + [1] * (seq_len - 2),
+                [0] + [2] * (seq_len - 1),
+            ],
+            dtype=torch.long,
+            device=model.src_mask.device,
+        ),
+        "real_col": torch.tensor(
+            [
+                [0.0, 0.0] + [0.5] * (seq_len - 2),
+                [0.0] + [1.5] * (seq_len - 1),
+            ],
+            dtype=torch.float32,
+            device=model.src_mask.device,
+        ),
+    }
+
+
+def test_forward_no_nan_with_padding(model, batch):
+    out = model.forward_train(batch)
+
+    for tensor in out.values():
+        assert torch.isfinite(tensor).all()

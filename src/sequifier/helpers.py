@@ -528,6 +528,7 @@ def apply_bert_masking(
     Applies BERT-style span corruption to the input data using custom distributions.
     Explicitly passes the boolean prediction mask via the targets dictionary.
     """
+    data_batch = {k: tensor.clone() for k, tensor in data_batch.items()}
     targets_batch = {k: tensor.clone().detach() for k, tensor in targets_batch.items()}
     batch_size, seq_len = config.training_spec.batch_size, config.seq_length
 
@@ -640,5 +641,7 @@ def apply_bert_masking(
 
     # 6. Append the explicit prediction mask
     targets_batch["_bert_mask"] = bert_mask
+
+    data_batch["_attention_valid_mask"] = valid_mask.detach()
 
     return data_batch, targets_batch

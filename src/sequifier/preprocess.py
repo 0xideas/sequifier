@@ -1270,9 +1270,6 @@ def _process_batches_multiple_files_inner(
             data = _load_and_preprocess_data(
                 path, read_format, selected_columns, max_rows_inner
             )
-            data = _load_and_preprocess_data(
-                path, read_format, selected_columns, max_rows_inner
-            )
             data, _, _ = _apply_column_statistics(
                 data,
                 data_columns,
