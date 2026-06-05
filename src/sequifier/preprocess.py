@@ -4,6 +4,7 @@ import multiprocessing
 import os
 import re
 import shutil
+import warnings
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -1466,7 +1467,22 @@ def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]
     ids = sorted(
         [int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]
     )  # type: ignore
-    id_map = {id_: i + 3 for i, id_ in enumerate(ids)}
+
+    if isinstance(ids[0], str):
+        if "[mask]" in ids:
+            raise ValueError(f"Found value '[mask]' in {column}, this is invalid")
+
+        for special_val in ["[unknown]", "[other]"]:
+            if special_val in ids:
+                warnings.warn(
+                    f"Found special value {special_val} in {column}, these will be combined with the sequifier-internal special value {special_val}"
+                )
+        ids = [id_ for id_ in ids if id_ not in ["[unknown]", "[other]"]]
+        id_map = {id_: i + 3 for i, id_ in enumerate(ids)}
+        id_map["[unknown]"] = 0
+        id_map["[other]"] = 1
+    else:
+        id_map = {id_: i + 3 for i, id_ in enumerate(ids)}
     return dict(id_map)
 
 

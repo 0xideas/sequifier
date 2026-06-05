@@ -55,13 +55,13 @@ torch._dynamo.config.suppress_errors = True
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
-    EXPLICIT_PADDING_MASK_FALLBACK_WARNING,
     apply_bert_masking,
     conditional_beartype,
     configure_determinism,
     configure_logger,
     construct_index_maps,
     get_torch_dtype,
+    infer_valid_mask_from_data,
     normalize_path,
 )
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
@@ -977,30 +977,6 @@ class TransformerModel(nn.Module):
             return self._recursive_concat(srcs_inner)
 
     @conditional_beartype
-    def _infer_attention_valid_mask(
-        self, src: dict[str, Tensor], metadata: Optional[dict[str, Tensor]] = None
-    ) -> Tensor:
-        """
-        Returns a boolean mask of shape (batch_size, seq_length).
-
-        True means valid/non-padding token.
-        False means padding token.
-        """
-        if metadata is not None and "attention_valid_mask" in metadata:
-            return metadata["attention_valid_mask"].bool()
-
-        # Prefer categorical columns because padding is unambiguously encoded as 0.
-        for col in self.categorical_columns:
-            if col in src:
-                return src[col] != 0
-
-        # Fallback for real-only data.
-        # This matches the existing heuristic used in BERT masking.
-        warnings.warn(EXPLICIT_PADDING_MASK_FALLBACK_WARNING, stacklevel=2)
-        ref_col = next(col for col in self.input_columns if col in src)
-        return (src[ref_col] != 0.0).long().cumsum(dim=1) > 0
-
-    @conditional_beartype
     def _build_attention_mask(self, valid_mask: Tensor, dtype: torch.dtype) -> Tensor:
         batch_size, seq_length = valid_mask.shape
         device = valid_mask.device
@@ -1115,9 +1091,9 @@ class TransformerModel(nn.Module):
         if self.joint_embedding_layer is not None:
             src2 = self.joint_embedding_layer(src2)
 
-        valid_mask = self._infer_attention_valid_mask(src, metadata).to(
-            device=src2.device
-        )
+        valid_mask = infer_valid_mask_from_data(
+            src, self.hparams.categorical_columns, "attention_valid_mask", metadata
+        ).to(device=src2.device)
         if valid_mask.shape != src2.shape[:2]:
             raise ValueError(
                 f"Invalid attention mask shape: got {tuple(valid_mask.shape)}, "
@@ -1720,28 +1696,14 @@ class TransformerModel(nn.Module):
         if not target_names:
             raise RuntimeError("Loss calculation failed; no target columns were found.")
 
-        if metadata is not None and "target_valid_mask" in metadata:
-            seq_mask_2d = metadata["target_valid_mask"].bool()
-        else:
-            mask_col = next(
-                (
-                    col
-                    for col in target_names
-                    if self.target_column_types[col] == "categorical"
-                ),
-                target_names[0],
-            )
-
-            if self.target_column_types[mask_col] == "real":
-                warnings.warn(EXPLICIT_PADDING_MASK_FALLBACK_WARNING, stacklevel=2)
-                seq_mask_2d = (targets[mask_col] != 0.0).long().cumsum(dim=1) > 0
-            else:
-                seq_mask_2d = targets[mask_col] != 0
+        valid_mask = infer_valid_mask_from_data(
+            targets, self.categorical_columns, "target_valid_mask", metadata
+        )
 
         if metadata is not None and "bert_mask" in metadata:
-            seq_mask_2d = seq_mask_2d & metadata["bert_mask"].bool()
+            valid_mask = valid_mask & metadata["bert_mask"].bool()
 
-        mask = seq_mask_2d.T.contiguous().reshape(-1)
+        mask = valid_mask.T.contiguous().reshape(-1)
 
         losses = {}
         for target_column in target_names:

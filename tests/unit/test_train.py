@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from sequifier.config.train_config import ModelSpecModel, TrainingSpecModel, TrainModel
+from sequifier.helpers import infer_valid_mask_from_data
 from sequifier.train import TransformerModel
 
 
@@ -207,7 +208,7 @@ def test_calculate_loss_uses_explicit_target_mask_for_real_zero_targets():
     model.target_column_types = {"real_col": "real"}
     model.criterion = {"real_col": torch.nn.MSELoss(reduction="none")}
     model.loss_weights = None
-
+    model.categorical_columns = []
     outputs = {
         "real_col": torch.tensor(
             [
@@ -221,7 +222,7 @@ def test_calculate_loss_uses_explicit_target_mask_for_real_zero_targets():
         "real_col": torch.tensor([[0.0, 0.0, 2.0]]),
     }
     metadata = {
-        "target_valid_mask": torch.tensor([[True, True, True]]),
+        "attention_valid_mask": torch.tensor([[True, True, True]]),
     }
 
     total_loss, component_losses = TransformerModel._calculate_loss(
@@ -232,7 +233,7 @@ def test_calculate_loss_uses_explicit_target_mask_for_real_zero_targets():
     assert torch.isclose(component_losses["real_col"], torch.tensor(2.0))
 
 
-def test_infer_attention_valid_mask_prefers_explicit_mask_for_real_zero_inputs():
+def test_infer_valid_mask_from_data():
     model = TransformerModel.__new__(TransformerModel)
     model.categorical_columns = []
     model.input_columns = ["real_col"]
@@ -244,7 +245,9 @@ def test_infer_attention_valid_mask_prefers_explicit_mask_for_real_zero_inputs()
         "attention_valid_mask": torch.tensor([[True, True, True]]),
     }
 
-    mask = TransformerModel._infer_attention_valid_mask(model, src, metadata)
+    mask = infer_valid_mask_from_data(
+        src, model.categorical_columns, "attention_valid_mask", metadata
+    )
 
     assert torch.equal(mask, torch.tensor([[True, True, True]]))
 

@@ -267,8 +267,15 @@ def test_get_column_statistics_state_accumulation():
 
     # Validations
     # 1. Categorical: Should contain all unique keys a,b,c,d
-    assert len(id_maps["cat_col"]) == 4
-    assert set(id_maps["cat_col"].keys()) == {"a", "b", "c", "d"}
+    assert len(id_maps["cat_col"]) == 6
+    assert set(id_maps["cat_col"].keys()) == {
+        "[unknown]",
+        "[other]",
+        "a",
+        "b",
+        "c",
+        "d",
+    }
 
     # 2. Numerical: Should match full dataset calculation
     expected_mean = data_full["num_col"].mean()

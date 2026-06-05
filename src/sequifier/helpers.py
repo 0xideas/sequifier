@@ -616,9 +616,17 @@ def get_last_training_batch_timedelta(
     return (t2 - t1).total_seconds()
 
 
-def infer_valid_mask_from_data(data_batch: Dict[str, torch.Tensor], config: Any):
-    if len(config.categorical_columns):
-        ref_col = config.categorical_columns[0]
+def infer_valid_mask_from_data(
+    data_batch: Dict[str, torch.Tensor],
+    categorical_columns: list[str],
+    default_key: str,
+    metadata: Optional[dict[str, Tensor]] = None,
+):
+    if metadata is not None and default_key in metadata:
+        return metadata[default_key].bool()
+
+    if len(categorical_columns):
+        ref_col = categorical_columns[0]
         return data_batch[ref_col] != 0
     else:
         warnings.warn(EXPLICIT_PADDING_MASK_FALLBACK_WARNING, stacklevel=2)
@@ -648,7 +656,9 @@ def apply_bert_masking(
     if "attention_valid_mask" in metadata_batch:
         valid_mask = metadata_batch["attention_valid_mask"].bool()
     else:
-        valid_mask = infer_valid_mask_from_data(data_batch, config)
+        valid_mask = infer_valid_mask_from_data(
+            data_batch, config.categorical_columns, "attention_valid_mask"
+        )
 
     batch_size, seq_len = valid_mask.shape
     device = valid_mask.device
