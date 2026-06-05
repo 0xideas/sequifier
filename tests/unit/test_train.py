@@ -219,11 +219,13 @@ def test_calculate_loss_uses_explicit_target_mask_for_real_zero_targets():
     }
     targets = {
         "real_col": torch.tensor([[0.0, 0.0, 2.0]]),
-        "_target_valid_mask": torch.tensor([[True, True, True]]),
+    }
+    metadata = {
+        "target_valid_mask": torch.tensor([[True, True, True]]),
     }
 
     total_loss, component_losses = TransformerModel._calculate_loss(
-        model, outputs, targets
+        model, outputs, targets, metadata
     )
 
     assert torch.isclose(total_loss, torch.tensor(2.0))
@@ -237,10 +239,12 @@ def test_infer_attention_valid_mask_prefers_explicit_mask_for_real_zero_inputs()
 
     src = {
         "real_col": torch.tensor([[0.0, 0.0, 1.0]]),
-        "_attention_valid_mask": torch.tensor([[True, True, True]]),
+    }
+    metadata = {
+        "attention_valid_mask": torch.tensor([[True, True, True]]),
     }
 
-    mask = TransformerModel._infer_attention_valid_mask(model, src)
+    mask = TransformerModel._infer_attention_valid_mask(model, src, metadata)
 
     assert torch.equal(mask, torch.tensor([[True, True, True]]))
 

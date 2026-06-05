@@ -12,7 +12,7 @@ from torch.utils.data import IterableDataset, get_worker_info
 from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
-    attach_padding_masks,
+    generate_padding_masks,
     get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
 )
@@ -183,7 +183,13 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
     def __iter__(
         self,
     ) -> Iterator[
-        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]
+        Tuple[
+            Dict[str, torch.Tensor],
+            Dict[str, torch.Tensor],
+            Dict[str, torch.Tensor],
+            None,
+            None,
+        ]
     ]:
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_initialized() else 0
@@ -228,14 +234,13 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
                 for key, tensor in self.targets.items()
             }
 
+            metadata_batch = {}
             if self.left_pad_lengths is not None:
-                attach_padding_masks(
-                    data_batch,
-                    targets_batch,
+                metadata_batch = generate_padding_masks(
                     self.left_pad_lengths[batch_indices],
                     train_seq_len,
                     self.config.training_spec.data_offset,
                     self.config.training_spec.target_offset,
                 )
 
-            yield data_batch, targets_batch, None, None, None
+            yield data_batch, targets_batch, metadata_batch, None, None

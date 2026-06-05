@@ -257,7 +257,7 @@ def numpy_to_pytorch(
     seq_length: int,
     data_offset: int,
     target_offset: int,
-) -> dict[str, Tensor]:
+) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     """Converts a long-format Polars DataFrame to a dict of sequence tensors.
 
     This function assumes the input DataFrame `data` is in a long format
@@ -286,9 +286,11 @@ def numpy_to_pytorch(
             column names for time steps (e.g., "0" to "L").
 
     Returns:
-        A dictionary mapping feature names to their corresponding PyTorch
-        tensors. Target tensors are stored with a `_target` suffix
-        (e.g., `{'price': <tensor>, 'price_target': <tensor>}`).
+        A tuple of:
+        - a dictionary mapping feature names to their corresponding PyTorch
+          tensors. Target tensors are stored with a `_target` suffix
+          (e.g., `{'price': <tensor>, 'price_target': <tensor>}`).
+        - a metadata dictionary containing any explicit masks.
     """
     input_seq_cols = [
         str(c) for c in range(seq_length - 1 + data_offset, (-1 + data_offset), -1)
@@ -322,15 +324,13 @@ def numpy_to_pytorch(
 
     left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(data)
     if left_pad_lengths is not None:
-        full_length = seq_length + 1
-        unified_tensors["_attention_valid_mask"] = build_valid_mask(
-            left_pad_lengths, full_length, data_offset, seq_length
+        metadata = generate_padding_masks(
+            left_pad_lengths, seq_length, data_offset, target_offset
         )
-        unified_tensors["_target_valid_mask"] = build_valid_mask(
-            left_pad_lengths, full_length, target_offset, seq_length
-        )
+    else:
+        metadata = {}
 
-    return unified_tensors
+    return unified_tensors, metadata
 
 
 @beartype
@@ -369,22 +369,22 @@ def get_left_pad_lengths_from_preprocessed_data(data: pl.DataFrame) -> Optional[
 
 
 @beartype
-def attach_padding_masks(
-    data_batch: dict[str, Tensor],
-    targets_batch: dict[str, Tensor],
+def generate_padding_masks(
     left_pad_lengths: Tensor,
     seq_length: int,
     data_offset: int,
     target_offset: int,
-) -> None:
-    """Attaches explicit attention and target masks to batch dictionaries."""
+) -> dict[str, Tensor]:
+    """Generates explicit attention and target masks as a metadata dictionary."""
     full_length = seq_length + 1
-    data_batch["_attention_valid_mask"] = build_valid_mask(
-        left_pad_lengths, full_length, data_offset, seq_length
-    )
-    targets_batch["_target_valid_mask"] = build_valid_mask(
-        left_pad_lengths, full_length, target_offset, seq_length
-    )
+    return {
+        "attention_valid_mask": build_valid_mask(
+            left_pad_lengths, full_length, data_offset, seq_length
+        ),
+        "target_valid_mask": build_valid_mask(
+            left_pad_lengths, full_length, target_offset, seq_length
+        ),
+    }
 
 
 @beartype
@@ -629,18 +629,24 @@ def infer_valid_mask_from_data(data_batch: Dict[str, torch.Tensor], config: Any)
 def apply_bert_masking(
     data_batch: Dict[str, torch.Tensor],
     targets_batch: Dict[str, torch.Tensor],
+    metadata_batch: Optional[Dict[str, torch.Tensor]],
     config: Any,  # TrainConfig
-) -> tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+) -> tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
     """
     Applies BERT-style span corruption to the input data using custom distributions.
-    Explicitly passes the boolean prediction mask via the targets dictionary.
+    Explicitly passes the boolean prediction mask via the metadata dictionary.
     """
     data_batch = {k: tensor.clone() for k, tensor in data_batch.items()}
     targets_batch = {k: tensor.clone().detach() for k, tensor in targets_batch.items()}
+    metadata_batch = (
+        {k: tensor.clone().detach() for k, tensor in metadata_batch.items()}
+        if metadata_batch
+        else {}
+    )
 
     # 1. Identify valid tokens (Renamed from padding_mask to valid_mask for clarity)
-    if "_attention_valid_mask" in data_batch:
-        valid_mask = data_batch["_attention_valid_mask"].bool()
+    if "attention_valid_mask" in metadata_batch:
+        valid_mask = metadata_batch["attention_valid_mask"].bool()
     else:
         valid_mask = infer_valid_mask_from_data(data_batch, config)
 
@@ -744,9 +750,8 @@ def apply_bert_masking(
             tensor[mask_token_mask] = mask_val
             tensor[random_token_mask] = random_noise[random_token_mask]
 
-    # 6. Append the explicit prediction mask
-    targets_batch["_bert_mask"] = bert_mask
+    # 6. Append explicit prediction and attention masks to metadata.
+    metadata_batch["bert_mask"] = bert_mask
+    metadata_batch["attention_valid_mask"] = valid_mask.detach()
 
-    data_batch["_attention_valid_mask"] = valid_mask.detach()
-
-    return data_batch, targets_batch
+    return data_batch, targets_batch, metadata_batch

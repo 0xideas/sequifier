@@ -87,13 +87,14 @@ def test_numpy_to_pytorch_shapes_and_shifting():
     all_columns = ["A"]
     seq_length = 3
 
-    tensors = numpy_to_pytorch(
+    tensors, metadata = numpy_to_pytorch(
         data, column_types, all_columns, seq_length, data_offset=1, target_offset=0
     )
 
     # 1. Check Keys
     assert "A" in tensors
     assert "A_target" in tensors
+    assert metadata == {}
 
     # 2. Check Input Tensor (Cols 3, 2, 1)
     # Row 0: [10, 20, 30]
@@ -118,7 +119,7 @@ def test_numpy_to_pytorch_dtypes():
 
     # Case 1: Integer
     data_int = pl.DataFrame({"inputCol": ["int_col"], "1": [10], "0": [20]})
-    tensors_int = numpy_to_pytorch(
+    tensors_int, _ = numpy_to_pytorch(
         data_int,
         {"int_col": torch.int64},
         ["int_col"],
@@ -130,7 +131,7 @@ def test_numpy_to_pytorch_dtypes():
 
     # Case 2: Float
     data_float = pl.DataFrame({"inputCol": ["float_col"], "1": [10.5], "0": [20.5]})
-    tensors_float = numpy_to_pytorch(
+    tensors_float, _ = numpy_to_pytorch(
         data_float,
         {"float_col": torch.float32},
         ["float_col"],
@@ -188,7 +189,7 @@ def test_numpy_to_pytorch_includes_explicit_padding_masks():
         }
     )
 
-    tensors = numpy_to_pytorch(
+    _, metadata = numpy_to_pytorch(
         data,
         {"A": torch.float32},
         ["A"],
@@ -198,11 +199,11 @@ def test_numpy_to_pytorch_includes_explicit_padding_masks():
     )
 
     assert torch.equal(
-        tensors["_attention_valid_mask"],
+        metadata["attention_valid_mask"],
         torch.tensor([[True, True, True], [False, False, True]]),
     )
     assert torch.equal(
-        tensors["_target_valid_mask"],
+        metadata["target_valid_mask"],
         torch.tensor([[True, True, True], [False, True, True]]),
     )
 
@@ -233,16 +234,20 @@ def test_apply_bert_masking_uses_explicit_valid_mask_for_zero_values():
     )
     data_batch = {
         "real_col": torch.tensor([[99.0, 0.0, 1.0, 2.0]]),
-        "_attention_valid_mask": torch.tensor([[False, True, True, True]]),
     }
     targets_batch = {
         "real_col": torch.tensor([[99.0, 0.0, 1.0, 2.0]]),
-        "_target_valid_mask": torch.tensor([[False, True, True, True]]),
+    }
+    metadata = {
+        "attention_valid_mask": torch.tensor([[False, True, True, True]]),
+        "target_valid_mask": torch.tensor([[False, True, True, True]]),
     }
 
-    _, masked_targets = apply_bert_masking(data_batch, targets_batch, config)
+    _, _, masked_metadata = apply_bert_masking(
+        data_batch, targets_batch, metadata, config
+    )
 
     assert torch.equal(
-        masked_targets["_bert_mask"],
+        masked_metadata["bert_mask"],
         torch.tensor([[False, True, True, True]]),
     )

@@ -13,7 +13,7 @@ from torch.utils.data import IterableDataset, get_worker_info
 from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
-    attach_padding_masks,
+    generate_padding_masks,
     get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
 )
@@ -34,9 +34,9 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             sample indices per epoch. Defaults to True.
 
     Yields:
-        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]:
+        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None]:
             A batch tuple containing sequence dictionaries, target dictionaries,
-            and three `None` placeholders (for API compatibility).
+            metadata dictionaries, and two `None` placeholders (for API compatibility).
 
     Raises:
         FileNotFoundError: If `metadata.json` is missing.
@@ -156,7 +156,13 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
     def __iter__(
         self,
     ) -> Iterator[
-        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]
+        Tuple[
+            Dict[str, torch.Tensor],
+            Dict[str, torch.Tensor],
+            Dict[str, torch.Tensor],
+            None,
+            None,
+        ]
     ]:
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_initialized() else 0
@@ -234,6 +240,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         # Initialize cross-file buffers
         seq_buffer: Dict[str, torch.Tensor] = {}
         tgt_buffer: Dict[str, torch.Tensor] = {}
+        meta_buffer: Dict[str, torch.Tensor] = {}
         buffer_len = 0
 
         for f_id in extended_files:
@@ -315,10 +322,9 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
                         f"Missing required column {col_name} in Parquet partition"
                     )
 
+            new_meta = {}
             if left_pad_lengths is not None:
-                attach_padding_masks(
-                    new_seq,
-                    new_tgt,
+                new_meta = generate_padding_masks(
                     left_pad_lengths[worker_indices],
                     train_seq_len,
                     self.config.training_spec.data_offset,
@@ -331,12 +337,21 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             if buffer_len == 0:
                 seq_buffer = new_seq
                 tgt_buffer = new_tgt
+                meta_buffer = new_meta
             else:
                 seq_buffer = {
                     k: torch.cat([seq_buffer[k], new_seq[k]], dim=0) for k in seq_buffer
                 }
                 tgt_buffer = {
                     k: torch.cat([tgt_buffer[k], new_tgt[k]], dim=0) for k in tgt_buffer
+                }
+                if set(meta_buffer) != set(new_meta):
+                    raise RuntimeError(
+                        "Inconsistent leftPadLength metadata across Parquet chunks."
+                    )
+                meta_buffer = {
+                    k: torch.cat([meta_buffer[k], new_meta[k]], dim=0)
+                    for k in meta_buffer
                 }
 
             buffer_len += num_new_samples
@@ -349,13 +364,15 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
                 # Slice out a perfect batch from the top of the buffer
                 batch_seq = {k: v[: self.batch_size] for k, v in seq_buffer.items()}
                 batch_tgt = {k: v[: self.batch_size] for k, v in tgt_buffer.items()}
+                batch_meta = {k: v[: self.batch_size] for k, v in meta_buffer.items()}
 
-                yield batch_seq, batch_tgt, None, None, None
+                yield batch_seq, batch_tgt, batch_meta, None, None
                 yielded_samples += self.batch_size
 
                 # Keep the remainder in the buffer for the next loop/file
                 seq_buffer = {k: v[self.batch_size :] for k, v in seq_buffer.items()}
                 tgt_buffer = {k: v[self.batch_size :] for k, v in tgt_buffer.items()}
+                meta_buffer = {k: v[self.batch_size :] for k, v in meta_buffer.items()}
                 buffer_len -= self.batch_size
 
         # 6. Yield the final partial batch from the buffer if any remains
@@ -365,5 +382,6 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
 
             batch_seq = {k: v[:final_yield_size] for k, v in seq_buffer.items()}
             batch_tgt = {k: v[:final_yield_size] for k, v in tgt_buffer.items()}
+            batch_meta = {k: v[:final_yield_size] for k, v in meta_buffer.items()}
 
-            yield batch_seq, batch_tgt, None, None, None
+            yield batch_seq, batch_tgt, batch_meta, None, None

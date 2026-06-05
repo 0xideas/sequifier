@@ -17,6 +17,7 @@ from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configure_determinism,
     construct_index_maps,
+    generate_padding_masks,
     normalize_path,
     numpy_to_pytorch,
     subset_to_input_columns,
@@ -374,9 +375,20 @@ def infer_embedding(
                 sequence_ids_tensor,
                 subsequence_ids_tensor,
                 start_positions_tensor,
-                _,
+                left_pad_lengths_tensor,
             ) = unpack_preprocessed_pt_tuple(data)
-            embeddings = get_embeddings_pt(config, inferer, sequences_dict)
+            metadata = {}
+            if left_pad_lengths_tensor is not None:
+                target_offset = 0 if config.training_objective == "causal" else 1
+                metadata = generate_padding_masks(
+                    left_pad_lengths_tensor,
+                    config.seq_length,
+                    data_offset=1,
+                    target_offset=target_offset,
+                )
+            embeddings = get_embeddings_pt(
+                config, inferer, sequences_dict, metadata=metadata
+            )
 
             sequence_ids_for_preds = sequence_ids_tensor.numpy()
             subsequence_ids_for_preds = subsequence_ids_tensor.numpy()
@@ -587,7 +599,7 @@ def infer_generative(
                 sequence_ids_tensor,
                 _,
                 start_positions_tensor,
-                _,
+                left_pad_lengths_tensor,
             ) = unpack_preprocessed_pt_tuple(data)
             total_steps = (
                 1
@@ -601,8 +613,18 @@ def infer_generative(
                 if key in config.input_columns
             }
 
+            metadata = {}
+            if left_pad_lengths_tensor is not None:
+                target_offset = 0 if config.training_objective == "causal" else 1
+                metadata = generate_padding_masks(
+                    left_pad_lengths_tensor,
+                    config.seq_length,
+                    data_offset=1,
+                    target_offset=target_offset,
+                )
+
             probs, preds = get_probs_preds_from_dict(
-                config, inferer, sequences_dict, total_steps
+                config, inferer, sequences_dict, total_steps, metadata=metadata
             )
 
             prediction_length = inferer.prediction_length  # Get prediction_length
@@ -740,6 +762,7 @@ def get_embeddings_pt(
     config: Any,
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
+    metadata: Optional[dict[str, torch.Tensor]] = None,
 ) -> np.ndarray:
     """Generates embeddings from a batch of PyTorch tensor data.
 
@@ -764,7 +787,10 @@ def get_embeddings_pt(
         for key, val in data.items()
         if key in config.input_columns
     }
-    embeddings = inferer.infer_embedding(X)
+    metadata_np = (
+        {key: val.numpy() for key, val in metadata.items()} if metadata else None
+    )
+    embeddings = inferer.infer_embedding(X, metadata=metadata_np)
     return embeddings
 
 
@@ -774,6 +800,7 @@ def get_probs_preds_from_dict(
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
     total_steps: int = 1,
+    metadata: Optional[dict[str, torch.Tensor]] = None,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """Generates predictions from PyTorch tensor data, supporting autoregression.
 
@@ -816,18 +843,26 @@ def get_probs_preds_from_dict(
         for key, tensor in data.items()
         if key in config.input_columns
     }
+    metadata_np = (
+        {key: tensor.numpy() for key, tensor in metadata.items()} if metadata else None
+    )
     all_probs_list = {col: [] for col in target_cols}
     all_preds_list = {col: [] for col in target_cols}
 
     # 3. Autoregressive loop
+    metadata_for_step = metadata_np
     for i in range(total_steps):
         if config.output_probabilities:
-            probs_for_step = inferer.infer_generative(X, return_probs=True)
+            probs_for_step = inferer.infer_generative(
+                X, return_probs=True, metadata=metadata_for_step
+            )
             preds_for_step = inferer.infer_generative(None, probs_for_step)
             for col in target_cols:
                 all_probs_list[col].append(probs_for_step[col])
         else:
-            preds_for_step = inferer.infer_generative(X, return_probs=False)
+            preds_for_step = inferer.infer_generative(
+                X, return_probs=False, metadata=metadata_for_step
+            )
 
         for col in target_cols:
             all_preds_list[col].append(preds_for_step[col])
@@ -844,6 +879,17 @@ def get_probs_preds_from_dict(
             X_next[col] = np.concatenate([shifted_input, new_value], axis=1)
 
         X = X_next
+        if (
+            metadata_for_step is not None
+            and "attention_valid_mask" in metadata_for_step
+        ):
+            shifted_mask = metadata_for_step["attention_valid_mask"][:, 1:]
+            appended_valid = np.ones(
+                (shifted_mask.shape[0], 1), dtype=shifted_mask.dtype
+            )
+            metadata_for_step["attention_valid_mask"] = np.concatenate(
+                [shifted_mask, appended_valid], axis=1
+            )
 
     final_preds = {
         col: np.array(preds_list).T.reshape(-1, 1).flatten()
@@ -888,13 +934,18 @@ def get_embeddings(
     """
     all_columns = sorted(list(set(config.input_columns + config.target_columns)))
     target_offset = 0 if config.training_objective == "causal" else 1
-    X = numpy_to_pytorch(
+    X, metadata = numpy_to_pytorch(
         data, column_types, all_columns, config.seq_length, 1, target_offset
     )
     X = {col: X_col.numpy() for col, X_col in X.items()}
+    metadata_np = (
+        {col: metadata_col.numpy() for col, metadata_col in metadata.items()}
+        if metadata
+        else None
+    )
     del data
 
-    embeddings = inferer.infer_embedding(X)
+    embeddings = inferer.infer_embedding(X, metadata=metadata_np)
 
     return embeddings
 
@@ -932,18 +983,23 @@ def get_probs_preds_from_df(
 
     target_offset = 0 if config.training_objective == "causal" else 1
 
-    X = numpy_to_pytorch(
+    X, metadata = numpy_to_pytorch(
         data, column_types, all_columns, config.seq_length, 1, target_offset
     )
     X = {col: X_col.numpy() for col, X_col in X.items()}
+    metadata_np = (
+        {col: metadata_col.numpy() for col, metadata_col in metadata.items()}
+        if metadata
+        else None
+    )
     del data
 
     if config.output_probabilities:
-        probs = inferer.infer_generative(X, return_probs=True)
+        probs = inferer.infer_generative(X, return_probs=True, metadata=metadata_np)
         preds = inferer.infer_generative(None, probs)
     else:
         probs = None
-        preds = inferer.infer_generative(X)
+        preds = inferer.infer_generative(X, metadata=metadata_np)
 
     return (probs, preds)
 
@@ -1051,7 +1107,7 @@ def get_probs_preds_autoregression(
         + seq_length
     )
 
-    head_data = numpy_to_pytorch(
+    head_data, metadata = numpy_to_pytorch(
         head_data_df,
         column_types,
         config.input_columns,
@@ -1062,7 +1118,11 @@ def get_probs_preds_autoregression(
 
     # Run the autoregressive PyTorch inference
     probs, preds = get_probs_preds_from_dict(
-        config, inferer, head_data, total_steps=config.autoregression_total_steps
+        config,
+        inferer,
+        head_data,
+        total_steps=config.autoregression_total_steps,
+        metadata=metadata,
     )
 
     # 4. Generate the final output arrays using the perfectly aligned bases
@@ -1223,6 +1283,7 @@ class Inferer:
     def infer_embedding(
         self,
         x: dict[str, np.ndarray],
+        metadata: Optional[dict[str, np.ndarray]] = None,
     ) -> np.ndarray:
         """Performs inference with an embedding model.
 
@@ -1239,7 +1300,7 @@ class Inferer:
         """
         assert x is not None
         size = x[list(x.keys())[0]].shape[0]
-        embedding = self.adjust_and_infer_embedding(x, size)
+        embedding = self.adjust_and_infer_embedding(x, size, metadata=metadata)
 
         return embedding
 
@@ -1249,6 +1310,7 @@ class Inferer:
         x: Optional[dict[str, np.ndarray]],
         probs: Optional[dict[str, np.ndarray]] = None,
         return_probs: bool = False,
+        metadata: Optional[dict[str, np.ndarray]] = None,
     ) -> dict[str, np.ndarray]:
         """Performs generative inference, returning probabilities or predictions.
 
@@ -1294,7 +1356,7 @@ class Inferer:
                     f"Not all keys in x are in probs - {x.keys() = } != {probs.keys() = }. Full inference is executed."
                 )
 
-            outs = self.adjust_and_infer_generative(x, size)
+            outs = self.adjust_and_infer_generative(x, size, metadata=metadata)
 
             for target_column, target_outs in outs.items():
                 if np.any(target_outs == np.inf):
@@ -1332,7 +1394,12 @@ class Inferer:
         return outs
 
     @beartype
-    def adjust_and_infer_embedding(self, x: dict[str, np.ndarray], size: int):
+    def adjust_and_infer_embedding(
+        self,
+        x: dict[str, np.ndarray],
+        size: int,
+        metadata: Optional[dict[str, np.ndarray]] = None,
+    ):
         """Handles batching and backend-specific calls for embedding inference.
 
         This function prepares the input data `x` into batches using
@@ -1356,19 +1423,30 @@ class Inferer:
             embeddings = np.concatenate(inference_batch_embeddings, axis=0)[:size]
         elif self.inference_model_type == "pt":
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
+            metadata_adjusted = (
+                self.prepare_inference_batches(metadata, pad_to_batch_size=False)
+                if metadata
+                else None
+            )
             embeddings = infer_with_embedding_model(
                 self.inference_model,
                 x_adjusted,
                 self.device,
                 size,
                 self.target_columns,
+                metadata=metadata_adjusted,
             )
         else:
             assert False, "not possible"
         return embeddings
 
     @beartype
-    def adjust_and_infer_generative(self, x: dict[str, np.ndarray], size: int):
+    def adjust_and_infer_generative(
+        self,
+        x: dict[str, np.ndarray],
+        size: int,
+        metadata: Optional[dict[str, np.ndarray]] = None,
+    ):
         """Handles batching and backend-specific calls for generative inference.
 
         This function prepares the input data `x` into batches using
@@ -1401,12 +1479,18 @@ class Inferer:
         elif self.inference_model_type == "pt":
             assert x is not None
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
+            metadata_adjusted = (
+                self.prepare_inference_batches(metadata, pad_to_batch_size=False)
+                if metadata
+                else None
+            )
             outs = infer_with_generative_model(
                 self.inference_model,
                 x_adjusted,
                 self.device,
                 size * self.prediction_length,
                 self.target_columns,
+                metadata=metadata_adjusted,
             )
         else:
             assert False

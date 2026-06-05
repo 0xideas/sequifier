@@ -43,7 +43,7 @@ class SequifierDatasetFromFile(IterableDataset):
         target_offset = 0 if config.training_spec.training_objective == "causal" else 1
 
         # self.all_tensors now holds both inputs and targets
-        all_tensors = numpy_to_pytorch(
+        all_tensors, metadata_tensors = numpy_to_pytorch(
             data=data_df,
             column_types=column_types,
             all_columns=all_columns,
@@ -61,14 +61,7 @@ class SequifierDatasetFromFile(IterableDataset):
         self.target_tensors = {
             key: all_tensors[f"{key}_target"] for key in self.config.target_columns
         }
-        if "_attention_valid_mask" in all_tensors:
-            self.sequence_tensors["_attention_valid_mask"] = all_tensors[
-                "_attention_valid_mask"
-            ]
-        if "_target_valid_mask" in all_tensors:
-            self.target_tensors["_target_valid_mask"] = all_tensors[
-                "_target_valid_mask"
-            ]
+        self.metadata_tensors = metadata_tensors
         del all_tensors
 
         if config.training_spec.device.startswith("cuda"):
@@ -76,6 +69,8 @@ class SequifierDatasetFromFile(IterableDataset):
                 self.sequence_tensors[key] = self.sequence_tensors[key].pin_memory()
             for key in self.target_tensors:
                 self.target_tensors[key] = self.target_tensors[key].pin_memory()
+            for key in self.metadata_tensors:
+                self.metadata_tensors[key] = self.metadata_tensors[key].pin_memory()
 
         logger.info(f"[INFO] Dataset loaded with {self.n_samples} samples.")
 
@@ -90,7 +85,13 @@ class SequifierDatasetFromFile(IterableDataset):
     def __iter__(
         self,
     ) -> Iterator[
-        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]
+        Tuple[
+            Dict[str, torch.Tensor],
+            Dict[str, torch.Tensor],
+            Dict[str, torch.Tensor],
+            None,
+            None,
+        ]
     ]:
         """Yields batches of data.
 
@@ -98,13 +99,13 @@ class SequifierDatasetFromFile(IterableDataset):
         rank and worker ID.
 
         Yields:
-            Iterator[Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]]:
+            Iterator[Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None]]:
             An iterator where each item is a tuple containing:
                 - data_batch (dict): Dictionary of feature tensors for the batch.
                 - targets_batch (dict): Dictionary of target tensors for the batch.
+                - metadata_batch (dict): Dictionary of metadata tensors for the batch.
                 - None: Placeholder for sequence_id (not used in this dataset type).
                 - None: Placeholder for subsequence_id (not used in this dataset type).
-                - None: Placeholder for start_position (not used in this dataset type).
         """
         worker_info = torch.utils.data.get_worker_info()
         world_size = dist.get_world_size() if dist.is_initialized() else 1
@@ -144,5 +145,9 @@ class SequifierDatasetFromFile(IterableDataset):
                 key: tensor[batch_indices]
                 for key, tensor in self.target_tensors.items()
             }
+            metadata_batch = {
+                key: tensor[batch_indices]
+                for key, tensor in self.metadata_tensors.items()
+            }
 
-            yield data_batch, targets_batch, None, None, None
+            yield data_batch, targets_batch, metadata_batch, None, None

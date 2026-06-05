@@ -52,9 +52,6 @@ from torch.utils.data import DataLoader  # noqa: E402
 
 torch._dynamo.config.suppress_errors = True
 
-DATA_BATCH_METADATA_KEYS = {"_attention_valid_mask"}
-TARGET_BATCH_METADATA_KEYS = {"_target_valid_mask", "_bert_mask"}
-
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
@@ -522,7 +519,9 @@ class TransformerEmbeddingModel(nn.Module):
         return model_copy
 
     @conditional_beartype
-    def forward(self, src: dict[str, Tensor]):
+    def forward(
+        self, src: dict[str, Tensor], metadata: Optional[dict[str, Tensor]] = None
+    ):
         """Forward pass for the embedding model.
 
         Args:
@@ -531,7 +530,7 @@ class TransformerEmbeddingModel(nn.Module):
         Returns:
             The embedded output.
         """
-        return self.transformer_model.forward_embed(src)
+        return self.transformer_model.forward_embed(src, metadata=metadata)
 
 
 class TransformerModel(nn.Module):
@@ -978,15 +977,17 @@ class TransformerModel(nn.Module):
             return self._recursive_concat(srcs_inner)
 
     @conditional_beartype
-    def _infer_attention_valid_mask(self, src: dict[str, Tensor]) -> Tensor:
+    def _infer_attention_valid_mask(
+        self, src: dict[str, Tensor], metadata: Optional[dict[str, Tensor]] = None
+    ) -> Tensor:
         """
         Returns a boolean mask of shape (batch_size, seq_length).
 
         True means valid/non-padding token.
         False means padding token.
         """
-        if "_attention_valid_mask" in src:
-            return src["_attention_valid_mask"].bool()
+        if metadata is not None and "attention_valid_mask" in metadata:
+            return metadata["attention_valid_mask"].bool()
 
         # Prefer categorical columns because padding is unambiguously encoded as 0.
         for col in self.categorical_columns:
@@ -1043,7 +1044,9 @@ class TransformerModel(nn.Module):
         return x * valid_mask[:, :, None].to(dtype=x.dtype)
 
     @conditional_beartype
-    def forward_inner(self, src: dict[str, Tensor]) -> Tensor:
+    def forward_inner(
+        self, src: dict[str, Tensor], metadata: Optional[dict[str, Tensor]] = None
+    ) -> Tensor:
         """The inner forward pass of the model.
 
         This handles embedding lookup, positional encoding, and passing the
@@ -1112,12 +1115,14 @@ class TransformerModel(nn.Module):
         if self.joint_embedding_layer is not None:
             src2 = self.joint_embedding_layer(src2)
 
-        valid_mask = self._infer_attention_valid_mask(src).to(device=src2.device)
+        valid_mask = self._infer_attention_valid_mask(src, metadata).to(
+            device=src2.device
+        )
         if valid_mask.shape != src2.shape[:2]:
             raise ValueError(
                 f"Invalid attention mask shape: got {tuple(valid_mask.shape)}, "
                 f"expected {tuple(src2.shape[:2])} = (batch_size, seq_length). "
-                "Check _attention_valid_mask / leftPadLength construction."
+                "Check attention_valid_mask / leftPadLength construction."
             )
         src2 = self._zero_padding_positions(src2, valid_mask)
 
@@ -1133,7 +1138,9 @@ class TransformerModel(nn.Module):
         return src2.transpose(0, 1)
 
     @conditional_beartype
-    def forward_embed(self, src: dict[str, Tensor]) -> Tensor:
+    def forward_embed(
+        self, src: dict[str, Tensor], metadata: Optional[dict[str, Tensor]] = None
+    ) -> Tensor:
         """Forward pass for the embedding model.
 
         This returns only the embedding from the *last* token in the sequence.
@@ -1146,10 +1153,12 @@ class TransformerModel(nn.Module):
             The embedding tensor for the last token
             (batch_size, dim_model).
         """
-        return self.forward_inner(src)[-self.prediction_length :, :, :]
+        return self.forward_inner(src, metadata)[-self.prediction_length :, :, :]
 
     @conditional_beartype
-    def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
+    def forward_train(
+        self, src: dict[str, Tensor], metadata: Optional[dict[str, Tensor]] = None
+    ) -> dict[str, Tensor]:
         """Forward pass for training.
 
         This runs the inner forward pass and then applies the appropriate
@@ -1163,7 +1172,7 @@ class TransformerModel(nn.Module):
             A dictionary mapping target column names to their raw output
             (logit) tensors (seq_length, batch_size, n_classes/1).
         """
-        output = self.forward_inner(src)
+        output = self.forward_inner(src, metadata)
         output = {
             target_column: self.decode(target_column, output)
             for target_column in self.target_columns
@@ -1213,7 +1222,10 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def forward(
-        self, src: dict[str, Tensor], return_logits: Union[bool, Tensor] = False
+        self,
+        src: dict[str, Tensor],
+        metadata: Optional[dict[str, Tensor]] = None,
+        return_logits: Union[bool, Tensor] = False,
     ) -> dict[str, Tensor]:
         """The main forward pass of the model.
 
@@ -1230,7 +1242,7 @@ class TransformerModel(nn.Module):
             output (LogSoftmax probabilities or real values) for the
             last token (batch_size, n_classes/1).
         """
-        output = self.forward_train(src)
+        output = self.forward_train(src, metadata)
         if return_logits:
             return output
         return {
@@ -1492,8 +1504,9 @@ class TransformerModel(nn.Module):
 
         Iterates through the training DataLoader, computes loss, performs
         backpropagation, and updates model parameters. The DataLoader is expected
-        to yield tuples of (sequences_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
-        The IDs and positions are currently unused in this training loop.
+        to yield tuples of
+        (sequences_dict, targets_dict, metadata_dict, sequence_ids, subsequence_ids).
+        The IDs are currently unused in this training loop.
 
         Args:
             train_loader: DataLoader for the training dataset.
@@ -1511,20 +1524,26 @@ class TransformerModel(nn.Module):
 
         model_to_call.train()
 
-        for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
+        for batch_count, (data, targets, metadata, _, _) in enumerate(train_loader):
             if batch_count >= start_batch:
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
-                    if k in self.input_columns or k in DATA_BATCH_METADATA_KEYS
+                    if k in self.input_columns
                 }
                 targets = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in targets.items()
-                    if k in self.target_column_types or k in TARGET_BATCH_METADATA_KEYS
+                    if k in self.target_column_types
+                }
+                metadata = {
+                    k: v.to(self.device, non_blocking=True)
+                    for k, v in (metadata or {}).items()
                 }
                 if self.hparams.training_spec.training_objective == "bert":
-                    data, targets = apply_bert_masking(data, targets, self.hparams)
+                    data, targets, metadata = apply_bert_masking(
+                        data, targets, metadata, self.hparams
+                    )
 
                 # Only use standard torch.autocast if FSDP MixedPrecision is NOT handling it natively
                 if (
@@ -1541,11 +1560,13 @@ class TransformerModel(nn.Module):
                     with torch.autocast(
                         device_type=self.device.split(":")[0], dtype=amp_dtype
                     ):
-                        output = model_to_call(data, True)
-                        loss, losses = self._calculate_loss(output, targets)
+                        output = model_to_call(
+                            data, metadata=metadata, return_logits=True
+                        )
+                        loss, losses = self._calculate_loss(output, targets, metadata)
                 else:
-                    output = model_to_call(data, True)
-                    loss, losses = self._calculate_loss(output, targets)
+                    output = model_to_call(data, metadata=metadata, return_logits=True)
+                    loss, losses = self._calculate_loss(output, targets, metadata)
 
                 self.scaler.scale(loss).backward()
 
@@ -1672,7 +1693,10 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _calculate_loss(
-        self, output: dict[str, Tensor], targets: dict[str, Tensor]
+        self,
+        output: dict[str, Tensor],
+        targets: dict[str, Tensor],
+        metadata: Optional[dict[str, Tensor]] = None,
     ) -> tuple[Tensor, dict[str, Tensor]]:
         """Calculates the loss for the given output and targets.
 
@@ -1692,14 +1716,12 @@ class TransformerModel(nn.Module):
             - A dictionary of individual (unweighted) loss Tensors for each
               target column.
         """
-        target_names = [
-            k for k in targets.keys() if k not in TARGET_BATCH_METADATA_KEYS
-        ]
+        target_names = [k for k in targets.keys() if k in self.target_column_types]
         if not target_names:
             raise RuntimeError("Loss calculation failed; no target columns were found.")
 
-        if "_target_valid_mask" in targets:
-            seq_mask_2d = targets["_target_valid_mask"].bool()
+        if metadata is not None and "target_valid_mask" in metadata:
+            seq_mask_2d = metadata["target_valid_mask"].bool()
         else:
             mask_col = next(
                 (
@@ -1716,8 +1738,8 @@ class TransformerModel(nn.Module):
             else:
                 seq_mask_2d = targets[mask_col] != 0
 
-        if "_bert_mask" in targets:
-            seq_mask_2d = seq_mask_2d & targets["_bert_mask"].bool()
+        if metadata is not None and "bert_mask" in metadata:
+            seq_mask_2d = seq_mask_2d & metadata["bert_mask"].bool()
 
         mask = seq_mask_2d.T.contiguous().reshape(-1)
 
@@ -1825,8 +1847,8 @@ class TransformerModel(nn.Module):
         and aggregates results across all processes if in distributed mode.
         Also calculates a one-time baseline loss on the first call.
         The DataLoader is expected to yield tuples of
-        (sequences_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
-        The IDs and positions are currently unused during evaluation.
+        (sequences_dict, targets_dict, metadata_dict, sequence_ids, subsequence_ids).
+        The IDs are currently unused during evaluation.
 
         Args:
             valid_loader: DataLoader for the validation dataset.
@@ -1849,20 +1871,26 @@ class TransformerModel(nn.Module):
         model_to_call.eval()
 
         with torch.no_grad():
-            for data, targets, _, _, _ in valid_loader:
+            for data, targets, metadata, _, _ in valid_loader:
                 # Move data to the current process's assigned GPU
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
-                    if k in self.input_columns or k in DATA_BATCH_METADATA_KEYS
+                    if k in self.input_columns
                 }
                 targets = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in targets.items()
-                    if k in self.target_column_types or k in TARGET_BATCH_METADATA_KEYS
+                    if k in self.target_column_types
+                }
+                metadata = {
+                    k: v.to(self.device, non_blocking=True)
+                    for k, v in (metadata or {}).items()
                 }
                 if self.hparams.training_spec.training_objective == "bert":
-                    data, targets = apply_bert_masking(data, targets, self.hparams)
+                    data, targets, metadata = apply_bert_masking(
+                        data, targets, metadata, self.hparams
+                    )
 
                 if (
                     self.hparams.training_spec.layer_autocast
@@ -1878,18 +1906,20 @@ class TransformerModel(nn.Module):
                     with torch.autocast(
                         device_type=self.device.split(":")[0], dtype=amp_dtype
                     ):
-                        output = model_to_call(data, True)
-                        loss, losses = self._calculate_loss(output, targets)
+                        output = model_to_call(
+                            data, metadata=metadata, return_logits=True
+                        )
+                        loss, losses = self._calculate_loss(output, targets, metadata)
                 else:
-                    output = model_to_call(data, True)
-                    loss, losses = self._calculate_loss(output, targets)
+                    output = model_to_call(data, metadata=metadata, return_logits=True)
+                    loss, losses = self._calculate_loss(output, targets, metadata)
 
                 total_loss_collect.append(loss.item())
                 for col, loss in losses.items():
                     total_losses_collect[col].append(loss.item())
 
                 # Free up GPU memory
-                del data, targets, loss, losses
+                del data, targets, metadata, loss, losses
                 if self.device == "cuda":
                     torch.cuda.empty_cache()
 
@@ -1941,16 +1971,20 @@ class TransformerModel(nn.Module):
             baseline_losses_local_collect = {col: [] for col in self.target_columns}
 
             # Iterate over the sharded validation loader
-            for data, targets, _, _, _ in valid_loader:
+            for data, targets, metadata, _, _ in valid_loader:
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
-                    if k in self.input_columns or k in DATA_BATCH_METADATA_KEYS
+                    if k in self.input_columns
                 }
                 targets = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in targets.items()
-                    if k in self.target_column_types or k in TARGET_BATCH_METADATA_KEYS
+                    if k in self.target_column_types
+                }
+                metadata = {
+                    k: v.to(self.device, non_blocking=True)
+                    for k, v in (metadata or {}).items()
                 }
 
                 pseudo_output = {}
@@ -1961,14 +1995,10 @@ class TransformerModel(nn.Module):
                             col, data[col].transpose(0, 1)
                         )
                         targets_for_baseline[col] = targets[col]
-                if "_target_valid_mask" in targets:
-                    targets_for_baseline["_target_valid_mask"] = targets[
-                        "_target_valid_mask"
-                    ]
 
                 if len(pseudo_output) > 0:
                     loss, losses = self._calculate_loss(
-                        pseudo_output, targets_for_baseline
+                        pseudo_output, targets_for_baseline, metadata
                     )
                     baseline_loss_local_collect.append(loss.item())
                     for col, loss_ in losses.items():
@@ -2478,6 +2508,7 @@ def infer_with_embedding_model(
     device: str,
     size: int,
     target_columns: list[str],
+    metadata: Optional[list[dict[str, np.ndarray]]] = None,
 ) -> np.ndarray:
     """Performs inference with an embedding model.
 
@@ -2496,7 +2527,7 @@ def infer_with_embedding_model(
     categorical_cols = set(model.transformer_model.categorical_columns)
 
     with torch.no_grad():
-        for x_sub in x:
+        for batch_idx, x_sub in enumerate(x):
             layer_types = (
                 model.transformer_model.hparams.training_spec.layer_type_dtypes or {}
             )
@@ -2508,8 +2539,16 @@ def infer_with_embedding_model(
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
                 else:
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=ref_dtype)
+            metadata_gpu = (
+                {
+                    col: torch.from_numpy(x_).to(device)
+                    for col, x_ in metadata[batch_idx].items()
+                }
+                if metadata
+                else {}
+            )
 
-            output_gpu = model.forward(data_gpu)
+            output_gpu = model.forward(data_gpu, metadata=metadata_gpu)
             output_cpu = output_gpu.cpu().detach().float().numpy()
             output_cpu = output_cpu.transpose(1, 0, 2).reshape(
                 output_cpu.shape[0] * output_cpu.shape[1], output_cpu.shape[2]
@@ -2529,6 +2568,7 @@ def infer_with_generative_model(
     device: str,
     size: int,
     target_columns: list[str],
+    metadata: Optional[list[dict[str, np.ndarray]]] = None,
 ) -> dict[str, np.ndarray]:
     """Performs inference with a generative model.
 
@@ -2548,7 +2588,7 @@ def infer_with_generative_model(
     categorical_cols = set(model.categorical_columns)
 
     with torch.no_grad():
-        for x_sub in x:
+        for batch_idx, x_sub in enumerate(x):
             layer_types = model.hparams.training_spec.layer_type_dtypes or {}
             dtype_str = layer_types.get("linear", "float32")
             ref_dtype = get_torch_dtype(dtype_str)
@@ -2558,8 +2598,16 @@ def infer_with_generative_model(
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
                 else:
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=ref_dtype)
+            metadata_gpu = (
+                {
+                    col: torch.from_numpy(x_).to(device)
+                    for col, x_ in metadata[batch_idx].items()
+                }
+                if metadata
+                else {}
+            )
 
-            output_gpu = model.forward(data_gpu)
+            output_gpu = model.forward(data_gpu, metadata=metadata_gpu)
             output_cpu = {k: v.cpu().detach() for k, v in output_gpu.items()}
             outs0.append(output_cpu)
             if device == "cuda":

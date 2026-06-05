@@ -129,10 +129,10 @@ def test_iteration_attaches_explicit_padding_masks(mock_config, dataset_path):
         dataset = SequifierDatasetFromFolderPtLazy(
             dataset_path, mock_config, shuffle=False
         )
-        seq_dict, tgt_dict, _, _, _ = next(iter(dataset))
+        seq_dict, tgt_dict, metadata_dict, _, _ = next(iter(dataset))
 
     assert torch.equal(
-        seq_dict["_attention_valid_mask"],
+        metadata_dict["attention_valid_mask"],
         torch.tensor(
             [
                 [True, True, True, True, True],
@@ -144,7 +144,7 @@ def test_iteration_attaches_explicit_padding_masks(mock_config, dataset_path):
         ),
     )
     assert torch.equal(
-        tgt_dict["_target_valid_mask"],
+        metadata_dict["target_valid_mask"],
         torch.tensor(
             [
                 [True, True, True, True, True],
