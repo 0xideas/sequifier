@@ -92,6 +92,70 @@ def test_iteration_yields_correct_batches(mock_config, dataset_path):
     assert tgt_batch["item"].shape == (5, 2)
 
 
+def test_iteration_attaches_explicit_padding_masks(mock_config, tmp_path):
+    data_dir = tmp_path / "parquet_masks"
+    data_dir.mkdir()
+
+    schema = {
+        "sequenceId": pl.Int64,
+        "subsequenceId": pl.Int64,
+        "startItemPosition": pl.Int64,
+        "leftPadLength": pl.Int64,
+        "inputCol": pl.String,
+        "2": pl.Float64,
+        "1": pl.Float64,
+        "0": pl.Float64,
+    }
+    rows = [
+        (0, 0, 0, 0, "item", 0.0, 1.0, 2.0),
+        (1, 0, 0, 1, "item", 0.0, 0.0, 2.0),
+        (2, 0, 0, 2, "item", 0.0, 0.0, 2.0),
+        (3, 0, 0, 3, "item", 0.0, 0.0, 2.0),
+        (4, 0, 0, 0, "item", 0.0, 1.0, 2.0),
+    ]
+    pl.DataFrame(rows, schema=schema, orient="row").write_parquet(
+        data_dir / "file.parquet"
+    )
+    with open(data_dir / "metadata.json", "w") as f:
+        json.dump(
+            {
+                "total_samples": 5,
+                "batch_files": [{"path": "file.parquet", "samples": 5}],
+            },
+            f,
+        )
+
+    dataset = SequifierDatasetFromFolderParquetLazy(
+        str(data_dir), mock_config, shuffle=False
+    )
+    seq_batch, tgt_batch, _, _, _ = next(iter(dataset))
+
+    assert torch.equal(
+        seq_batch["_attention_valid_mask"],
+        torch.tensor(
+            [
+                [True, True],
+                [False, True],
+                [False, False],
+                [False, False],
+                [True, True],
+            ]
+        ),
+    )
+    assert torch.equal(
+        tgt_batch["_target_valid_mask"],
+        torch.tensor(
+            [
+                [True, True],
+                [True, True],
+                [False, True],
+                [False, False],
+                [True, True],
+            ]
+        ),
+    )
+
+
 @patch("torch.distributed.is_initialized", return_value=True)
 @patch("torch.distributed.get_rank", return_value=0)
 @patch("torch.distributed.get_world_size", return_value=2)

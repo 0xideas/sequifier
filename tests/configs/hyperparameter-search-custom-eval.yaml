@@ -56,7 +56,7 @@ training_hyperparameter_sampling:
   epochs: [1, 1]
   save_interval_epochs: 10
   batch_size: [5, 10]
-  learning_rate: [0.001, 0.01]
+  learning_rate: [0.001, 0.0001]
   criterion:
     itemId: CrossEntropyLoss
     supCat1: CrossEntropyLoss
@@ -64,7 +64,7 @@ training_hyperparameter_sampling:
     supCat3: CrossEntropyLoss
     supCat4: CrossEntropyLoss
   accumulation_steps: [1]
-  dropout: [0.0]
+  dropout: [0.5]
   optimizer:
     - name: Adam
   scheduler:

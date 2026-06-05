@@ -202,6 +202,49 @@ def test_calculate_loss(model, model_config):
     assert "real_col" in component_losses
 
 
+def test_calculate_loss_uses_explicit_target_mask_for_real_zero_targets():
+    model = TransformerModel.__new__(TransformerModel)
+    model.target_column_types = {"real_col": "real"}
+    model.criterion = {"real_col": torch.nn.MSELoss(reduction="none")}
+    model.loss_weights = None
+
+    outputs = {
+        "real_col": torch.tensor(
+            [
+                [[1.0]],
+                [[2.0]],
+                [[1.0]],
+            ]
+        )
+    }
+    targets = {
+        "real_col": torch.tensor([[0.0, 0.0, 2.0]]),
+        "_target_valid_mask": torch.tensor([[True, True, True]]),
+    }
+
+    total_loss, component_losses = TransformerModel._calculate_loss(
+        model, outputs, targets
+    )
+
+    assert torch.isclose(total_loss, torch.tensor(2.0))
+    assert torch.isclose(component_losses["real_col"], torch.tensor(2.0))
+
+
+def test_infer_attention_valid_mask_prefers_explicit_mask_for_real_zero_inputs():
+    model = TransformerModel.__new__(TransformerModel)
+    model.categorical_columns = []
+    model.input_columns = ["real_col"]
+
+    src = {
+        "real_col": torch.tensor([[0.0, 0.0, 1.0]]),
+        "_attention_valid_mask": torch.tensor([[True, True, True]]),
+    }
+
+    mask = TransformerModel._infer_attention_valid_mask(model, src)
+
+    assert torch.equal(mask, torch.tensor([[True, True, True]]))
+
+
 def test_padding_keys_are_masked(bert_model):
     seq_len = bert_model.seq_length
 

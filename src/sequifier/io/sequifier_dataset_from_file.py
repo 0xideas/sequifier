@@ -61,6 +61,14 @@ class SequifierDatasetFromFile(IterableDataset):
         self.target_tensors = {
             key: all_tensors[f"{key}_target"] for key in self.config.target_columns
         }
+        if "_attention_valid_mask" in all_tensors:
+            self.sequence_tensors["_attention_valid_mask"] = all_tensors[
+                "_attention_valid_mask"
+            ]
+        if "_target_valid_mask" in all_tensors:
+            self.target_tensors["_target_valid_mask"] = all_tensors[
+                "_target_valid_mask"
+            ]
         del all_tensors
 
         if config.training_spec.device.startswith("cuda"):

@@ -75,11 +75,25 @@ def load_parquet_folder_outputs(path):
     other_cols = [
         col
         for col in data.columns
-        if col not in ["sequenceId", "subsequenceId", "startItemPosition", "inputCol"]
+        if col
+        not in [
+            "sequenceId",
+            "subsequenceId",
+            "startItemPosition",
+            "leftPadLength",
+            "inputCol",
+        ]
     ]
 
     return data[
-        ["sequenceId", "subsequenceId", "startItemPosition", "inputCol"] + other_cols
+        [
+            "sequenceId",
+            "subsequenceId",
+            "startItemPosition",
+            "leftPadLength",
+            "inputCol",
+        ]
+        + other_cols
     ].sort(["sequenceId", "subsequenceId", "startItemPosition", "inputCol"])
 
 
@@ -93,7 +107,13 @@ def load_pt_outputs(path):
                     sequence_id,
                     subsequence_id,
                     start_item_position,
+                    *maybe_left_pad_length,
                 ) = torch.load(os.path.join(root, file))
+                left_pad_length = (
+                    maybe_left_pad_length[0]
+                    if maybe_left_pad_length
+                    else torch.zeros_like(sequence_id)
+                )
                 sequences2 = {}
                 for col, vals in sequences.items():
                     vals2 = vals.numpy()
@@ -128,6 +148,12 @@ def load_pt_outputs(path):
                             start_item_position,
                         ]
                     )
+                    sequences2["leftPadLength"] = np.concatenate(
+                        [
+                            sequences2.get("leftPadLength", []),
+                            left_pad_length,
+                        ]
+                    )
 
                 content = pl.DataFrame(sequences2)
                 contents.append(content)
@@ -137,10 +163,24 @@ def load_pt_outputs(path):
     other_cols = [
         col
         for col in data.columns
-        if col not in ["sequenceId", "subsequenceId", "startItemPosition", "inputCol"]
+        if col
+        not in [
+            "sequenceId",
+            "subsequenceId",
+            "startItemPosition",
+            "leftPadLength",
+            "inputCol",
+        ]
     ]
     return data[
-        ["sequenceId", "subsequenceId", "startItemPosition", "inputCol"] + other_cols
+        [
+            "sequenceId",
+            "subsequenceId",
+            "startItemPosition",
+            "leftPadLength",
+            "inputCol",
+        ]
+        + other_cols
     ].sort(["sequenceId", "subsequenceId", "startItemPosition", "inputCol"])
 
 
@@ -178,7 +218,7 @@ def test_preprocessed_data_real(data_splits):
         assert len(data_splits[name]) == 2
 
         for i, data in enumerate(data_splits[name]):
-            number_expected_columns = 13
+            number_expected_columns = 14
             assert data.shape[1] == (
                 number_expected_columns
             ), f"{name = } - {i = }: {data.shape = } - {data.columns = }"
@@ -195,7 +235,7 @@ def test_preprocessed_data_categorical(data_splits):
         assert len(data_splits[name]) == 3
 
         for i, data in enumerate(data_splits[name]):
-            number_expected_columns = 13
+            number_expected_columns = 14
             assert data.shape[1] == (
                 number_expected_columns
             ), f"{name = } - {i = }: {data.shape = } - {data.columns = }"
@@ -268,9 +308,9 @@ def test_preprocessed_data_exact(run_preprocessing):
     pt_output = load_pt_outputs(pt_out_path)
 
     assert np.all(
-        parquet_output.to_numpy()[:, [0, 1, 2, 4, 5, 6, 7, 8, 9]]
-        == pt_output.to_numpy()[:, [0, 1, 2, 4, 5, 6, 7, 8, 9]].astype(int)
-    ), f"{np.sum(parquet_output.to_numpy()[:,[0,1,2,4,5,6,7,8,9]] == pt_output.to_numpy()[:,[0,1,2,4,5,6,7,8,9]].astype(int)) = }"
+        parquet_output.to_numpy()[:, [0, 1, 2, 3, 5, 6, 7, 8, 9]]
+        == pt_output.to_numpy()[:, [0, 1, 2, 3, 5, 6, 7, 8, 9]].astype(int)
+    ), f"{np.sum(parquet_output.to_numpy()[:,[0,1,2,3,5,6,7,8,9]] == pt_output.to_numpy()[:,[0,1,2,3,5,6,7,8,9]].astype(int)) = }"
 
     assert np.all(
         parquet_output["sequenceId"].to_numpy() == np.repeat(np.arange(10), 9)
@@ -381,7 +421,13 @@ def test_preprocessing_from_precomputed_stats(
         ].to_numpy()
     )
 
-    metadata_cols = ["sequenceId", "subsequenceId", "startItemPosition", "inputCol"]
+    metadata_cols = [
+        "sequenceId",
+        "subsequenceId",
+        "startItemPosition",
+        "leftPadLength",
+        "inputCol",
+    ]
 
     assert (
         np.mean(

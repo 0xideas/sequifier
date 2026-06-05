@@ -15,7 +15,12 @@ from beartype import beartype
 from loguru import logger
 
 from sequifier.config.preprocess_config import load_preprocessor_config
-from sequifier.helpers import PANDAS_TO_TORCH_TYPES, read_data, write_data
+from sequifier.helpers import (
+    PANDAS_TO_TORCH_TYPES,
+    read_data,
+    unpack_preprocessed_pt_tuple,
+    write_data,
+)
 
 
 @beartype
@@ -340,6 +345,7 @@ class Preprocessor:
             "sequenceId": pl.Int64,
             "subsequenceId": pl.Int64,
             "startItemPosition": pl.Int64,
+            "leftPadLength": pl.Int64,
             "inputCol": pl.String,
         }
 
@@ -835,7 +841,9 @@ class Preprocessor:
         for file_path in files:
             try:
                 if write_format == "pt":
-                    sequences_dict, _, _, _ = torch.load(file_path, weights_only=False)
+                    sequences_dict, _, _, _, _ = unpack_preprocessed_pt_tuple(
+                        torch.load(file_path, weights_only=False)
+                    )
                     if sequences_dict:
                         n_samples = sequences_dict[
                             list(sequences_dict.keys())[0]
@@ -1591,10 +1599,13 @@ def process_and_write_data_pt(
     aggs = [
         pl.concat_list(sequence_cols)
         .filter(pl.col("inputCol") == col_name)
-        .flatten()
+        .list.explode(keep_nulls=False, empty_as_null=False)  # flatten
         .alias(f"seq_{col_name}")
         for col_name in all_feature_cols
-    ] + [pl.col("startItemPosition").first().alias("startItemPosition")]
+    ] + [
+        pl.col("startItemPosition").first().alias("startItemPosition"),
+        pl.col("leftPadLength").first().alias("leftPadLength"),
+    ]
 
     aggregated_data = (
         data.group_by(["sequenceId", "subsequenceId"])
@@ -1613,6 +1624,9 @@ def process_and_write_data_pt(
     )
     start_item_positions_tensor = torch.tensor(
         aggregated_data.get_column("startItemPosition").to_numpy(), dtype=torch.int64
+    )
+    left_pad_lengths_tensor = torch.tensor(
+        aggregated_data.get_column("leftPadLength").to_numpy(), dtype=torch.int64
     )
     sequences_dict = {}
 
@@ -1634,6 +1648,7 @@ def process_and_write_data_pt(
         sequence_ids_tensor,
         subsequence_ids_tensor,
         start_item_positions_tensor,
+        left_pad_lengths_tensor,
     )
     torch.save(data_to_save, path)
 
@@ -1869,7 +1884,7 @@ def extract_sequences(
     for in_row in raw_sequences.iter_rows(named=True):
         in_seq_lists_only = {col: in_row[col] for col in columns}
 
-        subsequences = extract_subsequences(
+        subsequences, left_pad_lengths = extract_subsequences(
             in_seq_lists_only,
             seq_length,
             stride_for_split,
@@ -1883,11 +1898,12 @@ def extract_sequences(
                     in_row["sequenceId"],
                     subsequence_id,
                     subsequence_id * stride_for_split,
+                    left_pad_lengths[subsequence_id],
                     col,
                 ] + subseqs[subsequence_id]
-                if len(row) != (seq_length + 5):
+                if len(row) != (seq_length + 6):
                     raise RuntimeError(
-                        f"Row length mismatch. Expected {seq_length + 5}, got {len(row)}. Row: {row}"
+                        f"Row length mismatch. Expected {seq_length + 6}, got {len(row)}. Row: {row}"
                     )
                 rows.append(row)
 
@@ -1956,7 +1972,7 @@ def extract_subsequences(
     stride_for_split: int,
     columns: list[str],
     subsequence_start_mode: str,
-) -> dict[str, list[list[Union[float, int]]]]:
+) -> tuple[dict[str, list[list[Union[float, int]]]], list[int]]:
     """Extracts subsequences from a dictionary of sequence lists.
 
     This function takes a dictionary `in_seq` where keys are column
@@ -1978,10 +1994,8 @@ def extract_subsequences(
         A dictionary mapping column names to a *list of lists*, where
         each inner list is a subsequence.
     """
-    if not in_seq[columns[0]]:
-        return {col: [] for col in columns}
-
     in_seq_len = len(in_seq[columns[0]])
+    pad_len = 0
     if in_seq_len < (seq_length + 1):
         pad_len = (seq_length + 1) - in_seq_len
         in_seq = {col: ([0] * pad_len) + in_seq[col] for col in columns}
@@ -1996,10 +2010,13 @@ def extract_subsequences(
             f"Diff of {subsequence_starts = }, {subsequence_starts_diff = } larger than {stride_for_split = }"
         )
 
-    return {
+    result = {
         col: [list(in_seq[col][i : i + seq_length + 1]) for i in subsequence_starts]
         for col in columns
     }
+    left_pad_lengths = [pad_len] * len(subsequence_starts)
+
+    return result, left_pad_lengths
 
 
 @beartype

@@ -1,7 +1,14 @@
+from types import SimpleNamespace
+
 import polars as pl
 import torch
 
-from sequifier.helpers import construct_index_maps, numpy_to_pytorch
+from sequifier.helpers import (
+    apply_bert_masking,
+    build_valid_mask,
+    construct_index_maps,
+    numpy_to_pytorch,
+)
 
 # ==========================================
 # 1. Test Index Map Construction
@@ -132,3 +139,110 @@ def test_numpy_to_pytorch_dtypes():
         target_offset=0,
     )
     assert tensors_float["float_col"].dtype == torch.float32
+
+
+def test_build_valid_mask_from_left_pad_lengths():
+    left_pad_lengths = torch.tensor([0, 2, 5], dtype=torch.int64)
+
+    input_mask = build_valid_mask(
+        left_pad_lengths, full_length=6, offset=1, seq_length=5
+    )
+    target_mask = build_valid_mask(
+        left_pad_lengths, full_length=6, offset=0, seq_length=5
+    )
+
+    assert torch.equal(
+        input_mask,
+        torch.tensor(
+            [
+                [True, True, True, True, True],
+                [False, False, True, True, True],
+                [False, False, False, False, False],
+            ]
+        ),
+    )
+    assert torch.equal(
+        target_mask,
+        torch.tensor(
+            [
+                [True, True, True, True, True],
+                [False, True, True, True, True],
+                [False, False, False, False, True],
+            ]
+        ),
+    )
+
+
+def test_numpy_to_pytorch_includes_explicit_padding_masks():
+    data = pl.DataFrame(
+        {
+            "sequenceId": [1, 2],
+            "subsequenceId": [0, 0],
+            "startItemPosition": [0, 0],
+            "leftPadLength": [0, 2],
+            "inputCol": ["A", "A"],
+            "3": [0.0, 0.0],
+            "2": [0.0, 0.0],
+            "1": [1.0, 1.0],
+            "0": [2.0, 2.0],
+        }
+    )
+
+    tensors = numpy_to_pytorch(
+        data,
+        {"A": torch.float32},
+        ["A"],
+        seq_length=3,
+        data_offset=1,
+        target_offset=0,
+    )
+
+    assert torch.equal(
+        tensors["_attention_valid_mask"],
+        torch.tensor([[True, True, True], [False, False, True]]),
+    )
+    assert torch.equal(
+        tensors["_target_valid_mask"],
+        torch.tensor([[True, True, True], [False, True, True]]),
+    )
+
+
+class _OnesSpanMasking:
+    def sample(self, shape, device):
+        return torch.ones(shape, dtype=torch.long, device=device)
+
+
+def test_apply_bert_masking_uses_explicit_valid_mask_for_zero_values():
+    config = SimpleNamespace(
+        categorical_columns=[],
+        real_columns=["real_col"],
+        n_classes={},
+        seq_length=4,
+        training_spec=SimpleNamespace(
+            batch_size=1,
+            bert_spec=SimpleNamespace(
+                masking_probability=1.0,
+                span_masking=_OnesSpanMasking(),
+                replacement_distribution=SimpleNamespace(
+                    masked=1.0,
+                    random=0.0,
+                    identical=0.0,
+                ),
+            ),
+        ),
+    )
+    data_batch = {
+        "real_col": torch.tensor([[99.0, 0.0, 1.0, 2.0]]),
+        "_attention_valid_mask": torch.tensor([[False, True, True, True]]),
+    }
+    targets_batch = {
+        "real_col": torch.tensor([[99.0, 0.0, 1.0, 2.0]]),
+        "_target_valid_mask": torch.tensor([[False, True, True, True]]),
+    }
+
+    _, masked_targets = apply_bert_masking(data_batch, targets_batch, config)
+
+    assert torch.equal(
+        masked_targets["_bert_mask"],
+        torch.tensor([[False, True, True, True]]),
+    )

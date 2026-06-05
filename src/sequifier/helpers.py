@@ -3,6 +3,7 @@ import os
 import random
 import re
 import sys
+import warnings
 from datetime import datetime
 from typing import Any, Dict, Optional, Union
 
@@ -38,6 +39,12 @@ PANDAS_TO_TORCH_TYPES = {
     "UInt8": torch.int16,
     "uint8": torch.int16,
 }
+
+EXPLICIT_PADDING_MASK_FALLBACK_WARNING = (
+    "Explicit padding mask not found. Falling back to value-based padding "
+    "inference for real-valued data; leading 0.0 values may be treated as "
+    "padding. Re-run preprocessing to generate explicit masks."
+)
 
 
 # Check an environment variable to see if we are in a testing context
@@ -313,7 +320,97 @@ def numpy_to_pytorch(
         )
         unified_tensors[f"{col_name}_target"] = target_tensor
 
+    left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(data)
+    if left_pad_lengths is not None:
+        full_length = seq_length + 1
+        unified_tensors["_attention_valid_mask"] = build_valid_mask(
+            left_pad_lengths, full_length, data_offset, seq_length
+        )
+        unified_tensors["_target_valid_mask"] = build_valid_mask(
+            left_pad_lengths, full_length, target_offset, seq_length
+        )
+
     return unified_tensors
+
+
+@beartype
+def build_valid_mask(
+    left_pad_lengths: Tensor,
+    full_length: int,
+    offset: int,
+    seq_length: int,
+) -> Tensor:
+    """Builds a boolean validity mask from explicit left-padding metadata."""
+
+    full_positions = torch.arange(
+        full_length, device=left_pad_lengths.device, dtype=left_pad_lengths.dtype
+    )
+    full_valid = full_positions[None, :] >= left_pad_lengths[:, None]
+
+    return full_valid[:, -(seq_length + offset) : (-offset if offset > 0 else None)]
+
+
+@beartype
+def get_left_pad_lengths_from_preprocessed_data(data: pl.DataFrame) -> Optional[Tensor]:
+    """Extracts one leftPadLength value per long-format subsequence."""
+    if "leftPadLength" not in data.columns:
+        return None
+
+    assert {"sequenceId", "subsequenceId"}.issubset(data.columns)
+
+    lengths = (
+        data.group_by(["sequenceId", "subsequenceId"], maintain_order=True)
+        .agg(pl.col("leftPadLength").first().alias("leftPadLength"))
+        .sort(["sequenceId", "subsequenceId"])
+        .get_column("leftPadLength")
+    )
+
+    return torch.tensor(lengths.to_numpy(), dtype=torch.int64)
+
+
+@beartype
+def attach_padding_masks(
+    data_batch: dict[str, Tensor],
+    targets_batch: dict[str, Tensor],
+    left_pad_lengths: Tensor,
+    seq_length: int,
+    data_offset: int,
+    target_offset: int,
+) -> None:
+    """Attaches explicit attention and target masks to batch dictionaries."""
+    full_length = seq_length + 1
+    data_batch["_attention_valid_mask"] = build_valid_mask(
+        left_pad_lengths, full_length, data_offset, seq_length
+    )
+    targets_batch["_target_valid_mask"] = build_valid_mask(
+        left_pad_lengths, full_length, target_offset, seq_length
+    )
+
+
+@beartype
+def unpack_preprocessed_pt_tuple(
+    data: tuple[Any, ...],
+) -> tuple[Any, Any, Any, Any, Optional[Any]]:
+    """Unpacks both v1 four-item and v2 five-item preprocessed PT tuples."""
+    if len(data) == 4:
+        sequences_dict, sequence_ids, subsequence_ids, start_positions = data
+        return sequences_dict, sequence_ids, subsequence_ids, start_positions, None
+    if len(data) == 5:
+        (
+            sequences_dict,
+            sequence_ids,
+            subsequence_ids,
+            start_positions,
+            left_pad_lengths,
+        ) = data
+        return (
+            sequences_dict,
+            sequence_ids,
+            subsequence_ids,
+            start_positions,
+            left_pad_lengths,
+        )
+    raise ValueError(f"Expected a 4- or 5-item preprocessed PT tuple, got {len(data)}")
 
 
 @beartype
@@ -519,6 +616,16 @@ def get_last_training_batch_timedelta(
     return (t2 - t1).total_seconds()
 
 
+def infer_valid_mask_from_data(data_batch: Dict[str, torch.Tensor], config: Any):
+    if len(config.categorical_columns):
+        ref_col = config.categorical_columns[0]
+        return data_batch[ref_col] != 0
+    else:
+        warnings.warn(EXPLICIT_PADDING_MASK_FALLBACK_WARNING, stacklevel=2)
+        ref_col = list(data_batch.keys())[0]
+        return (data_batch[ref_col] != 0.0).long().cumsum(dim=1) > 0
+
+
 def apply_bert_masking(
     data_batch: Dict[str, torch.Tensor],
     targets_batch: Dict[str, torch.Tensor],
@@ -530,16 +637,14 @@ def apply_bert_masking(
     """
     data_batch = {k: tensor.clone() for k, tensor in data_batch.items()}
     targets_batch = {k: tensor.clone().detach() for k, tensor in targets_batch.items()}
-    batch_size, seq_len = config.training_spec.batch_size, config.seq_length
 
     # 1. Identify valid tokens (Renamed from padding_mask to valid_mask for clarity)
-    if len(config.categorical_columns):
-        ref_col = config.categorical_columns[0]
-        valid_mask = data_batch[ref_col] != 0
+    if "_attention_valid_mask" in data_batch:
+        valid_mask = data_batch["_attention_valid_mask"].bool()
     else:
-        ref_col = list(data_batch.keys())[0]
-        valid_mask = (data_batch[ref_col] != 0.0).long().cumsum(dim=1) > 0
+        valid_mask = infer_valid_mask_from_data(data_batch, config)
 
+    batch_size, seq_len = valid_mask.shape
     device = valid_mask.device
 
     # Calculate exact number of tokens to mask per sequence based on valid length
@@ -560,7 +665,8 @@ def apply_bert_masking(
     # 3. Span Masking Loop
     for i in range(batch_size):
         budget = budgets[i].item()
-        valid_len = valid_mask[i].sum().item()
+        valid_positions = valid_mask[i].nonzero(as_tuple=True)[0]
+        valid_len = len(valid_positions)
 
         if budget < 1 or valid_len < 1:
             continue
@@ -578,18 +684,17 @@ def apply_bert_masking(
             start_idx = sampled_starts[span_idx]
 
             end_idx = min(start_idx + span_len, valid_len)
+            span_positions = valid_positions[start_idx:end_idx]
+            if len(span_positions) == 0:
+                span_idx += 1
+                continue
 
-            span_view = bert_mask[i, start_idx:end_idx]
-            newly_masked = (~span_view).sum().item()
+            unmasked_positions = span_positions[~bert_mask[i, span_positions]]
+            allowance = budget - current_masked
+            if len(unmasked_positions) > allowance:
+                unmasked_positions = unmasked_positions[:allowance]
 
-            # Truncate the span if adding it exceeds our exact masking budget
-            if current_masked + newly_masked > budget:
-                allowance = budget - current_masked
-                unmasked_indices = (~span_view).nonzero(as_tuple=True)[0]
-                if len(unmasked_indices) > allowance:
-                    end_idx = start_idx + unmasked_indices[allowance - 1].item() + 1
-
-            bert_mask[i, start_idx:end_idx] = True
+            bert_mask[i, unmasked_positions] = True
             current_masked = bert_mask[i].sum().item()
             span_idx += 1
 

@@ -9,7 +9,11 @@ from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
-from sequifier.helpers import normalize_path
+from sequifier.helpers import (
+    attach_padding_masks,
+    normalize_path,
+    unpack_preprocessed_pt_tuple,
+)
 
 
 class SequifierDatasetFromFolderPt(IterableDataset):
@@ -49,22 +53,39 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         all_sequences: Dict[str, list[torch.Tensor]] = {
             col: [] for col in set(config.input_columns + config.target_columns)
         }
+        all_left_pad_lengths: list[torch.Tensor] = []
 
         # Load all data files into RAM
         for file_info in metadata["batch_files"]:
             file_path = os.path.join(self.data_dir, file_info["path"])
-            (sequences_batch, _, _, _) = torch.load(
-                file_path, map_location="cpu", weights_only=False
+            (
+                sequences_batch,
+                _,
+                _,
+                _,
+                left_pad_lengths_batch,
+            ) = unpack_preprocessed_pt_tuple(
+                torch.load(file_path, map_location="cpu", weights_only=False)
             )
             for col in all_sequences.keys():
                 if col in sequences_batch:
                     all_sequences[col].append(sequences_batch[col])
+            if left_pad_lengths_batch is not None:
+                all_left_pad_lengths.append(left_pad_lengths_batch)
 
         self.sequences: Dict[str, torch.Tensor] = {
             col: torch.cat(tensors) for col, tensors in all_sequences.items() if tensors
         }
+        self.left_pad_lengths = (
+            torch.cat(all_left_pad_lengths)
+            if all_left_pad_lengths
+            and len(all_left_pad_lengths) == len(metadata["batch_files"])
+            else None
+        )
         for tensor in self.sequences.values():
             tensor.share_memory_()
+        if self.left_pad_lengths is not None:
+            self.left_pad_lengths.share_memory_()
 
         self.target_samples = self._get_target_samples()
         self.total_batches = self._calculate_total_batches(self.target_samples)
@@ -171,5 +192,15 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                 for key, tensor in self.sequences.items()
                 if key in self.config.target_columns
             }
+
+            if self.left_pad_lengths is not None:
+                attach_padding_masks(
+                    data_batch,
+                    targets_batch,
+                    self.left_pad_lengths[batch_indices],
+                    train_seq_len,
+                    data_offset,
+                    target_offset,
+                )
 
             yield data_batch, targets_batch, None, None, None

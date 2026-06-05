@@ -11,7 +11,12 @@ from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
-from sequifier.helpers import PANDAS_TO_TORCH_TYPES, normalize_path
+from sequifier.helpers import (
+    PANDAS_TO_TORCH_TYPES,
+    attach_padding_masks,
+    get_left_pad_lengths_from_preprocessed_data,
+    normalize_path,
+)
 
 
 class SequifierDatasetFromFolderParquetLazy(IterableDataset):
@@ -247,6 +252,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             # This file overlaps with our worker's assigned boundary. Load it.
             file_path = os.path.join(self.data_dir, self.batch_files_info[f_id]["path"])
             df = pl.read_parquet(file_path)
+            left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(df)
 
             # Generate indices for the whole file using torch (matching pt_lazy)
             indices = torch.arange(file_samples)
@@ -308,6 +314,16 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
                     raise RuntimeError(
                         f"Missing required column {col_name} in Parquet partition"
                     )
+
+            if left_pad_lengths is not None:
+                attach_padding_masks(
+                    new_seq,
+                    new_tgt,
+                    left_pad_lengths[worker_indices],
+                    train_seq_len,
+                    self.config.training_spec.data_offset,
+                    self.config.training_spec.target_offset,
+                )
 
             del df
 

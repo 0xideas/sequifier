@@ -10,7 +10,12 @@ from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
-from sequifier.helpers import PANDAS_TO_TORCH_TYPES, normalize_path
+from sequifier.helpers import (
+    PANDAS_TO_TORCH_TYPES,
+    attach_padding_masks,
+    get_left_pad_lengths_from_preprocessed_data,
+    normalize_path,
+)
 
 
 class SequifierDatasetFromFolderParquet(IterableDataset):
@@ -76,11 +81,16 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         all_targets: Dict[str, list[torch.Tensor]] = {
             col: [] for col in config.target_columns
         }
+        all_left_pad_lengths: list[torch.Tensor] = []
 
         # Step 1: Eager I/O reduction pass over all chunk allocations
         for file_info in metadata["batch_files"]:
             file_path = os.path.join(self.data_dir, file_info["path"])
             df = pl.read_parquet(file_path)
+
+            left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(df)
+            if left_pad_lengths is not None:
+                all_left_pad_lengths.append(left_pad_lengths)
 
             for col in all_sequences.keys():
                 feature_df = df.filter(pl.col("inputCol") == col)
@@ -112,12 +122,20 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
             for col, tensors in all_targets.items()
             if tensors
         }
+        self.left_pad_lengths = (
+            torch.cat(all_left_pad_lengths)
+            if all_left_pad_lengths
+            and len(all_left_pad_lengths) == len(metadata["batch_files"])
+            else None
+        )
 
         # Step 3: Prevent serialization duplications across worker forks via shared memory flags
         for tensor in self.sequences.values():
             tensor.share_memory_()
         for tensor in self.targets.values():
             tensor.share_memory_()
+        if self.left_pad_lengths is not None:
+            self.left_pad_lengths.share_memory_()
 
         self.target_samples = self._get_target_samples()
         self.total_batches = self._calculate_total_batches(self.target_samples)
@@ -209,5 +227,15 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
                 key: tensor[batch_indices, -train_seq_len:]
                 for key, tensor in self.targets.items()
             }
+
+            if self.left_pad_lengths is not None:
+                attach_padding_masks(
+                    data_batch,
+                    targets_batch,
+                    self.left_pad_lengths[batch_indices],
+                    train_seq_len,
+                    self.config.training_spec.data_offset,
+                    self.config.training_spec.target_offset,
+                )
 
             yield data_batch, targets_batch, None, None, None

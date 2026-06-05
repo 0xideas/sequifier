@@ -20,6 +20,7 @@ from sequifier.helpers import (
     normalize_path,
     numpy_to_pytorch,
     subset_to_input_columns,
+    unpack_preprocessed_pt_tuple,
     write_data,
 )
 from sequifier.train import (
@@ -373,7 +374,8 @@ def infer_embedding(
                 sequence_ids_tensor,
                 subsequence_ids_tensor,
                 start_positions_tensor,
-            ) = data
+                _,
+            ) = unpack_preprocessed_pt_tuple(data)
             embeddings = get_embeddings_pt(config, inferer, sequences_dict)
 
             sequence_ids_for_preds = sequence_ids_tensor.numpy()
@@ -580,7 +582,13 @@ def infer_generative(
                     )
                 )
         elif config.read_format == "pt":
-            sequences_dict, sequence_ids_tensor, _, start_positions_tensor = data
+            (
+                sequences_dict,
+                sequence_ids_tensor,
+                _,
+                start_positions_tensor,
+                _,
+            ) = unpack_preprocessed_pt_tuple(data)
             total_steps = (
                 1
                 if config.autoregression_total_steps is None

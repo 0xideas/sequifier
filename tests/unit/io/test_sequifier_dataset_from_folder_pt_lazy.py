@@ -108,6 +108,55 @@ def test_iteration_yields_correct_batches(mock_config, dataset_path, mock_torch_
     assert tgt_dict["tgt1"].shape == (5, 5)
 
 
+def test_iteration_attaches_explicit_padding_masks(mock_config, dataset_path):
+    with patch("torch.load") as mock_load:
+
+        def side_effect(path, map_location, weights_only):
+            dummy_seq = {
+                "col1": torch.ones((10, 6)),
+                "tgt1": torch.ones((10, 6)),
+            }
+            left_pad_lengths = torch.tensor([0, 1, 2, 3, 4, 5, 0, 0, 0, 0])
+            return (
+                dummy_seq,
+                torch.arange(10),
+                torch.zeros(10, dtype=torch.int64),
+                torch.zeros(10, dtype=torch.int64),
+                left_pad_lengths,
+            )
+
+        mock_load.side_effect = side_effect
+        dataset = SequifierDatasetFromFolderPtLazy(
+            dataset_path, mock_config, shuffle=False
+        )
+        seq_dict, tgt_dict, _, _, _ = next(iter(dataset))
+
+    assert torch.equal(
+        seq_dict["_attention_valid_mask"],
+        torch.tensor(
+            [
+                [True, True, True, True, True],
+                [False, True, True, True, True],
+                [False, False, True, True, True],
+                [False, False, False, True, True],
+                [False, False, False, False, True],
+            ]
+        ),
+    )
+    assert torch.equal(
+        tgt_dict["_target_valid_mask"],
+        torch.tensor(
+            [
+                [True, True, True, True, True],
+                [True, True, True, True, True],
+                [False, True, True, True, True],
+                [False, False, True, True, True],
+                [False, False, False, True, True],
+            ]
+        ),
+    )
+
+
 @patch("torch.distributed.is_initialized", return_value=True)
 @patch("torch.distributed.get_world_size", return_value=2)
 @patch("torch.distributed.get_rank", return_value=0)

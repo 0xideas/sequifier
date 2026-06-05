@@ -52,9 +52,13 @@ from torch.utils.data import DataLoader  # noqa: E402
 
 torch._dynamo.config.suppress_errors = True
 
+DATA_BATCH_METADATA_KEYS = {"_attention_valid_mask"}
+TARGET_BATCH_METADATA_KEYS = {"_target_valid_mask", "_bert_mask"}
+
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
+    EXPLICIT_PADDING_MASK_FALLBACK_WARNING,
     apply_bert_masking,
     conditional_beartype,
     configure_determinism,
@@ -991,6 +995,7 @@ class TransformerModel(nn.Module):
 
         # Fallback for real-only data.
         # This matches the existing heuristic used in BERT masking.
+        warnings.warn(EXPLICIT_PADDING_MASK_FALLBACK_WARNING, stacklevel=2)
         ref_col = next(col for col in self.input_columns if col in src)
         return (src[ref_col] != 0.0).long().cumsum(dim=1) > 0
 
@@ -1108,6 +1113,12 @@ class TransformerModel(nn.Module):
             src2 = self.joint_embedding_layer(src2)
 
         valid_mask = self._infer_attention_valid_mask(src).to(device=src2.device)
+        if valid_mask.shape != src2.shape[:2]:
+            raise ValueError(
+                f"Invalid attention mask shape: got {tuple(valid_mask.shape)}, "
+                f"expected {tuple(src2.shape[:2])} = (batch_size, seq_length). "
+                "Check _attention_valid_mask / leftPadLength construction."
+            )
         src2 = self._zero_padding_positions(src2, valid_mask)
 
         mask = self._build_attention_mask(valid_mask, dtype=src2.dtype)
@@ -1505,12 +1516,12 @@ class TransformerModel(nn.Module):
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
-                    if k in self.input_columns
+                    if k in self.input_columns or k in DATA_BATCH_METADATA_KEYS
                 }
                 targets = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in targets.items()
-                    if k in self.target_column_types
+                    if k in self.target_column_types or k in TARGET_BATCH_METADATA_KEYS
                 }
                 if self.hparams.training_spec.training_objective == "bert":
                     data, targets = apply_bert_masking(data, targets, self.hparams)
@@ -1681,27 +1692,37 @@ class TransformerModel(nn.Module):
             - A dictionary of individual (unweighted) loss Tensors for each
               target column.
         """
-        mask_col = next(
-            (
-                col
-                for col in targets.keys()
-                if self.target_column_types[col] == "categorical"
-            ),
-            list(targets.keys())[0],
-        )
+        target_names = [
+            k for k in targets.keys() if k not in TARGET_BATCH_METADATA_KEYS
+        ]
+        if not target_names:
+            raise RuntimeError("Loss calculation failed; no target columns were found.")
 
-        if self.target_column_types[mask_col] == "real":
-            seq_mask_2d = (targets[mask_col] != 0.0).long().cumsum(dim=1) > 0
+        if "_target_valid_mask" in targets:
+            seq_mask_2d = targets["_target_valid_mask"].bool()
         else:
-            seq_mask_2d = targets[mask_col] != 0
+            mask_col = next(
+                (
+                    col
+                    for col in target_names
+                    if self.target_column_types[col] == "categorical"
+                ),
+                target_names[0],
+            )
+
+            if self.target_column_types[mask_col] == "real":
+                warnings.warn(EXPLICIT_PADDING_MASK_FALLBACK_WARNING, stacklevel=2)
+                seq_mask_2d = (targets[mask_col] != 0.0).long().cumsum(dim=1) > 0
+            else:
+                seq_mask_2d = targets[mask_col] != 0
 
         if "_bert_mask" in targets:
-            seq_mask_2d = seq_mask_2d & targets["_bert_mask"]
+            seq_mask_2d = seq_mask_2d & targets["_bert_mask"].bool()
 
         mask = seq_mask_2d.T.contiguous().reshape(-1)
 
         losses = {}
-        for target_column in [k for k in targets.keys() if k != "_bert_mask"]:
+        for target_column in target_names:
             target_column_type = self.target_column_types[target_column]
             if target_column_type == "categorical":
                 output[target_column] = (
@@ -1730,7 +1751,7 @@ class TransformerModel(nn.Module):
             )
 
         loss = None
-        for target_column in targets.keys():
+        for target_column in target_names:
             losses[target_column] = losses[target_column] * (
                 self.loss_weights[target_column]
                 if self.loss_weights is not None
@@ -1833,12 +1854,12 @@ class TransformerModel(nn.Module):
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
-                    if k in self.input_columns
+                    if k in self.input_columns or k in DATA_BATCH_METADATA_KEYS
                 }
                 targets = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in targets.items()
-                    if k in self.target_column_types
+                    if k in self.target_column_types or k in TARGET_BATCH_METADATA_KEYS
                 }
                 if self.hparams.training_spec.training_objective == "bert":
                     data, targets = apply_bert_masking(data, targets, self.hparams)
@@ -1924,12 +1945,12 @@ class TransformerModel(nn.Module):
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
-                    if k in self.input_columns
+                    if k in self.input_columns or k in DATA_BATCH_METADATA_KEYS
                 }
                 targets = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in targets.items()
-                    if k in self.target_column_types
+                    if k in self.target_column_types or k in TARGET_BATCH_METADATA_KEYS
                 }
 
                 pseudo_output = {}
@@ -1940,6 +1961,10 @@ class TransformerModel(nn.Module):
                             col, data[col].transpose(0, 1)
                         )
                         targets_for_baseline[col] = targets[col]
+                if "_target_valid_mask" in targets:
+                    targets_for_baseline["_target_valid_mask"] = targets[
+                        "_target_valid_mask"
+                    ]
 
                 if len(pseudo_output) > 0:
                     loss, losses = self._calculate_loss(

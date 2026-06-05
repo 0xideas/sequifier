@@ -10,7 +10,11 @@ from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
-from sequifier.helpers import normalize_path
+from sequifier.helpers import (
+    attach_padding_masks,
+    normalize_path,
+    unpack_preprocessed_pt_tuple,
+)
 
 
 class SequifierDatasetFromFolderPtLazy(IterableDataset):
@@ -223,8 +227,14 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
 
             # This file overlaps with our worker's assigned boundary. Load it.
             file_path = os.path.join(self.data_dir, self.batch_files_info[f_id]["path"])
-            (sequences_batch, _, _, _) = torch.load(
-                file_path, map_location="cpu", weights_only=False
+            (
+                sequences_batch,
+                _,
+                _,
+                _,
+                left_pad_lengths_batch,
+            ) = unpack_preprocessed_pt_tuple(
+                torch.load(file_path, map_location="cpu", weights_only=False)
             )
 
             # Generate indices for the whole file
@@ -269,8 +279,18 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 if k in self.config.target_columns
             }
 
+            if left_pad_lengths_batch is not None:
+                attach_padding_masks(
+                    new_seq,
+                    new_tgt,
+                    left_pad_lengths_batch[worker_indices],
+                    train_seq_len,
+                    data_offset,
+                    target_offset,
+                )
+
             # Free the large file immediately to keep RAM down
-            del sequences_batch
+            del sequences_batch, left_pad_lengths_batch
 
             # Append the new slice to the cross-file buffer
             if buffer_len == 0:
