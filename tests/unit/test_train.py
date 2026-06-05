@@ -222,7 +222,7 @@ def test_calculate_loss_uses_explicit_target_mask_for_real_zero_targets():
         "real_col": torch.tensor([[0.0, 0.0, 2.0]]),
     }
     metadata = {
-        "attention_valid_mask": torch.tensor([[True, True, True]]),
+        "target_valid_mask": torch.tensor([[True, True, True]]),
     }
 
     total_loss, component_losses = TransformerModel._calculate_loss(
