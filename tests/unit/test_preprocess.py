@@ -4,7 +4,9 @@ import numpy as np
 import polars as pl
 import pytest
 import torch
+from pydantic import ValidationError
 
+from sequifier.config.preprocess_config import PreprocessorModel
 from sequifier.preprocess import (
     RESERVED_MASK_COLUMN,
     Preprocessor,
@@ -149,7 +151,7 @@ def test_reserved_mask_column_is_not_a_data_column():
         }
     )
 
-    assert _get_data_columns(data) == ["itemId"]
+    assert _get_data_columns(data, RESERVED_MASK_COLUMN) == ["itemId"]
 
 
 def test_apply_reserved_mask_column_replaces_values_and_drops_column():
@@ -165,6 +167,7 @@ def test_apply_reserved_mask_column_replaces_values_and_drops_column():
         data,
         ["cat_col", "num_col"],
         {"cat_col": "Int64", "num_col": "Float64"},
+        RESERVED_MASK_COLUMN,
     )
 
     assert RESERVED_MASK_COLUMN not in masked.columns
@@ -175,6 +178,22 @@ def test_apply_reserved_mask_column_replaces_values_and_drops_column():
 def test_preprocessor_applies_reserved_mask_column_end_to_end(tmp_path):
     project_root = tmp_path / "project"
     project_root.mkdir()
+    metadata_dir = project_root / "configs" / "metadata_configs"
+    metadata_dir.mkdir(parents=True)
+    metadata_config_path = "configs/metadata_configs/masked-input-base.json"
+    (project_root / metadata_config_path).write_text(
+        json.dumps(
+            {
+                "n_classes": {"itemId": 6},
+                "id_maps": {"itemId": {"a": 3, "b": 4, "c": 5}},
+                "split_paths": [],
+                "column_types": {"itemId": "Int64", "itemValue": "Float64"},
+                "selected_columns_statistics": {
+                    "itemValue": {"mean": 60.0, "std": 10.0}
+                },
+            }
+        )
+    )
     data_path = tmp_path / "masked-input.csv"
     pl.DataFrame(
         {
@@ -204,7 +223,8 @@ def test_preprocessor_applies_reserved_mask_column_end_to_end(tmp_path):
         process_by_file=True,
         subsequence_start_mode="distribute",
         use_precomputed_maps=None,
-        metadata_config_path=None,
+        metadata_config_path=metadata_config_path,
+        reserved_mask_column=RESERVED_MASK_COLUMN,
     )
 
     output = pl.read_parquet(project_root / "data" / "masked-input-split0.parquet")
@@ -218,7 +238,7 @@ def test_preprocessor_applies_reserved_mask_column_end_to_end(tmp_path):
     )
 
     assert RESERVED_MASK_COLUMN not in output.columns
-    assert item_sequence == (3.0, 2.0, 4.0)
+    assert item_sequence == (3.0, 2.0, 5.0)
     assert value_sequence[1] == 0.0
     assert value_sequence[0] != 0.0
     assert value_sequence[2] != 0.0
@@ -227,6 +247,95 @@ def test_preprocessor_applies_reserved_mask_column_end_to_end(tmp_path):
     assert RESERVED_MASK_COLUMN not in metadata["column_types"]
     assert RESERVED_MASK_COLUMN not in metadata["id_maps"]
     assert RESERVED_MASK_COLUMN not in metadata["selected_columns_statistics"]
+
+
+def test_preprocessor_requires_metadata_config_for_reserved_mask_column(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    data_path = tmp_path / "masked-input.csv"
+    pl.DataFrame(
+        {
+            "sequenceId": [0],
+            "itemPosition": [0],
+            "itemId": ["a"],
+            RESERVED_MASK_COLUMN: [0],
+        }
+    ).write_csv(data_path)
+
+    with pytest.raises(
+        ValueError,
+        match="metadata_config_path must be set when reserved_mask_column is set",
+    ):
+        Preprocessor(
+            project_root=str(project_root),
+            continue_preprocessing=False,
+            data_path=str(data_path),
+            read_format="csv",
+            write_format="parquet",
+            merge_output=True,
+            selected_columns=["itemId"],
+            split_ratios=[1.0],
+            seq_length=1,
+            stride_by_split=[1],
+            max_rows=None,
+            seed=1010,
+            n_cores=1,
+            batches_per_file=1024,
+            process_by_file=True,
+            subsequence_start_mode="distribute",
+            use_precomputed_maps=None,
+            metadata_config_path=None,
+            reserved_mask_column=RESERVED_MASK_COLUMN,
+        )
+
+
+def test_preprocessor_config_defaults_reserved_mask_column_to_none(tmp_path):
+    data_path = tmp_path / "input.csv"
+    pl.DataFrame(
+        {
+            "sequenceId": [0],
+            "itemPosition": [0],
+            "itemId": ["a"],
+            RESERVED_MASK_COLUMN: [0],
+        }
+    ).write_csv(data_path)
+
+    config = PreprocessorModel(
+        project_root=str(tmp_path),
+        data_path=str(data_path),
+        split_ratios=[1.0],
+        seq_length=1,
+        seed=1010,
+    )
+
+    assert config.reserved_mask_column is None
+
+
+def test_preprocessor_config_requires_metadata_config_for_reserved_mask_column(
+    tmp_path,
+):
+    data_path = tmp_path / "input.csv"
+    pl.DataFrame(
+        {
+            "sequenceId": [0],
+            "itemPosition": [0],
+            "itemId": ["a"],
+            RESERVED_MASK_COLUMN: [0],
+        }
+    ).write_csv(data_path)
+
+    with pytest.raises(
+        ValidationError,
+        match="metadata_config_path must be set when reserved_mask_column is set",
+    ):
+        PreprocessorModel(
+            project_root=str(tmp_path),
+            data_path=str(data_path),
+            split_ratios=[1.0],
+            seq_length=1,
+            seed=1010,
+            reserved_mask_column=RESERVED_MASK_COLUMN,
+        )
 
 
 @pytest.mark.parametrize("mode", ["distribute", "exact"])

@@ -12,3 +12,4 @@ stride_by_split:
 - 1
 max_rows: null
 metadata_config_path: configs/metadata_configs/test-data-categorical-multitarget-5.json
+reserved_mask_column: "[mask]"

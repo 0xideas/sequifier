@@ -5,7 +5,13 @@ from typing import Optional
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from sequifier.helpers import try_catch_excess_keys
 
@@ -56,6 +62,8 @@ class PreprocessorModel(BaseModel):
         process_by_file: A flag to indicate if processing should be done file by file.
         continue_preprocessing: Continue preprocessing job that was interrupted while writing to temp folder.
         subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
+        reserved_mask_column: Optional input column used to mask all model input columns.
+                              Requires metadata_config_path when set.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -79,6 +87,7 @@ class PreprocessorModel(BaseModel):
     subsequence_start_mode: str = "distribute"
     use_precomputed_maps: Optional[list[str]] = None
     metadata_config_path: Optional[str] = None
+    reserved_mask_column: Optional[str] = None
 
     @field_validator("data_path")
     @classmethod
@@ -175,6 +184,14 @@ class PreprocessorModel(BaseModel):
                 "subsequence_start_mode must be one of 'distribute', 'exact'"
             )
         return v
+
+    @model_validator(mode="after")
+    def validate_reserved_mask_column_requires_metadata(self) -> "PreprocessorModel":
+        if self.reserved_mask_column is not None and self.metadata_config_path is None:
+            raise ValueError(
+                "metadata_config_path must be set when reserved_mask_column is set"
+            )
+        return self
 
     def __init__(self, **kwargs):
         default_stride_for_split = [kwargs["seq_length"]] * len(kwargs["split_ratios"])
