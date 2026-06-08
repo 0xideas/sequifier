@@ -1,10 +1,16 @@
+import json
+
 import numpy as np
 import polars as pl
 import pytest
 import torch
 
 from sequifier.preprocess import (
+    RESERVED_MASK_COLUMN,
+    Preprocessor,
+    _apply_reserved_mask_column,
     _get_column_statistics,
+    _get_data_columns,
     create_id_map,
     extract_sequences,
     extract_subsequences,
@@ -131,6 +137,96 @@ def test_process_and_write_data_pt_persists_left_pad_lengths(tmp_path):
         sequences["col1"],
         torch.tensor([[1.0, 2.0, 3.0, 4.0], [0.0, 0.0, 1.0, 2.0]]),
     )
+
+
+def test_reserved_mask_column_is_not_a_data_column():
+    data = pl.DataFrame(
+        {
+            "sequenceId": [1],
+            "itemPosition": [0],
+            "itemId": [101],
+            RESERVED_MASK_COLUMN: [1],
+        }
+    )
+
+    assert _get_data_columns(data) == ["itemId"]
+
+
+def test_apply_reserved_mask_column_replaces_values_and_drops_column():
+    data = pl.DataFrame(
+        {
+            "cat_col": [3, 4, 5, 6],
+            "num_col": [-1.0, 2.5, 3.5, 4.5],
+            RESERVED_MASK_COLUMN: ["0", "1", "0", "1"],
+        }
+    )
+
+    masked = _apply_reserved_mask_column(
+        data,
+        ["cat_col", "num_col"],
+        {"cat_col": "Int64", "num_col": "Float64"},
+    )
+
+    assert RESERVED_MASK_COLUMN not in masked.columns
+    assert masked["cat_col"].to_list() == [3, 2, 5, 2]
+    assert masked["num_col"].to_list() == [-1.0, 0.0, 3.5, 0.0]
+
+
+def test_preprocessor_applies_reserved_mask_column_end_to_end(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    data_path = tmp_path / "masked-input.csv"
+    pl.DataFrame(
+        {
+            "sequenceId": [0, 0, 0],
+            "itemPosition": [0, 1, 2],
+            "itemId": ["a", "b", "c"],
+            "itemValue": [10.0, 100.0, 70.0],
+            RESERVED_MASK_COLUMN: [0, 1, 0],
+        }
+    ).write_csv(data_path)
+
+    Preprocessor(
+        project_root=str(project_root),
+        continue_preprocessing=False,
+        data_path=str(data_path),
+        read_format="csv",
+        write_format="parquet",
+        merge_output=True,
+        selected_columns=["itemId", "itemValue"],
+        split_ratios=[1.0],
+        seq_length=2,
+        stride_by_split=[1],
+        max_rows=None,
+        seed=1010,
+        n_cores=1,
+        batches_per_file=1024,
+        process_by_file=True,
+        subsequence_start_mode="distribute",
+        use_precomputed_maps=None,
+        metadata_config_path=None,
+    )
+
+    output = pl.read_parquet(project_root / "data" / "masked-input-split0.parquet")
+    metadata_path = project_root / "configs" / "metadata_configs" / "masked-input.json"
+
+    item_sequence = (
+        output.filter(pl.col("inputCol") == "itemId").select(["2", "1", "0"]).row(0)
+    )
+    value_sequence = (
+        output.filter(pl.col("inputCol") == "itemValue").select(["2", "1", "0"]).row(0)
+    )
+
+    assert RESERVED_MASK_COLUMN not in output.columns
+    assert item_sequence == (3.0, 2.0, 4.0)
+    assert value_sequence[1] == 0.0
+    assert value_sequence[0] != 0.0
+    assert value_sequence[2] != 0.0
+
+    metadata = json.loads(metadata_path.read_text())
+    assert RESERVED_MASK_COLUMN not in metadata["column_types"]
+    assert RESERVED_MASK_COLUMN not in metadata["id_maps"]
+    assert RESERVED_MASK_COLUMN not in metadata["selected_columns_statistics"]
 
 
 @pytest.mark.parametrize("mode", ["distribute", "exact"])

@@ -23,6 +23,12 @@ from sequifier.helpers import (
     write_data,
 )
 
+RESERVED_MASK_COLUMN = "[mask]"
+INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
+RESERVED_INPUT_COLUMNS = (*INPUT_METADATA_COLUMNS, RESERVED_MASK_COLUMN)
+CATEGORICAL_MASK_ID = 2
+REAL_MASK_VALUE = 0.0
+
 
 @beartype
 def preprocess(args: Any, args_config: dict[str, Any]) -> None:
@@ -131,6 +137,10 @@ class Preprocessor:
 
         if selected_columns is not None:
             selected_columns = ["sequenceId", "itemPosition"] + selected_columns
+            if RESERVED_MASK_COLUMN in selected_columns:
+                raise ValueError(
+                    f"'{RESERVED_MASK_COLUMN}' is not allowed to be in 'selected_columns'"
+                )
 
         self._setup_split_paths(write_format, len(split_ratios))
 
@@ -161,9 +171,7 @@ class Preprocessor:
             data = _load_and_preprocess_data(
                 data_path, read_format, selected_columns, max_rows
             )
-            data_columns = [
-                col for col in data.columns if col not in ["sequenceId", "itemPosition"]
-            ]
+            data_columns = _get_data_columns(data)
             if self.metadata_config_path:
                 metadata_path = os.path.join(
                     self.project_root, self.metadata_config_path
@@ -206,6 +214,7 @@ class Preprocessor:
                 n_classes=n_classes,
                 col_types=col_types,
             )
+            data = _apply_reserved_mask_column(data, data_columns, col_types)
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
@@ -269,9 +278,7 @@ class Preprocessor:
 
                 # Reconstruct data_columns from the provided col_types
                 data_columns = [
-                    col
-                    for col in col_types.keys()
-                    if col not in ["sequenceId", "itemPosition"]
+                    col for col in col_types.keys() if col not in RESERVED_INPUT_COLUMNS
                 ]
 
                 # We still need to find the files to process
@@ -451,11 +458,7 @@ class Preprocessor:
                     )
 
                     # Get columns for the current file (excluding metadata cols)
-                    current_file_cols = [
-                        col
-                        for col in data.columns
-                        if col not in ["sequenceId", "itemPosition"]
-                    ]
+                    current_file_cols = _get_data_columns(data)
 
                     if col_types is None:
                         data_columns = current_file_cols
@@ -881,6 +884,88 @@ class Preprocessor:
 
 
 @beartype
+def _get_data_columns(data: pl.DataFrame) -> list[str]:
+    return [col for col in data.columns if col not in RESERVED_INPUT_COLUMNS]
+
+
+@beartype
+def _deduplicate_columns(columns: list[str]) -> list[str]:
+    return list(dict.fromkeys(columns))
+
+
+@beartype
+def _selected_columns_with_optional_mask(
+    data_path: str, read_format: str, selected_columns: Optional[list[str]]
+) -> Optional[list[str]]:
+    if selected_columns is None or read_format != "parquet":
+        return selected_columns
+
+    schema_columns = pq.read_schema(data_path).names
+    if RESERVED_MASK_COLUMN in schema_columns:
+        return selected_columns + [RESERVED_MASK_COLUMN]
+    return selected_columns
+
+
+@beartype
+def _mask_column_expr(mask_dtype: Any) -> pl.Expr:
+    mask_col = pl.col(RESERVED_MASK_COLUMN)
+
+    if isinstance(mask_dtype, pl.Boolean):
+        return mask_col
+
+    if isinstance(
+        mask_dtype,
+        (
+            pl.Int8,
+            pl.Int16,
+            pl.Int32,
+            pl.Int64,
+            pl.UInt8,
+            pl.UInt16,
+            pl.UInt32,
+            pl.UInt64,
+            pl.Float32,
+            pl.Float64,
+        ),
+    ):
+        return mask_col == 1
+
+    if isinstance(mask_dtype, (pl.String, pl.Utf8)):
+        return mask_col.str.to_lowercase().is_in(["1", "true"])
+
+    raise ValueError(
+        f"Column {RESERVED_MASK_COLUMN} must be boolean, numeric, or string, got {mask_dtype}"
+    )
+
+
+@beartype
+def _apply_reserved_mask_column(
+    data: pl.DataFrame, data_columns: list[str], col_types: dict[str, str]
+) -> pl.DataFrame:
+    if RESERVED_MASK_COLUMN not in data.columns:
+        return data
+
+    mask_expr = _mask_column_expr(data.schema[RESERVED_MASK_COLUMN])
+    updates = []
+    for col in data_columns:
+        mask_value = (
+            CATEGORICAL_MASK_ID if col_types[col] == "Int64" else REAL_MASK_VALUE
+        )
+        updates.append(
+            pl.when(mask_expr)
+            .then(pl.lit(mask_value))
+            .otherwise(pl.col(col))
+            .cast(data.schema[col])
+            .alias(col)
+        )
+
+    if updates:
+        data = data.with_columns(updates)
+
+    return data.drop(RESERVED_MASK_COLUMN)
+
+
+@beartype
 def _apply_column_statistics(
     data: pl.DataFrame,
     data_columns: list[str],
@@ -1042,6 +1127,10 @@ def _get_column_statistics(
         ValueError: If a column has an unsupported data type (neither
             string, integer, nor float).
     """
+    if RESERVED_MASK_COLUMN in data.columns:
+        mask_expr = _mask_column_expr(data.schema[RESERVED_MASK_COLUMN])
+        data = data.filter(~mask_expr)
+
     for data_col in data_columns:
         dtype = data.schema[data_col]
         if isinstance(
@@ -1117,16 +1206,22 @@ def _load_and_preprocess_data(
         prepared data.
     """
     logger.info(f"Reading data from '{data_path}'...")
-    data = read_data(data_path, read_format, columns=selected_columns)
+    columns_to_read = _selected_columns_with_optional_mask(
+        data_path, read_format, selected_columns
+    )
+    data = read_data(data_path, read_format, columns=columns_to_read)
 
     if data.null_count().sum().sum_horizontal().item() != 0:
         raise ValueError(f"NaN or null values not accepted: {data.null_count()}")
 
     if selected_columns:
         selected_columns_filtered = [
-            col for col in selected_columns if col not in ["sequenceId", "itemPosition"]
+            col for col in selected_columns if col not in INPUT_METADATA_COLUMNS
         ]
-        data = data.select(["sequenceId", "itemPosition"] + selected_columns_filtered)
+        columns_to_select = list(INPUT_METADATA_COLUMNS) + selected_columns_filtered
+        if RESERVED_MASK_COLUMN in data.columns:
+            columns_to_select.append(RESERVED_MASK_COLUMN)
+        data = data.select(_deduplicate_columns(columns_to_select))
 
     if max_rows:
         data = data.slice(0, int(max_rows))
@@ -1287,6 +1382,7 @@ def _process_batches_multiple_files_inner(
                 n_classes,
                 col_types,
             )
+            data = _apply_reserved_mask_column(data, data_columns, col_types)
 
             data_name_root_inner = f"{data_name_root}-{process_id}-{file_index_str}"
 
@@ -1549,8 +1645,17 @@ def combine_maps(
     Returns:
         A new, combined, and re-indexed ID map.
     """
-    combined_keys = sorted(list(set(list(map1.keys())).union(list(set(map2.keys())))))
+    keys1 = {k for k in map1.keys() if k not in ["[unknown]", "[other]", "[mask]"]}
+    keys2 = {k for k in map2.keys() if k not in ["[unknown]", "[other]", "[mask]"]}
+
+    combined_keys = sorted(list(keys1.union(keys2)))
     id_map = {id_: i + 3 for i, id_ in enumerate(combined_keys)}
+
+    # Re-apply special mapping rules if these are string keys
+    if combined_keys and isinstance(combined_keys[0], str):
+        id_map["[unknown]"] = 0
+        id_map["[other]"] = 1
+
     return id_map
 
 
