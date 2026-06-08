@@ -10,7 +10,7 @@ from sequifier.config.preprocess_config import PreprocessorModel
 from sequifier.preprocess import (
     RESERVED_MASK_COLUMN,
     Preprocessor,
-    _apply_reserved_mask_column,
+    _apply_mask_column,
     _get_column_statistics,
     _get_data_columns,
     create_id_map,
@@ -141,7 +141,7 @@ def test_process_and_write_data_pt_persists_left_pad_lengths(tmp_path):
     )
 
 
-def test_reserved_mask_column_is_not_a_data_column():
+def test_mask_column_is_not_a_data_column():
     data = pl.DataFrame(
         {
             "sequenceId": [1],
@@ -154,7 +154,7 @@ def test_reserved_mask_column_is_not_a_data_column():
     assert _get_data_columns(data, RESERVED_MASK_COLUMN) == ["itemId"]
 
 
-def test_apply_reserved_mask_column_replaces_values_and_drops_column():
+def test_apply_mask_column_replaces_values_and_drops_column():
     data = pl.DataFrame(
         {
             "cat_col": [3, 4, 5, 6],
@@ -163,7 +163,7 @@ def test_apply_reserved_mask_column_replaces_values_and_drops_column():
         }
     )
 
-    masked = _apply_reserved_mask_column(
+    masked = _apply_mask_column(
         data,
         ["cat_col", "num_col"],
         {"cat_col": "Int64", "num_col": "Float64"},
@@ -175,7 +175,7 @@ def test_apply_reserved_mask_column_replaces_values_and_drops_column():
     assert masked["num_col"].to_list() == [-1.0, 0.0, 3.5, 0.0]
 
 
-def test_preprocessor_applies_reserved_mask_column_end_to_end(tmp_path):
+def test_preprocessor_applies_mask_column_end_to_end(tmp_path):
     project_root = tmp_path / "project"
     project_root.mkdir()
     metadata_dir = project_root / "configs" / "metadata_configs"
@@ -224,7 +224,7 @@ def test_preprocessor_applies_reserved_mask_column_end_to_end(tmp_path):
         subsequence_start_mode="distribute",
         use_precomputed_maps=None,
         metadata_config_path=metadata_config_path,
-        reserved_mask_column=RESERVED_MASK_COLUMN,
+        mask_column=RESERVED_MASK_COLUMN,
     )
 
     output = pl.read_parquet(project_root / "data" / "masked-input-split0.parquet")
@@ -249,7 +249,7 @@ def test_preprocessor_applies_reserved_mask_column_end_to_end(tmp_path):
     assert RESERVED_MASK_COLUMN not in metadata["selected_columns_statistics"]
 
 
-def test_preprocessor_requires_metadata_config_for_reserved_mask_column(tmp_path):
+def test_preprocessor_requires_metadata_config_for_mask_column(tmp_path):
     project_root = tmp_path / "project"
     project_root.mkdir()
     data_path = tmp_path / "masked-input.csv"
@@ -264,7 +264,7 @@ def test_preprocessor_requires_metadata_config_for_reserved_mask_column(tmp_path
 
     with pytest.raises(
         ValueError,
-        match="metadata_config_path must be set when reserved_mask_column is set",
+        match="metadata_config_path must be set when mask_column is set",
     ):
         Preprocessor(
             project_root=str(project_root),
@@ -285,11 +285,11 @@ def test_preprocessor_requires_metadata_config_for_reserved_mask_column(tmp_path
             subsequence_start_mode="distribute",
             use_precomputed_maps=None,
             metadata_config_path=None,
-            reserved_mask_column=RESERVED_MASK_COLUMN,
+            mask_column=RESERVED_MASK_COLUMN,
         )
 
 
-def test_preprocessor_config_defaults_reserved_mask_column_to_none(tmp_path):
+def test_preprocessor_config_defaults_mask_column_to_none(tmp_path):
     data_path = tmp_path / "input.csv"
     pl.DataFrame(
         {
@@ -308,10 +308,10 @@ def test_preprocessor_config_defaults_reserved_mask_column_to_none(tmp_path):
         seed=1010,
     )
 
-    assert config.reserved_mask_column is None
+    assert config.mask_column is None
 
 
-def test_preprocessor_config_requires_metadata_config_for_reserved_mask_column(
+def test_preprocessor_config_requires_metadata_config_for_mask_column(
     tmp_path,
 ):
     data_path = tmp_path / "input.csv"
@@ -326,7 +326,7 @@ def test_preprocessor_config_requires_metadata_config_for_reserved_mask_column(
 
     with pytest.raises(
         ValidationError,
-        match="metadata_config_path must be set when reserved_mask_column is set",
+        match="metadata_config_path must be set when mask_column is set",
     ):
         PreprocessorModel(
             project_root=str(tmp_path),
@@ -334,7 +334,7 @@ def test_preprocessor_config_requires_metadata_config_for_reserved_mask_column(
             split_ratios=[1.0],
             seq_length=1,
             seed=1010,
-            reserved_mask_column=RESERVED_MASK_COLUMN,
+            mask_column=RESERVED_MASK_COLUMN,
         )
 
 

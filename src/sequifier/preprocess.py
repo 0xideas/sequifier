@@ -91,7 +91,7 @@ class Preprocessor:
         subsequence_start_mode: str,
         use_precomputed_maps: Optional[list[str]],
         metadata_config_path: Optional[str],
-        reserved_mask_column: Optional[str] = None,
+        mask_column: Optional[str] = None,
     ):
         """Initializes the Preprocessor with the given parameters.
 
@@ -112,7 +112,7 @@ class Preprocessor:
             process_by_file: A flag to indicate if processing should be done file by file.
             use_precomputed_maps: An optional list of columns for which to enforce precomputed maps
             metadata_config_path: Optional path to a precomputed metadata config
-            reserved_mask_column: Optional input column used to mask all data columns
+            mask_column: Optional input column used to mask all data columns
         """
         self.project_root = project_root
         self.batches_per_file = batches_per_file
@@ -130,11 +130,9 @@ class Preprocessor:
 
         self.use_precomputed_maps = use_precomputed_maps
         self.metadata_config_path = metadata_config_path
-        self.reserved_mask_column = reserved_mask_column
-        if self.reserved_mask_column is not None and self.metadata_config_path is None:
-            raise ValueError(
-                "metadata_config_path must be set when reserved_mask_column is set"
-            )
+        self.mask_column = mask_column
+        if self.mask_column is not None and self.metadata_config_path is None:
+            raise ValueError("metadata_config_path must be set when mask_column is set")
 
         self.seed = seed
         np.random.seed(seed)
@@ -144,12 +142,9 @@ class Preprocessor:
 
         if selected_columns is not None:
             selected_columns = ["sequenceId", "itemPosition"] + selected_columns
-            if (
-                self.reserved_mask_column is not None
-                and self.reserved_mask_column in selected_columns
-            ):
+            if self.mask_column is not None and self.mask_column in selected_columns:
                 raise ValueError(
-                    f"'{self.reserved_mask_column}' is not allowed to be in 'selected_columns'"
+                    f"'{self.mask_column}' is not allowed to be in 'selected_columns'"
                 )
 
         self._setup_split_paths(write_format, len(split_ratios))
@@ -183,9 +178,9 @@ class Preprocessor:
                 read_format,
                 selected_columns,
                 max_rows,
-                self.reserved_mask_column,
+                self.mask_column,
             )
-            data_columns = _get_data_columns(data, self.reserved_mask_column)
+            data_columns = _get_data_columns(data, self.mask_column)
             if self.metadata_config_path:
                 metadata_path = os.path.join(
                     self.project_root, self.metadata_config_path
@@ -214,7 +209,7 @@ class Preprocessor:
                     selected_columns_statistics,
                     0,
                     precomputed_id_maps,
-                    self.reserved_mask_column,
+                    self.mask_column,
                 )
 
                 id_maps = id_maps | precomputed_id_maps
@@ -229,9 +224,7 @@ class Preprocessor:
                 n_classes=n_classes,
                 col_types=col_types,
             )
-            data = _apply_reserved_mask_column(
-                data, data_columns, col_types, self.reserved_mask_column
-            )
+            data = _apply_mask_column(data, data_columns, col_types, self.mask_column)
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
@@ -297,7 +290,7 @@ class Preprocessor:
                 data_columns = [
                     col
                     for col in col_types.keys()
-                    if col not in _reserved_input_columns(self.reserved_mask_column)
+                    if col not in _reserved_input_columns(self.mask_column)
                 ]
 
                 # We still need to find the files to process
@@ -474,13 +467,11 @@ class Preprocessor:
                         read_format,
                         selected_columns,
                         max_rows_inner,
-                        self.reserved_mask_column,
+                        self.mask_column,
                     )
 
                     # Get columns for the current file (excluding metadata cols)
-                    current_file_cols = _get_data_columns(
-                        data, self.reserved_mask_column
-                    )
+                    current_file_cols = _get_data_columns(data, self.mask_column)
 
                     if col_types is None:
                         data_columns = current_file_cols
@@ -520,7 +511,7 @@ class Preprocessor:
                         selected_columns_statistics,
                         n_rows_running_count,
                         precomputed_id_maps,
-                        self.reserved_mask_column,
+                        self.mask_column,
                     )
                     n_rows_running_count += data.shape[0]
 
@@ -607,7 +598,7 @@ class Preprocessor:
         write_format: str,
         process_by_file: bool = True,
         subsequence_start_mode: str = "distribute",
-        reserved_mask_column: Optional[str] = None,
+        mask_column: Optional[str] = None,
     ) -> None:
         """Processes batches of data from multiple files.
 
@@ -629,10 +620,10 @@ class Preprocessor:
             write_format: The file format for the output files.
             process_by_file: A flag to indicate if processing should be done file by file.
             subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
-            reserved_mask_column: Optional input column used to mask all data columns.
+            mask_column: Optional input column used to mask all data columns.
         """
-        if reserved_mask_column is None:
-            reserved_mask_column = self.reserved_mask_column
+        if mask_column is None:
+            mask_column = self.mask_column
 
         if process_by_file:
             _process_batches_multiple_files_inner(
@@ -660,7 +651,7 @@ class Preprocessor:
                 merge_output=self.merge_output,
                 continue_preprocessing=self.continue_preprocessing,
                 subsequence_start_mode=subsequence_start_mode,
-                reserved_mask_column=reserved_mask_column,
+                mask_column=mask_column,
             )
             input_files = create_file_paths_for_multiple_files2(
                 self.project_root,
@@ -705,7 +696,7 @@ class Preprocessor:
                 "merge_output": self.merge_output,
                 "continue_preprocessing": self.continue_preprocessing,
                 "subsequence_start_mode": subsequence_start_mode,
-                "reserved_mask_column": reserved_mask_column,
+                "mask_column": mask_column,
             }
 
             job_params = [
@@ -914,20 +905,18 @@ class Preprocessor:
 
 
 @beartype
-def _reserved_input_columns(reserved_mask_column: Optional[str]) -> tuple[str, ...]:
-    if reserved_mask_column is None:
+def _reserved_input_columns(mask_column: Optional[str]) -> tuple[str, ...]:
+    if mask_column is None:
         return INPUT_METADATA_COLUMNS
-    return (*INPUT_METADATA_COLUMNS, reserved_mask_column)
+    return (*INPUT_METADATA_COLUMNS, mask_column)
 
 
 @beartype
 def _get_data_columns(
-    data: pl.DataFrame, reserved_mask_column: Optional[str] = None
+    data: pl.DataFrame, mask_column: Optional[str] = None
 ) -> list[str]:
     return [
-        col
-        for col in data.columns
-        if col not in _reserved_input_columns(reserved_mask_column)
+        col for col in data.columns if col not in _reserved_input_columns(mask_column)
     ]
 
 
@@ -941,24 +930,20 @@ def _selected_columns_with_optional_mask(
     data_path: str,
     read_format: str,
     selected_columns: Optional[list[str]],
-    reserved_mask_column: Optional[str] = None,
+    mask_column: Optional[str] = None,
 ) -> Optional[list[str]]:
-    if (
-        selected_columns is None
-        or read_format != "parquet"
-        or reserved_mask_column is None
-    ):
+    if selected_columns is None or read_format != "parquet" or mask_column is None:
         return selected_columns
 
     schema_columns = pq.read_schema(data_path).names
-    if reserved_mask_column in schema_columns:
-        return selected_columns + [reserved_mask_column]
+    if mask_column in schema_columns:
+        return selected_columns + [mask_column]
     return selected_columns
 
 
 @beartype
-def _mask_column_expr(mask_dtype: Any, reserved_mask_column: str) -> pl.Expr:
-    mask_col = pl.col(reserved_mask_column)
+def _mask_column_expr(mask_dtype: Any, mask_column: str) -> pl.Expr:
+    mask_col = pl.col(mask_column)
 
     if isinstance(mask_dtype, pl.Boolean):
         return mask_col
@@ -981,26 +966,24 @@ def _mask_column_expr(mask_dtype: Any, reserved_mask_column: str) -> pl.Expr:
         return mask_col == 1
 
     if isinstance(mask_dtype, (pl.String, pl.Utf8)):
-        return mask_col.str.to_lowercase().is_in(["1", "true"])
+        return mask_col.str.to_lowercase().is_in(["1"])
 
     raise ValueError(
-        f"Column {reserved_mask_column} must be boolean, numeric, or string, got {mask_dtype}"
+        f"Column {mask_column} must be boolean, numeric, or string, got {mask_dtype}"
     )
 
 
 @beartype
-def _apply_reserved_mask_column(
+def _apply_mask_column(
     data: pl.DataFrame,
     data_columns: list[str],
     col_types: dict[str, str],
-    reserved_mask_column: Optional[str] = None,
+    mask_column: Optional[str] = None,
 ) -> pl.DataFrame:
-    if reserved_mask_column is None or reserved_mask_column not in data.columns:
+    if mask_column is None or mask_column not in data.columns:
         return data
 
-    mask_expr = _mask_column_expr(
-        data.schema[reserved_mask_column], reserved_mask_column
-    )
+    mask_expr = _mask_column_expr(data.schema[mask_column], mask_column)
     updates = []
     for col in data_columns:
         mask_value = (
@@ -1017,7 +1000,7 @@ def _apply_reserved_mask_column(
     if updates:
         data = data.with_columns(updates)
 
-    return data.drop(reserved_mask_column)
+    return data.drop(mask_column)
 
 
 @beartype
@@ -1146,7 +1129,7 @@ def _get_column_statistics(
     selected_columns_statistics: dict[str, dict[str, float]],
     n_rows_running_count: int,
     precomputed_id_maps: dict[str, dict[Union[str, int], int]],
-    reserved_mask_column: Optional[str] = None,
+    mask_column: Optional[str] = None,
 ) -> tuple[
     dict[str, dict[Union[str, int], int]],
     dict[str, dict[str, float]],
@@ -1183,10 +1166,8 @@ def _get_column_statistics(
         ValueError: If a column has an unsupported data type (neither
             string, integer, nor float).
     """
-    if reserved_mask_column is not None and reserved_mask_column in data.columns:
-        mask_expr = _mask_column_expr(
-            data.schema[reserved_mask_column], reserved_mask_column
-        )
+    if mask_column is not None and mask_column in data.columns:
+        mask_expr = _mask_column_expr(data.schema[mask_column], mask_column)
         data = data.filter(~mask_expr)
 
     for data_col in data_columns:
@@ -1242,7 +1223,7 @@ def _load_and_preprocess_data(
     read_format: str,
     selected_columns: Optional[list[str]],
     max_rows: Optional[int],
-    reserved_mask_column: Optional[str] = None,
+    mask_column: Optional[str] = None,
 ) -> pl.DataFrame:
     """Loads data from a file and performs initial preparation.
 
@@ -1266,7 +1247,7 @@ def _load_and_preprocess_data(
     """
     logger.info(f"Reading data from '{data_path}'...")
     columns_to_read = _selected_columns_with_optional_mask(
-        data_path, read_format, selected_columns, reserved_mask_column
+        data_path, read_format, selected_columns, mask_column
     )
     data = read_data(data_path, read_format, columns=columns_to_read)
 
@@ -1278,8 +1259,8 @@ def _load_and_preprocess_data(
             col for col in selected_columns if col not in INPUT_METADATA_COLUMNS
         ]
         columns_to_select = list(INPUT_METADATA_COLUMNS) + selected_columns_filtered
-        if reserved_mask_column is not None and reserved_mask_column in data.columns:
-            columns_to_select.append(reserved_mask_column)
+        if mask_column is not None and mask_column in data.columns:
+            columns_to_select.append(mask_column)
         data = data.select(_deduplicate_columns(columns_to_select))
 
     if max_rows:
@@ -1364,7 +1345,7 @@ def _process_batches_multiple_files_inner(
     merge_output: bool,
     continue_preprocessing: bool,
     subsequence_start_mode: str,
-    reserved_mask_column: Optional[str],
+    mask_column: Optional[str],
 ):
     """Inner function for processing batches of data from multiple files.
 
@@ -1430,7 +1411,7 @@ def _process_batches_multiple_files_inner(
                             read_format,
                             selected_columns,
                             max_rows_inner,
-                            reserved_mask_column,
+                            mask_column,
                         )
                         n_rows_running_count += data.shape[0]
                     continue
@@ -1440,7 +1421,7 @@ def _process_batches_multiple_files_inner(
                 read_format,
                 selected_columns,
                 max_rows_inner,
-                reserved_mask_column,
+                mask_column,
             )
             data, _, _ = _apply_column_statistics(
                 data,
@@ -1450,9 +1431,7 @@ def _process_batches_multiple_files_inner(
                 n_classes,
                 col_types,
             )
-            data = _apply_reserved_mask_column(
-                data, data_columns, col_types, reserved_mask_column
-            )
+            data = _apply_mask_column(data, data_columns, col_types, mask_column)
 
             data_name_root_inner = f"{data_name_root}-{process_id}-{file_index_str}"
 
