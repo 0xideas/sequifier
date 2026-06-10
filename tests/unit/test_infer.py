@@ -1,15 +1,13 @@
 from unittest.mock import patch
 
 import numpy as np
-import polars as pl
 import pytest
 import torch
 
 from sequifier.config.infer_config import InfererModel
 from sequifier.infer import (
     Inferer,
-    _filter_outputs_to_valid_targets,
-    _prediction_valid_mask_from_frame,
+    calculate_item_positions,
     get_probs_preds_from_dict,
     normalize,
     sample_with_cumsum,
@@ -266,62 +264,26 @@ def test_infer_pure_rejects_unknown_onnx_input(mock_inferer):
         )
 
 
-def test_prediction_valid_mask_from_frame_requires_left_pad_length_for_bert():
-    config = InfererModel(
-        project_root=".",
-        metadata_config_path="dummy.json",
-        model_path="dummy.onnx",
-        model_type="generative",
+def test_calculate_item_positions_bert_uses_full_input_window():
+    positions = calculate_item_positions(
+        np.array([10, 20]),
+        seq_length=4,
+        prediction_length=4,
         training_objective="bert",
-        data_path="tests/unit/data/empty.parquet",
-        input_columns=["target_col"],
-        categorical_columns=[],
-        real_columns=["target_col"],
-        target_columns=["target_col"],
-        column_types={"target_col": "float64"},
-        target_column_types={"target_col": "real"},
-        seed=42,
-        device="cpu",
-        prediction_length=None,
-        seq_length=3,
-        inference_batch_size=2,
-        output_probabilities=False,
-        map_to_id=False,
-        autoregression=False,
-    )
-    data = pl.DataFrame(
-        {
-            "sequenceId": [0],
-            "subsequenceId": [0],
-            "startItemPosition": [0],
-            "inputCol": ["target_col"],
-            "3": [0.0],
-            "2": [0.0],
-            "1": [1.0],
-            "0": [2.0],
-        }
     )
 
-    assert config.prediction_length is not None
-    with pytest.raises(ValueError, match="leftPadLength"):
-        _prediction_valid_mask_from_frame(config, data, config.prediction_length)
+    np.testing.assert_array_equal(positions, [10, 11, 12, 13, 20, 21, 22, 23])
 
 
-def test_filter_outputs_to_valid_targets_filters_predictions_and_probabilities():
-    mask = np.array([False, True, True, False])
-    sequence_ids, positions, preds, probs = _filter_outputs_to_valid_targets(
-        mask,
-        np.array([10, 10, 11, 11]),
-        np.array([0, 1, 0, 1]),
-        {"target_col": np.array([1, 2, 3, 4])},
-        {"target_col": np.array([[0.7, 0.3], [0.2, 0.8], [0.4, 0.6], [0.9, 0.1]])},
+def test_calculate_item_positions_causal_uses_future_window_tail():
+    positions = calculate_item_positions(
+        np.array([10, 20]),
+        seq_length=4,
+        prediction_length=2,
+        training_objective="causal",
     )
 
-    assert probs is not None
-    np.testing.assert_array_equal(sequence_ids, [10, 11])
-    np.testing.assert_array_equal(positions, [1, 0])
-    np.testing.assert_array_equal(preds["target_col"], [2, 3])
-    np.testing.assert_array_equal(probs["target_col"], [[0.2, 0.8], [0.4, 0.6]])
+    np.testing.assert_array_equal(positions, [13, 14, 23, 24])
 
 
 # ==========================================

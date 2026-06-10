@@ -18,7 +18,6 @@ from sequifier.helpers import (
     configure_determinism,
     construct_index_maps,
     generate_padding_masks,
-    get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
     numpy_to_pytorch,
     subset_to_input_columns,
@@ -297,77 +296,6 @@ def calculate_item_positions(
     return repeated_bases + tiled_offsets
 
 
-def _flatten_prediction_valid_mask(
-    metadata: Optional[dict[str, Any]], prediction_length: int
-) -> Optional[np.ndarray]:
-    if metadata is None or "target_valid_mask" not in metadata:
-        return None
-
-    mask = metadata["target_valid_mask"]
-    mask_np = mask.cpu().numpy() if isinstance(mask, torch.Tensor) else np.asarray(mask)
-    return mask_np[:, -prediction_length:].reshape(-1).astype(bool)
-
-
-def _prediction_valid_mask_from_frame(
-    config: "InfererModel", data: pl.DataFrame, prediction_length: int
-) -> Optional[np.ndarray]:
-    if config.training_objective != "bert":
-        return None
-
-    left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(data)
-    if left_pad_lengths is None:
-        raise ValueError(
-            "BERT inference with full-sequence prediction requires leftPadLength metadata "
-            "so padded target positions can be filtered."
-        )
-
-    metadata = generate_padding_masks(
-        left_pad_lengths,
-        config.seq_length,
-        data_offset=1,
-        target_offset=1,
-    )
-    return _flatten_prediction_valid_mask(metadata, prediction_length)
-
-
-def _filter_outputs_to_valid_targets(
-    prediction_valid_mask: Optional[np.ndarray],
-    sequence_ids_for_preds: np.ndarray,
-    item_positions_for_preds: np.ndarray,
-    preds: dict[str, np.ndarray],
-    probs: Optional[dict[str, np.ndarray]],
-) -> tuple[
-    np.ndarray, np.ndarray, dict[str, np.ndarray], Optional[dict[str, np.ndarray]]
-]:
-    if prediction_valid_mask is None:
-        return sequence_ids_for_preds, item_positions_for_preds, preds, probs
-
-    if prediction_valid_mask.shape[0] != len(sequence_ids_for_preds):
-        raise ValueError(
-            "target_valid_mask length does not match prediction metadata length "
-            f"({prediction_valid_mask.shape[0]} != {len(sequence_ids_for_preds)})."
-        )
-
-    filtered_preds = {
-        target_column: np.asarray(values)[prediction_valid_mask]
-        for target_column, values in preds.items()
-    }
-    filtered_probs = (
-        {
-            target_column: np.asarray(values)[prediction_valid_mask]
-            for target_column, values in probs.items()
-        }
-        if probs is not None
-        else None
-    )
-    return (
-        np.asarray(sequence_ids_for_preds)[prediction_valid_mask],
-        np.asarray(item_positions_for_preds)[prediction_valid_mask],
-        filtered_preds,
-        filtered_probs,
-    )
-
-
 @beartype
 def infer_embedding(
     config: "InfererModel",
@@ -574,7 +502,6 @@ def infer_generative(
         is_folder_input = os.path.isdir(
             normalize_path(config.data_path, config.project_root)
         )
-        prediction_valid_mask = None
 
         if config.read_format in ["parquet", "csv"] and not is_folder_input:
             if config.input_columns is not None:
@@ -594,9 +521,6 @@ def infer_generative(
                     data.get_column("startItemPosition").filter(mask).to_numpy()
                 )
                 prediction_length = inferer.prediction_length
-                prediction_valid_mask = _prediction_valid_mask_from_frame(
-                    config, data, prediction_length
-                )
 
                 # Expand IDs to match model output shape
                 sequence_ids_for_preds = np.repeat(
@@ -646,9 +570,6 @@ def infer_generative(
                     data.get_column("startItemPosition").filter(mask).to_numpy()
                 )
                 prediction_length = inferer.prediction_length
-                prediction_valid_mask = _prediction_valid_mask_from_frame(
-                    config, data, prediction_length
-                )
 
                 sequence_ids_for_preds = np.repeat(
                     sequence_ids_for_preds_base, prediction_length
@@ -709,24 +630,12 @@ def infer_generative(
             prediction_length = inferer.prediction_length  # Get prediction_length
 
             if total_steps == 1:
-                if (
-                    config.training_objective == "bert"
-                    and "target_valid_mask" not in metadata
-                ):
-                    raise ValueError(
-                        "BERT inference with full-sequence prediction requires target_valid_mask metadata "
-                        "so padded target positions can be filtered."
-                    )
-
                 # Non-autoregressive path: Apply prediction_length logic
                 sequence_ids_for_preds_base = sequence_ids_tensor.numpy()
                 item_positions_base_raw = start_positions_tensor.numpy()
 
                 sequence_ids_for_preds = np.repeat(
                     sequence_ids_for_preds_base, prediction_length
-                )
-                prediction_valid_mask = _flatten_prediction_valid_mask(
-                    metadata, prediction_length
                 )
 
                 # Invoke the unified positioning engine
@@ -764,16 +673,6 @@ def infer_generative(
                 preds[target_column] = inferer.invert_normalization(
                     predictions, target_column
                 )
-
-        sequence_ids_for_preds, item_positions_for_preds, preds, probs = (
-            _filter_outputs_to_valid_targets(
-                prediction_valid_mask,
-                sequence_ids_for_preds,
-                item_positions_for_preds,
-                preds,
-                probs,
-            )
-        )
 
         os.makedirs(
             os.path.join(config.project_root, "outputs", "predictions"),
