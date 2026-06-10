@@ -1,0 +1,68 @@
+project_root: tests/project_folder
+model_name: model-categorical-bert
+read_format: pt
+metadata_config_path: configs/metadata_configs/test-data-categorical-1.json
+
+input_columns: [itemId]
+target_columns: [itemId]
+target_column_types:
+  itemId: categorical
+
+seq_length: 8
+inference_batch_size: 10
+
+export_generative_model: true
+export_embedding_model: true
+export_onnx: false
+export_pt: true
+export_with_dropout: false
+
+model_spec:
+  initial_embedding_dim: 16
+  dim_model: 16
+  n_head: 2
+  dim_feedforward: 8
+  num_layers: 1
+  prediction_length: 8
+  activation_fn: relu
+  normalization: layer_norm
+  positional_encoding: learned
+  attention_type: mha
+  norm_first: false
+  n_kv_heads: 2
+  rope_theta: 10000.0
+training_spec:
+  training_objective: bert
+  bert_spec:
+    masking_probability: 0.5
+    replacement_distribution:
+      masked: 0.8
+      random: 0.1
+      identical: 0.1
+    span_masking:
+      type: GeometricDistribution
+      p: 1.0
+  device: cpu
+  torch_compile: none
+  epochs: 1
+  save_interval_epochs: 1
+  batch_size: 5
+  log_interval: 1
+  learning_rate: 0.001
+  accumulation_steps: null
+  dropout: 0.0
+  criterion:
+    itemId: CrossEntropyLoss
+  loss_weights:
+    itemId: 1.0
+  optimizer:
+    name: Adam
+  scheduler:
+    name: StepLR
+    step_size: 1.0
+    gamma: 0.99
+  scheduler_step_on: epoch
+  calculate_validation_loss_on_initialization: false
+  continue_training: false
+  enforce_determinism: true
+  layer_autocast: false

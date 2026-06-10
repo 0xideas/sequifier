@@ -13,6 +13,7 @@ sequifier preprocess --config-path tests/configs/preprocess-test-categorical-exa
 sequifier preprocess --config-path tests/configs/preprocess-test-categorical-exact-pt.yaml
 sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-grid.yaml
 sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-sample.yaml
+sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-bert.yaml
 sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-bayesian.yaml
 sequifier hyperparameter-search --config-path tests/configs/hyperparameter-search-custom-eval.yaml
 sequifier train --config-path tests/configs/train-test-categorical.yaml --metadata-config-path configs/metadata_configs/test-data-categorical-1.json --model-name model-categorical-1 --input-columns itemId
@@ -25,6 +26,8 @@ sequifier train --config-path tests/configs/train-test-categorical.yaml --metada
 sequifier train --config-path tests/configs/train-test-real.yaml --metadata-config-path configs/metadata_configs/test-data-real-50.json --model-name model-real-50 --input-columns None
 sequifier train --config-path tests/configs/train-test-categorical-inf-size-1.yaml
 sequifier train --config-path tests/configs/train-test-categorical-inf-size-3.yaml
+sequifier train --config-path tests/configs/train-test-categorical-bert.yaml
+sequifier train --config-path tests/configs/train-test-real-bert.yaml
 sequifier train --config-path tests/configs/train-test-categorical-multitarget.yaml
 sequifier train --config-path tests/configs/train-test-categorical-multitarget-eager.yaml
 sequifier train --config-path tests/configs/train-test-distributed.yaml
@@ -48,6 +51,8 @@ sequifier infer --config-path tests/configs/infer-test-lazy.yaml
 sequifier infer --config-path tests/configs/infer-test-categorical-autoregression.yaml  --input-columns itemId
 sequifier infer --config-path tests/configs/infer-test-categorical-embedding.yaml  --input-columns itemId
 sequifier infer --config-path tests/configs/infer-test-categorical-inf-size-3-embedding.yaml
+sequifier infer --config-path tests/configs/infer-test-categorical-bert.yaml
+sequifier infer --config-path tests/configs/infer-test-categorical-bert-embedding.yaml
 sequifier preprocess --config-path tests/configs/preprocess-test-categorical-precomputed-stats.yaml
 sequifier preprocess --config-path tests/configs/preprocess-test-categorical-precomputed-stats-negative.yaml
 sequifier train --config-path tests/configs/train-test-resume-epoch.yaml
@@ -59,6 +64,7 @@ sequifier visualize-training model-categorical-3-from-mid-epoch-checkpoint --pro
 sequifier visualize-training model-categorical-3-inf-size --project-root tests/project_folder
 sequifier visualize-training model-categorical-5 --project-root tests/project_folder
 sequifier visualize-training model-categorical-50 --project-root tests/project_folder
+sequifier visualize-training model-categorical-bert --project-root tests/project_folder
 sequifier visualize-training model-categorical-distributed --project-root tests/project_folder
 sequifier visualize-training model-categorical-distributed-lazy-parquet --project-root tests/project_folder
 sequifier visualize-training model-categorical-lazy --project-root tests/project_folder
@@ -69,4 +75,5 @@ sequifier visualize-training model-real-1-from-epoch-checkpoint --project-root t
 sequifier visualize-training model-real-3 --project-root tests/project_folder
 sequifier visualize-training model-real-5 --project-root tests/project_folder
 sequifier visualize-training model-real-50 --project-root tests/project_folder
+sequifier visualize-training model-real-bert --project-root tests/project_folder
 sequifier visualize-training test-hp-search-grid-run-0,test-hp-search-grid-run-1,test-hp-search-grid-run-2,test-hp-search-grid-run-3 --project-root tests/project_folder --log-scale --bucket-training-batches 5

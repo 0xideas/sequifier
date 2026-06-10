@@ -134,6 +134,16 @@ def training_config_path_cat_inf_size_3():
 
 
 @pytest.fixture(scope="session")
+def training_config_path_cat_bert():
+    return os.path.join("tests", "configs", "train-test-categorical-bert.yaml")
+
+
+@pytest.fixture(scope="session")
+def training_config_path_real_bert():
+    return os.path.join("tests", "configs", "train-test-real-bert.yaml")
+
+
+@pytest.fixture(scope="session")
 def training_config_path_distributed():
     return os.path.join("tests", "configs", "train-test-distributed.yaml")
 
@@ -181,6 +191,25 @@ def inference_config_path_cat_inf_size_1():
 @pytest.fixture(scope="session")
 def inference_config_path_cat_inf_size_3():
     return os.path.join("tests", "configs", "infer-test-categorical-inf-size-3.yaml")
+
+
+@pytest.fixture(scope="session")
+def inference_config_path_cat_bert():
+    return os.path.join("tests", "configs", "infer-test-categorical-bert.yaml")
+
+
+@pytest.fixture(scope="session")
+def inference_config_path_cat_bert_embedding():
+    return os.path.join(
+        "tests", "configs", "infer-test-categorical-bert-embedding.yaml"
+    )
+
+
+@pytest.fixture(scope="session")
+def inference_config_path_cat_bert_autoregression():
+    return os.path.join(
+        "tests", "configs", "infer-test-categorical-bert-autoregression.yaml"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -240,6 +269,7 @@ def hp_search_configs():
     return {
         "grid": os.path.join("tests", "configs", "hyperparameter-search-grid.yaml"),
         "sample": os.path.join("tests", "configs", "hyperparameter-search-sample.yaml"),
+        "bert": os.path.join("tests", "configs", "hyperparameter-search-bert.yaml"),
         "bayesian": os.path.join(
             "tests", "configs", "hyperparameter-search-bayesian.yaml"
         ),
@@ -271,6 +301,8 @@ def format_configs_locally(
     training_config_path_real,
     training_config_path_cat_inf_size_1,
     training_config_path_cat_inf_size_3,
+    training_config_path_cat_bert,
+    training_config_path_real_bert,
     training_config_path_distributed,
     training_config_path_distributed_lazy_parquet,
     training_config_path_lazy,
@@ -284,6 +316,9 @@ def format_configs_locally(
     inference_config_path_categorical_autoregression,
     inference_config_path_cat_inf_size_1,
     inference_config_path_cat_inf_size_3,
+    inference_config_path_cat_bert,
+    inference_config_path_cat_bert_embedding,
+    inference_config_path_cat_bert_autoregression,
     inference_config_path_distributed,
     inference_config_path_distributed_parquet,
     inference_config_path_lazy,
@@ -303,6 +338,8 @@ def format_configs_locally(
             training_config_path_real,
             training_config_path_cat_inf_size_1,
             training_config_path_cat_inf_size_3,
+            training_config_path_cat_bert,
+            training_config_path_real_bert,
             training_config_path_distributed,
             training_config_path_distributed_lazy_parquet,
             training_config_path_lazy,
@@ -316,11 +353,15 @@ def format_configs_locally(
             inference_config_path_categorical_autoregression,
             inference_config_path_cat_inf_size_1,
             inference_config_path_cat_inf_size_3,
+            inference_config_path_cat_bert,
+            inference_config_path_cat_bert_embedding,
+            inference_config_path_cat_bert_autoregression,
             inference_config_path_distributed,
             inference_config_path_distributed_parquet,
             inference_config_path_lazy,
             hp_search_configs["grid"],
             hp_search_configs["sample"],
+            hp_search_configs["bert"],
             hp_search_configs["bayesian"],
             hp_search_configs["custom-eval"],
         ]
@@ -464,6 +505,8 @@ def run_training(
     training_config_path_real,
     training_config_path_cat_inf_size_1,
     training_config_path_cat_inf_size_3,
+    training_config_path_cat_bert,
+    training_config_path_real_bert,
     training_config_path_distributed,
     training_config_path_distributed_lazy_parquet,
     training_config_path_lazy,
@@ -490,6 +533,10 @@ def run_training(
     run_and_log(f"sequifier train --config-path {training_config_path_cat_inf_size_1}")
 
     run_and_log(f"sequifier train --config-path {training_config_path_cat_inf_size_3}")
+
+    run_and_log(f"sequifier train --config-path {training_config_path_cat_bert}")
+
+    run_and_log(f"sequifier train --config-path {training_config_path_real_bert}")
 
     run_and_log(f"sequifier train --config-path {training_config_path_cat_multitarget}")
 
@@ -560,6 +607,10 @@ def run_hp_search(
     )
 
     run_and_log(
+        f"sequifier hyperparameter-search --config-path {hp_search_configs['bert']}"
+    )
+
+    run_and_log(
         f"sequifier hyperparameter-search --config-path {hp_search_configs['bayesian']}"
     )
 
@@ -594,6 +645,8 @@ def run_inference(
     inference_config_path_embedding,
     inference_config_path_cat_inf_size_1,
     inference_config_path_cat_inf_size_3,
+    inference_config_path_cat_bert,
+    inference_config_path_cat_bert_embedding,
     inference_config_path_distributed,
     inference_config_path_distributed_parquet,
     inference_config_path_lazy,
@@ -656,6 +709,12 @@ def run_inference(
 
     run_and_log(
         f"sequifier infer --config-path {inference_config_path_cat_inf_size_3_embedding}"
+    )
+
+    run_and_log(f"sequifier infer --config-path {inference_config_path_cat_bert}")
+
+    run_and_log(
+        f"sequifier infer --config-path {inference_config_path_cat_bert_embedding}"
     )
 
 
@@ -813,3 +872,36 @@ def embeddings(run_inference, model_names_embeddings, project_root):
             embeddings_path, "categorical", "csv"
         )
     return embeds
+
+
+@pytest.fixture()
+def bert_predictions(run_inference, project_root):
+    prediction_path = os.path.join(
+        project_root,
+        "outputs",
+        "predictions",
+        "sequifier-model-categorical-bert-best-1-predictions",
+    )
+    return read_multi_file_preds(prediction_path, "categorical")
+
+
+@pytest.fixture()
+def bert_probabilities(run_inference, project_root):
+    probabilities_path = os.path.join(
+        project_root,
+        "outputs",
+        "probabilities",
+        "sequifier-model-categorical-bert-best-1-itemId-probabilities",
+    )
+    return read_multi_file_preds(probabilities_path, "categorical", "csv")
+
+
+@pytest.fixture()
+def bert_embeddings(run_inference, project_root):
+    embeddings_path = os.path.join(
+        project_root,
+        "outputs",
+        "embeddings",
+        "sequifier-model-categorical-bert-best-embedding-1-embeddings",
+    )
+    return read_multi_file_preds(embeddings_path, "categorical", "csv")

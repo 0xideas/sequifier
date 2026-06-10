@@ -23,6 +23,16 @@ def test_hp_search_sample_outputs(run_hp_search, project_root):
     ), f"Expected 4 sample configs, found {len(generated_configs)}"
 
 
+def test_hp_search_bert_outputs(run_hp_search, project_root):
+    hp_name = "test-hp-search-bert"
+    config_dir = os.path.join(project_root, "configs")
+
+    generated_configs = glob.glob(os.path.join(config_dir, f"{hp_name}-run-*.yaml"))
+    assert (
+        len(generated_configs) == 1
+    ), f"Expected 1 BERT sample config, found {len(generated_configs)}"
+
+
 def test_hp_search_bayesian_outputs(run_hp_search, project_root):
     hp_name = "test-hp-search-bayesian"
     config_dir = os.path.join(project_root, "configs")
@@ -38,6 +48,7 @@ def test_hp_search_state(run_hp_search, project_root):
 
     assert os.path.exists(os.path.join(state_dir, "test-hp-search-sample.db"))
     assert os.path.exists(os.path.join(state_dir, "test-hp-search-grid.db"))
+    assert os.path.exists(os.path.join(state_dir, "test-hp-search-bert.db"))
     assert os.path.exists(os.path.join(state_dir, "test-hp-search-bayesian.db"))
     assert os.path.exists(os.path.join(state_dir, "test-hp-search-custom-eval.db"))
 

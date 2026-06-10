@@ -1,0 +1,76 @@
+project_root: tests/project_folder
+metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-categorical-1.json
+hp_search_name: test-hp-search-bert
+model_config_write_path: configs
+
+read_format: pt
+target_columns: [itemId]
+target_column_types:
+  itemId: categorical
+seq_length: [8]
+inference_batch_size: 10
+
+search_strategy: sample
+n_samples: 1
+prune_trials: false
+
+input_columns:
+  - [itemId]
+export_embedding_model: false
+export_generative_model: true
+export_onnx: false
+export_pt: true
+export_with_dropout: false
+
+model_hyperparameter_sampling:
+  initial_embedding_dim: [16]
+  joint_embedding_dim: [null]
+  feature_embedding_dims: null
+  dim_model: [16]
+  n_head: [2]
+  dim_feedforward: [8]
+  num_layers: [1]
+  activation_fn: ["relu"]
+  normalization: ["layer_norm"]
+  positional_encoding: ["learned"]
+  attention_type: ["mha"]
+  norm_first: [false]
+  n_kv_heads: [2]
+  rope_theta: [10000.0]
+  prediction_length: 8
+
+training_hyperparameter_sampling:
+  training_objective: ["bert"]
+  bert_spec:
+    masking_probability: [0.5]
+    replacement_distribution:
+      - masked: 0.8
+        random: 0.1
+        identical: 0.1
+    span_masking:
+      - type: GeometricDistribution
+        p: 1.0
+  device: cpu
+  torch_compile: none
+  epochs: [1]
+  save_interval_epochs: 10
+  batch_size: [5]
+  learning_rate: [0.001]
+  criterion:
+    itemId: CrossEntropyLoss
+  loss_weights:
+    itemId: 1.0
+  accumulation_steps: [1]
+  dropout: [0.0]
+  optimizer:
+    - name: Adam
+  scheduler:
+    - name: StepLR
+      step_size: 1
+      gamma: 0.99
+  log_interval: 5
+  calculate_validation_loss_on_initialization: false
+  continue_training: false
+  layer_autocast: false
+
+override_input: true

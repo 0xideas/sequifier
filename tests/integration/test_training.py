@@ -33,6 +33,8 @@ def test_checkpoint_files_exists(
                 for j in [1, 3]
                 for i in range(1, 4)
             ]
+            + ["model-categorical-bert-epoch-1.pt"]
+            + ["model-real-bert-epoch-1.pt"]
             + [f"model-categorical-multitarget-5-epoch-{i}.pt" for i in range(1, 4)]
             + [
                 f"model-categorical-multitarget-5-eager-epoch-{i}.pt"
@@ -107,6 +109,12 @@ def test_model_files_exists(run_training, run_training_from_checkpoint, project_
                 "sequifier-model-categorical-3-inf-size-last-3.pt",
                 "sequifier-model-categorical-3-inf-size-best-embedding-3.pt",
                 "sequifier-model-categorical-3-inf-size-last-embedding-3.pt",
+                "sequifier-model-categorical-bert-best-1.pt",
+                "sequifier-model-categorical-bert-last-1.pt",
+                "sequifier-model-categorical-bert-best-embedding-1.pt",
+                "sequifier-model-categorical-bert-last-embedding-1.pt",
+                "sequifier-model-real-bert-best-1.pt",
+                "sequifier-model-real-bert-last-1.pt",
                 "sequifier-model-categorical-distributed-best-3.pt",
                 "sequifier-model-categorical-distributed-best-3.onnx",
                 "sequifier-model-categorical-distributed-last-3.pt",
@@ -123,6 +131,10 @@ def test_model_files_exists(run_training, run_training_from_checkpoint, project_
             + [
                 f"sequifier-test-hp-search-sample-run-{i}-{suffix}-1.pt"
                 for i in range(4)
+                for suffix in ["best", "last"]
+            ]
+            + [
+                f"sequifier-test-hp-search-bert-run-0-{suffix}-1.pt"
                 for suffix in ["best", "last"]
             ]
             + [

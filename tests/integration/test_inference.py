@@ -1,7 +1,21 @@
+import json
+import os
+import subprocess
+
 import numpy as np
 import polars as pl
 
 TARGET_VARIABLE_DICT = {"categorical": "itemId", "real": "itemValue"}
+BERT_SEQ_LENGTH = 8
+BERT_EMBEDDING_DIM = 16
+
+
+def _categorical_metadata(project_root):
+    metadata_path = os.path.join(
+        project_root, "configs", "metadata_configs", "test-data-categorical-1.json"
+    )
+    with open(metadata_path, "r") as f:
+        return json.load(f)
 
 
 def test_predictions_real(predictions):
@@ -97,6 +111,32 @@ def test_probabilities(probabilities):
         )
 
 
+def test_bert_generative_predictions_default_to_seq_length(
+    bert_predictions, project_root
+):
+    metadata = _categorical_metadata(project_root)
+    valid_values = {str(v) for v in metadata["id_maps"]["itemId"].keys()}
+
+    assert bert_predictions.height > 0
+    assert set(bert_predictions["itemId"].to_list()).issubset(valid_values)
+
+    rows_per_sequence = bert_predictions.group_by("sequenceId").len()
+    assert (rows_per_sequence["len"] == BERT_SEQ_LENGTH).all(), rows_per_sequence
+
+
+def test_bert_probabilities(bert_predictions, bert_probabilities, project_root):
+    metadata = _categorical_metadata(project_root)
+    expected_class_count = metadata["n_classes"]["itemId"]
+
+    assert bert_probabilities.height == bert_predictions.height
+    assert bert_probabilities.shape[1] == expected_class_count
+    np.testing.assert_almost_equal(
+        bert_probabilities.sum_horizontal(),
+        np.ones(bert_probabilities.shape[0]),
+        decimal=5,
+    )
+
+
 def test_multi_pred(predictions):
     multitarget_models = [name for name in predictions.keys() if "multitarget" in name]
 
@@ -130,6 +170,43 @@ def test_embeddings(embeddings):
             assert model_embeddings.shape[0] == 30
             assert model_embeddings.shape[1] == 203
             assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.3
+
+
+def test_bert_embeddings(bert_predictions, bert_embeddings):
+    expected_embedding_cols = [str(i) for i in range(BERT_EMBEDDING_DIM)]
+    expected_columns = ["sequenceId", "subsequenceId", "itemPosition"]
+
+    assert bert_embeddings.height == bert_predictions.height
+    assert bert_embeddings.shape[1] == len(expected_columns) + BERT_EMBEDDING_DIM
+    assert all(col in bert_embeddings.columns for col in expected_columns)
+    assert all(col in bert_embeddings.columns for col in expected_embedding_cols)
+
+    embedding_values = bert_embeddings.select(expected_embedding_cols).to_numpy()
+    assert np.isfinite(embedding_values).all()
+
+    rows_per_sequence = bert_embeddings.group_by("sequenceId").len()
+    assert (rows_per_sequence["len"] == BERT_SEQ_LENGTH).all(), rows_per_sequence
+
+
+def test_bert_rejects_autoregression_end_to_end(
+    run_training, inference_config_path_cat_bert_autoregression
+):
+    result = subprocess.run(
+        [
+            "sequifier",
+            "infer",
+            "--config-path",
+            inference_config_path_cat_bert_autoregression,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert (
+        "Autoregressive inference is not possible with BERT-style models."
+        in result.stdout + result.stderr
+    )
 
 
 def test_predictions_item_position(predictions):

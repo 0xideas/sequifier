@@ -222,7 +222,8 @@ class InfererModel(BaseModel):
             )
 
         if (
-            info.data.get("training_objective") is not None
+            v
+            and info.data.get("training_objective") is not None
             and info.data.get("training_objective") == "bert"
         ):
             raise ValueError(
