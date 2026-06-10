@@ -5,7 +5,14 @@ from typing import Optional, Union
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from sequifier.helpers import normalize_path, try_catch_excess_keys
 
@@ -137,6 +144,18 @@ class InfererModel(BaseModel):
     infer_with_dropout: bool = Field(default=False)
     autoregression: bool = Field(default=False)
     autoregression_total_steps: Optional[int] = Field(default=None)
+
+    @model_validator(mode="after")
+    def validate_bert_prediction_length_matches_seq_length(self):
+        if self.training_objective == "bert":
+            if self.prediction_length is None:
+                self.prediction_length = self.seq_length
+            elif self.prediction_length != self.seq_length:
+                raise ValueError(
+                    "For BERT inference, prediction_length must be equal to seq_length "
+                    f"(got prediction_length={self.prediction_length}, seq_length={self.seq_length})."
+                )
+        return self
 
     @field_validator("training_objective")
     @classmethod

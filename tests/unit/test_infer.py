@@ -7,6 +7,7 @@ import torch
 from sequifier.config.infer_config import InfererModel
 from sequifier.infer import (
     Inferer,
+    _filter_outputs_to_valid_targets,
     get_probs_preds_from_dict,
     normalize,
     sample_with_cumsum,
@@ -148,6 +149,116 @@ def test_inferer_prepare_inference_batches_split(mock_inferer):
     assert batches[1]["cat_col"].shape == (2, 1)
     assert batches[2]["cat_col"].shape == (1, 1)  # The remainder
     np.testing.assert_array_equal(batches[2]["cat_col"], [[5]])
+
+
+def test_infer_config_defaults_bert_prediction_length_to_seq_length():
+    config = InfererModel(
+        project_root=".",
+        metadata_config_path="dummy.json",
+        model_path="dummy.onnx",
+        model_type="generative",
+        training_objective="bert",
+        data_path="tests/unit/data/empty.parquet",
+        input_columns=["target_col"],
+        categorical_columns=[],
+        real_columns=["target_col"],
+        target_columns=["target_col"],
+        column_types={"target_col": "float64"},
+        target_column_types={"target_col": "real"},
+        seed=42,
+        device="cpu",
+        prediction_length=None,
+        seq_length=3,
+        inference_batch_size=2,
+        output_probabilities=False,
+        map_to_id=False,
+        autoregression=False,
+    )
+
+    assert config.prediction_length == config.seq_length
+
+
+def test_infer_config_rejects_bert_prediction_length_mismatch():
+    with pytest.raises(ValueError, match="prediction_length must be equal"):
+        InfererModel(
+            project_root=".",
+            metadata_config_path="dummy.json",
+            model_path="dummy.onnx",
+            model_type="generative",
+            training_objective="bert",
+            data_path="tests/unit/data/empty.parquet",
+            input_columns=["target_col"],
+            categorical_columns=[],
+            real_columns=["target_col"],
+            target_columns=["target_col"],
+            column_types={"target_col": "float64"},
+            target_column_types={"target_col": "real"},
+            seed=42,
+            device="cpu",
+            prediction_length=1,
+            seq_length=3,
+            inference_batch_size=2,
+            output_probabilities=False,
+            map_to_id=False,
+            autoregression=False,
+        )
+
+
+def test_infer_pure_passes_attention_valid_mask_to_onnx(mock_inferer):
+    class Input:
+        def __init__(self, name):
+            self.name = name
+
+    class Session:
+        def __init__(self):
+            self.ort_inputs = None
+
+        def get_inputs(self):
+            return [
+                Input("cat_col_in"),
+                Input("real_col_in"),
+                Input("attention_valid_mask"),
+            ]
+
+        def run(self, _, ort_inputs):
+            self.ort_inputs = ort_inputs
+            return [np.zeros((1, 2, 3), dtype=np.float32)]
+
+    session = Session()
+    mock_inferer.ort_session = session
+    mock_inferer.inference_batch_size = 2
+
+    x = {
+        "cat_col": np.array([[1, 2], [3, 4]], dtype=np.int64),
+        "real_col": np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+    }
+    metadata = {
+        "attention_valid_mask": np.array([[False, True], [True, True]], dtype=np.bool_)
+    }
+
+    mock_inferer.infer_pure(x, metadata)
+    assert session.ort_inputs is not None
+    np.testing.assert_array_equal(
+        session.ort_inputs["attention_valid_mask"],
+        metadata["attention_valid_mask"],
+    )
+
+
+def test_filter_outputs_to_valid_targets_filters_predictions_and_probabilities():
+    mask = np.array([False, True, True, False])
+    sequence_ids, positions, preds, probs = _filter_outputs_to_valid_targets(
+        mask,
+        np.array([10, 10, 11, 11]),
+        np.array([0, 1, 0, 1]),
+        {"target_col": np.array([1, 2, 3, 4])},
+        {"target_col": np.array([[0.7, 0.3], [0.2, 0.8], [0.4, 0.6], [0.9, 0.1]])},
+    )
+
+    assert probs is not None
+    np.testing.assert_array_equal(sequence_ids, [10, 11])
+    np.testing.assert_array_equal(positions, [1, 0])
+    np.testing.assert_array_equal(preds["target_col"], [2, 3])
+    np.testing.assert_array_equal(probs["target_col"], [[0.2, 0.8], [0.4, 0.6]])
 
 
 # ==========================================

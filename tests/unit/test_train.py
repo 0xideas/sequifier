@@ -2,10 +2,67 @@ import copy
 
 import pytest
 import torch
+from pydantic import ValidationError
 
-from sequifier.config.train_config import ModelSpecModel, TrainingSpecModel, TrainModel
+from sequifier.config.train_config import (
+    BERTSpecModel,
+    ModelSpecModel,
+    ReplacementDistribution,
+    TrainingSpecModel,
+    TrainModel,
+)
 from sequifier.helpers import infer_valid_mask_from_data
 from sequifier.train import TransformerModel
+
+
+def _training_spec_kwargs(**overrides):
+    values = {
+        "training_objective": "causal",
+        "device": "cpu",
+        "epochs": 1,
+        "save_interval_epochs": 1,
+        "batch_size": 4,
+        "learning_rate": 0.001,
+        "criterion": {"cat_col": "CrossEntropyLoss", "real_col": "MSELoss"},
+        "optimizer": {"name": "Adam"},
+        "scheduler": {"name": "StepLR", "step_size": 1, "gamma": 0.1},
+        "loss_weights": {"cat_col": 1.0, "real_col": 1.0},
+    }
+    values.update(overrides)
+    return values
+
+
+def _bert_spec():
+    return BERTSpecModel(
+        masking_probability=0.5,
+        replacement_distribution={
+            "masked": 1.0,
+            "random": 0.0,
+            "identical": 0.0,
+        },
+        span_masking={"type": "GeometricDistribution", "p": 1.0},
+    )
+
+
+def test_replacement_distribution_allows_zero_probabilities():
+    distribution = ReplacementDistribution(masked=1.0, random=0.0, identical=0.0)
+
+    assert distribution.masked == 1.0
+    assert distribution.random == 0.0
+    assert distribution.identical == 0.0
+
+
+def test_training_spec_model_requires_bert_spec_for_bert_objective():
+    with pytest.raises(ValidationError, match="BERT hyperparameters must be set"):
+        TrainingSpecModel(**_training_spec_kwargs(training_objective="bert"))
+
+
+def test_training_spec_model_rejects_bert_spec_for_causal_objective():
+    with pytest.raises(
+        ValidationError,
+        match="BERT hyperparameters should only be configured",
+    ):
+        TrainingSpecModel(**_training_spec_kwargs(bert_spec=_bert_spec()))
 
 
 @pytest.fixture
@@ -111,6 +168,18 @@ def test_transformer_model_initialization(model, model_config):
         assert "real_col" not in model.encoder
     else:
         assert "real_col" in model.encoder
+
+
+def test_train_model_requires_bert_prediction_length_to_equal_seq_length(model_config):
+    config_values = model_config.model_dump()
+    config_values["model_spec"]["prediction_length"] = model_config.seq_length - 1
+    config_values["training_spec"] = _training_spec_kwargs(
+        training_objective="bert",
+        bert_spec=_bert_spec(),
+    )
+
+    with pytest.raises(ValidationError, match="prediction_length must be equal"):
+        TrainModel(**config_values)
 
 
 def test_forward_train_shapes(model, model_config):

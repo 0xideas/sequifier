@@ -119,9 +119,9 @@ class DotDict(dict):
 
 
 class ReplacementDistribution(BaseModel):
-    masked: float = Field(..., gt=0.0, le=1.0)
-    random: float = Field(..., gt=0.0, le=1.0)
-    identical: float = Field(..., gt=0.0, le=1.0)
+    masked: float = Field(..., ge=0.0, le=1.0)
+    random: float = Field(..., ge=0.0, le=1.0)
+    identical: float = Field(..., ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def validate_sum(self):
@@ -341,19 +341,17 @@ class TrainingSpecModel(BaseModel):
             raise ValueError(f"Only 'causal' and 'bert' are allowed, found {v}")
         return v
 
-    @field_validator("bert_spec")
-    @classmethod
-    def validate_bert_spec(cls, v, info):
-        training_objective = info.data.get("training_objective")
-        if v and not training_objective == "bert":
+    @model_validator(mode="after")
+    def validate_bert_spec_matches_objective(self):
+        if self.bert_spec is not None and self.training_objective != "bert":
             raise ValueError(
                 "The BERT hyperparameters should only be configured if the training objective is 'bert'"
             )
-        if not v and training_objective == "bert":
+        if self.bert_spec is None and self.training_objective == "bert":
             raise ValueError(
                 "If the training_objective is 'bert', the BERT hyperparameters must be set"
             )
-        return v
+        return self
 
     @field_validator("sampling_strategy")
     @classmethod
@@ -567,6 +565,18 @@ class TrainModel(BaseModel):
 
     model_spec: ModelSpecModel
     training_spec: TrainingSpecModel
+
+    @model_validator(mode="after")
+    def validate_bert_prediction_length_matches_seq_length(self):
+        if (
+            self.training_spec.training_objective == "bert"
+            and self.model_spec.prediction_length != self.seq_length
+        ):
+            raise ValueError(
+                "For BERT training, model_spec.prediction_length must be equal to seq_length "
+                f"(got prediction_length={self.model_spec.prediction_length}, seq_length={self.seq_length})."
+            )
+        return self
 
     @field_validator("model_name")
     @classmethod

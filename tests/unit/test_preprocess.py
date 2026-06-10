@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from sequifier.config.preprocess_config import PreprocessorModel
 from sequifier.preprocess import (
     Preprocessor,
+    _apply_column_statistics,
     _apply_mask_column,
     _get_column_statistics,
     _get_data_columns,
@@ -17,6 +18,7 @@ from sequifier.preprocess import (
     extract_subsequences,
     get_batch_limits,
     get_combined_statistics,
+    load_precomputed_id_maps,
     process_and_write_data_pt,
 )
 
@@ -490,6 +492,36 @@ def test_get_column_statistics_state_accumulation():
     np.testing.assert_almost_equal(stats["num_col"]["std"], expected_std)
 
 
+def test_get_column_statistics_skips_all_masked_chunks():
+    data = pl.DataFrame(
+        {
+            "cat_col": ["a", "b"],
+            "num_col": [1.0, 2.0],
+            RESERVED_MASK_COLUMN: [1, 1],
+        }
+    )
+
+    id_maps, stats = _get_column_statistics(
+        data,
+        ["cat_col", "num_col"],
+        {},
+        {},
+        0,
+        {},
+        mask_column=RESERVED_MASK_COLUMN,
+    )
+
+    assert id_maps == {}
+    assert stats == {}
+
+
+def test_apply_column_statistics_errors_when_all_rows_masked():
+    data = pl.DataFrame({"cat_col": ["a"], "num_col": [1.0]})
+
+    with pytest.raises(ValueError, match="No unmasked examples"):
+        _apply_column_statistics(data, ["cat_col", "num_col"], {}, {})
+
+
 def test_create_id_map():
     """Tests basic ID mapping creation."""
     df = pl.DataFrame({"A": ["z", "x", "y", "x"]})
@@ -499,3 +531,37 @@ def test_create_id_map():
     assert mapping["x"] == 3
     assert mapping["y"] == 4
     assert mapping["z"] == 5
+
+
+def test_load_precomputed_id_maps_allows_reserved_entries(tmp_path):
+    project_root = tmp_path / "project"
+    id_map_dir = project_root / "configs" / "id_maps"
+    id_map_dir.mkdir(parents=True)
+    (id_map_dir / "itemId.json").write_text(
+        json.dumps(
+            {
+                "[unknown]": 0,
+                "[other]": 1,
+                "[mask]": 2,
+                "a": 3,
+                "b": 4,
+            }
+        )
+    )
+
+    id_maps = load_precomputed_id_maps(str(project_root), ["itemId"])
+
+    assert id_maps["itemId"]["[mask]"] == 2
+    assert id_maps["itemId"]["a"] == 3
+
+
+def test_load_precomputed_id_maps_migrates_legacy_user_ids(tmp_path):
+    project_root = tmp_path / "project"
+    id_map_dir = project_root / "configs" / "id_maps"
+    id_map_dir.mkdir(parents=True)
+    (id_map_dir / "itemId.json").write_text(json.dumps({"a": 2, "b": 3}))
+
+    with pytest.warns(UserWarning, match="legacy user IDs"):
+        id_maps = load_precomputed_id_maps(str(project_root), ["itemId"])
+
+    assert id_maps["itemId"] == {"a": 3, "b": 4}

@@ -2099,14 +2099,21 @@ class TransformerModel(nn.Module):
             }
 
             input_dict = {**x_cat, **x_real}
+            metadata_dict = {
+                "attention_valid_mask": torch.ones(
+                    self.inference_batch_size,
+                    self.seq_length,
+                    dtype=torch.bool,
+                    device=export_device,
+                )
+            }
 
-            # Wrap in a tuple with an empty dict to prevent PyTorch from treating input_dict as kwargs
-            x = (input_dict, {})
+            # Wrap in a tuple to prevent PyTorch from treating dictionaries as kwargs.
+            x = (input_dict, metadata_dict)
 
-            # PyTree flattening sorts dictionary keys automatically, so we sort names to match
-            input_names = [
-                f"{col}_in" if col in sorted(list(input_dict.keys())) else col
-                for col in sorted(self.target_columns)
+            # PyTree flattening sorts dictionary keys automatically, so names must match that order.
+            input_names = [f"{col}_in" for col in sorted(input_dict.keys())] + [
+                "attention_valid_mask"
             ]
 
             # Determine output names based on the model type

@@ -26,6 +26,8 @@ from sequifier.helpers import (
 INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
 CATEGORICAL_MASK_ID = 2
 REAL_MASK_VALUE = 0.0
+RESERVED_ID_KEYS = {"[unknown]", "[other]", "[mask]"}
+RESERVED_ID_VALUES = {0, 1, 2}
 
 
 @beartype
@@ -815,7 +817,10 @@ class Preprocessor:
                 for split_path in self.split_paths
             ],
             "column_types": col_types,
-            "selected_columns_statistics": selected_columns_statistics,
+            "selected_columns_statistics": {
+                col: {"mean": stats["mean"], "std": stats["std"]}
+                for col, stats in selected_columns_statistics.items()
+            },
         }
         os.makedirs(
             os.path.join(self.project_root, "configs", "metadata_configs"),
@@ -1048,6 +1053,17 @@ def _apply_column_statistics(
     if col_types is None:
         col_types = {col: str(data.schema[col]) for col in data_columns}
 
+    missing_columns = [
+        col
+        for col in data_columns
+        if col not in id_maps and col not in selected_columns_statistics
+    ]
+    if missing_columns:
+        raise ValueError(
+            "No unmasked examples found for columns: "
+            f"{missing_columns}. Check the mask column or provide precomputed metadata."
+        )
+
     for col in data_columns:
         if col in id_maps:
             data = data.with_columns(pl.col(col).replace(id_maps[col], default=1))
@@ -1103,11 +1119,53 @@ def load_precomputed_id_maps(
 
                     if not len(m) > 0:
                         raise ValueError(f"map in {file} does not contain any values")
-                    min_val = min(m.values())
+                    for reserved_key, expected_value in {
+                        "[unknown]": 0,
+                        "[other]": 1,
+                        "[mask]": 2,
+                    }.items():
+                        if reserved_key in m and m[reserved_key] != expected_value:
+                            raise ValueError(
+                                f"{reserved_key} in map {file} must map to {expected_value}"
+                            )
+
+                    user_values = [
+                        value for key, value in m.items() if key not in RESERVED_ID_KEYS
+                    ]
+                    if not user_values:
+                        raise ValueError(
+                            f"map in {file} does not contain any non-reserved values"
+                        )
+
+                    min_val = min(user_values)
+                    if min_val == 2:
+                        warnings.warn(
+                            f"Precomputed map {file} uses legacy user IDs starting at 2; shifting user IDs by 1 to reserve the BERT mask ID.",
+                            stacklevel=2,
+                        )
+                        m = {
+                            key: value + 1
+                            if key not in RESERVED_ID_KEYS and value >= 2
+                            else value
+                            for key, value in m.items()
+                        }
+                        user_values = [
+                            value
+                            for key, value in m.items()
+                            if key not in RESERVED_ID_KEYS
+                        ]
+                        min_val = min(user_values)
+
                     if min_val != 3:
                         raise ValueError(
-                            f"minimum value in map {file} is {min_val}, must be 3."
+                            f"minimum non-reserved value in map {file} is {min_val}, must be 3."
                         )
+                    if any(value in RESERVED_ID_VALUES for value in user_values):
+                        raise ValueError(
+                            f"non-reserved values in map {file} must not use reserved IDs {RESERVED_ID_VALUES}"
+                        )
+                    if len(set(m.values())) != len(m.values()):
+                        raise ValueError(f"map in {file} contains duplicate IDs")
                     custom_maps[col_name] = m
     if required_maps:
         missing_maps = [col for col in required_maps if col not in custom_maps]
@@ -1169,6 +1227,9 @@ def _get_column_statistics(
         mask_expr = _mask_column_expr(data.schema[mask_column], mask_column)
         data = data.filter(~mask_expr)
 
+    if data.is_empty():
+        return id_maps, selected_columns_statistics
+
     for data_col in data_columns:
         dtype = data.schema[data_col]
         if isinstance(
@@ -1197,18 +1258,29 @@ def _get_column_statistics(
                     f"Column {data_col} is not categorical, precomputed map is invalid."
                 )
 
-            combined_mean, combined_std = get_combined_statistics(
-                data.shape[0],
-                data.get_column(data_col).mean(),
-                data.get_column(data_col).std(),
-                n_rows_running_count,
-                selected_columns_statistics.get(data_col, {"mean": 0.0})["mean"],
-                selected_columns_statistics.get(data_col, {"std": 0.0})["std"],
-            )
+            chunk_mean = data.get_column(data_col).mean()
+            chunk_std = data.get_column(data_col).std() or 0.0
+            previous_stats = selected_columns_statistics.get(data_col)
+
+            if previous_stats is None:
+                combined_mean, combined_std = chunk_mean, chunk_std
+                combined_count = data.shape[0]
+            else:
+                previous_count = int(previous_stats.get("count", n_rows_running_count))
+                combined_mean, combined_std = get_combined_statistics(
+                    data.shape[0],
+                    chunk_mean,
+                    chunk_std,
+                    previous_count,
+                    previous_stats["mean"],
+                    previous_stats["std"],
+                )
+                combined_count = previous_count + data.shape[0]
 
             selected_columns_statistics[data_col] = {
                 "std": combined_std,
                 "mean": combined_mean,
+                "count": float(combined_count),
             }
         else:
             raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
@@ -1577,8 +1649,16 @@ def get_combined_statistics(
         A tuple `(combined_mean, combined_std)` containing the combined
         mean and standard deviation of the two subsets.
     """
+    if n1 == 0:
+        return mean2, std2
+    if n2 == 0:
+        return mean1, std1
+
     # Step 1: Calculate the combined mean.
     combined_mean = (n1 * mean1 + n2 * mean2) / (n1 + n2)
+
+    if n1 + n2 <= 1:
+        return combined_mean, 0.0
 
     # Step 2: Calculate the pooled sum of squared differences.
     # This includes the internal variance of each subset and the variance
