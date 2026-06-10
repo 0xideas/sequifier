@@ -23,7 +23,6 @@ from sequifier.helpers import (
     write_data,
 )
 
-RESERVED_MASK_COLUMN = "[mask]"
 INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
 CATEGORICAL_MASK_ID = 2
 REAL_MASK_VALUE = 0.0
@@ -2054,7 +2053,7 @@ def extract_sequences(
     for in_row in raw_sequences.iter_rows(named=True):
         in_seq_lists_only = {col: in_row[col] for col in columns}
 
-        subsequences, left_pad_lengths = extract_subsequences(
+        subsequences, left_pad_lengths, subsequence_starts = extract_subsequences(
             in_seq_lists_only,
             seq_length,
             stride_for_split,
@@ -2067,7 +2066,7 @@ def extract_sequences(
                 row = [
                     in_row["sequenceId"],
                     subsequence_id,
-                    subsequence_id * stride_for_split,
+                    int(subsequence_starts[subsequence_id]) - left_pad_lengths[subsequence_id],
                     left_pad_lengths[subsequence_id],
                     col,
                 ] + subseqs[subsequence_id]
@@ -2142,7 +2141,7 @@ def extract_subsequences(
     stride_for_split: int,
     columns: list[str],
     subsequence_start_mode: str,
-) -> tuple[dict[str, list[list[Union[float, int]]]], list[int]]:
+) -> tuple[dict[str, list[list[Union[float, int]]]], list[int], np.ndarray]:
     """Extracts subsequences from a dictionary of sequence lists.
 
     This function takes a dictionary `in_seq` where keys are column
@@ -2186,7 +2185,7 @@ def extract_subsequences(
     }
     left_pad_lengths = [pad_len] * len(subsequence_starts)
 
-    return result, left_pad_lengths
+    return result, left_pad_lengths, subsequence_starts
 
 
 @beartype

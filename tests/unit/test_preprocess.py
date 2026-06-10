@@ -36,7 +36,7 @@ def test_extract_subsequences_basic():
     # Expected behavior: Window size is seq_length + 1 (history + target)
     # Windows: [10,11,12,13], [11,12,13,14], [12,13,14,15]
 
-    result, left_pad_lengths = extract_subsequences(
+    result, left_pad_lengths, subsequence_starts = extract_subsequences(
         input_data, seq_length, stride, columns, subsequence_start_mode="distribute"
     )
 
@@ -54,7 +54,7 @@ def test_extract_subsequences_padding():
 
     # Expected: [0, 0, 0, 1, 2] -> 3 zeroes padding
 
-    result, left_pad_lengths = extract_subsequences(
+    result, left_pad_lengths, subsequence_starts = extract_subsequences(
         input_data, seq_length, stride, columns, subsequence_start_mode="distribute"
     )
 
@@ -64,7 +64,7 @@ def test_extract_subsequences_padding():
 
 def test_extract_subsequences_returns_left_pad_lengths_when_requested():
     input_data = {"col1": [0.0, 1.5]}
-    result, left_pad_lengths = extract_subsequences(
+    result, left_pad_lengths, subsequence_starts = extract_subsequences(
         input_data,
         seq_length=4,
         stride_for_split=1,
@@ -351,7 +351,7 @@ def test_extract_subsequences_modes(mode):
     if mode == "distribute":
         stride = 4
         # distribute might adjust indices to maximize coverage
-        result, left_pad_lengths = extract_subsequences(
+        result, left_pad_lengths, subsequence_starts = extract_subsequences(
             input_data, seq_length, stride, columns, mode
         )
         assert len(result["col1"]) > 0
@@ -367,7 +367,7 @@ def test_extract_subsequences_modes(mode):
         # Testing a passing exact case
         # (10-1) - 2 = 7. If we change input len to 11: (11-1)-2 = 8. stride 4 works.
         input_data_exact = {"col1": list(range(11))}
-        result, left_pad_lengths = extract_subsequences(
+        result, left_pad_lengths, subsequence_starts = extract_subsequences(
             input_data_exact, seq_length, 4, columns, mode
         )
         assert len(result["col1"]) > 0
