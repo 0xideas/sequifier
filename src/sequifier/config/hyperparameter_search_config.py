@@ -8,9 +8,12 @@ from beartype import beartype
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.config.train_config import (
+    BERTSpecModel,
     DotDict,
     ModelSpecModel,
+    ReplacementDistribution,
     TrainingSpecModel,
     TrainModel,
 )
@@ -68,6 +71,66 @@ class IntDistribution(BaseModel):
 
 OptunaFloat = Union[list[float], FloatDistribution]
 OptunaInt = Union[list[int], IntDistribution]
+
+
+def sample_param(
+    trial: Any,
+    name: str,
+    space: Union[list, FloatDistribution, IntDistribution],
+):
+    if isinstance(space, list):
+        return trial.suggest_categorical(name, space)
+    if isinstance(space, FloatDistribution):
+        return trial.suggest_float(
+            name, space.low, space.high, step=space.step, log=space.log
+        )
+    if isinstance(space, IntDistribution):
+        return trial.suggest_int(
+            name, space.low, space.high, step=space.step, log=space.log
+        )
+    raise TypeError(f"Unsupported hyperparameter search space for {name}: {space}")
+
+
+class BERTSpecHyperparameterSampling(BaseModel):
+    """Pydantic model for BERT objective hyperparameter sampling.
+
+    Each BERT spec field is sampled independently so Optuna can track the
+    conditional search space without receiving nested objects as categorical
+    values.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    masking_probability: OptunaFloat
+    replacement_distribution: list[ReplacementDistribution]
+    span_masking: list[ProbabilityDistribution]
+
+    def sample_trial(self, trial: Any) -> BERTSpecModel:
+        masking_probability = sample_param(
+            trial, "bert_masking_probability", self.masking_probability
+        )
+        replacement_distribution_index = trial.suggest_categorical(
+            "bert_replacement_distribution_index",
+            list(range(len(self.replacement_distribution))),
+        )
+        span_masking_index = trial.suggest_categorical(
+            "bert_span_masking_index", list(range(len(self.span_masking)))
+        )
+
+        replacement_distribution = self.replacement_distribution[
+            replacement_distribution_index
+        ].model_copy(deep=True)
+        span_masking = self.span_masking[span_masking_index].model_copy(deep=True)
+
+        logger.info(
+            f"{masking_probability = } - {replacement_distribution = } - {span_masking = }"
+        )
+
+        return BERTSpecModel(
+            masking_probability=masking_probability,
+            replacement_distribution=replacement_distribution,
+            span_masking=span_masking,
+        )
 
 
 @beartype
@@ -165,8 +228,10 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path
         save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving
         calculate_validation_loss_on_initialization: calculate val loss on weight initialization
+        training_objective: Training objective choices, either 'causal' or 'bert'.
         batch_size: A list of possible batch sizes.
         learning_rate: A list of possible learning rates.
+        bert_spec: Optional BERT hyperparameter search space. Required if 'bert' can be sampled.
         criterion: A dictionary mapping target columns to loss functions.
         class_weights: Optional dictionary mapping columns to class weights.
         accumulation_steps: A list of possible gradient accumulation steps.
@@ -198,8 +263,10 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     save_batch_interval_minutes_val_loss: bool = True
     calculate_validation_loss_on_initialization: bool = False
 
+    training_objective: list[str] = Field(default_factory=lambda: ["causal"])
     batch_size: OptunaInt
     learning_rate: list[float]  # Kept as list to preserve coupling with epochs
+    bert_spec: Optional[BERTSpecHyperparameterSampling] = None
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
     accumulation_steps: OptunaInt
@@ -258,6 +325,32 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         self.scheduler = [
             DotDict(scheduler_config) for scheduler_config in kwargs["scheduler"]
         ]
+
+    @field_validator("training_objective", mode="before")
+    @classmethod
+    def normalize_training_objective(cls, v):
+        if isinstance(v, str):
+            return [v]
+        return v
+
+    @field_validator("training_objective")
+    @classmethod
+    def validate_training_objective(cls, v):
+        allowed = {"causal", "bert"}
+        invalid = set(v).difference(allowed)
+        if invalid:
+            raise ValueError(
+                f"Only 'causal' and 'bert' are allowed, found {invalid}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def validate_bert_spec(self):
+        if "bert" in self.training_objective and self.bert_spec is None:
+            raise ValueError(
+                "If 'bert' is in training_objective, bert_spec must be configured."
+            )
+        return self
 
     @field_validator("layer_type_dtypes")
     @classmethod
@@ -343,29 +436,27 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         )
         optimizer = self.optimizer[opt_index]
 
-        def sample_param(
-            name: str, space: Union[list, FloatDistribution, IntDistribution]
-        ):
-            if isinstance(space, list):
-                return trial.suggest_categorical(name, space)
-            elif isinstance(space, FloatDistribution):
-                return trial.suggest_float(
-                    name, space.low, space.high, step=space.step, log=space.log
-                )
-            elif isinstance(space, IntDistribution):
-                return trial.suggest_int(
-                    name, space.low, space.high, step=space.step, log=space.log
-                )
+        training_objective = trial.suggest_categorical(
+            "training_objective", self.training_objective
+        )
+        bert_spec = (
+            self.bert_spec.sample_trial(trial)
+            if training_objective == "bert" and self.bert_spec is not None
+            else None
+        )
 
-        batch_size = sample_param("batch_size", self.batch_size)
-        dropout = sample_param("dropout", self.dropout)
-        accumulation_steps = sample_param("accumulation_steps", self.accumulation_steps)
+        batch_size = sample_param(trial, "batch_size", self.batch_size)
+        dropout = sample_param(trial, "dropout", self.dropout)
+        accumulation_steps = sample_param(
+            trial, "accumulation_steps", self.accumulation_steps
+        )
 
         logger.info(
-            f"{learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }"
+            f"{training_objective = } - {learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }"
         )
 
         return TrainingSpecModel(
+            training_objective=training_objective,
             device=self.device,
             epochs=epochs,
             log_interval=self.log_interval,
@@ -380,6 +471,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             learning_rate=learning_rate,
             criterion=self.criterion,
             class_weights=self.class_weights,
+            bert_spec=bert_spec,
             accumulation_steps=accumulation_steps,
             dropout=dropout,
             loss_weights=self.loss_weights,
@@ -498,23 +590,11 @@ class ModelSpecHyperparameterSampling(BaseModel):
             else self.feature_embedding_dims[dim_model_idx]
         )
 
-        def sample_param(
-            name: str, space: Union[list, FloatDistribution, IntDistribution]
-        ):
-            if isinstance(space, list):
-                return trial.suggest_categorical(name, space)
-            elif isinstance(space, FloatDistribution):
-                return trial.suggest_float(
-                    name, space.low, space.high, step=space.step, log=space.log
-                )
-            elif isinstance(space, IntDistribution):
-                return trial.suggest_int(
-                    name, space.low, space.high, step=space.step, log=space.log
-                )
-
-        dim_feedforward = sample_param("dim_feedforward", self.dim_feedforward)
-        num_layers = sample_param("num_layers", self.num_layers)
-        rope_theta = sample_param("rope_theta", self.rope_theta)
+        dim_feedforward = sample_param(
+            trial, "dim_feedforward", self.dim_feedforward
+        )
+        num_layers = sample_param(trial, "num_layers", self.num_layers)
+        rope_theta = sample_param(trial, "rope_theta", self.rope_theta)
 
         activation_fn = trial.suggest_categorical("activation_fn", self.activation_fn)
         normalization = trial.suggest_categorical("normalization", self.normalization)

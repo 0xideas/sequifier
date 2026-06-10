@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 from sequifier.config.preprocess_config import PreprocessorModel
 from sequifier.preprocess import (
-    RESERVED_MASK_COLUMN,
     Preprocessor,
     _apply_mask_column,
     _get_column_statistics,
@@ -24,8 +23,7 @@ from sequifier.preprocess import (
 # ==========================================
 # 1. Test Sequence Extraction (Sliding Window)
 # ==========================================
-
-
+RESERVED_MASK_COLUMN = "[mask]"
 def test_extract_subsequences_basic():
     """Tests basic sliding window extraction with sufficient length."""
     input_data = {"col1": [10, 11, 12, 13, 14, 15]}

@@ -5,7 +5,7 @@ logs/
 metadata_configs/
 outputs/
 project_folder/
-
+!tests/unit/data
 *\~
 *.DS_Store
 

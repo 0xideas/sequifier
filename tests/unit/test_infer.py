@@ -164,7 +164,7 @@ def ar_config():
         model_path="dummy.onnx",
         model_type="generative",
         training_objective="causal",
-        data_path="tests/unit/data/dummy.parquet",
+        data_path="tests/unit/data/empty.parquet",
         input_columns=["target_col"],
         categorical_columns=[],
         real_columns=["target_col"],

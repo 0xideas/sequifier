@@ -1,5 +1,6 @@
 import numpy
 import yaml
+from pydantic import BaseModel
 
 from sequifier.config.train_config import (
     DotDict,
@@ -77,6 +78,7 @@ class TrainModelDumper(yaml.Dumper):
 TrainModelDumper.add_representer(TrainModel, represent_sequifier_object)
 TrainModelDumper.add_representer(ModelSpecModel, represent_sequifier_object)
 TrainModelDumper.add_representer(TrainingSpecModel, represent_sequifier_object)
+TrainModelDumper.add_multi_representer(BaseModel, represent_sequifier_object)
 TrainModelDumper.add_representer(DotDict, represent_dot_dict)
 TrainModelDumper.add_representer(numpy.float64, represent_numpy_float)
 TrainModelDumper.add_representer(
