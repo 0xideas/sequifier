@@ -16,6 +16,7 @@ from pydantic import (
     ConfigDict,
     Field,
     computed_field,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -232,6 +233,10 @@ class TrainingSpecModel(BaseModel):
         self.optimizer = DotDict(kwargs["optimizer"])
         self.validate_scheduler_config(kwargs["scheduler"], kwargs)
         self.scheduler = DotDict(kwargs["scheduler"])
+
+    @field_serializer("optimizer", "scheduler")
+    def serialize_dotdict(self, value: DotDict) -> dict[str, Any]:
+        return dict(value)
 
     @computed_field
     @property

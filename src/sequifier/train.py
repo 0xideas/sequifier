@@ -533,6 +533,22 @@ class TransformerEmbeddingModel(nn.Module):
         return self.transformer_model.forward_embed(src, metadata=metadata)
 
 
+class _OnnxExportWrapper(nn.Module):
+    def __init__(
+        self,
+        model: Union["TransformerModel", TransformerEmbeddingModel],
+        feature_columns: list[str],
+    ):
+        super().__init__()
+        self.model = model
+        self.feature_columns = feature_columns
+
+    def forward(self, *inputs: Tensor):
+        features = dict(zip(self.feature_columns, inputs[:-1]))
+        metadata = {"attention_valid_mask": inputs[-1]}
+        return self.model(features, metadata=metadata)
+
+
 class TransformerModel(nn.Module):
     """The main Transformer model for the sequifier.
 
@@ -2067,6 +2083,8 @@ class TransformerModel(nn.Module):
             suffix: A string suffix for the filename (e.g., "best", "last-embedding").
             epoch: The current epoch number, included in the filename.
         """
+        os.makedirs(os.path.join(self.project_root, "models"), exist_ok=True)
+
         if self.export_onnx:
             is_different_type = any(
                 p.dtype in [torch.float16, torch.bfloat16, torch.float64]
@@ -2099,20 +2117,21 @@ class TransformerModel(nn.Module):
             }
 
             input_dict = {**x_cat, **x_real}
-            metadata_dict = {
-                "attention_valid_mask": torch.ones(
-                    self.inference_batch_size,
-                    self.seq_length,
-                    dtype=torch.bool,
-                    device=export_device,
-                )
-            }
+            attention_valid_mask = torch.ones(
+                self.inference_batch_size,
+                self.seq_length,
+                dtype=torch.bool,
+                device=export_device,
+            )
+            attention_valid_mask[0, 0] = False
 
-            # Wrap in a tuple to prevent PyTorch from treating dictionaries as kwargs.
-            x = (input_dict, metadata_dict)
+            feature_columns = list(input_dict.keys())
+            x = tuple(input_dict[col] for col in feature_columns) + (
+                attention_valid_mask,
+            )
+            export_wrapper = _OnnxExportWrapper(model_to_export, feature_columns)
 
-            # PyTree flattening sorts dictionary keys automatically, so names must match that order.
-            input_names = [f"{col}_in" for col in sorted(input_dict.keys())] + [
+            input_names = [f"{col}_in" for col in input_dict.keys()] + [
                 "attention_valid_mask"
             ]
 
@@ -2158,7 +2177,7 @@ class TransformerModel(nn.Module):
                 warnings.filterwarnings("ignore", category=FutureWarning)
 
                 torch.onnx.export(
-                    model_to_export,
+                    export_wrapper,
                     x,
                     export_path,
                     export_params=True,
