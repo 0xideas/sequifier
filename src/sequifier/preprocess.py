@@ -2066,7 +2066,8 @@ def extract_sequences(
                 row = [
                     in_row["sequenceId"],
                     subsequence_id,
-                    int(subsequence_starts[subsequence_id]) - left_pad_lengths[subsequence_id],
+                    int(subsequence_starts[subsequence_id])
+                    - left_pad_lengths[subsequence_id],
                     left_pad_lengths[subsequence_id],
                     col,
                 ] + subseqs[subsequence_id]

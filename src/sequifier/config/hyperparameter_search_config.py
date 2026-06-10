@@ -339,9 +339,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         allowed = {"causal", "bert"}
         invalid = set(v).difference(allowed)
         if invalid:
-            raise ValueError(
-                f"Only 'causal' and 'bert' are allowed, found {invalid}"
-            )
+            raise ValueError(f"Only 'causal' and 'bert' are allowed, found {invalid}")
         return v
 
     @model_validator(mode="after")
@@ -590,9 +588,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             else self.feature_embedding_dims[dim_model_idx]
         )
 
-        dim_feedforward = sample_param(
-            trial, "dim_feedforward", self.dim_feedforward
-        )
+        dim_feedforward = sample_param(trial, "dim_feedforward", self.dim_feedforward)
         num_layers = sample_param(trial, "num_layers", self.num_layers)
         rope_theta = sample_param(trial, "rope_theta", self.rope_theta)
 
