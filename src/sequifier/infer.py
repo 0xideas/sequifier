@@ -316,7 +316,10 @@ def _prediction_valid_mask_from_frame(
 
     left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(data)
     if left_pad_lengths is None:
-        return None
+        raise ValueError(
+            "BERT inference with full-sequence prediction requires leftPadLength metadata "
+            "so padded target positions can be filtered."
+        )
 
     metadata = generate_padding_masks(
         left_pad_lengths,
@@ -706,6 +709,15 @@ def infer_generative(
             prediction_length = inferer.prediction_length  # Get prediction_length
 
             if total_steps == 1:
+                if (
+                    config.training_objective == "bert"
+                    and "target_valid_mask" not in metadata
+                ):
+                    raise ValueError(
+                        "BERT inference with full-sequence prediction requires target_valid_mask metadata "
+                        "so padded target positions can be filtered."
+                    )
+
                 # Non-autoregressive path: Apply prediction_length logic
                 sequence_ids_for_preds_base = sequence_ids_tensor.numpy()
                 item_positions_base_raw = start_positions_tensor.numpy()
@@ -1664,8 +1676,6 @@ class Inferer:
             ONNX model.
         """
         metadata = metadata or {}
-        fallback_columns = sorted(x.keys())
-        used_feature_columns = set()
         reference_shape = next(iter(x.values())).shape
         ort_inputs = {}
         for session_input in self.ort_session.get_inputs():
@@ -1679,25 +1689,12 @@ class Inferer:
             elif input_name.endswith("_in") and input_name[:-3] in x:
                 feature_column = input_name[:-3]
                 value = x[feature_column]
-                used_feature_columns.add(feature_column)
             elif input_name in x:
                 value = x[input_name]
-                used_feature_columns.add(input_name)
             else:
-                fallback_column = next(
-                    (
-                        column
-                        for column in fallback_columns
-                        if column not in used_feature_columns
-                    ),
-                    None,
+                raise ValueError(
+                    f"Could not map ONNX input '{input_name}' to a feature or metadata array."
                 )
-                if fallback_column is None:
-                    raise ValueError(
-                        f"Could not map ONNX input '{input_name}' to a feature or metadata array."
-                    )
-                value = x[fallback_column]
-                used_feature_columns.add(fallback_column)
 
             ort_inputs[input_name] = self.expand_to_batch_size(value)
 

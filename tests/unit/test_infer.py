@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import numpy as np
+import polars as pl
 import pytest
 import torch
 
@@ -8,6 +9,7 @@ from sequifier.config.infer_config import InfererModel
 from sequifier.infer import (
     Inferer,
     _filter_outputs_to_valid_targets,
+    _prediction_valid_mask_from_frame,
     get_probs_preds_from_dict,
     normalize,
     sample_with_cumsum,
@@ -242,6 +244,67 @@ def test_infer_pure_passes_attention_valid_mask_to_onnx(mock_inferer):
         session.ort_inputs["attention_valid_mask"],
         metadata["attention_valid_mask"],
     )
+
+
+def test_infer_pure_rejects_unknown_onnx_input(mock_inferer):
+    class Input:
+        def __init__(self, name):
+            self.name = name
+
+    class Session:
+        def get_inputs(self):
+            return [Input("unexpected_input")]
+
+    mock_inferer.ort_session = Session()
+
+    with pytest.raises(ValueError, match="Could not map ONNX input"):
+        mock_inferer.infer_pure(
+            {
+                "cat_col": np.array([[1, 2]], dtype=np.int64),
+                "real_col": np.array([[1.0, 2.0]], dtype=np.float32),
+            }
+        )
+
+
+def test_prediction_valid_mask_from_frame_requires_left_pad_length_for_bert():
+    config = InfererModel(
+        project_root=".",
+        metadata_config_path="dummy.json",
+        model_path="dummy.onnx",
+        model_type="generative",
+        training_objective="bert",
+        data_path="tests/unit/data/empty.parquet",
+        input_columns=["target_col"],
+        categorical_columns=[],
+        real_columns=["target_col"],
+        target_columns=["target_col"],
+        column_types={"target_col": "float64"},
+        target_column_types={"target_col": "real"},
+        seed=42,
+        device="cpu",
+        prediction_length=None,
+        seq_length=3,
+        inference_batch_size=2,
+        output_probabilities=False,
+        map_to_id=False,
+        autoregression=False,
+    )
+    data = pl.DataFrame(
+        {
+            "sequenceId": [0],
+            "subsequenceId": [0],
+            "startItemPosition": [0],
+            "inputCol": ["target_col"],
+            "3": [0.0],
+            "2": [0.0],
+            "1": [1.0],
+            "0": [2.0],
+        }
+    )
+
+    assert config.prediction_length is not None
+    with pytest.raises(ValueError, match="leftPadLength"):
+        _prediction_valid_mask_from_frame(config, data, config.prediction_length)
 
 
 def test_filter_outputs_to_valid_targets_filters_predictions_and_probabilities():
