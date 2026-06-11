@@ -93,7 +93,7 @@ def construct_index_maps(
     A special mapping for these indices are added:
     - If original IDs are strings, 0 maps to "[unknown]".
     - If original IDs are strings, 1 maps to "[other]".
-    - If original IDs are strings, 2 maps to "[unknown]".
+    - If original IDs are strings, 2 maps to "[mask]".
     - If original IDs are integers, 0 maps to (minimum original ID) - 3.
     - If original IDs are integers, 1 maps to (minimum original ID) - 2.
     - If original IDs are integers, 2 maps to (minimum original ID) - 1.

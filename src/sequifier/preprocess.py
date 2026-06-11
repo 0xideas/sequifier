@@ -952,27 +952,13 @@ def _selected_columns_with_optional_mask(
 def _mask_column_expr(mask_dtype: Any, mask_column: str) -> pl.Expr:
     mask_col = pl.col(mask_column)
 
-    if isinstance(mask_dtype, pl.Boolean):
+    if mask_dtype == pl.Boolean:
         return mask_col
 
-    if isinstance(
-        mask_dtype,
-        (
-            pl.Int8,
-            pl.Int16,
-            pl.Int32,
-            pl.Int64,
-            pl.UInt8,
-            pl.UInt16,
-            pl.UInt32,
-            pl.UInt64,
-            pl.Float32,
-            pl.Float64,
-        ),
-    ):
+    if mask_dtype.is_numeric():
         return mask_col == 1
 
-    if isinstance(mask_dtype, (pl.String, pl.Utf8)):
+    if mask_dtype in (pl.String, pl.Utf8):
         return mask_col.str.to_lowercase().is_in(["1"])
 
     raise ValueError(
