@@ -15,6 +15,8 @@ from loguru import logger
 from pydantic import ValidationError
 from torch import Tensor
 
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS
+
 PANDAS_TO_TORCH_TYPES = {
     "Float64": torch.float32,
     "float64": torch.float32,
@@ -90,13 +92,8 @@ def construct_index_maps(
     the original string or integer identifiers. It only performs this
     operation if `map_to_id` is True and `id_maps` is provided.
 
-    A special mapping for these indices are added:
-    - If original IDs are strings, 0 maps to "[unknown]".
-    - If original IDs are strings, 1 maps to "[other]".
-    - If original IDs are strings, 2 maps to "[mask]".
-    - If original IDs are integers, 0 maps to (minimum original ID) - 3.
-    - If original IDs are integers, 1 maps to (minimum original ID) - 2.
-    - If original IDs are integers, 2 maps to (minimum original ID) - 1.
+    Special reserved IDs are always decoded as their sentinel labels:
+    0 maps to "[unknown]", 1 maps to "[other]", and 2 maps to "[mask]".
 
     Args:
         id_maps: A nested dictionary mapping column names to their
@@ -126,17 +123,11 @@ def construct_index_maps(
         for target_column in target_columns_index_map:
             map_ = {v: k for k, v in id_maps[target_column].items()}
             val = next(iter(map_.values()))
-            if isinstance(val, str):
-                map_[0] = "[unknown]"
-                map_[1] = "[other]"
-                map_[2] = "[mask]"
-            else:
-                if not isinstance(val, int):
-                    raise TypeError(f"Expected integer ID in map, got {type(val)}")
-                min_id = int(min(map_.values()))
-                map_[0] = min_id - 3  # type: ignore
-                map_[1] = min_id - 2  # type: ignore
-                map_[2] = min_id - 1  # type: ignore
+            if not isinstance(val, (str, int)):
+                raise TypeError(
+                    f"Expected string or integer ID in map, got {type(val)}"
+                )
+            map_.update(SPECIAL_TOKEN_IDS.labels_by_id)
             index_map[target_column] = map_
     return index_map
 
@@ -738,17 +729,15 @@ def apply_bert_masking(
     # 5. Apply corruption to data_batch
     for col, tensor in data_batch.items():
         if col in config.categorical_columns:
-            mask_id = 2
-
             random_tokens = torch.randint(
-                low=3,
+                low=SPECIAL_TOKEN_IDS.user_start,
                 high=config.n_classes[col],
                 size=(batch_size, seq_len),
                 device=device,
                 dtype=tensor.dtype,
             )
 
-            tensor[mask_token_mask] = mask_id
+            tensor[mask_token_mask] = SPECIAL_TOKEN_IDS.mask
             tensor[random_token_mask] = random_tokens[random_token_mask]
 
         elif col in config.real_columns:

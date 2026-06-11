@@ -23,6 +23,7 @@ from pydantic import (
 import sequifier
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.helpers import normalize_path, try_catch_excess_keys
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
 AnyType = str | int | float
 
@@ -97,6 +98,9 @@ def load_train_config(
         )
 
         config_values["id_maps"] = metadata_config["id_maps"]
+        config_values["special_token_ids"] = metadata_config.get(
+            "special_token_ids", SPECIAL_TOKEN_IDS.ids_by_label
+        )
 
     return try_catch_excess_keys(config_path, TrainModel, config_values)
 
@@ -553,6 +557,9 @@ class TrainModel(BaseModel):
     target_columns: list[str]
     target_column_types: dict[str, str]
     id_maps: dict[str, dict[str | int, int]]
+    special_token_ids: dict[str, int] = Field(
+        default_factory=lambda: SPECIAL_TOKEN_IDS.ids_by_label
+    )
 
     seq_length: int
     n_classes: dict[str, int]

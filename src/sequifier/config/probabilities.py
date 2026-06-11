@@ -43,11 +43,11 @@ class NormalDistributionDiscretizedFloor(BaseModel, ProbabilityDistributionBaseC
         return torch.clamp(torch.round(val), min=0).long() + 1
 
 
-class LogNormalDistributionDistcretizedFloor(
+class LogNormalDistributionDiscretizedFloor(
     BaseModel, ProbabilityDistributionBaseClass
 ):
-    type: Literal["LogNormalDistributionDistcretizedFloor"] = (
-        "LogNormalDistributionDistcretizedFloor"
+    type: Literal["LogNormalDistributionDiscretizedFloor",] = (
+        "LogNormalDistributionDiscretizedFloor"
     )
     mean: float
     standard_deviation: float = Field(..., gt=0.0)
@@ -74,7 +74,7 @@ ProbabilityDistribution = Annotated[
     Union[
         GeometricDistribution,
         NormalDistributionDiscretizedFloor,
-        LogNormalDistributionDistcretizedFloor,
+        LogNormalDistributionDiscretizedFloor,
         PoissonDistributionFloor,
     ],
     Field(discriminator="type"),

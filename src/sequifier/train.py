@@ -64,6 +64,7 @@ from sequifier.helpers import (  # noqa: E402
     infer_valid_mask_from_data,
     normalize_path,
 )
+from sequifier.io.batch import SequifierBatch  # noqa: E402
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
 )
@@ -81,6 +82,20 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
 )
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
+
+
+def _as_sequifier_batch(batch: Any) -> SequifierBatch:
+    if isinstance(batch, SequifierBatch):
+        return batch
+
+    data, targets, metadata, sequence_ids, subsequence_ids = batch
+    return SequifierBatch(
+        inputs=data,
+        targets=targets,
+        metadata=metadata or {},
+        sequence_ids=sequence_ids,
+        subsequence_ids=subsequence_ids,
+    )
 
 
 def cleanup():
@@ -1496,9 +1511,7 @@ class TransformerModel(nn.Module):
 
         Iterates through the training DataLoader, computes loss, performs
         backpropagation, and updates model parameters. The DataLoader is expected
-        to yield tuples of
-        (sequences_dict, targets_dict, metadata_dict, sequence_ids, subsequence_ids).
-        The IDs are currently unused in this training loop.
+        to yield SequifierBatch objects. IDs are currently unused in this loop.
 
         Args:
             train_loader: DataLoader for the training dataset.
@@ -1516,8 +1529,12 @@ class TransformerModel(nn.Module):
 
         model_to_call.train()
 
-        for batch_count, (data, targets, metadata, _, _) in enumerate(train_loader):
+        for batch_count, raw_batch in enumerate(train_loader):
+            batch = _as_sequifier_batch(raw_batch)
             if batch_count >= start_batch:
+                data = batch.inputs
+                targets = batch.targets
+                metadata = batch.metadata
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
@@ -1828,10 +1845,9 @@ class TransformerModel(nn.Module):
 
         Iterates through the validation data, calculates the total loss,
         and aggregates results across all processes if in distributed mode.
-        Also calculates a one-time baseline loss on the first call.
-        The DataLoader is expected to yield tuples of
-        (sequences_dict, targets_dict, metadata_dict, sequence_ids, subsequence_ids).
-        The IDs are currently unused during evaluation.
+        Also calculates a one-time baseline loss on the first call. The
+        DataLoader is expected to yield SequifierBatch objects. IDs are
+        currently unused during evaluation.
 
         Args:
             valid_loader: DataLoader for the validation dataset.
@@ -1854,7 +1870,11 @@ class TransformerModel(nn.Module):
         model_to_call.eval()
 
         with torch.no_grad():
-            for data, targets, metadata, _, _ in valid_loader:
+            for raw_batch in valid_loader:
+                batch = _as_sequifier_batch(raw_batch)
+                data = batch.inputs
+                targets = batch.targets
+                metadata = batch.metadata
                 # Move data to the current process's assigned GPU
                 data = {
                     k: v.to(self.device, non_blocking=True)
@@ -1954,7 +1974,11 @@ class TransformerModel(nn.Module):
             baseline_losses_local_collect = {col: [] for col in self.target_columns}
 
             # Iterate over the sharded validation loader
-            for data, targets, metadata, _, _ in valid_loader:
+            for raw_batch in valid_loader:
+                batch = _as_sequifier_batch(raw_batch)
+                data = batch.inputs
+                targets = batch.targets
+                metadata = batch.metadata
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()

@@ -1,5 +1,5 @@
 import math
-from typing import Dict, Iterator, Tuple
+from typing import Iterator
 
 import torch
 import torch.distributed as dist
@@ -8,6 +8,7 @@ from torch.utils.data import IterableDataset
 
 from sequifier.config.train_config import TrainModel
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES, numpy_to_pytorch, read_data
+from sequifier.io.batch import SequifierBatch
 
 
 class SequifierDatasetFromFile(IterableDataset):
@@ -84,28 +85,14 @@ class SequifierDatasetFromFile(IterableDataset):
 
     def __iter__(
         self,
-    ) -> Iterator[
-        Tuple[
-            Dict[str, torch.Tensor],
-            Dict[str, torch.Tensor],
-            Dict[str, torch.Tensor],
-            None,
-            None,
-        ]
-    ]:
+    ) -> Iterator[SequifierBatch]:
         """Yields batches of data.
 
         Handles shuffling (if enabled) and slicing data based on distributed
         rank and worker ID.
 
         Yields:
-            Iterator[Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None]]:
-            An iterator where each item is a tuple containing:
-                - data_batch (dict): Dictionary of feature tensors for the batch.
-                - targets_batch (dict): Dictionary of target tensors for the batch.
-                - metadata_batch (dict): Dictionary of metadata tensors for the batch.
-                - None: Placeholder for sequence_id (not used in this dataset type).
-                - None: Placeholder for subsequence_id (not used in this dataset type).
+            An iterator where each item is a SequifierBatch.
         """
         worker_info = torch.utils.data.get_worker_info()
         world_size = dist.get_world_size() if dist.is_initialized() else 1
@@ -150,4 +137,8 @@ class SequifierDatasetFromFile(IterableDataset):
                 for key, tensor in self.metadata_tensors.items()
             }
 
-            yield data_batch, targets_batch, metadata_batch, None, None
+            yield SequifierBatch(
+                inputs=data_batch,
+                targets=targets_batch,
+                metadata=metadata_batch,
+            )

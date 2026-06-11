@@ -1,7 +1,7 @@
 import json
 import math
 import os
-from typing import Dict, Iterator, Tuple
+from typing import Dict, Iterator
 
 import numpy as np
 import polars as pl
@@ -17,6 +17,7 @@ from sequifier.helpers import (
     get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
 )
+from sequifier.io.batch import SequifierBatch
 
 
 class SequifierDatasetFromFolderParquetLazy(IterableDataset):
@@ -34,9 +35,9 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             sample indices per epoch. Defaults to True.
 
     Yields:
-        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None]:
-            A batch tuple containing sequence dictionaries, target dictionaries,
-            metadata dictionaries, and two `None` placeholders (for API compatibility).
+        SequifierBatch:
+            A named batch containing sequence dictionaries, target dictionaries,
+            metadata dictionaries, and optional identifiers.
 
     Raises:
         FileNotFoundError: If `metadata.json` is missing.
@@ -155,15 +156,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
 
     def __iter__(
         self,
-    ) -> Iterator[
-        Tuple[
-            Dict[str, torch.Tensor],
-            Dict[str, torch.Tensor],
-            Dict[str, torch.Tensor],
-            None,
-            None,
-        ]
-    ]:
+    ) -> Iterator[SequifierBatch]:
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_initialized() else 0
 
@@ -366,7 +359,11 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
                 batch_tgt = {k: v[: self.batch_size] for k, v in tgt_buffer.items()}
                 batch_meta = {k: v[: self.batch_size] for k, v in meta_buffer.items()}
 
-                yield batch_seq, batch_tgt, batch_meta, None, None
+                yield SequifierBatch(
+                    inputs=batch_seq,
+                    targets=batch_tgt,
+                    metadata=batch_meta,
+                )
                 yielded_samples += self.batch_size
 
                 # Keep the remainder in the buffer for the next loop/file
@@ -384,4 +381,8 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             batch_tgt = {k: v[:final_yield_size] for k, v in tgt_buffer.items()}
             batch_meta = {k: v[:final_yield_size] for k, v in meta_buffer.items()}
 
-            yield batch_seq, batch_tgt, batch_meta, None, None
+            yield SequifierBatch(
+                inputs=batch_seq,
+                targets=batch_tgt,
+                metadata=batch_meta,
+            )

@@ -33,7 +33,7 @@ def test_construct_index_maps_string():
 
 
 def test_construct_index_maps_integer():
-    """Tests reversing an int-to-int map, ensuring 0 maps to min_id - 1."""
+    """Tests reversing an int-to-int map with special IDs as sentinels."""
     id_maps: dict[str, dict[str | int, int]] = {"storeId": {100: 3, 101: 4}}
     target_cols = ["storeId"]
 
@@ -42,11 +42,9 @@ def test_construct_index_maps_integer():
     assert result["storeId"][3] == 100
     assert result["storeId"][4] == 101
 
-    # Check the special 0 index for integers (min value - 2)
-    # Min value is 100, so 2 -> 98, 1 -> 99
-    assert result["storeId"][0] == 97
-    assert result["storeId"][1] == 98
-    assert result["storeId"][2] == 99
+    assert result["storeId"][0] == "[unknown]"
+    assert result["storeId"][1] == "[other]"
+    assert result["storeId"][2] == "[mask]"
 
 
 def test_construct_index_maps_flag_false():

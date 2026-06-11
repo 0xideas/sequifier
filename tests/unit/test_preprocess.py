@@ -250,6 +250,11 @@ def test_preprocessor_applies_mask_column_end_to_end(tmp_path):
     assert RESERVED_MASK_COLUMN not in metadata["column_types"]
     assert RESERVED_MASK_COLUMN not in metadata["id_maps"]
     assert RESERVED_MASK_COLUMN not in metadata["selected_columns_statistics"]
+    assert metadata["special_token_ids"] == {
+        "[unknown]": 0,
+        "[other]": 1,
+        "[mask]": 2,
+    }
 
 
 def test_load_and_preprocess_data_requests_mask_column_for_csv_projection(tmp_path):
@@ -291,6 +296,36 @@ def test_load_and_preprocess_data_requests_mask_column_for_csv_projection(tmp_pa
         "itemValue",
         RESERVED_MASK_COLUMN,
     ]
+
+
+def test_load_and_preprocess_data_fails_when_mask_column_is_missing(tmp_path):
+    csv_path = tmp_path / "input.csv"
+    pl.DataFrame({"sequenceId": [0], "itemPosition": [0], "itemId": ["a"]}).write_csv(
+        csv_path
+    )
+
+    with pytest.raises(ValueError, match="mask_column '.+' not found"):
+        _load_and_preprocess_data(
+            str(csv_path),
+            "csv",
+            None,
+            None,
+            RESERVED_MASK_COLUMN,
+        )
+
+    parquet_path = tmp_path / "input.parquet"
+    pl.DataFrame(
+        {"sequenceId": [0], "itemPosition": [0], "itemId": ["a"]}
+    ).write_parquet(parquet_path)
+
+    with pytest.raises(ValueError, match="mask_column '.+' not found"):
+        _load_and_preprocess_data(
+            str(parquet_path),
+            "parquet",
+            ["itemId"],
+            None,
+            RESERVED_MASK_COLUMN,
+        )
 
 
 def test_preprocessor_requires_metadata_config_for_mask_column(tmp_path):

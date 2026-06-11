@@ -22,12 +22,14 @@ from sequifier.helpers import (
     unpack_preprocessed_pt_tuple,
     write_data,
 )
+from sequifier.special_tokens import (
+    SPECIAL_TOKEN_ID_VALUES,
+    SPECIAL_TOKEN_IDS,
+    SPECIAL_TOKEN_LABELS,
+)
 
 INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
-CATEGORICAL_MASK_ID = 2
 REAL_MASK_VALUE = 0.0
-RESERVED_ID_KEYS = {"[unknown]", "[other]", "[mask]"}
-RESERVED_ID_VALUES = {0, 1, 2}
 
 
 @beartype
@@ -812,6 +814,7 @@ class Preprocessor:
         data_driven_config = {
             "n_classes": n_classes,
             "id_maps": id_maps,
+            "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             "split_paths": [
                 os.path.splitext(split_path)[0] if not self.merge_output else split_path
                 for split_path in self.split_paths
@@ -945,7 +948,7 @@ def _selected_columns_with_optional_mask(
     schema_columns = pq.read_schema(data_path).names
     if mask_column in schema_columns:
         return _deduplicate_columns(selected_columns + [mask_column])
-    return selected_columns
+    raise ValueError(f"mask_column '{mask_column}' not found in {data_path}")
 
 
 @beartype
@@ -973,14 +976,16 @@ def _apply_mask_column(
     col_types: dict[str, str],
     mask_column: Optional[str] = None,
 ) -> pl.DataFrame:
-    if mask_column is None or mask_column not in data.columns:
+    if mask_column is None:
         return data
+    if mask_column not in data.columns:
+        raise ValueError(f"mask_column '{mask_column}' not found in input data")
 
     mask_expr = _mask_column_expr(data.schema[mask_column], mask_column)
     updates = []
     for col in data_columns:
         mask_value = (
-            CATEGORICAL_MASK_ID if col_types[col] == "Int64" else REAL_MASK_VALUE
+            SPECIAL_TOKEN_IDS.mask if col_types[col] == "Int64" else REAL_MASK_VALUE
         )
         updates.append(
             pl.when(mask_expr)
@@ -1108,18 +1113,19 @@ def load_precomputed_id_maps(
 
                     if not len(m) > 0:
                         raise ValueError(f"map in {file} does not contain any values")
-                    for reserved_key, expected_value in {
-                        "[unknown]": 0,
-                        "[other]": 1,
-                        "[mask]": 2,
-                    }.items():
+                    for (
+                        reserved_key,
+                        expected_value,
+                    ) in SPECIAL_TOKEN_IDS.ids_by_label.items():
                         if reserved_key in m and m[reserved_key] != expected_value:
                             raise ValueError(
                                 f"{reserved_key} in map {file} must map to {expected_value}"
                             )
 
                     user_values = [
-                        value for key, value in m.items() if key not in RESERVED_ID_KEYS
+                        value
+                        for key, value in m.items()
+                        if key not in SPECIAL_TOKEN_LABELS
                     ]
                     if not user_values:
                         raise ValueError(
@@ -1134,24 +1140,25 @@ def load_precomputed_id_maps(
                         )
                         m = {
                             key: value + 1
-                            if key not in RESERVED_ID_KEYS and value >= 2
+                            if key not in SPECIAL_TOKEN_LABELS
+                            and value >= SPECIAL_TOKEN_IDS.mask
                             else value
                             for key, value in m.items()
                         }
                         user_values = [
                             value
                             for key, value in m.items()
-                            if key not in RESERVED_ID_KEYS
+                            if key not in SPECIAL_TOKEN_LABELS
                         ]
                         min_val = min(user_values)
 
-                    if min_val != 3:
+                    if min_val != SPECIAL_TOKEN_IDS.user_start:
                         raise ValueError(
-                            f"minimum non-reserved value in map {file} is {min_val}, must be 3."
+                            f"minimum non-reserved value in map {file} is {min_val}, must be {SPECIAL_TOKEN_IDS.user_start}."
                         )
-                    if any(value in RESERVED_ID_VALUES for value in user_values):
+                    if any(value in SPECIAL_TOKEN_ID_VALUES for value in user_values):
                         raise ValueError(
-                            f"non-reserved values in map {file} must not use reserved IDs {RESERVED_ID_VALUES}"
+                            f"non-reserved values in map {file} must not use reserved IDs {SPECIAL_TOKEN_ID_VALUES}"
                         )
                     if len(set(m.values())) != len(m.values()):
                         raise ValueError(f"map in {file} contains duplicate IDs")
@@ -1310,6 +1317,9 @@ def _load_and_preprocess_data(
         data_path, read_format, selected_columns, mask_column
     )
     data = read_data(data_path, read_format, columns=columns_to_read)
+
+    if mask_column is not None and mask_column not in data.columns:
+        raise ValueError(f"mask_column '{mask_column}' not found in {data_path}")
 
     if data.null_count().sum().sum_horizontal().item() != 0:
         raise ValueError(f"NaN or null values not accepted: {data.null_count()}")
@@ -1682,20 +1692,37 @@ def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]
     )  # type: ignore
 
     if isinstance(ids[0], str):
-        if "[mask]" in ids:
-            raise ValueError(f"Found value '[mask]' in {column}, this is invalid")
+        if SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask] in ids:
+            raise ValueError(
+                f"Found value '{SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask]}' in {column}, this is invalid"
+            )
 
-        for special_val in ["[unknown]", "[other]"]:
+        for special_val in [
+            SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown],
+            SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other],
+        ]:
             if special_val in ids:
                 warnings.warn(
                     f"Found special value {special_val} in {column}, these will be combined with the sequifier-internal special value {special_val}"
                 )
-        ids = [id_ for id_ in ids if id_ not in ["[unknown]", "[other]"]]
-        id_map = {id_: i + 3 for i, id_ in enumerate(ids)}
-        id_map["[unknown]"] = 0
-        id_map["[other]"] = 1
+        ids = [
+            id_
+            for id_ in ids
+            if id_
+            not in [
+                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown],
+                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other],
+            ]
+        ]
+        id_map = {id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(ids)}
+        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]] = (
+            SPECIAL_TOKEN_IDS.unknown
+        )
+        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]] = (
+            SPECIAL_TOKEN_IDS.other
+        )
     else:
-        id_map = {id_: i + 3 for i, id_ in enumerate(ids)}
+        id_map = {id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(ids)}
     return dict(id_map)
 
 
@@ -1762,16 +1789,22 @@ def combine_maps(
     Returns:
         A new, combined, and re-indexed ID map.
     """
-    keys1 = {k for k in map1.keys() if k not in ["[unknown]", "[other]", "[mask]"]}
-    keys2 = {k for k in map2.keys() if k not in ["[unknown]", "[other]", "[mask]"]}
+    keys1 = {k for k in map1.keys() if k not in SPECIAL_TOKEN_LABELS}
+    keys2 = {k for k in map2.keys() if k not in SPECIAL_TOKEN_LABELS}
 
     combined_keys = sorted(list(keys1.union(keys2)))
-    id_map = {id_: i + 3 for i, id_ in enumerate(combined_keys)}
+    id_map = {
+        id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(combined_keys)
+    }
 
     # Re-apply special mapping rules if these are string keys
     if combined_keys and isinstance(combined_keys[0], str):
-        id_map["[unknown]"] = 0
-        id_map["[other]"] = 1
+        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]] = (
+            SPECIAL_TOKEN_IDS.unknown
+        )
+        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]] = (
+            SPECIAL_TOKEN_IDS.other
+        )
 
     return id_map
 

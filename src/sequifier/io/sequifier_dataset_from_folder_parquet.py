@@ -1,7 +1,7 @@
 import json
 import math
 import os
-from typing import Dict, Iterator, Tuple
+from typing import Dict, Iterator
 
 import polars as pl
 import torch
@@ -16,6 +16,7 @@ from sequifier.helpers import (
     get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
 )
+from sequifier.io.batch import SequifierBatch
 
 
 class SequifierDatasetFromFolderParquet(IterableDataset):
@@ -182,15 +183,7 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
 
     def __iter__(
         self,
-    ) -> Iterator[
-        Tuple[
-            Dict[str, torch.Tensor],
-            Dict[str, torch.Tensor],
-            Dict[str, torch.Tensor],
-            None,
-            None,
-        ]
-    ]:
+    ) -> Iterator[SequifierBatch]:
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_initialized() else 0
 
@@ -243,4 +236,8 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
                     self.config.training_spec.target_offset,
                 )
 
-            yield data_batch, targets_batch, metadata_batch, None, None
+            yield SequifierBatch(
+                inputs=data_batch,
+                targets=targets_batch,
+                metadata=metadata_batch,
+            )

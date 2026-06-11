@@ -32,12 +32,18 @@ def test_metadata_config(metadata_configs):
                 [
                     "n_classes",
                     "id_maps",
+                    "special_token_ids",
                     "split_paths",
                     "column_types",
                     "selected_columns_statistics",
                 ]
             )
         ), list(metadata_config.keys())
+        assert metadata_config["special_token_ids"] == {
+            "[unknown]": 0,
+            "[other]": 1,
+            "[mask]": 2,
+        }
 
         assert metadata_config["split_paths"][0].endswith(
             "split0.parquet"
