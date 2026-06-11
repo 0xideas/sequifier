@@ -18,7 +18,6 @@ from sequifier.helpers import (
     configure_determinism,
     construct_index_maps,
     generate_padding_masks,
-    get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
     numpy_to_pytorch,
     subset_to_input_columns,
@@ -325,6 +324,70 @@ def _flatten_bert_target_valid_mask(
 
 
 @beartype
+def _is_categorical_column(config: InfererModel, column_name: str) -> bool:
+    column_type = str(config.column_types.get(column_name, "")).lower()
+    return (
+        column_name in config.categorical_columns
+        or config.target_column_types.get(column_name) == "categorical"
+        or column_type.startswith("int")
+    )
+
+
+@beartype
+def _infer_bert_valid_mask_from_values(
+    config: InfererModel,
+    column_name: str,
+    values: np.ndarray,
+    prediction_length: int,
+) -> Optional[np.ndarray]:
+    if _is_categorical_column(config, column_name):
+        valid_mask = values != 0
+    else:
+        valid_mask = np.cumsum(values != 0.0, axis=1) > 0
+
+    return _flatten_bert_target_valid_mask(
+        config, {"target_valid_mask": valid_mask}, prediction_length
+    )
+
+
+@beartype
+def _bert_reference_column(config: InfererModel, data_columns: set[str]) -> str:
+    preferred_columns = (
+        [col for col in config.target_columns if col in config.categorical_columns]
+        + [col for col in config.input_columns if col in config.categorical_columns]
+        + [col for col in config.target_columns if col in data_columns]
+        + [col for col in config.input_columns if col in data_columns]
+    )
+    for column_name in preferred_columns:
+        if column_name in data_columns:
+            return column_name
+
+    raise ValueError("Could not find a reference column for BERT valid-mask inference.")
+
+
+@beartype
+def _flatten_legacy_bert_target_valid_mask_from_sequences(
+    config: InfererModel,
+    sequences: dict[str, Union[torch.Tensor, np.ndarray]],
+    prediction_length: int,
+) -> Optional[np.ndarray]:
+    if config.training_objective != "bert":
+        return None
+
+    column_name = _bert_reference_column(config, set(sequences.keys()))
+    values = sequences[column_name]
+    if isinstance(values, torch.Tensor):
+        values = values.detach().cpu().numpy()  # type: ignore
+    values = np.asarray(values)
+    if values.ndim == 2 and values.shape[1] > prediction_length:
+        values = values[:, :prediction_length]
+
+    return _infer_bert_valid_mask_from_values(
+        config, column_name, values, prediction_length
+    )
+
+
+@beartype
 def _bert_target_valid_mask_from_preprocessed_data(
     config: InfererModel,
     data: pl.DataFrame,
@@ -333,17 +396,30 @@ def _bert_target_valid_mask_from_preprocessed_data(
     if config.training_objective != "bert":
         return None
 
-    left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(data)
-    if left_pad_lengths is None:
-        return None
+    data_columns = set(data.get_column("inputCol").unique())
+    column_name = _bert_reference_column(config, data_columns)
+    reference_rows = data.filter(pl.col("inputCol") == column_name)
 
-    metadata = generate_padding_masks(
-        left_pad_lengths,
-        config.seq_length,
-        data_offset=1,
-        target_offset=1,
+    if "leftPadLength" in reference_rows.columns:
+        left_pad_lengths = torch.tensor(
+            reference_rows.get_column("leftPadLength").to_numpy(), dtype=torch.int64
+        )
+        metadata = generate_padding_masks(
+            left_pad_lengths,
+            config.seq_length,
+            data_offset=1,
+            target_offset=1,
+        )
+        return _flatten_bert_target_valid_mask(config, metadata, prediction_length)
+
+    target_seq_cols = [
+        str(c)
+        for c in range(config.seq_length, config.seq_length - prediction_length, -1)
+    ]
+    values = reference_rows.select(target_seq_cols).to_numpy()
+    return _infer_bert_valid_mask_from_values(
+        config, column_name, values, prediction_length
     )
-    return _flatten_bert_target_valid_mask(config, metadata, prediction_length)
 
 
 @beartype
@@ -482,6 +558,12 @@ def infer_embedding(
             valid_prediction_mask = _flatten_bert_target_valid_mask(
                 config, metadata, prediction_length
             )
+            if valid_prediction_mask is None:
+                valid_prediction_mask = (
+                    _flatten_legacy_bert_target_valid_mask_from_sequences(
+                        config, sequences_dict, prediction_length
+                    )
+                )
 
             sequence_ids_for_preds = sequence_ids_tensor.numpy()
             subsequence_ids_for_preds = subsequence_ids_tensor.numpy()
@@ -744,6 +826,12 @@ def infer_generative(
             valid_prediction_mask = _flatten_bert_target_valid_mask(
                 config, metadata, prediction_length
             )
+            if valid_prediction_mask is None:
+                valid_prediction_mask = (
+                    _flatten_legacy_bert_target_valid_mask_from_sequences(
+                        config, sequences_dict, prediction_length
+                    )
+                )
 
             if total_steps == 1:
                 # Non-autoregressive path: Apply prediction_length logic
