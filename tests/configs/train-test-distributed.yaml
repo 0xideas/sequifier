@@ -27,6 +27,7 @@ model_spec:
   prediction_length: 1
 
 training_spec:
+  training_objective: causal
   device: cpu
   epochs: 3
   log_interval: 1

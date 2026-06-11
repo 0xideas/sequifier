@@ -2,6 +2,7 @@ project_root: tests/project_folder
 metadata_config_path: configs/metadata_configs/test-data-categorical-5.json
 
 model_type: generative
+training_objective: causal
 model_path: models/sequifier-test-hp-search-custom-eval-run-0-best-1.pt
 
 data_path: data/test-data-categorical-5-split2

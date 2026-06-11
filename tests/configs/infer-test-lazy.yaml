@@ -3,6 +3,7 @@ metadata_config_path: configs/metadata_configs/test-data-categorical-3.json
 
 model_path: models/sequifier-model-categorical-lazy-best-3.onnx
 model_type: generative
+training_objective: causal
 
 data_path: data/test-data-categorical-3-split2
 read_format: pt

@@ -39,6 +39,7 @@ model_spec:
   rope_theta: 10000.0
 
 training_spec:
+  training_objective: causal
   device: cpu
   epochs: 3
   save_interval_epochs: 1

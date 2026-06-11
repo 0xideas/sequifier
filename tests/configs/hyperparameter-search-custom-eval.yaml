@@ -52,6 +52,7 @@ model_hyperparameter_sampling:
 
 # Training Hyperparameter Search Space
 training_hyperparameter_sampling:
+  training_objective: ["causal"]
   device: cpu
   epochs: [1, 1]
   save_interval_epochs: 10

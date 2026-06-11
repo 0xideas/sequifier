@@ -2,6 +2,7 @@ project_root: tests/project_folder
 training_config_path: tests/configs/train-test-real.yaml
 metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-real-1.json
 model_type: generative
+training_objective: causal
 model_path: tests/project_folder/models/sequifier-model-real-1-best-3-autoregression.pt
 data_path: tests/project_folder/data/test-data-real-1-split1-autoregression.csv
 read_format: csv

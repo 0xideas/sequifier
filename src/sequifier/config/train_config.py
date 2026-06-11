@@ -183,7 +183,7 @@ class TrainingSpecModel(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    training_objective: str = "causal"
+    training_objective: str
     device: str
     device_max_concat_length: int = 12
     epochs: int

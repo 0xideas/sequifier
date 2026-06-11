@@ -31,6 +31,7 @@ model_spec:
   n_kv_heads: 2
   rope_theta: 10000.0
 training_spec:
+  training_objective: causal
   device: cpu
   epochs: 3
   save_interval_epochs: 1

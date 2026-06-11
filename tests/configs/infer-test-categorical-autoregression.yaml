@@ -2,6 +2,7 @@ project_root: tests/project_folder
 training_config_path: tests/configs/train-test-categorical.yaml
 metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-categorical-5.json
 model_type: generative
+training_objective: causal
 model_path: tests/project_folder/models/sequifier-model-categorical-1-best-3-autoregression.onnx
 data_path: tests/project_folder/data/test-data-categorical-1-split2
 read_format: pt

@@ -32,6 +32,7 @@ model_spec:
   n_kv_heads: 1
   rope_theta: 1000.0
 training_spec:
+  training_objective: causal
   device: cpu
   torch_compile: "outer"
   epochs: 3

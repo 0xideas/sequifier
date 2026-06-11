@@ -118,7 +118,7 @@ class InfererModel(BaseModel):
     metadata_config_path: str
     model_path: Union[str, list[str]]
     model_type: str
-    training_objective: str = "causal"
+    training_objective: str
     data_path: str
     training_config_path: str = Field(default="configs/train.yaml")
     read_format: str = Field(default="parquet")
