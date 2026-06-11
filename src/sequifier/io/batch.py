@@ -11,7 +11,6 @@ class SequifierBatch:
     metadata: dict[str, torch.Tensor]
     sequence_ids: Optional[torch.Tensor] = None
     subsequence_ids: Optional[torch.Tensor] = None
-    start_positions: Optional[torch.Tensor] = None
 
     def __iter__(self) -> Iterator[object]:
         yield self.inputs

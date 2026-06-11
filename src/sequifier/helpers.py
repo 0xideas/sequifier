@@ -611,6 +611,7 @@ def apply_bert_masking(
     targets_batch: Dict[str, torch.Tensor],
     metadata_batch: Optional[Dict[str, torch.Tensor]],
     config: Any,  # TrainConfig
+    eval_seed: Optional[int] = None,
 ) -> tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
     """
     Applies BERT-style span corruption to the input data using custom distributions.
@@ -628,6 +629,12 @@ def apply_bert_masking(
 
     batch_size, seq_len = valid_mask.shape
     device = valid_mask.device
+
+    if eval_seed is not None:
+        cpu_rng_state = torch.get_rng_state()
+        if device.type == "cuda":
+            gpu_rng_state = torch.cuda.get_rng_state(device)
+        torch.manual_seed(eval_seed)
 
     # Calculate exact number of tokens to mask per sequence based on valid length
     masking_prob = config.training_spec.bert_spec.masking_probability
@@ -728,4 +735,8 @@ def apply_bert_masking(
     metadata_batch["bert_mask"] = bert_mask
     metadata_batch["attention_valid_mask"] = valid_mask.detach()
 
+    if eval_seed is not None:
+        torch.set_rng_state(cpu_rng_state)  # type: ignore
+        if device.type == "cuda":
+            torch.cuda.set_rng_state(gpu_rng_state, device)  # type: ignore
     return data_batch, targets_batch, metadata_batch

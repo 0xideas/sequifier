@@ -81,6 +81,7 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
 )
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS  # noqa: E402
 
 
 def _as_sequifier_batch(batch: Any) -> SequifierBatch:
@@ -1858,7 +1859,7 @@ class TransformerModel(nn.Module):
         model_to_call.eval()
 
         with torch.no_grad():
-            for raw_batch in valid_loader:
+            for batch_idx, raw_batch in enumerate(valid_loader):
                 batch = _as_sequifier_batch(raw_batch)
                 data = batch.inputs
                 targets = batch.targets
@@ -1880,7 +1881,11 @@ class TransformerModel(nn.Module):
                 }
                 if self.hparams.training_spec.training_objective == "bert":
                     data, targets, metadata = apply_bert_masking(
-                        data, targets, metadata, self.hparams
+                        data,
+                        targets,
+                        metadata,
+                        self.hparams,
+                        eval_seed=self.hparams.seed + batch_idx,
                     )
 
                 if (
@@ -1962,7 +1967,7 @@ class TransformerModel(nn.Module):
             baseline_losses_local_collect = {col: [] for col in self.target_columns}
 
             # Iterate over the sharded validation loader
-            for raw_batch in valid_loader:
+            for batch_idx, raw_batch in enumerate(valid_loader):
                 batch = _as_sequifier_batch(raw_batch)
                 data = batch.inputs
                 targets = batch.targets
@@ -1982,13 +1987,35 @@ class TransformerModel(nn.Module):
                     for k, v in (metadata or {}).items()
                 }
 
+                if self.hparams.training_spec.training_objective == "bert":
+                    _, _, metadata = apply_bert_masking(
+                        data,
+                        targets,
+                        metadata,
+                        self.hparams,
+                        eval_seed=self.hparams.seed + batch_idx,
+                    )
+
                 pseudo_output = {}
                 targets_for_baseline = {}
                 for col in self.target_columns:
-                    if col in data:
-                        pseudo_output[col] = self._transform_val(
-                            col, data[col].transpose(0, 1)
-                        )
+                    if col in targets:
+                        if self.hparams.training_spec.training_objective == "causal":
+                            pseudo_output[col] = self._transform_val(
+                                col, data[col].transpose(0, 1)
+                            )
+                        elif self.hparams.training_spec.training_objective == "bert":
+                            shifted_targets = torch.roll(targets[col], shifts=1, dims=1)
+
+                            if self.target_column_types[col] == "categorical":
+                                shifted_targets[:, 0] = SPECIAL_TOKEN_IDS.unknown
+                            else:
+                                shifted_targets[:, 0] = 0.0
+                            pseudo_output[col] = self._transform_val(
+                                col, shifted_targets.transpose(0, 1)
+                            )
+                        else:
+                            raise ValueError("Impossible")
                         targets_for_baseline[col] = targets[col]
 
                 if len(pseudo_output) > 0:
