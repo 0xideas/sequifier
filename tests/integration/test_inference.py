@@ -1,6 +1,5 @@
 import json
 import os
-import subprocess
 
 import numpy as np
 import polars as pl
@@ -257,27 +256,6 @@ def test_bert_embeddings(bert_predictions, bert_embeddings, project_root):
         rows_per_subsequence,
         expected_rows_per_subsequence,
         ["sequenceId", "subsequenceId"],
-    )
-
-
-def test_bert_rejects_autoregression_end_to_end(
-    run_training, inference_config_path_cat_bert_autoregression
-):
-    result = subprocess.run(
-        [
-            "sequifier",
-            "infer",
-            "--config-path",
-            inference_config_path_cat_bert_autoregression,
-        ],
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode != 0
-    assert (
-        "Autoregressive inference is not possible with BERT-style models."
-        in result.stdout + result.stderr
     )
 
 

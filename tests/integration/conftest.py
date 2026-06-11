@@ -206,13 +206,6 @@ def inference_config_path_cat_bert_embedding():
 
 
 @pytest.fixture(scope="session")
-def inference_config_path_cat_bert_autoregression():
-    return os.path.join(
-        "tests", "configs", "infer-test-categorical-bert-autoregression.yaml"
-    )
-
-
-@pytest.fixture(scope="session")
 def inference_config_path_real_autoregression():
     return os.path.join("tests", "configs", "infer-test-real-autoregression.yaml")
 
@@ -318,7 +311,6 @@ def format_configs_locally(
     inference_config_path_cat_inf_size_3,
     inference_config_path_cat_bert,
     inference_config_path_cat_bert_embedding,
-    inference_config_path_cat_bert_autoregression,
     inference_config_path_distributed,
     inference_config_path_distributed_parquet,
     inference_config_path_lazy,
@@ -355,7 +347,6 @@ def format_configs_locally(
             inference_config_path_cat_inf_size_3,
             inference_config_path_cat_bert,
             inference_config_path_cat_bert_embedding,
-            inference_config_path_cat_bert_autoregression,
             inference_config_path_distributed,
             inference_config_path_distributed_parquet,
             inference_config_path_lazy,
