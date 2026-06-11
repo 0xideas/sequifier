@@ -61,7 +61,6 @@ from sequifier.helpers import (  # noqa: E402
     configure_logger,
     construct_index_maps,
     get_torch_dtype,
-    infer_valid_mask_from_data,
     normalize_path,
 )
 from sequifier.io.batch import SequifierBatch  # noqa: E402
@@ -534,9 +533,7 @@ class TransformerEmbeddingModel(nn.Module):
         return model_copy
 
     @conditional_beartype
-    def forward(
-        self, src: dict[str, Tensor], metadata: Optional[dict[str, Tensor]] = None
-    ):
+    def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]):
         """Forward pass for the embedding model.
 
         Args:
@@ -1052,7 +1049,7 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def forward_inner(
-        self, src: dict[str, Tensor], metadata: Optional[dict[str, Tensor]] = None
+        self, src: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> Tensor:
         """The inner forward pass of the model.
 
@@ -1122,9 +1119,7 @@ class TransformerModel(nn.Module):
         if self.joint_embedding_layer is not None:
             src2 = self.joint_embedding_layer(src2)
 
-        valid_mask = infer_valid_mask_from_data(
-            src, self.hparams.categorical_columns, "attention_valid_mask", metadata
-        ).to(device=src2.device)
+        valid_mask = metadata["attention_valid_mask"].bool()  # type: ignore
         if valid_mask.shape != src2.shape[:2]:
             raise ValueError(
                 f"Invalid attention mask shape: got {tuple(valid_mask.shape)}, "
@@ -1146,7 +1141,7 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def forward_embed(
-        self, src: dict[str, Tensor], metadata: Optional[dict[str, Tensor]] = None
+        self, src: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> Tensor:
         """Forward pass for the embedding model.
 
@@ -1164,7 +1159,7 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def forward_train(
-        self, src: dict[str, Tensor], metadata: Optional[dict[str, Tensor]] = None
+        self, src: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> dict[str, Tensor]:
         """Forward pass for training.
 
@@ -1231,7 +1226,7 @@ class TransformerModel(nn.Module):
     def forward(
         self,
         src: dict[str, Tensor],
-        metadata: Optional[dict[str, Tensor]] = None,
+        metadata: dict[str, Tensor],
         return_logits: Union[bool, Tensor] = False,
     ) -> dict[str, Tensor]:
         """The main forward pass of the model.
@@ -1729,14 +1724,7 @@ class TransformerModel(nn.Module):
         if not target_names:
             raise RuntimeError("Loss calculation failed; no target columns were found.")
 
-        categorical_target_columns = [
-            target_name
-            for target_name in target_names
-            if self.target_column_types[target_name] == "categorical"
-        ]
-        valid_mask = infer_valid_mask_from_data(
-            targets, categorical_target_columns, "target_valid_mask", metadata
-        )
+        valid_mask = metadata["attention_valid_mask"].bool()  # type: ignore
 
         if metadata is not None and "bert_mask" in metadata:
             valid_mask = valid_mask & metadata["bert_mask"].bool()

@@ -12,7 +12,6 @@ from sequifier.config.train_config import (
     TrainingSpecModel,
     TrainModel,
 )
-from sequifier.helpers import infer_valid_mask_from_data
 from sequifier.train import TransformerModel
 
 
@@ -167,6 +166,19 @@ def bert_model(model_config):
     return TransformerModel(config)
 
 
+def _all_valid_metadata(batch_size, seq_len, device=None):
+    valid_mask = torch.ones(
+        batch_size,
+        seq_len,
+        dtype=torch.bool,
+        device=device,
+    )
+    return {
+        "attention_valid_mask": valid_mask,
+        "target_valid_mask": valid_mask.clone(),
+    }
+
+
 def test_transformer_model_initialization(model, model_config):
     """Tests that the model initializes with the correct layers."""
     # Check if encoder dicts were created
@@ -218,9 +230,10 @@ def test_forward_train_shapes(model, model_config):
     x_real = torch.randn(batch_size, seq_len)
 
     src = {"cat_col": x_cat, "real_col": x_real}
+    metadata = _all_valid_metadata(batch_size, seq_len, device=x_cat.device)
 
     # forward_train returns a dict of tensors
-    outputs = model.forward_train(src)
+    outputs = model.forward_train(src, metadata)
 
     assert "cat_col" in outputs
     assert "real_col" in outputs
@@ -245,10 +258,11 @@ def test_forward_inference_shapes(model, model_config):
     x_cat = torch.randint(0, model_config.n_classes["cat_col"], (batch_size, seq_len))
     x_real = torch.randn(batch_size, seq_len)
     src = {"cat_col": x_cat, "real_col": x_real}
+    metadata = _all_valid_metadata(batch_size, seq_len, device=x_cat.device)
 
     # forward returns predictions for the *last* prediction_length tokens
     # And applies softmax to categorical outputs
-    outputs = model.forward(src)
+    outputs = model.forward(src, metadata)
 
     # Expected shape: (prediction_length, batch_size, n_classes_or_1)
     # If prediction_length is 1, dim 0 is size 1.
@@ -282,12 +296,13 @@ def test_calculate_loss(model, model_config):
     y_cat = torch.randint(0, model_config.n_classes["cat_col"], (batch_size, seq_len))
     y_real = torch.randn(batch_size, seq_len)
     targets = {"cat_col": y_cat, "real_col": y_real}
+    metadata = _all_valid_metadata(batch_size, seq_len, device=x_cat.device)
 
     # Run forward pass
-    outputs = model.forward_train(src)
+    outputs = model.forward_train(src, metadata)
 
     # Calculate loss
-    total_loss, component_losses = model._calculate_loss(outputs, targets)
+    total_loss, component_losses = model._calculate_loss(outputs, targets, metadata)
 
     # Assertions
     assert total_loss.dim() == 0  # Scalar
@@ -315,6 +330,7 @@ def test_calculate_loss_uses_explicit_target_mask_for_real_zero_targets():
         "real_col": torch.tensor([[0.0, 0.0, 2.0]]),
     }
     metadata = {
+        "attention_valid_mask": torch.tensor([[True, True, True]]),
         "target_valid_mask": torch.tensor([[True, True, True]]),
     }
 
@@ -344,33 +360,17 @@ def test_calculate_loss_uses_target_columns_for_fallback_mask_inference():
     targets = {
         "real_target": torch.tensor([[0.0, 0.0, 2.0]]),
     }
+    metadata = {
+        "attention_valid_mask": torch.tensor([[False, False, True]]),
+        "target_valid_mask": torch.tensor([[False, False, True]]),
+    }
 
-    with pytest.warns(UserWarning):
-        total_loss, component_losses = TransformerModel._calculate_loss(
-            model, outputs, targets
-        )
+    total_loss, component_losses = TransformerModel._calculate_loss(
+        model, outputs, targets, metadata
+    )
 
     assert torch.isclose(total_loss, torch.tensor(1.0))
     assert torch.isclose(component_losses["real_target"], torch.tensor(1.0))
-
-
-def test_infer_valid_mask_from_data():
-    model = TransformerModel.__new__(TransformerModel)
-    model.categorical_columns = []
-    model.input_columns = ["real_col"]
-
-    src = {
-        "real_col": torch.tensor([[0.0, 0.0, 1.0]]),
-    }
-    metadata = {
-        "attention_valid_mask": torch.tensor([[True, True, True]]),
-    }
-
-    mask = infer_valid_mask_from_data(
-        src, model.categorical_columns, "attention_valid_mask", metadata
-    )
-
-    assert torch.equal(mask, torch.tensor([[True, True, True]]))
 
 
 def test_padding_keys_are_masked(bert_model):
@@ -458,8 +458,26 @@ def batch(model):
     }
 
 
-def test_forward_no_nan_with_padding(model, batch):
-    out = model.forward_train(batch)
+@pytest.fixture
+def batch_metadata(model):
+    seq_len = model.seq_length
+    valid_mask = torch.ones(
+        2,
+        seq_len,
+        dtype=torch.bool,
+        device=model.src_mask.device,
+    )
+    valid_mask[0, :2] = False
+    valid_mask[1, :1] = False
+
+    return {
+        "attention_valid_mask": valid_mask,
+        "target_valid_mask": valid_mask.clone(),
+    }
+
+
+def test_forward_no_nan_with_padding(model, batch, batch_metadata):
+    out = model.forward_train(batch, batch_metadata)
 
     for tensor in out.values():
         assert torch.isfinite(tensor).all()

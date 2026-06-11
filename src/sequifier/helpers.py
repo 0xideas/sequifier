@@ -3,7 +3,6 @@ import os
 import random
 import re
 import sys
-import warnings
 from datetime import datetime
 from typing import Any, Dict, Optional, Union
 
@@ -607,24 +606,6 @@ def get_last_training_batch_timedelta(
     return (t2 - t1).total_seconds()
 
 
-def infer_valid_mask_from_data(
-    data_batch: Dict[str, torch.Tensor],
-    categorical_columns: list[str],
-    default_key: str,
-    metadata: Optional[dict[str, Tensor]] = None,
-):
-    if metadata is not None and default_key in metadata:
-        return metadata[default_key].bool()
-
-    if len(categorical_columns):
-        ref_col = categorical_columns[0]
-        return data_batch[ref_col] != 0
-    else:
-        warnings.warn(EXPLICIT_PADDING_MASK_FALLBACK_WARNING, stacklevel=2)
-        ref_col = list(data_batch.keys())[0]
-        return (data_batch[ref_col] != 0.0).long().cumsum(dim=1) > 0
-
-
 def apply_bert_masking(
     data_batch: Dict[str, torch.Tensor],
     targets_batch: Dict[str, torch.Tensor],
@@ -643,13 +624,7 @@ def apply_bert_masking(
         else {}
     )
 
-    # 1. Identify valid tokens (Renamed from padding_mask to valid_mask for clarity)
-    if "attention_valid_mask" in metadata_batch:
-        valid_mask = metadata_batch["attention_valid_mask"].bool()
-    else:
-        valid_mask = infer_valid_mask_from_data(
-            data_batch, config.categorical_columns, "attention_valid_mask"
-        )
+    valid_mask = metadata_batch["attention_valid_mask"].bool()
 
     batch_size, seq_len = valid_mask.shape
     device = valid_mask.device
