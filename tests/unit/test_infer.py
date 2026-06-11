@@ -460,7 +460,7 @@ def test_bert_generative_inference_uses_dataframe_order_for_padding_masks(tmp_pa
     assert predictions.get_column("target_col").to_list() == ["B", "A", "B"]
 
 
-def test_bert_generative_inference_filters_legacy_data_without_left_pad(tmp_path):
+def test_bert_generative_inference_keeps_data_without_left_pad(tmp_path):
     config = _bert_inference_config(tmp_path)
     data = _bert_preprocessed_frame().drop("leftPadLength")
     written = []
@@ -483,10 +483,10 @@ def test_bert_generative_inference_filters_legacy_data_without_left_pad(tmp_path
 
     predictions = next(frame for path, frame, _ in written if "predictions" in path)
 
-    assert predictions.height == 1
-    assert predictions.get_column("sequenceId").to_list() == [7]
-    assert predictions.get_column("itemPosition").to_list() == [102]
-    assert predictions.get_column("target_col").to_list() == ["A"]
+    assert predictions.height == 3
+    assert predictions.get_column("sequenceId").to_list() == [7, 7, 7]
+    assert predictions.get_column("itemPosition").to_list() == [100, 101, 102]
+    assert predictions.get_column("target_col").to_list() == ["A", "B", "A"]
 
 
 def test_bert_embedding_inference_filters_left_padded_positions(tmp_path):
