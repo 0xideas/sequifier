@@ -13,6 +13,7 @@ from sequifier.preprocess import (
     _apply_mask_column,
     _get_column_statistics,
     _get_data_columns,
+    _load_and_preprocess_data,
     create_id_map,
     extract_sequences,
     extract_subsequences,
@@ -249,6 +250,47 @@ def test_preprocessor_applies_mask_column_end_to_end(tmp_path):
     assert RESERVED_MASK_COLUMN not in metadata["column_types"]
     assert RESERVED_MASK_COLUMN not in metadata["id_maps"]
     assert RESERVED_MASK_COLUMN not in metadata["selected_columns_statistics"]
+
+
+def test_load_and_preprocess_data_requests_mask_column_for_csv_projection(tmp_path):
+    data_path = tmp_path / "masked-input.csv"
+    captured_columns = None
+
+    def projected_read_data(path, read_format, columns=None):
+        nonlocal captured_columns
+        captured_columns = columns
+        assert path == str(data_path)
+        assert read_format == "csv"
+        assert columns is not None
+        assert RESERVED_MASK_COLUMN in columns
+        return pl.DataFrame(
+            {
+                "sequenceId": [0],
+                "itemPosition": [0],
+                "itemId": ["a"],
+                "itemValue": [1.0],
+                RESERVED_MASK_COLUMN: [1],
+            }
+        )
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("sequifier.preprocess.read_data", projected_read_data)
+        data = _load_and_preprocess_data(
+            str(data_path),
+            "csv",
+            ["itemId", "itemValue"],
+            None,
+            RESERVED_MASK_COLUMN,
+        )
+
+    assert captured_columns == ["itemId", "itemValue", RESERVED_MASK_COLUMN]
+    assert data.columns == [
+        "sequenceId",
+        "itemPosition",
+        "itemId",
+        "itemValue",
+        RESERVED_MASK_COLUMN,
+    ]
 
 
 def test_preprocessor_requires_metadata_config_for_mask_column(tmp_path):

@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import numpy as np
+import polars as pl
 import pytest
 import torch
 
@@ -9,6 +10,8 @@ from sequifier.infer import (
     Inferer,
     calculate_item_positions,
     get_probs_preds_from_dict,
+    infer_embedding,
+    infer_generative,
     normalize,
     sample_with_cumsum,
 )
@@ -178,6 +181,33 @@ def test_infer_config_defaults_bert_prediction_length_to_seq_length():
     assert config.prediction_length == config.seq_length
 
 
+def test_infer_config_defaults_causal_prediction_length_to_one():
+    config = InfererModel(
+        project_root=".",
+        metadata_config_path="dummy.json",
+        model_path="dummy.onnx",
+        model_type="generative",
+        training_objective="causal",
+        data_path="tests/unit/data/empty.parquet",
+        input_columns=["target_col"],
+        categorical_columns=[],
+        real_columns=["target_col"],
+        target_columns=["target_col"],
+        column_types={"target_col": "float64"},
+        target_column_types={"target_col": "real"},
+        seed=42,
+        device="cpu",
+        prediction_length=None,
+        seq_length=3,
+        inference_batch_size=2,
+        output_probabilities=False,
+        map_to_id=False,
+        autoregression=False,
+    )
+
+    assert config.prediction_length == 1
+
+
 def test_infer_config_rejects_bert_prediction_length_mismatch():
     with pytest.raises(ValueError, match="prediction_length must be equal"):
         InfererModel(
@@ -284,6 +314,136 @@ def test_calculate_item_positions_causal_uses_future_window_tail():
     )
 
     np.testing.assert_array_equal(positions, [13, 14, 23, 24])
+
+
+def _bert_inference_config(tmp_path, model_type="generative"):
+    data_path = tmp_path / "data.parquet"
+    data_path.touch()
+
+    return InfererModel(
+        project_root=str(tmp_path),
+        metadata_config_path="dummy.json",
+        model_path="dummy.onnx",
+        model_type=model_type,
+        training_objective="bert",
+        data_path=str(data_path),
+        input_columns=["target_col"],
+        categorical_columns=["target_col"],
+        real_columns=[],
+        target_columns=["target_col"],
+        column_types={"target_col": "int64"},
+        target_column_types={"target_col": "categorical"},
+        seed=42,
+        device="cpu",
+        prediction_length=None,
+        seq_length=3,
+        inference_batch_size=4,
+        output_probabilities=False,
+        map_to_id=True,
+        autoregression=False,
+    )
+
+
+def _bert_preprocessed_frame():
+    return pl.DataFrame(
+        {
+            "sequenceId": [7],
+            "subsequenceId": [0],
+            "startItemPosition": [100],
+            "leftPadLength": [2],
+            "inputCol": ["target_col"],
+            "3": [0],
+            "2": [0],
+            "1": [3],
+            "0": [4],
+        }
+    )
+
+
+def _mock_bert_inferer(config):
+    return Inferer(
+        model_type=config.model_type,
+        model_path=config.model_path,
+        project_root=config.project_root,
+        id_maps={"target_col": {"A": 3, "B": 4}},
+        selected_columns_statistics={},
+        map_to_id=config.map_to_id,
+        categorical_columns=config.categorical_columns,
+        real_columns=config.real_columns,
+        input_columns=config.input_columns,
+        target_columns=config.target_columns,
+        target_column_types=config.target_column_types,
+        sample_from_distribution_columns=config.sample_from_distribution_columns,
+        infer_with_dropout=config.infer_with_dropout,
+        prediction_length=config.prediction_length,
+        inference_batch_size=config.inference_batch_size,
+        device=config.device,
+        args_config={},
+        training_config_path=config.training_config_path,
+    )
+
+
+def test_bert_generative_inference_filters_left_padded_positions(tmp_path):
+    config = _bert_inference_config(tmp_path)
+    config.output_probabilities = True
+    data = _bert_preprocessed_frame()
+    written = []
+
+    with patch("sequifier.infer.onnxruntime.InferenceSession"), patch(
+        "sequifier.infer.load_inference_model"
+    ):
+        inferer = _mock_bert_inferer(config)
+
+    def capture_write(dataframe, path, write_format):
+        written.append((path, dataframe, write_format))
+
+    probs = {"target_col": np.full((3, 5), 0.2)}
+    preds = {"target_col": np.array([3, 4, 3])}
+    with patch(
+        "sequifier.infer.get_probs_preds_from_df", return_value=(probs, preds)
+    ), patch("sequifier.infer.write_data", side_effect=capture_write):
+        infer_generative(
+            config, inferer, "bert-model", [data], {"target_col": torch.int64}
+        )
+
+    predictions = next(frame for path, frame, _ in written if "predictions" in path)
+    probabilities = next(frame for path, frame, _ in written if "probabilities" in path)
+
+    assert predictions.height == 1
+    assert predictions.get_column("sequenceId").to_list() == [7]
+    assert predictions.get_column("itemPosition").to_list() == [102]
+    assert predictions.get_column("target_col").to_list() == ["A"]
+    assert probabilities.height == 1
+
+
+def test_bert_embedding_inference_filters_left_padded_positions(tmp_path):
+    config = _bert_inference_config(tmp_path, model_type="embedding")
+    data = _bert_preprocessed_frame()
+    written = []
+
+    with patch("sequifier.infer.onnxruntime.InferenceSession"), patch(
+        "sequifier.infer.load_inference_model"
+    ):
+        inferer = _mock_bert_inferer(config)
+
+    def capture_write(dataframe, path, write_format):
+        written.append((path, dataframe, write_format))
+
+    embeddings = np.array([[0.1, 1.1], [0.2, 1.2], [0.3, 1.3]])
+    with patch("sequifier.infer.get_embeddings", return_value=embeddings), patch(
+        "sequifier.infer.write_data", side_effect=capture_write
+    ):
+        infer_embedding(
+            config, inferer, "bert-model", [data], {"target_col": torch.int64}
+        )
+
+    embeddings_df = next(frame for _, frame, _ in written)
+
+    assert embeddings_df.height == 1
+    assert embeddings_df.get_column("sequenceId").to_list() == [7]
+    assert embeddings_df.get_column("subsequenceId").to_list() == [0]
+    assert embeddings_df.get_column("itemPosition").to_list() == [102]
+    assert embeddings_df.select(["0", "1"]).row(0) == (0.3, 1.3)
 
 
 # ==========================================

@@ -18,6 +18,7 @@ from sequifier.helpers import (
     configure_determinism,
     construct_index_maps,
     generate_padding_masks,
+    get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
     numpy_to_pytorch,
     subset_to_input_columns,
@@ -297,6 +298,88 @@ def calculate_item_positions(
 
 
 @beartype
+def _flatten_bert_target_valid_mask(
+    config: InfererModel,
+    metadata: Optional[dict[str, Any]],
+    prediction_length: int,
+) -> Optional[np.ndarray]:
+    if config.training_objective != "bert" or not metadata:
+        return None
+    if "target_valid_mask" not in metadata:
+        return None
+
+    valid_mask = metadata["target_valid_mask"]
+    if isinstance(valid_mask, torch.Tensor):
+        valid_mask = valid_mask.detach().cpu().numpy()
+    valid_mask = np.asarray(valid_mask, dtype=bool)
+
+    if valid_mask.ndim != 2:
+        raise ValueError(f"target_valid_mask must be 2D, got shape {valid_mask.shape}.")
+    if valid_mask.shape[1] != prediction_length:
+        raise ValueError(
+            "target_valid_mask width must match prediction_length "
+            f"(got {valid_mask.shape[1]} and {prediction_length})."
+        )
+
+    return valid_mask.reshape(-1)
+
+
+@beartype
+def _bert_target_valid_mask_from_preprocessed_data(
+    config: InfererModel,
+    data: pl.DataFrame,
+    prediction_length: int,
+) -> Optional[np.ndarray]:
+    if config.training_objective != "bert":
+        return None
+
+    left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(data)
+    if left_pad_lengths is None:
+        return None
+
+    metadata = generate_padding_masks(
+        left_pad_lengths,
+        config.seq_length,
+        data_offset=1,
+        target_offset=1,
+    )
+    return _flatten_bert_target_valid_mask(config, metadata, prediction_length)
+
+
+@beartype
+def _apply_valid_prediction_mask(
+    values: np.ndarray,
+    valid_prediction_mask: Optional[np.ndarray],
+    label: str,
+) -> np.ndarray:
+    values = np.asarray(values)
+    if valid_prediction_mask is None:
+        return values
+    if values.shape[0] != valid_prediction_mask.shape[0]:
+        raise ValueError(
+            f"{label} has {values.shape[0]} rows, but target_valid_mask has "
+            f"{valid_prediction_mask.shape[0]} rows."
+        )
+    return values[valid_prediction_mask]
+
+
+@beartype
+def _apply_valid_prediction_mask_to_dict(
+    values: Optional[dict[str, np.ndarray]],
+    valid_prediction_mask: Optional[np.ndarray],
+    label: str,
+) -> Optional[dict[str, np.ndarray]]:
+    if values is None:
+        return None
+    return {
+        key: _apply_valid_prediction_mask(
+            value, valid_prediction_mask, f"{label}.{key}"
+        )
+        for key, value in values.items()
+    }
+
+
+@beartype
 def infer_embedding(
     config: "InfererModel",
     inferer: "Inferer",
@@ -326,6 +409,7 @@ def infer_embedding(
     """
     for data_id, data in enumerate(dataset):
         prediction_length = inferer.prediction_length
+        valid_prediction_mask = None
 
         # Step 1: Get embeddings and base position/ID data
         is_folder_input = os.path.isdir(
@@ -343,6 +427,9 @@ def infer_embedding(
             mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
 
             embeddings = get_embeddings(config, inferer, data, column_types)
+            valid_prediction_mask = _bert_target_valid_mask_from_preprocessed_data(
+                config, data, prediction_length
+            )
 
             sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
             subsequence_ids_for_preds = data.get_column("subsequenceId").filter(mask)
@@ -358,6 +445,9 @@ def infer_embedding(
             mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
 
             embeddings = get_embeddings(config, inferer, data, column_types)
+            valid_prediction_mask = _bert_target_valid_mask_from_preprocessed_data(
+                config, data, prediction_length
+            )
 
             sequence_ids_for_preds = (
                 data.get_column("sequenceId").filter(mask).to_numpy()
@@ -389,6 +479,9 @@ def infer_embedding(
             embeddings = get_embeddings_pt(
                 config, inferer, sequences_dict, metadata=metadata
             )
+            valid_prediction_mask = _flatten_bert_target_valid_mask(
+                config, metadata, prediction_length
+            )
 
             sequence_ids_for_preds = sequence_ids_tensor.numpy()
             subsequence_ids_for_preds = subsequence_ids_tensor.numpy()
@@ -419,6 +512,18 @@ def infer_embedding(
         sequence_ids_repeated = np.repeat(sequence_ids_for_preds, prediction_length)
         subsequence_ids_repeated = np.repeat(
             subsequence_ids_for_preds, prediction_length
+        )
+        embeddings = _apply_valid_prediction_mask(
+            embeddings, valid_prediction_mask, "embeddings"
+        )
+        final_positions = _apply_valid_prediction_mask(
+            final_positions, valid_prediction_mask, "itemPosition"
+        )
+        sequence_ids_repeated = _apply_valid_prediction_mask(
+            sequence_ids_repeated, valid_prediction_mask, "sequenceId"
+        )
+        subsequence_ids_repeated = _apply_valid_prediction_mask(
+            subsequence_ids_repeated, valid_prediction_mask, "subsequenceId"
         )
 
         # Step 3: Build the final DataFrame
@@ -498,6 +603,8 @@ def infer_generative(
             `torch.dtype`.
     """
     for data_id, data in enumerate(dataset):
+        valid_prediction_mask = None
+
         # Step 1: Adapt Data Subsetting (now works on Polars DF)
         is_folder_input = os.path.isdir(
             normalize_path(config.data_path, config.project_root)
@@ -521,6 +628,9 @@ def infer_generative(
                     data.get_column("startItemPosition").filter(mask).to_numpy()
                 )
                 prediction_length = inferer.prediction_length
+                valid_prediction_mask = _bert_target_valid_mask_from_preprocessed_data(
+                    config, data, prediction_length
+                )
 
                 # Expand IDs to match model output shape
                 sequence_ids_for_preds = np.repeat(
@@ -570,6 +680,9 @@ def infer_generative(
                     data.get_column("startItemPosition").filter(mask).to_numpy()
                 )
                 prediction_length = inferer.prediction_length
+                valid_prediction_mask = _bert_target_valid_mask_from_preprocessed_data(
+                    config, data, prediction_length
+                )
 
                 sequence_ids_for_preds = np.repeat(
                     sequence_ids_for_preds_base, prediction_length
@@ -628,6 +741,9 @@ def infer_generative(
             )
 
             prediction_length = inferer.prediction_length  # Get prediction_length
+            valid_prediction_mask = _flatten_bert_target_valid_mask(
+                config, metadata, prediction_length
+            )
 
             if total_steps == 1:
                 # Non-autoregressive path: Apply prediction_length logic
@@ -673,6 +789,19 @@ def infer_generative(
                 preds[target_column] = inferer.invert_normalization(
                     predictions, target_column
                 )
+
+        sequence_ids_for_preds = _apply_valid_prediction_mask(
+            sequence_ids_for_preds, valid_prediction_mask, "sequenceId"
+        )
+        item_positions_for_preds = _apply_valid_prediction_mask(
+            item_positions_for_preds, valid_prediction_mask, "itemPosition"
+        )
+        preds = _apply_valid_prediction_mask_to_dict(
+            preds, valid_prediction_mask, "preds"
+        )
+        probs = _apply_valid_prediction_mask_to_dict(
+            probs, valid_prediction_mask, "probs"
+        )
 
         os.makedirs(
             os.path.join(config.project_root, "outputs", "predictions"),
@@ -723,6 +852,7 @@ def infer_generative(
 
         n_input_cols = len(config.input_columns)
 
+        assert preds is not None
         predictions = pl.DataFrame(
             {
                 "sequenceId": sequence_ids_for_preds,

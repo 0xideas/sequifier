@@ -1712,8 +1712,13 @@ class TransformerModel(nn.Module):
         if not target_names:
             raise RuntimeError("Loss calculation failed; no target columns were found.")
 
+        categorical_target_columns = [
+            target_name
+            for target_name in target_names
+            if self.target_column_types[target_name] == "categorical"
+        ]
         valid_mask = infer_valid_mask_from_data(
-            targets, self.categorical_columns, "target_valid_mask", metadata
+            targets, categorical_target_columns, "target_valid_mask", metadata
         )
 
         if metadata is not None and "bert_mask" in metadata:

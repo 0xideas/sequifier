@@ -4,6 +4,7 @@ import pytest
 import torch
 from pydantic import ValidationError
 
+from sequifier.config.probabilities import PoissonDistributionFloor
 from sequifier.config.train_config import (
     BERTSpecModel,
     ModelSpecModel,
@@ -63,6 +64,24 @@ def test_training_spec_model_rejects_bert_spec_for_causal_objective():
         match="BERT hyperparameters should only be configured",
     ):
         TrainingSpecModel(**_training_spec_kwargs(bert_spec=_bert_spec()))
+
+
+def test_training_spec_model_dump_excludes_runtime_offsets():
+    training_spec = TrainingSpecModel(**_training_spec_kwargs())
+
+    dumped = training_spec.model_dump()
+
+    assert "data_offset" not in dumped
+    assert "target_offset" not in dumped
+    assert TrainingSpecModel(**dumped).target_offset == 0
+
+
+def test_poisson_span_masking_samples_at_least_one_token():
+    distribution = PoissonDistributionFloor(rate=0.1)
+
+    samples = distribution.sample((1000,), device=torch.device("cpu"))
+
+    assert samples.min().item() >= 1
 
 
 @pytest.fixture
@@ -138,8 +157,13 @@ def causal_model(model_config):
 
 @pytest.fixture
 def bert_model(model_config):
-    config = copy.deepcopy(model_config)
-    config.training_spec.training_objective = "bert"
+    config_values = model_config.model_dump()
+    config_values["model_spec"]["prediction_length"] = model_config.seq_length
+    config_values["training_spec"] = _training_spec_kwargs(
+        training_objective="bert",
+        bert_spec=_bert_spec(),
+    )
+    config = TrainModel(**config_values)
     return TransformerModel(config)
 
 
@@ -300,6 +324,34 @@ def test_calculate_loss_uses_explicit_target_mask_for_real_zero_targets():
 
     assert torch.isclose(total_loss, torch.tensor(2.0))
     assert torch.isclose(component_losses["real_col"], torch.tensor(2.0))
+
+
+def test_calculate_loss_uses_target_columns_for_fallback_mask_inference():
+    model = TransformerModel.__new__(TransformerModel)
+    model.target_column_types = {"real_target": "real"}
+    model.criterion = {"real_target": torch.nn.MSELoss(reduction="none")}
+    model.loss_weights = None
+    model.categorical_columns = ["context_cat"]
+    outputs = {
+        "real_target": torch.tensor(
+            [
+                [[10.0]],
+                [[20.0]],
+                [[3.0]],
+            ]
+        )
+    }
+    targets = {
+        "real_target": torch.tensor([[0.0, 0.0, 2.0]]),
+    }
+
+    with pytest.warns(UserWarning):
+        total_loss, component_losses = TransformerModel._calculate_loss(
+            model, outputs, targets
+        )
+
+    assert torch.isclose(total_loss, torch.tensor(1.0))
+    assert torch.isclose(component_losses["real_target"], torch.tensor(1.0))
 
 
 def test_infer_valid_mask_from_data():

@@ -15,7 +15,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    computed_field,
     field_serializer,
     field_validator,
     model_validator,
@@ -238,12 +237,10 @@ class TrainingSpecModel(BaseModel):
     def serialize_dotdict(self, value: DotDict) -> dict[str, Any]:
         return dict(value)
 
-    @computed_field
     @property
     def data_offset(self) -> int:
         return 1
 
-    @computed_field
     @property
     def target_offset(self) -> int:
         return 0 if self.training_objective == "causal" else 1

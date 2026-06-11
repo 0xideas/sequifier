@@ -4,6 +4,7 @@ import subprocess
 
 import numpy as np
 import polars as pl
+import torch
 
 TARGET_VARIABLE_DICT = {"categorical": "itemId", "real": "itemValue"}
 BERT_SEQ_LENGTH = 8
@@ -16,6 +17,63 @@ def _categorical_metadata(project_root):
     )
     with open(metadata_path, "r") as f:
         return json.load(f)
+
+
+def _bert_inference_metadata(project_root):
+    data_path = os.path.join(project_root, "data", "test-data-categorical-1-split2")
+    contents = []
+    for root, _, files in os.walk(data_path):
+        for file in sorted(files):
+            if not file.endswith(".pt"):
+                continue
+
+            loaded = torch.load(os.path.join(root, file), weights_only=False)
+            if len(loaded) == 5:
+                _, sequence_ids, subsequence_ids, _, left_pad_lengths = loaded
+            else:
+                _, sequence_ids, subsequence_ids, _ = loaded
+                left_pad_lengths = None
+
+            if left_pad_lengths is None:
+                left_pad_lengths = torch.zeros_like(sequence_ids)
+
+            valid_counts = torch.clamp(
+                BERT_SEQ_LENGTH - left_pad_lengths, min=0, max=BERT_SEQ_LENGTH
+            )
+            contents.append(
+                pl.DataFrame(
+                    {
+                        "sequenceId": sequence_ids.detach().cpu().numpy(),
+                        "subsequenceId": subsequence_ids.detach().cpu().numpy(),
+                        "valid_count": valid_counts.detach().cpu().numpy(),
+                    }
+                )
+            )
+
+    assert len(contents) > 0, f"no files found for {data_path}"
+    return pl.concat(contents, how="vertical")
+
+
+def _expected_bert_valid_counts(project_root, group_columns):
+    metadata = _bert_inference_metadata(project_root)
+
+    return (
+        metadata.group_by(group_columns)
+        .agg(pl.col("valid_count").sum().alias("expected_len"))
+        .filter(pl.col("expected_len") > 0)
+    )
+
+
+def _assert_counts_match_expected(actual, expected, group_columns):
+    actual_keys = set(actual.select(group_columns).iter_rows())
+    expected_keys = set(expected.select(group_columns).iter_rows())
+
+    assert actual_keys == expected_keys
+
+    comparison = actual.join(expected, on=group_columns)
+    assert comparison.select(
+        (pl.col("len") == pl.col("expected_len")).all()
+    ).item(), comparison
 
 
 def test_predictions_real(predictions):
@@ -121,7 +179,12 @@ def test_bert_generative_predictions_default_to_seq_length(
     assert set(bert_predictions["itemId"].to_list()).issubset(valid_values)
 
     rows_per_sequence = bert_predictions.group_by("sequenceId").len()
-    assert (rows_per_sequence["len"] == BERT_SEQ_LENGTH).all(), rows_per_sequence
+    expected_rows_per_sequence = _expected_bert_valid_counts(
+        project_root, ["sequenceId"]
+    )
+    _assert_counts_match_expected(
+        rows_per_sequence, expected_rows_per_sequence, ["sequenceId"]
+    )
 
 
 def test_bert_probabilities(bert_predictions, bert_probabilities, project_root):
@@ -172,7 +235,7 @@ def test_embeddings(embeddings):
             assert np.abs(model_embeddings[:, 1:].to_numpy().mean()) < 0.3
 
 
-def test_bert_embeddings(bert_predictions, bert_embeddings):
+def test_bert_embeddings(bert_predictions, bert_embeddings, project_root):
     expected_embedding_cols = [str(i) for i in range(BERT_EMBEDDING_DIM)]
     expected_columns = ["sequenceId", "subsequenceId", "itemPosition"]
 
@@ -184,8 +247,17 @@ def test_bert_embeddings(bert_predictions, bert_embeddings):
     embedding_values = bert_embeddings.select(expected_embedding_cols).to_numpy()
     assert np.isfinite(embedding_values).all()
 
-    rows_per_sequence = bert_embeddings.group_by("sequenceId").len()
-    assert (rows_per_sequence["len"] == BERT_SEQ_LENGTH).all(), rows_per_sequence
+    rows_per_subsequence = bert_embeddings.group_by(
+        ["sequenceId", "subsequenceId"]
+    ).len()
+    expected_rows_per_subsequence = _expected_bert_valid_counts(
+        project_root, ["sequenceId", "subsequenceId"]
+    )
+    _assert_counts_match_expected(
+        rows_per_subsequence,
+        expected_rows_per_subsequence,
+        ["sequenceId", "subsequenceId"],
+    )
 
 
 def test_bert_rejects_autoregression_end_to_end(

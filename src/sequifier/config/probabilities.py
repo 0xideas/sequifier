@@ -67,7 +67,7 @@ class PoissonDistributionFloor(BaseModel, ProbabilityDistributionBaseClass):
 
     def sample(self, shape: tuple, device: torch.device) -> torch.Tensor:
         m = torch.distributions.Poisson(rate=torch.tensor([self.rate], device=device))
-        return m.sample(shape).squeeze(-1).long()
+        return m.sample(shape).squeeze(-1).long() + 1
 
 
 ProbabilityDistribution = Annotated[

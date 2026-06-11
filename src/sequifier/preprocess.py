@@ -936,12 +936,15 @@ def _selected_columns_with_optional_mask(
     selected_columns: Optional[list[str]],
     mask_column: Optional[str] = None,
 ) -> Optional[list[str]]:
-    if selected_columns is None or read_format != "parquet" or mask_column is None:
+    if selected_columns is None or mask_column is None:
         return selected_columns
+
+    if read_format != "parquet":
+        return _deduplicate_columns(selected_columns + [mask_column])
 
     schema_columns = pq.read_schema(data_path).names
     if mask_column in schema_columns:
-        return selected_columns + [mask_column]
+        return _deduplicate_columns(selected_columns + [mask_column])
     return selected_columns
 
 

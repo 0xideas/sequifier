@@ -146,11 +146,13 @@ class InfererModel(BaseModel):
     autoregression_total_steps: Optional[int] = Field(default=None)
 
     @model_validator(mode="after")
-    def validate_bert_prediction_length_matches_seq_length(self):
+    def normalize_prediction_length(self):
+        if self.prediction_length is None:
+            self.prediction_length = (
+                self.seq_length if self.training_objective == "bert" else 1
+            )
         if self.training_objective == "bert":
-            if self.prediction_length is None:
-                self.prediction_length = self.seq_length
-            elif self.prediction_length != self.seq_length:
+            if self.prediction_length != self.seq_length:
                 raise ValueError(
                     "For BERT inference, prediction_length must be equal to seq_length "
                     f"(got prediction_length={self.prediction_length}, seq_length={self.seq_length})."
