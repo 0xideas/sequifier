@@ -104,7 +104,9 @@ def cleanup():
 
 
 @beartype
-def create_dummy_data(config: TrainModel, local_rank: int) -> dict[str, Tensor]:
+def create_dummy_data_and_metadata(
+    config: TrainModel, local_rank: int
+) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     dummy_data = {}
     for col in config.input_columns:
         dtype = torch.int64 if col in config.categorical_columns else torch.float32
@@ -114,7 +116,14 @@ def create_dummy_data(config: TrainModel, local_rank: int) -> dict[str, Tensor]:
             device=local_rank,
         )
 
-    return dummy_data
+    dummy_metadata = {
+        "attention_valid_mask": torch.ones(
+            (config.training_spec.batch_size, config.seq_length),
+            dtype=torch.bool,
+            device=local_rank,
+        )
+    }
+    return dummy_data, dummy_metadata
 
 
 @beartype
@@ -345,9 +354,11 @@ def train_worker(
                     model.layers[i] = torch.compile(model.layers[i])
 
         if config.training_spec.device.startswith("cuda"):
-            dummy_data = create_dummy_data(config, local_rank)
+            dummy_data, dummy_metadata = create_dummy_data_and_metadata(
+                config, local_rank
+            )
             with torch.no_grad():
-                _ = model(dummy_data, False)
+                _ = model(dummy_data, dummy_metadata, False)
 
             dist.barrier()
 
@@ -387,16 +398,18 @@ def train_worker(
         ddp_model = DDP(model, device_ids=device_ids, find_unused_parameters=False)
 
         if config.training_spec.device.startswith("cuda"):
-            dummy_data = create_dummy_data(config, local_rank)
+            dummy_data, dummy_metadata = create_dummy_data_and_metadata(
+                config, local_rank
+            )
 
             if config.training_spec.layer_autocast:
                 with torch.no_grad(), torch.autocast(
                     device_type="cuda", dtype=torch.bfloat16
                 ):
-                    _ = ddp_model(dummy_data, False)
+                    _ = ddp_model(dummy_data, dummy_metadata, False)
             else:
                 with torch.no_grad():
-                    _ = ddp_model(dummy_data, False)
+                    _ = ddp_model(dummy_data, dummy_metadata, False)
 
             dist.barrier()
         model.train_model(train_loader, valid_loader, ddp_model=ddp_model)
