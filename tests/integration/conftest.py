@@ -61,6 +61,13 @@ def preprocessing_config_path_cat_multitarget():
 
 
 @pytest.fixture(scope="session")
+def preprocessing_config_path_cat_lookahead_0():
+    return os.path.join(
+        "tests", "configs", "preprocess-test-categorical-lookahead-0.yaml"
+    )
+
+
+@pytest.fixture(scope="session")
 def preprocessing_config_path_multi_file():
     return os.path.join("tests", "configs", "preprocess-test-multi-file.yaml")
 
@@ -288,6 +295,7 @@ def reformat_parameter(attr, param, type):
 def format_configs_locally(
     preprocessing_config_path_cat,
     preprocessing_config_path_cat_multitarget,
+    preprocessing_config_path_cat_lookahead_0,
     preprocessing_config_path_real,
     preprocessing_config_path_multi_file,
     preprocessing_config_path_interrupted,
@@ -323,6 +331,7 @@ def format_configs_locally(
     config_paths = [
         preprocessing_config_path_cat,
         preprocessing_config_path_cat_multitarget,
+        preprocessing_config_path_cat_lookahead_0,
         preprocessing_config_path_real,
         preprocessing_config_path_multi_file,
         preprocessing_config_path_interrupted,
@@ -418,6 +427,7 @@ def run_preprocessing(
     project_root,
     preprocessing_config_path_cat,
     preprocessing_config_path_cat_multitarget,
+    preprocessing_config_path_cat_lookahead_0,
     preprocessing_config_path_real,
     preprocessing_config_path_multi_file,
     preprocessing_config_path_interrupted,
@@ -444,6 +454,17 @@ def run_preprocessing(
         run_and_log(
             f"sequifier preprocess --config-path {preprocessing_config_path_real} --data-path {data_path_real} --selected-columns {SELECTED_COLUMNS['real'][data_number]}"
         )
+
+    data_path_cat_lookahead_0 = os.path.join(
+        "tests",
+        "resources",
+        "source_data",
+        "test-data-categorical-1-lookahead-0.csv",
+    )
+    run_and_log(
+        f"sequifier preprocess --config-path {preprocessing_config_path_cat_lookahead_0} "
+        f"--data-path {data_path_cat_lookahead_0} --selected-columns None "
+    )
 
     source_path = os.path.join("tests", "resources", "source_configs", "id_maps")
     target_path = os.path.join(project_root, "configs", "id_maps")

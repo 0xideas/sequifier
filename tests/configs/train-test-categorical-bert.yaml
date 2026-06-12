@@ -1,7 +1,7 @@
 project_root: tests/project_folder
 model_name: model-categorical-bert
 read_format: pt
-metadata_config_path: configs/metadata_configs/test-data-categorical-1.json
+metadata_config_path: configs/metadata_configs/test-data-categorical-1-lookahead-0.json
 
 input_columns: [itemId]
 target_columns: [itemId]

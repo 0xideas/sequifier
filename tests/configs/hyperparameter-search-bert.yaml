@@ -1,5 +1,5 @@
 project_root: tests/project_folder
-metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-categorical-1.json
+metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-categorical-1-lookahead-0.json
 hp_search_name: test-hp-search-bert
 model_config_write_path: configs
 
@@ -8,6 +8,7 @@ target_columns: [itemId]
 target_column_types:
   itemId: categorical
 context_length: [8]
+max_lookahead: 0
 inference_batch_size: 10
 
 search_strategy: sample

@@ -2,6 +2,8 @@ import glob
 import json
 import os
 
+import yaml
+
 
 def test_hp_search_grid_outputs(run_hp_search, project_root):
     hp_name = "test-hp-search-grid"
@@ -31,6 +33,15 @@ def test_hp_search_bert_outputs(run_hp_search, project_root):
     assert (
         len(generated_configs) == 1
     ), f"Expected 1 BERT sample config, found {len(generated_configs)}"
+
+    with open(generated_configs[0], "r") as f:
+        generated_config = yaml.safe_load(f)
+
+    assert generated_config["metadata_config_path"].endswith(
+        "test-data-categorical-1-lookahead-0.json"
+    )
+    assert generated_config["max_lookahead"] == 0
+    assert generated_config["sample_length"] == generated_config["context_length"]
 
 
 def test_hp_search_bayesian_outputs(run_hp_search, project_root):

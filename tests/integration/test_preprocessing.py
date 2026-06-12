@@ -200,6 +200,8 @@ def read_preprocessing_outputs(path, variant):
         ):
             return load_parquet_folder_outputs(path)
         return load_pt_outputs(path)
+    else:
+        raise ValueError(f"Invalid variant: {variant}")
 
 
 @pytest.fixture()
@@ -258,6 +260,49 @@ def test_preprocessed_data_categorical(data_splits):
                     np.abs(group["5"].to_numpy()[:-j] - group["6"].to_numpy()[j:])
                     < 0.0001
                 ), f'{list(group["5"].to_numpy()[:-j]) = } != {list(group["6"].to_numpy()[j:]) = }'
+
+
+def test_preprocessed_data_categorical_lookahead_0(run_preprocessing, project_root):
+    metadata_path = os.path.join(
+        project_root,
+        "configs",
+        "metadata_configs",
+        "test-data-categorical-1-lookahead-0.json",
+    )
+    with open(metadata_path, "r") as f:
+        metadata_config = json.load(f)
+
+    assert metadata_config["max_lookahead"] == 0
+    assert metadata_config["sample_length"] == metadata_config["context_length"]
+
+    for split in range(3):
+        data = read_preprocessing_outputs(
+            os.path.join(
+                project_root,
+                "data",
+                f"test-data-categorical-1-lookahead-0-split{split}",
+            ),
+            "categorical",
+        )
+
+        assert data is not None
+        assert data.shape[1] == 13
+        assert "8" not in data.columns
+        assert set(str(i) for i in range(8)).issubset(set(data.columns))
+
+        for sequence_id, group in data.group_by("sequenceId"):
+            assert np.all(
+                np.abs(group["1"].to_numpy()[:-1] - group["2"].to_numpy()[1:]) < 0.0001
+            ), (
+                f"{sequence_id = }: {list(group['1'].to_numpy()[:-1]) = } "
+                f"!= {list(group['2'].to_numpy()[1:]) = }"
+            )
+            assert np.all(
+                np.abs(group["5"].to_numpy()[:-1] - group["6"].to_numpy()[1:]) < 0.0001
+            ), (
+                f"{sequence_id = }: {list(group['5'].to_numpy()[:-1]) = } "
+                f"!= {list(group['6'].to_numpy()[1:]) = }"
+            )
 
 
 def unnest(list_var):

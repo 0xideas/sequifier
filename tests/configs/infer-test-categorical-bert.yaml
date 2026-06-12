@@ -1,10 +1,10 @@
 project_root: tests/project_folder
 training_config_path: tests/configs/train-test-categorical-bert.yaml
-metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-categorical-1.json
+metadata_config_path: tests/project_folder/configs/metadata_configs/test-data-categorical-1-lookahead-0.json
 model_type: generative
 training_objective: bert
 model_path: tests/project_folder/models/sequifier-model-categorical-bert-best-1.pt
-data_path: tests/project_folder/data/test-data-categorical-1-split2
+data_path: tests/project_folder/data/test-data-categorical-1-lookahead-0-split2
 read_format: pt
 write_format: csv
 

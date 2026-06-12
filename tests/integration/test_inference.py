@@ -8,18 +8,19 @@ import torch
 TARGET_VARIABLE_DICT = {"categorical": "itemId", "real": "itemValue"}
 BERT_SEQ_LENGTH = 8
 BERT_EMBEDDING_DIM = 16
+BERT_DATA_NAME = "test-data-categorical-1-lookahead-0"
 
 
 def _categorical_metadata(project_root):
     metadata_path = os.path.join(
-        project_root, "configs", "metadata_configs", "test-data-categorical-1.json"
+        project_root, "configs", "metadata_configs", f"{BERT_DATA_NAME}.json"
     )
     with open(metadata_path, "r") as f:
         return json.load(f)
 
 
 def _bert_inference_metadata(project_root):
-    data_path = os.path.join(project_root, "data", "test-data-categorical-1-split2")
+    data_path = os.path.join(project_root, "data", f"{BERT_DATA_NAME}-split2")
     contents = []
     for root, _, files in os.walk(data_path):
         for file in sorted(files):
@@ -172,7 +173,9 @@ def test_bert_generative_predictions_default_to_context_length(
     bert_predictions, project_root
 ):
     metadata = _categorical_metadata(project_root)
-    valid_values = {str(v) for v in metadata["id_maps"]["itemId"].keys()}
+    valid_values = {str(v) for v in metadata["id_maps"]["itemId"].keys()}.union(
+        {"[unknown]", "[other]"}
+    )
 
     assert bert_predictions.height > 0
     assert set(bert_predictions["itemId"].to_list()).issubset(valid_values)

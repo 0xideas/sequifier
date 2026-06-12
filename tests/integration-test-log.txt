@@ -6,6 +6,7 @@ sequifier preprocess --config-path tests/configs/preprocess-test-categorical.yam
 sequifier preprocess --config-path tests/configs/preprocess-test-real.yaml --data-path tests/resources/source_data/test-data-real-5.csv --selected-columns itemValue supReal1 supReal2 supReal3 supReal4
 sequifier preprocess --config-path tests/configs/preprocess-test-categorical.yaml --data-path tests/resources/source_data/test-data-categorical-50.csv --selected-columns None
 sequifier preprocess --config-path tests/configs/preprocess-test-real.yaml --data-path tests/resources/source_data/test-data-real-50.csv --selected-columns itemValue supReal1 supReal2 supReal3 supReal4 supReal5 supReal6 supReal7 supReal8 supReal9 supReal10 supReal11 supReal12 supReal13 supReal14 supReal15 supReal16 supReal17 supReal18 supReal19 supReal20 supReal21 supReal22 supReal23 supReal24 supReal25 supReal26 supReal27 supReal28 supReal29 supReal30 supReal31 supReal32 supReal33 supReal34 supReal35 supReal36 supReal37 supReal38 supReal39 supReal40 supReal41 supReal42 supReal43 supReal44 supReal45 supReal46 supReal47 supReal48 supReal49
+sequifier preprocess --config-path tests/configs/preprocess-test-categorical-lookahead-0.yaml --data-path tests/resources/source_data/test-data-categorical-1-lookahead-0.csv --selected-columns None
 sequifier preprocess --config-path tests/configs/preprocess-test-categorical-multitarget.yaml
 sequifier preprocess --config-path tests/configs/preprocess-test-multi-file.yaml
 sequifier preprocess --config-path tests/configs/preprocess-test-categorical-interrupted.yaml
