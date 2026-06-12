@@ -16,6 +16,7 @@ def mock_config():
     config.project_root = "."
     config.seed = 42
     config.seq_length = 2
+    config.window_length = 3
     config.column_types = {"item": "Float64"}
     config.training_spec.batch_size = 5
     config.training_spec.num_workers = 0

@@ -12,6 +12,7 @@ split_ratios:
 - 0.1
 - 0.1
 seq_length: 48
+target_max_offset: 1
 stride_by_split:
 - 1
 - 1
@@ -30,6 +31,7 @@ target_column_types: # 'criterion' in training_spec must also be adapted
   EXAMPLE_TARGET_COLUMN_NAME: real
 
 seq_length: 48
+window_length: 49
 inference_batch_size: 10
 
 export_generative_model: PLEASE FILL # true or false
@@ -47,6 +49,7 @@ model_spec:
   num_layers: 3
   prediction_length: 1
 training_spec:
+  window_length: 49
   training_objective: causal
   device: cuda
   epochs: 10
@@ -88,6 +91,7 @@ output_probabilities: false
 map_to_id: true
 device: cpu
 seq_length: 48
+window_length: 49
 inference_batch_size: 10
 
 autoregression: true

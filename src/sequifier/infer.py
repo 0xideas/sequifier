@@ -20,7 +20,9 @@ from sequifier.helpers import (
     generate_padding_masks,
     normalize_path,
     numpy_to_pytorch,
+    slice_window,
     subset_to_input_columns,
+    validate_stored_window_width,
     write_data,
 )
 from sequifier.special_tokens import validate_special_token_ids
@@ -362,8 +364,9 @@ def _bert_target_valid_mask_from_preprocessed_data(
         metadata = generate_padding_masks(
             left_pad_lengths,
             config.seq_length,
-            data_offset=1,
-            target_offset=1,
+            config.window_length,
+            data_offset=config.data_offset,
+            target_offset=config.target_offset,
         )
         return _flatten_bert_target_valid_mask(config, metadata, prediction_length)
 
@@ -491,14 +494,16 @@ def infer_embedding(
                 start_positions_tensor,
                 left_pad_lengths_tensor,
             ) = data
+            for tensor in sequences_dict.values():
+                validate_stored_window_width(tensor, config.window_length)
             metadata = {}
             if left_pad_lengths_tensor is not None:
-                target_offset = 0 if config.training_objective == "causal" else 1
                 metadata = generate_padding_masks(
                     left_pad_lengths_tensor,
                     config.seq_length,
-                    data_offset=1,
-                    target_offset=target_offset,
+                    config.window_length,
+                    data_offset=config.data_offset,
+                    target_offset=config.target_offset,
                 )
             embeddings = get_embeddings_pt(
                 config, inferer, sequences_dict, metadata=metadata
@@ -738,6 +743,8 @@ def infer_generative(
                 start_positions_tensor,
                 left_pad_lengths_tensor,
             ) = data
+            for tensor in sequences_dict.values():
+                validate_stored_window_width(tensor, config.window_length)
             total_steps = (
                 1
                 if config.autoregression_total_steps is None
@@ -745,19 +752,19 @@ def infer_generative(
             )
 
             sequences_dict = {
-                key: tensor[:, :-1]
+                key: slice_window(tensor, config.seq_length, config.data_offset)
                 for key, tensor in sequences_dict.items()
                 if key in config.input_columns
             }
 
             metadata = {}
             if left_pad_lengths_tensor is not None:
-                target_offset = 0 if config.training_objective == "causal" else 1
                 metadata = generate_padding_masks(
                     left_pad_lengths_tensor,
                     config.seq_length,
-                    data_offset=1,
-                    target_offset=target_offset,
+                    config.window_length,
+                    data_offset=config.data_offset,
+                    target_offset=config.target_offset,
                 )
 
             probs, preds = get_probs_preds_from_dict(
@@ -936,8 +943,10 @@ def get_embeddings_pt(
     Returns:
         A NumPy array containing the computed embeddings for the batch.
     """
+    for tensor in data.values():
+        validate_stored_window_width(tensor, config.window_length)
     X = {
-        key: val[:, :-1].numpy()
+        key: slice_window(val, config.seq_length, config.data_offset).numpy()
         for key, val in data.items()
         if key in config.input_columns
     }
@@ -1087,9 +1096,14 @@ def get_embeddings(
         A NumPy array containing the computed embeddings for the batch.
     """
     all_columns = sorted(list(set(config.input_columns + config.target_columns)))
-    target_offset = 0 if config.training_objective == "causal" else 1
     X, metadata = numpy_to_pytorch(
-        data, column_types, all_columns, config.seq_length, 1, target_offset
+        data,
+        column_types,
+        all_columns,
+        config.seq_length,
+        config.window_length,
+        config.data_offset,
+        config.target_offset,
     )
     X = {col: X_col.numpy() for col, X_col in X.items()}
     metadata_np = (
@@ -1135,10 +1149,14 @@ def get_probs_preds_from_df(
     """
     all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
-    target_offset = 0 if config.training_objective == "causal" else 1
-
     X, metadata = numpy_to_pytorch(
-        data, column_types, all_columns, config.seq_length, 1, target_offset
+        data,
+        column_types,
+        all_columns,
+        config.seq_length,
+        config.window_length,
+        config.data_offset,
+        config.target_offset,
     )
     X = {col: X_col.numpy() for col, X_col in X.items()}
     metadata_np = (
@@ -1266,7 +1284,8 @@ def get_probs_preds_autoregression(
         column_types,
         config.input_columns,
         seq_length,
-        data_offset=1,
+        config.window_length,
+        data_offset=config.data_offset,
         target_offset=0,
     )
 

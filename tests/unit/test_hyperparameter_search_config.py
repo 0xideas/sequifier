@@ -62,14 +62,19 @@ def bert_spec_sampling_config():
     }
 
 
+def sample_training_spec(sampling, trial):
+    return sampling.sample_trial(trial, target_max_offset=1, window_length=9)
+
+
 def test_training_objective_defaults_to_causal_without_bert_spec():
     sampling = make_training_sampling()
     trial = RecordingTrial()
 
-    training_spec = sampling.sample_trial(trial)
+    training_spec = sample_training_spec(sampling, trial)
 
     assert training_spec.training_objective == "causal"
     assert training_spec.bert_spec is None
+    assert training_spec.window_length == 9
     assert trial.params["training_objective"] == "causal"
 
 
@@ -87,9 +92,10 @@ def test_bert_spec_fields_are_sampled_separately_for_bert_objective():
         }
     )
 
-    training_spec = sampling.sample_trial(trial)
+    training_spec = sample_training_spec(sampling, trial)
 
     assert training_spec.training_objective == "bert"
+    assert training_spec.bert_spec is not None
     assert training_spec.bert_spec.masking_probability == 0.30
     assert training_spec.bert_spec.replacement_distribution.masked == 0.6
     assert training_spec.bert_spec.replacement_distribution.random == 0.2
@@ -112,7 +118,7 @@ def test_causal_objective_does_not_sample_bert_fields():
     )
     trial = RecordingTrial({"training_objective": "causal"})
 
-    training_spec = sampling.sample_trial(trial)
+    training_spec = sample_training_spec(sampling, trial)
 
     assert training_spec.training_objective == "causal"
     assert training_spec.bert_spec is None
@@ -131,7 +137,7 @@ def test_bert_training_spec_dumps_to_plain_yaml():
         training_objective=["bert"],
         bert_spec=bert_spec_sampling_config(),
     )
-    training_spec = sampling.sample_trial(RecordingTrial())
+    training_spec = sample_training_spec(sampling, RecordingTrial())
 
     dumped = yaml.dump(training_spec, Dumper=TrainModelDumper, sort_keys=False)
     loaded = yaml.safe_load(dumped)

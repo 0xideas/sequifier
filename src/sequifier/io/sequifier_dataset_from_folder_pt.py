@@ -9,7 +9,13 @@ from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
-from sequifier.helpers import generate_padding_masks, normalize_path
+from sequifier.helpers import (
+    generate_padding_masks,
+    normalize_path,
+    sequence_layout_from_metadata,
+    slice_window,
+    validate_stored_window_width,
+)
 from sequifier.io.batch import SequifierBatch
 
 
@@ -41,6 +47,13 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
+        folder_layout = sequence_layout_from_metadata(metadata, config.seq_length)
+        if folder_layout.window_length != config.window_length:
+            raise ValueError(
+                f"Preprocessed folder window_length={folder_layout.window_length} "
+                f"does not match config window_length={config.window_length}."
+            )
+
         self.n_samples = metadata["total_samples"]
 
         logger.info(
@@ -64,6 +77,9 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             ) = torch.load(file_path, map_location="cpu", weights_only=False)
             for col in all_sequences.keys():
                 if col in sequences_batch:
+                    validate_stored_window_width(
+                        sequences_batch[col], config.window_length
+                    )
                     all_sequences[col].append(sequences_batch[col])
             if left_pad_lengths_batch is not None:
                 all_left_pad_lengths.append(left_pad_lengths_batch)
@@ -166,22 +182,12 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             data_offset = self.config.training_spec.data_offset
             target_offset = self.config.training_spec.target_offset
             data_batch = {
-                key: tensor[
-                    batch_indices,
-                    -(train_seq_len + data_offset) : (
-                        -data_offset if data_offset > 0 else None
-                    ),
-                ]
+                key: slice_window(tensor[batch_indices], train_seq_len, data_offset)
                 for key, tensor in self.sequences.items()
                 if key in self.config.input_columns
             }
             targets_batch = {
-                key: tensor[
-                    batch_indices,
-                    -(train_seq_len + target_offset) : (
-                        -target_offset if target_offset > 0 else None
-                    ),
-                ]
+                key: slice_window(tensor[batch_indices], train_seq_len, target_offset)
                 for key, tensor in self.sequences.items()
                 if key in self.config.target_columns
             }
@@ -191,6 +197,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                 metadata_batch = generate_padding_masks(
                     self.left_pad_lengths[batch_indices],
                     train_seq_len,
+                    self.config.window_length,
                     data_offset,
                     target_offset,
                 )

@@ -410,7 +410,7 @@ def copy_interrupted_data(project_root, remove_project_root_contents):
         project_root, "data", "test-data-categorical-1-interrupted-temp"
     )
 
-    shutil.copytree(source_path, target_path)
+    shutil.copytree(source_path, target_path, dirs_exist_ok=True)
 
 
 @pytest.fixture(scope="session")
@@ -447,7 +447,7 @@ def run_preprocessing(
 
     source_path = os.path.join("tests", "resources", "source_configs", "id_maps")
     target_path = os.path.join(project_root, "configs", "id_maps")
-    shutil.copytree(source_path, target_path)
+    shutil.copytree(source_path, target_path, dirs_exist_ok=True)
     run_and_log(
         f"sequifier preprocess --config-path {preprocessing_config_path_cat_multitarget}"
     )

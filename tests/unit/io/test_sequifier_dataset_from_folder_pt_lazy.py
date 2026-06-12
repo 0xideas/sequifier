@@ -20,6 +20,7 @@ def mock_config(tmp_path):
     config.training_spec.num_workers = 0
     config.seed = 42
     config.seq_length = 5
+    config.window_length = 6
     config.input_columns = ["col1"]
     config.target_columns = ["col1", "tgt1"]
     config.training_spec.data_offset = 1
@@ -57,8 +58,7 @@ def mock_torch_load():
     with patch("torch.load") as mock_load:
 
         def side_effect(path, map_location, weights_only):
-            # Tensors size: (10 samples per file, sequence length 10 to allow slicing)
-            dummy_seq = {"col1": torch.ones((10, 10)), "tgt1": torch.zeros((10, 10))}
+            dummy_seq = {"col1": torch.ones((10, 6)), "tgt1": torch.zeros((10, 6))}
 
             return (
                 dummy_seq,

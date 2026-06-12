@@ -97,16 +97,16 @@ Let's start with the data format expected by sequifier. The basic data format th
 
 The two columns "sequenceId" and "itemPosition" have to be present, and then there must be at least one feature column. There can also be many feature columns, and these can be categorical or real valued.
 
-Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`, which takes this form:
+Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Each stored window has width `seq_length + target_max_offset` (`target_max_offset` defaults to `1`; set it to `0` for BERT-style same-width inputs and targets):
 
-|sequenceId|subsequenceId|startItemPosition|columnName|[Subsequence Length]|[Subsequence Length - 1]|...|0|
-|----------|-------------|-----------------|----------|--------------------|------------------------| - |-|
-|0|0|0|column1|"high"|"high"|...|"low"|
-|0|0|0|column2|12.3|10.2|...|14.9|
-|...|...|...|...|...|...|...|...|
-|1|0|15|column1|"medium"|"high"|...|"medium"|
-|1|0|15|column2|20.6|18.5|...|21.6|
-|...|...|...|...|...|...|...|...|
+|sequenceId|subsequenceId|startItemPosition|leftPadLength|inputCol|[Window Length - 1]|[Window Length - 2]|...|0|
+|----------|-------------|-----------------|-------------|--------|-------------------|-------------------| - |-|
+|0|0|0|0|column1|"high"|"high"|...|"low"|
+|0|0|0|0|column2|12.3|10.2|...|14.9|
+|...|...|...|...|...|...|...|...|...|
+|1|0|15|0|column1|"medium"|"high"|...|"medium"|
+|1|0|15|0|column2|20.6|18.5|...|21.6|
+|...|...|...|...|...|...|...|...|...|
 
 On inference, the output is returned in the library input format, introduced first.
 
@@ -254,6 +254,7 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `seq_length` | `int` | **Yes** | - | The length of the context window (history) fed into the model. |
+| `target_max_offset` | `int` | No | `1` | Number of future items retained after the input context. The stored window width is `seq_length + target_max_offset`. Use `0` for BERT-style preprocessing where inputs and targets have the same width; keep `1` for legacy causal next-item training. |
 | `split_ratios` | `list[float]`| **Yes** | - | Proportions for data splits (e.g., `[0.8, 0.1, 0.1]` for train/val/test). Must sum to 1.0. |
 | `stride_by_split` | `list[int]` | No | `[seq_length]*N` | The step size used to slide the window for each split. Corresponds to `split_ratios`. |
 | `subsequence_start_mode`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |

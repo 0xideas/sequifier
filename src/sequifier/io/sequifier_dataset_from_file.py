@@ -41,16 +41,15 @@ class SequifierDatasetFromFile(IterableDataset):
             for col in config.column_types
         }
 
-        target_offset = 0 if config.training_spec.training_objective == "causal" else 1
-
         # self.all_tensors now holds both inputs and targets
         all_tensors, metadata_tensors = numpy_to_pytorch(
             data=data_df,
             column_types=column_types,
             all_columns=all_columns,
             seq_length=config.seq_length,
-            data_offset=1,
-            target_offset=target_offset,
+            window_length=config.window_length,
+            data_offset=config.training_spec.data_offset,
+            target_offset=config.training_spec.target_offset,
         )
         self.n_samples = all_tensors[all_columns[0]].shape[0]
 

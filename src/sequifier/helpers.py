@@ -3,6 +3,7 @@ import os
 import random
 import re
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional, Union
 
@@ -46,6 +47,100 @@ EXPLICIT_PADDING_MASK_FALLBACK_WARNING = (
     "inference for real-valued data; leading 0.0 values may be treated as "
     "padding. Re-run preprocessing to generate explicit masks."
 )
+
+
+@dataclass(frozen=True)
+class SequenceLayout:
+    seq_length: int
+    target_max_offset: int = 1
+    sequence_layout_version: int = 2
+
+    def __post_init__(self) -> None:
+        if self.seq_length < 1:
+            raise ValueError("seq_length must be a positive integer")
+        if self.target_max_offset < 0:
+            raise ValueError("target_max_offset must be non-negative")
+
+    @property
+    def window_length(self) -> int:
+        return self.seq_length + self.target_max_offset
+
+    @property
+    def input_offset(self) -> int:
+        return self.target_max_offset
+
+    def target_offset(self, horizon: int) -> int:
+        offset = self.target_max_offset - horizon
+        if offset < 0:
+            raise ValueError(
+                f"horizon={horizon} exceeds target_max_offset={self.target_max_offset}"
+            )
+        return offset
+
+
+@beartype
+def sequence_column_names(seq_length: int, offset: int) -> list[str]:
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+    return [str(i) for i in range(seq_length - 1 + offset, offset - 1, -1)]
+
+
+@beartype
+def slice_window(tensor: Tensor, seq_length: int, offset: int) -> Tensor:
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+
+    end = -offset if offset else None
+    result = tensor[:, -(seq_length + offset) : end]
+
+    if result.shape[1] != seq_length:
+        raise ValueError(
+            f"Stored window width {tensor.shape[1]} cannot provide "
+            f"seq_length={seq_length} at offset={offset}"
+        )
+    return result
+
+
+@beartype
+def validate_stored_window_width(tensor: Tensor, window_length: int) -> None:
+    if tensor.shape[1] != window_length:
+        raise ValueError(
+            f"Stored window width {tensor.shape[1]} does not match "
+            f"metadata window_length={window_length}."
+        )
+
+
+@beartype
+def sequence_layout_from_metadata(metadata: dict, seq_length: int) -> SequenceLayout:
+    metadata_seq_length = int(metadata.get("seq_length", seq_length))
+    if metadata_seq_length != seq_length:
+        raise ValueError(
+            f"Configured seq_length={seq_length} does not match preprocessed "
+            f"metadata seq_length={metadata_seq_length}."
+        )
+
+    target_max_offset = int(metadata.get("target_max_offset", 1))
+    window_length = int(
+        metadata.get("window_length", metadata_seq_length + target_max_offset)
+    )
+    if window_length != metadata_seq_length + target_max_offset:
+        raise ValueError(
+            "Invalid sequence layout metadata: window_length must equal "
+            "seq_length + target_max_offset "
+            f"({window_length} != {metadata_seq_length} + {target_max_offset})."
+        )
+
+    layout = SequenceLayout(
+        seq_length=metadata_seq_length,
+        target_max_offset=target_max_offset,
+        sequence_layout_version=int(metadata.get("sequence_layout_version", 1)),
+    )
+    if layout.window_length != window_length:
+        raise ValueError(
+            f"Resolved layout window_length={layout.window_length} does not match "
+            f"metadata window_length={window_length}."
+        )
+    return layout
 
 
 # Check an environment variable to see if we are in a testing context
@@ -245,6 +340,7 @@ def numpy_to_pytorch(
     column_types: dict[str, torch.dtype],
     all_columns: list[str],
     seq_length: int,
+    window_length: int,
     data_offset: int,
     target_offset: int,
 ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
@@ -282,12 +378,8 @@ def numpy_to_pytorch(
           (e.g., `{'price': <tensor>, 'price_target': <tensor>}`).
         - a metadata dictionary containing any explicit masks.
     """
-    input_seq_cols = [
-        str(c) for c in range(seq_length - 1 + data_offset, (-1 + data_offset), -1)
-    ]
-    target_seq_cols = [
-        str(c) for c in range(seq_length - 1 + target_offset, (-1 + target_offset), -1)
-    ]
+    input_seq_cols = sequence_column_names(seq_length, data_offset)
+    target_seq_cols = sequence_column_names(seq_length, target_offset)
 
     # We will create a unified dictionary
     unified_tensors = {}
@@ -315,7 +407,11 @@ def numpy_to_pytorch(
     left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(data)
     if left_pad_lengths is not None:
         metadata = generate_padding_masks(
-            left_pad_lengths, seq_length, data_offset, target_offset
+            left_pad_lengths,
+            seq_length,
+            window_length,
+            data_offset,
+            target_offset,
         )
     else:
         metadata = {}
@@ -362,17 +458,17 @@ def get_left_pad_lengths_from_preprocessed_data(data: pl.DataFrame) -> Optional[
 def generate_padding_masks(
     left_pad_lengths: Tensor,
     seq_length: int,
+    window_length: int,
     data_offset: int,
     target_offset: int,
 ) -> dict[str, Tensor]:
     """Generates explicit attention and target masks as a metadata dictionary."""
-    full_length = seq_length + 1
     return {
         "attention_valid_mask": build_valid_mask(
-            left_pad_lengths, full_length, data_offset, seq_length
+            left_pad_lengths, window_length, data_offset, seq_length
         ),
         "target_valid_mask": build_valid_mask(
-            left_pad_lengths, full_length, target_offset, seq_length
+            left_pad_lengths, window_length, target_offset, seq_length
         ),
     }
 
@@ -603,6 +699,12 @@ def apply_bert_masking(
 
     batch_size, seq_len = valid_mask.shape
     device = valid_mask.device
+    for target_name, target in targets_batch.items():
+        if target.shape != valid_mask.shape:
+            raise ValueError(
+                f"BERT target {target_name!r} has shape {target.shape}; "
+                f"expected {valid_mask.shape}"
+            )
 
     if eval_seed is not None:
         cpu_rng_state = torch.get_rng_state()

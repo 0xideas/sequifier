@@ -9,6 +9,7 @@ target_column_types:
   itemId: categorical
 
 seq_length: 8
+window_length: 9
 inference_batch_size: 10
 
 export_generative_model: true
@@ -32,6 +33,7 @@ model_spec:
   n_kv_heads: 2
   rope_theta: 10000.0
 training_spec:
+  window_length: 9
   training_objective: bert
   bert_spec:
     masking_probability: 0.5

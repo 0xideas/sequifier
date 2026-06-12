@@ -8,6 +8,7 @@ from sequifier.helpers import (
     build_valid_mask,
     construct_index_maps,
     numpy_to_pytorch,
+    slice_window,
 )
 
 # ==========================================
@@ -86,7 +87,13 @@ def test_numpy_to_pytorch_shapes_and_shifting():
     seq_length = 3
 
     tensors, metadata = numpy_to_pytorch(
-        data, column_types, all_columns, seq_length, data_offset=1, target_offset=0
+        data,
+        column_types,
+        all_columns,
+        seq_length,
+        seq_length + 1,
+        data_offset=1,
+        target_offset=0,
     )
 
     # 1. Check Keys
@@ -122,6 +129,7 @@ def test_numpy_to_pytorch_dtypes():
         {"int_col": torch.int64},
         ["int_col"],
         seq_length=1,
+        window_length=2,
         data_offset=1,
         target_offset=0,
     )
@@ -134,6 +142,7 @@ def test_numpy_to_pytorch_dtypes():
         {"float_col": torch.float32},
         ["float_col"],
         seq_length=1,
+        window_length=2,
         data_offset=1,
         target_offset=0,
     )
@@ -172,6 +181,18 @@ def test_build_valid_mask_from_left_pad_lengths():
     )
 
 
+def test_slice_window_validates_stored_width():
+    tensor = torch.arange(8).reshape(2, 4)
+
+    assert torch.equal(
+        slice_window(tensor, seq_length=3, offset=1),
+        torch.tensor([[0, 1, 2], [4, 5, 6]]),
+    )
+    assert torch.equal(
+        slice_window(tensor[:, :3], seq_length=3, offset=0), tensor[:, :3]
+    )
+
+
 def test_numpy_to_pytorch_includes_explicit_padding_masks():
     data = pl.DataFrame(
         {
@@ -192,6 +213,7 @@ def test_numpy_to_pytorch_includes_explicit_padding_masks():
         {"A": torch.float32},
         ["A"],
         seq_length=3,
+        window_length=4,
         data_offset=1,
         target_offset=0,
     )

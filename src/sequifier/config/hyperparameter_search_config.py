@@ -415,7 +415,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
                     )
         return v
 
-    def sample_trial(self, trial: Any) -> TrainingSpecModel:
+    def sample_trial(
+        self, trial: Any, target_max_offset: int, window_length: int
+    ) -> TrainingSpecModel:
         """Samples training hyperparameters using an Optuna trial.
 
         This method leverages the provided Optuna trial to suggest values for
@@ -498,6 +500,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             fsdp_cpu_offload=self.fsdp_cpu_offload,
             torch_compile=self.torch_compile,
             float32_matmul_precision=self.float32_matmul_precision,
+            target_max_offset=target_max_offset,
+            window_length=window_length,
         )
 
 
@@ -699,6 +703,7 @@ class HyperparameterSearchConfig(BaseModel):
     id_maps: dict[str, dict[str | int, int]]
 
     seq_length: list[int]
+    target_max_offset: int = Field(default=1, ge=0)
     n_classes: dict[str, int]
     inference_batch_size: int
 
@@ -816,12 +821,17 @@ class HyperparameterSearchConfig(BaseModel):
             TrainModel: A fully populated configuration instance for the current trial.
         """
         model_spec = self.model_hyperparameter_sampling.sample_trial(trial)
-        training_spec = self.training_hyperparameter_sampling.sample_trial(trial)
 
         input_columns_index = trial.suggest_categorical(
             "input_columns_index", list(range(len(self.input_columns)))
         )
         seq_length = trial.suggest_categorical("seq_length", self.seq_length)
+        window_length = seq_length + self.target_max_offset
+        training_spec = self.training_hyperparameter_sampling.sample_trial(
+            trial,
+            target_max_offset=self.target_max_offset,
+            window_length=window_length,
+        )
 
         logger.info(f"{input_columns_index = } - {seq_length = }")
 
@@ -840,6 +850,8 @@ class HyperparameterSearchConfig(BaseModel):
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
             seq_length=seq_length,
+            target_max_offset=self.target_max_offset,
+            window_length=window_length,
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=101,

@@ -24,21 +24,22 @@ def metadata_configs(run_preprocessing, project_root):
 
 
 def test_metadata_config(metadata_configs):
+    expected_metadata_keys = [
+        "n_classes",
+        "id_maps",
+        "special_token_ids",
+        "split_paths",
+        "column_types",
+        "selected_columns_statistics",
+        "seq_length",
+        "target_max_offset",
+        "window_length",
+        "sequence_layout_version",
+    ]
+
     for file_name, metadata_config in metadata_configs.items():
         print(f"Verifying metadata_config for: {file_name}")
-        assert np.all(
-            np.array(list(metadata_config.keys()))
-            == np.array(
-                [
-                    "n_classes",
-                    "id_maps",
-                    "special_token_ids",
-                    "split_paths",
-                    "column_types",
-                    "selected_columns_statistics",
-                ]
-            )
-        ), list(metadata_config.keys())
+        assert list(metadata_config.keys()) == expected_metadata_keys
         assert metadata_config["special_token_ids"] == {
             "[unknown]": 0,
             "[other]": 1,

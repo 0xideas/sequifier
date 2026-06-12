@@ -14,7 +14,11 @@ from pydantic import (
     model_validator,
 )
 
-from sequifier.helpers import normalize_path, try_catch_excess_keys
+from sequifier.helpers import (
+    normalize_path,
+    sequence_layout_from_metadata,
+    try_catch_excess_keys,
+)
 from sequifier.special_tokens import validate_special_token_ids
 
 
@@ -50,6 +54,14 @@ def load_inferer_config(
         validate_special_token_ids(
             metadata_config.get("special_token_ids"),
             source=f"metadata config '{metadata_config_path}'",
+        )
+        sequence_layout = sequence_layout_from_metadata(
+            metadata_config, config_values["seq_length"]
+        )
+        config_values["target_max_offset"] = sequence_layout.target_max_offset
+        config_values["window_length"] = sequence_layout.window_length
+        config_values["sequence_layout_version"] = (
+            sequence_layout.sequence_layout_version
         )
 
         config_values["column_types"] = config_values.get(
@@ -143,6 +155,9 @@ class InfererModel(BaseModel):
     seed: int
     device: str
     seq_length: int
+    target_max_offset: int = Field(default=1, ge=0)
+    window_length: int
+    sequence_layout_version: int = 1
     prediction_length: Optional[int] = None
     inference_batch_size: int
 
@@ -153,6 +168,11 @@ class InfererModel(BaseModel):
 
     @model_validator(mode="after")
     def normalize_prediction_length(self):
+        if self.window_length != self.seq_length + self.target_max_offset:
+            raise ValueError(
+                "window_length must equal seq_length + target_max_offset "
+                f"({self.window_length} != {self.seq_length} + {self.target_max_offset})."
+            )
         if self.prediction_length is None:
             self.prediction_length = (
                 self.seq_length if self.training_objective == "bert" else 1
@@ -163,7 +183,21 @@ class InfererModel(BaseModel):
                     "For BERT inference, prediction_length must be equal to seq_length "
                     f"(got prediction_length={self.prediction_length}, seq_length={self.seq_length})."
                 )
+        elif self.target_max_offset < 1:
+            raise ValueError(
+                "Causal inference requires data preprocessed with target_max_offset >= 1"
+            )
         return self
+
+    @property
+    def data_offset(self) -> int:
+        return self.target_max_offset
+
+    @property
+    def target_offset(self) -> int:
+        if self.training_objective == "bert":
+            return self.target_max_offset
+        return self.target_max_offset - 1
 
     @field_validator("training_objective")
     @classmethod

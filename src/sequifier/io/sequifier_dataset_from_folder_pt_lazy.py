@@ -10,7 +10,13 @@ from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
-from sequifier.helpers import generate_padding_masks, normalize_path
+from sequifier.helpers import (
+    generate_padding_masks,
+    normalize_path,
+    sequence_layout_from_metadata,
+    slice_window,
+    validate_stored_window_width,
+)
 from sequifier.io.batch import SequifierBatch
 
 
@@ -56,6 +62,13 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
 
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
+
+        folder_layout = sequence_layout_from_metadata(metadata, config.seq_length)
+        if folder_layout.window_length != config.window_length:
+            raise ValueError(
+                f"Preprocessed folder window_length={folder_layout.window_length} "
+                f"does not match config window_length={config.window_length}."
+            )
 
         self.batch_files_info = metadata["batch_files"]
         self.total_samples = metadata["total_samples"]
@@ -230,6 +243,8 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 _,
                 left_pad_lengths_batch,
             ) = torch.load(file_path, map_location="cpu", weights_only=False)
+            for tensor in sequences_batch.values():
+                validate_stored_window_width(tensor, self.config.window_length)
 
             # Generate indices for the whole file
             indices = torch.arange(file_samples)
@@ -253,22 +268,12 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             data_offset = self.config.training_spec.data_offset
             target_offset = self.config.training_spec.target_offset
             new_seq = {
-                k: v[
-                    worker_indices,
-                    -(train_seq_len + data_offset) : (
-                        -data_offset if data_offset > 0 else None
-                    ),
-                ]
+                k: slice_window(v[worker_indices], train_seq_len, data_offset)
                 for k, v in sequences_batch.items()
                 if k in self.config.input_columns
             }
             new_tgt = {
-                k: v[
-                    worker_indices,
-                    -(train_seq_len + target_offset) : (
-                        -target_offset if target_offset > 0 else None
-                    ),
-                ]
+                k: slice_window(v[worker_indices], train_seq_len, target_offset)
                 for k, v in sequences_batch.items()
                 if k in self.config.target_columns
             }
@@ -278,6 +283,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 new_meta = generate_padding_masks(
                     left_pad_lengths_batch[worker_indices],
                     train_seq_len,
+                    self.config.window_length,
                     data_offset,
                     target_offset,
                 )

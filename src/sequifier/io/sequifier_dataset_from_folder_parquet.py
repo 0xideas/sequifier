@@ -15,6 +15,8 @@ from sequifier.helpers import (
     generate_padding_masks,
     get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
+    sequence_column_names,
+    sequence_layout_from_metadata,
 )
 from sequifier.io.batch import SequifierBatch
 
@@ -47,6 +49,13 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
+        folder_layout = sequence_layout_from_metadata(metadata, config.seq_length)
+        if folder_layout.window_length != config.window_length:
+            raise ValueError(
+                f"Preprocessed folder window_length={folder_layout.window_length} "
+                f"does not match config window_length={config.window_length}."
+            )
+
         self.n_samples = metadata["total_samples"]
 
         logger.info(
@@ -60,22 +69,12 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
 
         # Sequence formatting structures matching long-format schema boundaries
         train_seq_len = self.config.seq_length
-        input_seq_cols = [
-            str(c)
-            for c in range(
-                train_seq_len - 1 + self.config.training_spec.data_offset,
-                (-1 + self.config.training_spec.data_offset),
-                -1,
-            )
-        ]
-        target_seq_cols = [
-            str(c)
-            for c in range(
-                train_seq_len - 1 + self.config.training_spec.target_offset,
-                (-1 + self.config.training_spec.target_offset),
-                -1,
-            )
-        ]
+        input_seq_cols = sequence_column_names(
+            train_seq_len, self.config.training_spec.data_offset
+        )
+        target_seq_cols = sequence_column_names(
+            train_seq_len, self.config.training_spec.target_offset
+        )
         all_sequences: Dict[str, list[torch.Tensor]] = {
             col: [] for col in config.input_columns
         }
@@ -232,6 +231,7 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
                 metadata_batch = generate_padding_masks(
                     self.left_pad_lengths[batch_indices],
                     train_seq_len,
+                    self.config.window_length,
                     self.config.training_spec.data_offset,
                     self.config.training_spec.target_offset,
                 )

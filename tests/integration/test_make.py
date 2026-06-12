@@ -88,6 +88,7 @@ def adapt_configs(config_strings):
             .replace("epochs: 10", "epochs: 3")
             .replace("device: cuda", "device: cpu")
             .replace("seq_length: 48", "seq_length: 10")
+            .replace("window_length: 49", "window_length: 11")
             .replace("total_steps: PLEASE FILL", "total_steps: 10000")
         )
 
@@ -118,6 +119,7 @@ def adapt_configs(config_strings):
             .replace("[EXAMPLE_INPUT_COLUMN_NAME]", "[itemId]")
             .replace("[EXAMPLE_TARGET_COLUMN_NAME]", "[itemId]")
             .replace("seq_length: 48", "seq_length: 10")
+            .replace("window_length: 49", "window_length: 11")
             .replace("autoregression: true", "autoregression: false")
             .replace("EXAMPLE_TARGET_COLUMN_NAME: real", "itemId: categorical")
         )

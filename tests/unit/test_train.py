@@ -31,6 +31,7 @@ def _training_spec_kwargs(**overrides):
         "optimizer": {"name": "Adam"},
         "scheduler": {"name": "StepLR", "step_size": 1, "gamma": 0.1},
         "loss_weights": {"cat_col": 1.0, "real_col": 1.0},
+        "window_length": 11,
     }
     values.update(overrides)
     return values
@@ -117,6 +118,7 @@ def model_config(tmp_path):
         optimizer={"name": "Adam"},
         scheduler={"name": "StepLR", "step_size": 1, "gamma": 0.1},
         loss_weights={"cat_col": 1.0, "real_col": 1.0},
+        window_length=11,
     )
 
     config = TrainModel(
@@ -135,6 +137,7 @@ def model_config(tmp_path):
         id_maps={"cat_col": {"a": 1, "b": 2, "c": 3, "d": 4}},
         n_classes={"cat_col": 5},  # 0 + 4 classes
         seq_length=10,
+        window_length=11,
         inference_batch_size=4,
         seed=42,
         export_generative_model=True,

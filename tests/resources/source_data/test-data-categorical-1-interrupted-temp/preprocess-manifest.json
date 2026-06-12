@@ -1,0 +1,11 @@
+{
+    "seq_length": 8,
+    "target_max_offset": 1,
+    "window_length": 9,
+    "sequence_layout_version": 2,
+    "selected_columns": null,
+    "data_columns": [
+        "itemId"
+    ],
+    "write_format": "pt"
+}

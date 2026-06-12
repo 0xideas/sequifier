@@ -22,7 +22,11 @@ from pydantic import (
 
 import sequifier
 from sequifier.config.probabilities import ProbabilityDistribution
-from sequifier.helpers import normalize_path, try_catch_excess_keys
+from sequifier.helpers import (
+    normalize_path,
+    sequence_layout_from_metadata,
+    try_catch_excess_keys,
+)
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 
 AnyType = str | int | float
@@ -57,6 +61,20 @@ def load_train_config(
             normalize_path(metadata_config_path, config_values["project_root"]), "r"
         ) as f:
             metadata_config = json.loads(f.read())
+
+        sequence_layout = sequence_layout_from_metadata(
+            metadata_config, config_values["seq_length"]
+        )
+        config_values["target_max_offset"] = sequence_layout.target_max_offset
+        config_values["window_length"] = sequence_layout.window_length
+        config_values["sequence_layout_version"] = (
+            sequence_layout.sequence_layout_version
+        )
+        config_values.setdefault("training_spec", {})
+        config_values["training_spec"]["target_max_offset"] = (
+            sequence_layout.target_max_offset
+        )
+        config_values["training_spec"]["window_length"] = sequence_layout.window_length
 
         split_paths = metadata_config["split_paths"]
 
@@ -227,6 +245,8 @@ class TrainingSpecModel(BaseModel):
     fsdp_cpu_offload: Optional[bool] = None
     torch_compile: str = "outer"
     float32_matmul_precision: str = "highest"
+    target_max_offset: int = Field(default=1, ge=0)
+    window_length: int
 
     def __init__(self, **kwargs):
         super().__init__(
@@ -244,11 +264,13 @@ class TrainingSpecModel(BaseModel):
 
     @property
     def data_offset(self) -> int:
-        return 1
+        return self.target_max_offset
 
     @property
     def target_offset(self) -> int:
-        return 0 if self.training_objective == "causal" else 1
+        if self.training_objective == "bert":
+            return self.target_max_offset
+        return self.target_max_offset - 1
 
     @field_validator("layer_type_dtypes")
     @classmethod
@@ -357,6 +379,14 @@ class TrainingSpecModel(BaseModel):
         if self.bert_spec is None and self.training_objective == "bert":
             raise ValueError(
                 "If the training_objective is 'bert', the BERT hyperparameters must be set"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_sequence_layout(self):
+        if self.training_objective == "causal" and self.target_max_offset < 1:
+            raise ValueError(
+                "Causal training requires data preprocessed with target_max_offset >= 1"
             )
         return self
 
@@ -563,6 +593,9 @@ class TrainModel(BaseModel):
     )
 
     seq_length: int
+    target_max_offset: int = Field(default=1, ge=0)
+    window_length: int
+    sequence_layout_version: int = 1
     n_classes: dict[str, int]
     inference_batch_size: int
     seed: int
@@ -583,6 +616,13 @@ class TrainModel(BaseModel):
 
     @model_validator(mode="after")
     def validate_bert_prediction_length_matches_seq_length(self):
+        if self.window_length != self.seq_length + self.target_max_offset:
+            raise ValueError(
+                "window_length must equal seq_length + target_max_offset "
+                f"({self.window_length} != {self.seq_length} + {self.target_max_offset})."
+            )
+        self.training_spec.target_max_offset = self.target_max_offset
+        self.training_spec.window_length = self.window_length
         if (
             self.training_spec.training_objective == "bert"
             and self.model_spec.prediction_length != self.seq_length

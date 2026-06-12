@@ -7,6 +7,7 @@ import torch
 from pydantic import ValidationError
 
 from sequifier.config.preprocess_config import PreprocessorModel
+from sequifier.helpers import SequenceLayout
 from sequifier.preprocess import (
     Preprocessor,
     _apply_column_statistics,
@@ -40,7 +41,11 @@ def test_extract_subsequences_basic():
     # Windows: [10,11,12,13], [11,12,13,14], [12,13,14,15]
 
     result, left_pad_lengths, subsequence_starts = extract_subsequences(
-        input_data, seq_length, stride, columns, subsequence_start_mode="distribute"
+        input_data,
+        seq_length + 1,
+        stride,
+        columns,
+        subsequence_start_mode="distribute",
     )
 
     assert len(result["col1"]) == 3
@@ -48,17 +53,36 @@ def test_extract_subsequences_basic():
     assert result["col1"][2] == [12, 13, 14, 15]
 
 
+def test_extract_subsequences_bert_width():
+    input_data = {"col1": [10, 11, 12, 13, 14, 15]}
+    seq_length = 3
+    stride = 1
+    columns = ["col1"]
+
+    result, left_pad_lengths, subsequence_starts = extract_subsequences(
+        input_data,
+        window_length=seq_length,
+        stride_for_split=stride,
+        columns=columns,
+        subsequence_start_mode="distribute",
+    )
+
+    assert len(result["col1"]) == 4
+    assert result["col1"][0] == [10, 11, 12]
+    assert result["col1"][3] == [13, 14, 15]
+
+
 def test_extract_subsequences_padding():
     """Tests that sequences shorter than seq_length are padded with 0s."""
     input_data = {"col1": [1, 2]}  # Length 2
-    seq_length = 4  # Req length 5 (4+1)
+    window_length = 5
     stride = 1
     columns = ["col1"]
 
     # Expected: [0, 0, 0, 1, 2] -> 3 zeroes padding
 
     result, left_pad_lengths, subsequence_starts = extract_subsequences(
-        input_data, seq_length, stride, columns, subsequence_start_mode="distribute"
+        input_data, window_length, stride, columns, subsequence_start_mode="distribute"
     )
 
     assert len(result["col1"]) == 1
@@ -69,7 +93,7 @@ def test_extract_subsequences_returns_left_pad_lengths_when_requested():
     input_data = {"col1": [0.0, 1.5]}
     result, left_pad_lengths, subsequence_starts = extract_subsequences(
         input_data,
-        seq_length=4,
+        window_length=5,
         stride_for_split=1,
         columns=["col1"],
         subsequence_start_mode="distribute",
@@ -103,7 +127,7 @@ def test_extract_sequences_persists_left_pad_length_metadata():
     sequences = extract_sequences(
         data,
         schema,
-        seq_length=4,
+        layout=SequenceLayout(seq_length=4),
         stride_for_split=1,
         columns=["col1"],
         subsequence_start_mode="distribute",
@@ -130,7 +154,7 @@ def test_process_and_write_data_pt_persists_left_pad_lengths(tmp_path):
 
     process_and_write_data_pt(
         data,
-        seq_length=3,
+        window_length=4,
         path=str(out_path),
         column_types={"col1": "Float64"},
     )
@@ -426,13 +450,14 @@ def test_extract_subsequences_modes(mode):
     # exact: strictly adheres to stride, throws error if misalignment.
     input_data = {"col1": list(range(10))}
     seq_length = 2
+    window_length = seq_length + 1
     columns = ["col1"]
 
     if mode == "distribute":
         stride = 4
         # distribute might adjust indices to maximize coverage
         result, left_pad_lengths, subsequence_starts = extract_subsequences(
-            input_data, seq_length, stride, columns, mode
+            input_data, window_length, stride, columns, mode
         )
         assert len(result["col1"]) > 0
 
@@ -442,13 +467,13 @@ def test_extract_subsequences_modes(mode):
         )
         # Testing a failing exact case
         with pytest.raises(ValueError):
-            extract_subsequences(input_data, seq_length, 4, columns, mode)
+            extract_subsequences(input_data, window_length, 4, columns, mode)
 
         # Testing a passing exact case
         # (10-1) - 2 = 7. If we change input len to 11: (11-1)-2 = 8. stride 4 works.
         input_data_exact = {"col1": list(range(11))}
         result, left_pad_lengths, subsequence_starts = extract_subsequences(
-            input_data_exact, seq_length, 4, columns, mode
+            input_data_exact, window_length, 4, columns, mode
         )
         assert len(result["col1"]) > 0
 
