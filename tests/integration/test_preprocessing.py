@@ -31,9 +31,9 @@ def test_metadata_config(metadata_configs):
         "split_paths",
         "column_types",
         "selected_columns_statistics",
-        "seq_length",
-        "target_max_offset",
-        "window_length",
+        "context_length",
+        "max_lookahead",
+        "sample_length",
         "sequence_layout_version",
     ]
 

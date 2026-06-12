@@ -168,7 +168,7 @@ def test_probabilities(probabilities):
         )
 
 
-def test_bert_generative_predictions_default_to_seq_length(
+def test_bert_generative_predictions_default_to_context_length(
     bert_predictions, project_root
 ):
     metadata = _categorical_metadata(project_root)

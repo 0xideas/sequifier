@@ -97,7 +97,7 @@ Let's start with the data format expected by sequifier. The basic data format th
 
 The two columns "sequenceId" and "itemPosition" have to be present, and then there must be at least one feature column. There can also be many feature columns, and these can be categorical or real valued.
 
-Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Each stored window has width `seq_length + target_max_offset` (`target_max_offset` defaults to `1`; set it to `0` for BERT-style same-width inputs and targets):
+Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Each stored window has width `context_length + max_lookahead` (`max_lookahead` defaults to `1`; set it to `0` for BERT-style same-width inputs and targets):
 
 |sequenceId|subsequenceId|startItemPosition|leftPadLength|inputCol|[Window Length - 1]|[Window Length - 2]|...|0|
 |----------|-------------|-----------------|-------------|--------|-------------------|-------------------| - |-|
@@ -253,10 +253,10 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `seq_length` | `int` | **Yes** | - | The length of the context window (history) fed into the model. |
-| `target_max_offset` | `int` | No | `1` | Number of future items retained after the input context. The stored window width is `seq_length + target_max_offset`. Use `0` for BERT-style preprocessing where inputs and targets have the same width; keep `1` for legacy causal next-item training. |
+| `context_length` | `int` | **Yes** | - | The length of the context window (history) fed into the model. |
+| `max_lookahead` | `int` | No | `1` | Number of future items retained after the input context. The stored window width is `context_length + max_lookahead`. Use `0` for BERT-style preprocessing where inputs and targets have the same width; keep `1` for legacy causal next-item training. |
 | `split_ratios` | `list[float]`| **Yes** | - | Proportions for data splits (e.g., `[0.8, 0.1, 0.1]` for train/val/test). Must sum to 1.0. |
-| `stride_by_split` | `list[int]` | No | `[seq_length]*N` | The step size used to slide the window for each split. Corresponds to `split_ratios`. |
+| `stride_by_split` | `list[int]` | No | `[context_length]*N` | The step size used to slide the window for each split. Corresponds to `split_ratios`. |
 | `subsequence_start_mode`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
 
 ### 4\. Performance & System
@@ -281,10 +281,10 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 This controls data augmentation and redundancy.
 
-  * **Stride = `seq_length` (Non-overlapping):** The model sees every data point exactly once as a target. Training is faster, but the model might miss patterns that cross the window boundary.
+  * **Stride = `context_length` (Non-overlapping):** The model sees every data point exactly once as a target. Training is faster, but the model might miss patterns that cross the window boundary.
   * **Stride = 1 (Maximum Overlap):** Maximizes data volume. The model sees every possible sequence. This yields the highest accuracy but significantly increases the size of the preprocessed data and training time.
   * **Hybrid Approach:** It is common practice to set a large stride for the training and validation splits (index 0) to reduce the size on disk of the dataset, and a stride=1 for the test split to evaluate the model on each point in the test set. This supposes that the test split value is low.
-      * *Example:* `stride_by_split: [24, 24, 1]` (assuming `seq_length: 48`).
+      * *Example:* `stride_by_split: [24, 24, 1]` (assuming `context_length: 48`).
 
 ### 3\. `subsequence_start_mode`: `distribute` vs `exact`
 
@@ -379,7 +379,7 @@ The configuration is defined in a YAML file (e.g., `train.yaml`). The file is st
 | `target_columns` | `list[str]`| **Yes** | - | The specific column(s) the model should learn to predict. |
 | `target_column_types`| `dict` | **Yes** | - | Map of target columns to their type: `'categorical'` or `'real'`. The key order in target_column_types must exactly match the list order in target_columns |
 | `input_columns` | `list[str]`| No | All | Subset of columns to use as input features. Defaults to all available in metadata. |
-| `seq_length` | `int` | **Yes** | - | Must match the `seq_length` used in preprocessing. |
+| `context_length` | `int` | **Yes** | - | Must match the `context_length` used in preprocessing. |
 
 ### 3\. Model Architecture (`model_spec`)
 
@@ -604,7 +604,7 @@ These fields tell the inference engine which columns to extract from the new dat
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `model_type` | `str` | **Yes** | - | `generative` (predict next value) or `embedding` (extract vector representation). |
-| `seq_length` | `int` | **Yes** | - | The context window size. Must match training. |
+| `context_length` | `int` | **Yes** | - | The context window size. Must match training. |
 | `prediction_length` | `int` | No | `1` | Number of steps to predict *simultaneously*. **Must be 1** if `autoregression: true`. |
 | `inference_batch_size`| `int` | **Yes** | - | Number of sequences to process at once. |
 | `autoregression` | `bool` | No | `false` | If `true`, feeds predictions back into the model to predict further into the future. |
@@ -788,7 +788,7 @@ Sequifier allows you to search not just for model parameters, but for the best *
 | --- | --- | --- | --- |
 | `input_columns` | `list[list[str]]` | **Yes** | A list of input sets. E.g., `[['col1'], ['col1', 'col2']]`. |
 | `target_columns` | `list[str]` | **Yes** | The target column(s) to predict. Fixed across all runs. |
-| `seq_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
+| `context_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
 | `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
 
@@ -915,7 +915,7 @@ All other parameters are considered **Independent**. Sequifier will test every v
 
   * **Model:** `num_layers`, `dim_feedforward`, `activation_fn`, `normalization`, `norm_first`, `positional_encoding`, `attention_type`, `rope_theta`.
   * **Training:** `batch_size`, `dropout`, `accumulation_steps`, `optimizer`.
-  * **Data:** `seq_length`.
+  * **Data:** `context_length`.
 
 ### 3\. Special Case: `n_kv_heads`
 

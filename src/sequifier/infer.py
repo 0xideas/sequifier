@@ -221,7 +221,7 @@ def infer_worker(
                 f"Unsupported input type or read format: {config.read_format}"
             )
 
-        default_prediction_length = {"causal": 1, "bert": config.seq_length}
+        default_prediction_length = {"causal": 1, "bert": config.context_length}
         prediction_length = (
             config.prediction_length
             if config.prediction_length is not None
@@ -269,7 +269,7 @@ def infer_worker(
 
 def calculate_item_positions(
     start_positions: np.ndarray,
-    seq_length: int,
+    context_length: int,
     prediction_length: int,
     training_objective: str,
 ) -> np.ndarray:
@@ -278,7 +278,7 @@ def calculate_item_positions(
 
     Args:
         start_positions: 1D array of base start positions for each sequence in the batch.
-        seq_length: The length of the input sequence window.
+        context_length: The length of the input sequence window.
         prediction_length: The total number of predicted tokens per sequence.
         training_objective: Either "causal" or "bert".
 
@@ -291,7 +291,7 @@ def calculate_item_positions(
         position_offsets = np.arange(0, prediction_length)
     else:
         # Anchor positions to the future token step and tile backwards
-        base_positions = start_positions + seq_length
+        base_positions = start_positions + context_length
         position_offsets = np.arange(-prediction_length + 1, 1)
 
     # Repeat base anchors to match the number of predictions per sequence window
@@ -363,8 +363,8 @@ def _bert_target_valid_mask_from_preprocessed_data(
         )
         metadata = generate_padding_masks(
             left_pad_lengths,
-            config.seq_length,
-            config.window_length,
+            config.context_length,
+            config.sample_length,
             data_offset=config.data_offset,
             target_offset=config.target_offset,
         )
@@ -495,13 +495,13 @@ def infer_embedding(
                 left_pad_lengths_tensor,
             ) = data
             for tensor in sequences_dict.values():
-                validate_stored_window_width(tensor, config.window_length)
+                validate_stored_window_width(tensor, config.sample_length)
             metadata = {}
             if left_pad_lengths_tensor is not None:
                 metadata = generate_padding_masks(
                     left_pad_lengths_tensor,
-                    config.seq_length,
-                    config.window_length,
+                    config.context_length,
+                    config.sample_length,
                     data_offset=config.data_offset,
                     target_offset=config.target_offset,
                 )
@@ -522,7 +522,7 @@ def infer_embedding(
         # Step 2: Calculate absolute positions and repeat IDs
         # (e.g., for seq_len=50, inf_size=5, offsets are [45, 46, 47, 48, 49])
         base_offsets = np.arange(
-            config.seq_length - prediction_length, config.seq_length
+            config.context_length - prediction_length, config.context_length
         )
 
         # Tile these offsets for each sample in the batch
@@ -669,7 +669,7 @@ def infer_generative(
                 # Invoke the unified positioning engine
                 item_positions_for_preds = calculate_item_positions(
                     item_positions_base_raw,
-                    config.seq_length,
+                    config.context_length,
                     prediction_length,
                     config.training_objective,
                 )
@@ -682,7 +682,7 @@ def infer_generative(
                 # Unpack the new third return value
                 probs, preds, sequence_ids_for_preds, item_positions_for_preds = (
                     get_probs_preds_autoregression(
-                        config, inferer, data, column_types, config.seq_length
+                        config, inferer, data, column_types, config.context_length
                     )
                 )
         elif config.read_format == "parquet" and is_folder_input:
@@ -720,7 +720,7 @@ def infer_generative(
                 # Invoke the unified positioning engine
                 item_positions_for_preds = calculate_item_positions(
                     item_positions_base_raw,
-                    config.seq_length,
+                    config.context_length,
                     prediction_length,
                     config.training_objective,
                 )
@@ -732,7 +732,7 @@ def infer_generative(
 
                 probs, preds, sequence_ids_for_preds, item_positions_for_preds = (
                     get_probs_preds_autoregression(
-                        config, inferer, data, column_types, config.seq_length
+                        config, inferer, data, column_types, config.context_length
                     )
                 )
         elif config.read_format == "pt":
@@ -744,7 +744,7 @@ def infer_generative(
                 left_pad_lengths_tensor,
             ) = data
             for tensor in sequences_dict.values():
-                validate_stored_window_width(tensor, config.window_length)
+                validate_stored_window_width(tensor, config.sample_length)
             total_steps = (
                 1
                 if config.autoregression_total_steps is None
@@ -752,7 +752,7 @@ def infer_generative(
             )
 
             sequences_dict = {
-                key: slice_window(tensor, config.seq_length, config.data_offset)
+                key: slice_window(tensor, config.context_length, config.data_offset)
                 for key, tensor in sequences_dict.items()
                 if key in config.input_columns
             }
@@ -761,8 +761,8 @@ def infer_generative(
             if left_pad_lengths_tensor is not None:
                 metadata = generate_padding_masks(
                     left_pad_lengths_tensor,
-                    config.seq_length,
-                    config.window_length,
+                    config.context_length,
+                    config.sample_length,
                     data_offset=config.data_offset,
                     target_offset=config.target_offset,
                 )
@@ -788,7 +788,7 @@ def infer_generative(
                 # Invoke the unified positioning engine
                 item_positions_for_preds = calculate_item_positions(
                     item_positions_base_raw,
-                    config.seq_length,
+                    config.context_length,
                     prediction_length,
                     config.training_objective,
                 )
@@ -798,8 +798,8 @@ def infer_generative(
                     sequence_ids_tensor.numpy(), total_steps
                 )
                 item_position_boundaries = zip(
-                    list(start_positions_tensor + config.seq_length),
-                    list(start_positions_tensor + config.seq_length + total_steps),
+                    list(start_positions_tensor + config.context_length),
+                    list(start_positions_tensor + config.context_length + total_steps),
                 )
                 item_positions_for_preds = np.concatenate(
                     [np.arange(start, end) for start, end in item_position_boundaries],
@@ -944,9 +944,9 @@ def get_embeddings_pt(
         A NumPy array containing the computed embeddings for the batch.
     """
     for tensor in data.values():
-        validate_stored_window_width(tensor, config.window_length)
+        validate_stored_window_width(tensor, config.sample_length)
     X = {
-        key: slice_window(val, config.seq_length, config.data_offset).numpy()
+        key: slice_window(val, config.context_length, config.data_offset).numpy()
         for key, val in data.items()
         if key in config.input_columns
     }
@@ -1100,8 +1100,8 @@ def get_embeddings(
         data,
         column_types,
         all_columns,
-        config.seq_length,
-        config.window_length,
+        config.context_length,
+        config.sample_length,
         config.data_offset,
         config.target_offset,
     )
@@ -1153,8 +1153,8 @@ def get_probs_preds_from_df(
         data,
         column_types,
         all_columns,
-        config.seq_length,
-        config.window_length,
+        config.context_length,
+        config.sample_length,
         config.data_offset,
         config.target_offset,
     )
@@ -1239,7 +1239,7 @@ def get_probs_preds_autoregression(
     inferer: "Inferer",
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
-    seq_length: int,
+    context_length: int,
 ) -> tuple[
     Optional[dict[str, np.ndarray]], dict[str, np.ndarray], np.ndarray, np.ndarray
 ]:
@@ -1253,7 +1253,7 @@ def get_probs_preds_autoregression(
         inferer: Initialized `Inferer` instance.
         data: Input DataFrame, sorted globally by `sequenceId` and locally by `subsequenceId`.
         column_types: Mapping of input column names to their `torch.dtype`.
-        seq_length: Length of the input sequence context.
+        context_length: Length of the input sequence context.
 
     Returns:
         A tuple containing:
@@ -1276,15 +1276,15 @@ def get_probs_preds_autoregression(
         .agg(pl.col("startItemPosition").max())
         .get_column("startItemPosition")
         .to_numpy()
-        + seq_length
+        + context_length
     )
 
     head_data, metadata = numpy_to_pytorch(
         head_data_df,
         column_types,
         config.input_columns,
-        seq_length,
-        config.window_length,
+        context_length,
+        config.sample_length,
         data_offset=config.data_offset,
         target_offset=0,
     )

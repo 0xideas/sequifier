@@ -56,10 +56,10 @@ def load_inferer_config(
             source=f"metadata config '{metadata_config_path}'",
         )
         sequence_layout = sequence_layout_from_metadata(
-            metadata_config, config_values["seq_length"]
+            metadata_config, config_values["context_length"]
         )
-        config_values["target_max_offset"] = sequence_layout.target_max_offset
-        config_values["window_length"] = sequence_layout.window_length
+        config_values["max_lookahead"] = sequence_layout.max_lookahead
+        config_values["sample_length"] = sequence_layout.sample_length
         config_values["sequence_layout_version"] = (
             sequence_layout.sequence_layout_version
         )
@@ -122,7 +122,7 @@ class InfererModel(BaseModel):
         map_to_id: If True, maps categorical output values back to their original IDs.
         seed: The random seed for reproducibility.
         device: The device to run inference on (e.g., 'cuda', 'cpu', 'mps').
-        seq_length: The sequence length of the model's input.
+        context_length: The sequence length of the model's input.
         inference_batch_size: The batch size for inference.
         sample_from_distribution_columns: A list of columns from which to sample from the distribution.
         infer_with_dropout: If True, applies dropout during inference.
@@ -154,9 +154,9 @@ class InfererModel(BaseModel):
     map_to_id: bool = Field(default=True)
     seed: int
     device: str
-    seq_length: int
-    target_max_offset: int = Field(default=1, ge=0)
-    window_length: int
+    context_length: int
+    max_lookahead: int = Field(default=1, ge=0)
+    sample_length: int
     sequence_layout_version: int = 1
     prediction_length: Optional[int] = None
     inference_batch_size: int
@@ -168,36 +168,36 @@ class InfererModel(BaseModel):
 
     @model_validator(mode="after")
     def normalize_prediction_length(self):
-        if self.window_length != self.seq_length + self.target_max_offset:
+        if self.sample_length != self.context_length + self.max_lookahead:
             raise ValueError(
-                "window_length must equal seq_length + target_max_offset "
-                f"({self.window_length} != {self.seq_length} + {self.target_max_offset})."
+                "sample_length must equal context_length + max_lookahead "
+                f"({self.sample_length} != {self.context_length} + {self.max_lookahead})."
             )
         if self.prediction_length is None:
             self.prediction_length = (
-                self.seq_length if self.training_objective == "bert" else 1
+                self.context_length if self.training_objective == "bert" else 1
             )
         if self.training_objective == "bert":
-            if self.prediction_length != self.seq_length:
+            if self.prediction_length != self.context_length:
                 raise ValueError(
-                    "For BERT inference, prediction_length must be equal to seq_length "
-                    f"(got prediction_length={self.prediction_length}, seq_length={self.seq_length})."
+                    "For BERT inference, prediction_length must be equal to context_length "
+                    f"(got prediction_length={self.prediction_length}, context_length={self.context_length})."
                 )
-        elif self.target_max_offset < 1:
+        elif self.max_lookahead < 1:
             raise ValueError(
-                "Causal inference requires data preprocessed with target_max_offset >= 1"
+                "Causal inference requires data preprocessed with max_lookahead >= 1"
             )
         return self
 
     @property
     def data_offset(self) -> int:
-        return self.target_max_offset
+        return self.max_lookahead
 
     @property
     def target_offset(self) -> int:
         if self.training_objective == "bert":
-            return self.target_max_offset
-        return self.target_max_offset - 1
+            return self.max_lookahead
+        return self.max_lookahead - 1
 
     @field_validator("training_objective")
     @classmethod

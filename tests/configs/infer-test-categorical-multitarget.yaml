@@ -18,8 +18,8 @@ target_column_types:
 output_probabilities: true
 map_to_id: true
 device: cpu
-seq_length: 8
-window_length: 9
+context_length: 8
+sample_length: 9
 inference_batch_size: 10
 enforce_determinism: true
 

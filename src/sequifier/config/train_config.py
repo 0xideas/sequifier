@@ -63,18 +63,16 @@ def load_train_config(
             metadata_config = json.loads(f.read())
 
         sequence_layout = sequence_layout_from_metadata(
-            metadata_config, config_values["seq_length"]
+            metadata_config, config_values["context_length"]
         )
-        config_values["target_max_offset"] = sequence_layout.target_max_offset
-        config_values["window_length"] = sequence_layout.window_length
+        config_values["max_lookahead"] = sequence_layout.max_lookahead
+        config_values["sample_length"] = sequence_layout.sample_length
         config_values["sequence_layout_version"] = (
             sequence_layout.sequence_layout_version
         )
         config_values.setdefault("training_spec", {})
-        config_values["training_spec"]["target_max_offset"] = (
-            sequence_layout.target_max_offset
-        )
-        config_values["training_spec"]["window_length"] = sequence_layout.window_length
+        config_values["training_spec"]["max_lookahead"] = sequence_layout.max_lookahead
+        config_values["training_spec"]["sample_length"] = sequence_layout.sample_length
 
         split_paths = metadata_config["split_paths"]
 
@@ -245,8 +243,8 @@ class TrainingSpecModel(BaseModel):
     fsdp_cpu_offload: Optional[bool] = None
     torch_compile: str = "outer"
     float32_matmul_precision: str = "highest"
-    target_max_offset: int = Field(default=1, ge=0)
-    window_length: int
+    max_lookahead: int = Field(default=1, ge=0)
+    sample_length: int
 
     def __init__(self, **kwargs):
         super().__init__(
@@ -264,13 +262,13 @@ class TrainingSpecModel(BaseModel):
 
     @property
     def data_offset(self) -> int:
-        return self.target_max_offset
+        return self.max_lookahead
 
     @property
     def target_offset(self) -> int:
         if self.training_objective == "bert":
-            return self.target_max_offset
-        return self.target_max_offset - 1
+            return self.max_lookahead
+        return self.max_lookahead - 1
 
     @field_validator("layer_type_dtypes")
     @classmethod
@@ -384,9 +382,9 @@ class TrainingSpecModel(BaseModel):
 
     @model_validator(mode="after")
     def validate_sequence_layout(self):
-        if self.training_objective == "causal" and self.target_max_offset < 1:
+        if self.training_objective == "causal" and self.max_lookahead < 1:
             raise ValueError(
-                "Causal training requires data preprocessed with target_max_offset >= 1"
+                "Causal training requires data preprocessed with max_lookahead >= 1"
             )
         return self
 
@@ -558,7 +556,7 @@ class TrainModel(BaseModel):
         target_columns: The list of target columns for model training.
         target_column_types: A dictionary mapping target columns to their types ('categorical' or 'real').
         id_maps: For each categorical column, a map from distinct values to their indexed representation.
-        seq_length: The sequence length of the model's input.
+        context_length: The sequence length of the model's input.
         n_classes: The number of classes for each categorical column.
         inference_batch_size: The batch size to be used for inference after model export.
         seed: The random seed for numpy and PyTorch.
@@ -592,9 +590,9 @@ class TrainModel(BaseModel):
         default_factory=lambda: SPECIAL_TOKEN_IDS.ids_by_label
     )
 
-    seq_length: int
-    target_max_offset: int = Field(default=1, ge=0)
-    window_length: int
+    context_length: int
+    max_lookahead: int = Field(default=1, ge=0)
+    sample_length: int
     sequence_layout_version: int = 1
     n_classes: dict[str, int]
     inference_batch_size: int
@@ -615,21 +613,21 @@ class TrainModel(BaseModel):
         return validate_special_token_ids(v, source="TrainModel")
 
     @model_validator(mode="after")
-    def validate_bert_prediction_length_matches_seq_length(self):
-        if self.window_length != self.seq_length + self.target_max_offset:
+    def validate_bert_prediction_length_matches_context_length(self):
+        if self.sample_length != self.context_length + self.max_lookahead:
             raise ValueError(
-                "window_length must equal seq_length + target_max_offset "
-                f"({self.window_length} != {self.seq_length} + {self.target_max_offset})."
+                "sample_length must equal context_length + max_lookahead "
+                f"({self.sample_length} != {self.context_length} + {self.max_lookahead})."
             )
-        self.training_spec.target_max_offset = self.target_max_offset
-        self.training_spec.window_length = self.window_length
+        self.training_spec.max_lookahead = self.max_lookahead
+        self.training_spec.sample_length = self.sample_length
         if (
             self.training_spec.training_objective == "bert"
-            and self.model_spec.prediction_length != self.seq_length
+            and self.model_spec.prediction_length != self.context_length
         ):
             raise ValueError(
-                "For BERT training, model_spec.prediction_length must be equal to seq_length "
-                f"(got prediction_length={self.model_spec.prediction_length}, seq_length={self.seq_length})."
+                "For BERT training, model_spec.prediction_length must be equal to context_length "
+                f"(got prediction_length={self.model_spec.prediction_length}, context_length={self.context_length})."
             )
         return self
 

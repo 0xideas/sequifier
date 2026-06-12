@@ -65,7 +65,7 @@ def test_numpy_to_pytorch_shapes_and_shifting():
     Tests that DataFrames are correctly converted to input and target Tensors.
 
     Logic to test:
-    If seq_length = 3:
+    If context_length = 3:
     - Input cols:  ['3', '2', '1']
     - Target cols: ['2', '1', '0']
     """
@@ -84,14 +84,14 @@ def test_numpy_to_pytorch_shapes_and_shifting():
 
     column_types = {"A": torch.float32}
     all_columns = ["A"]
-    seq_length = 3
+    context_length = 3
 
     tensors, metadata = numpy_to_pytorch(
         data,
         column_types,
         all_columns,
-        seq_length,
-        seq_length + 1,
+        context_length,
+        context_length + 1,
         data_offset=1,
         target_offset=0,
     )
@@ -128,8 +128,8 @@ def test_numpy_to_pytorch_dtypes():
         data_int,
         {"int_col": torch.int64},
         ["int_col"],
-        seq_length=1,
-        window_length=2,
+        context_length=1,
+        sample_length=2,
         data_offset=1,
         target_offset=0,
     )
@@ -141,8 +141,8 @@ def test_numpy_to_pytorch_dtypes():
         data_float,
         {"float_col": torch.float32},
         ["float_col"],
-        seq_length=1,
-        window_length=2,
+        context_length=1,
+        sample_length=2,
         data_offset=1,
         target_offset=0,
     )
@@ -153,10 +153,10 @@ def test_build_valid_mask_from_left_pad_lengths():
     left_pad_lengths = torch.tensor([0, 2, 5], dtype=torch.int64)
 
     input_mask = build_valid_mask(
-        left_pad_lengths, full_length=6, offset=1, seq_length=5
+        left_pad_lengths, full_length=6, offset=1, context_length=5
     )
     target_mask = build_valid_mask(
-        left_pad_lengths, full_length=6, offset=0, seq_length=5
+        left_pad_lengths, full_length=6, offset=0, context_length=5
     )
 
     assert torch.equal(
@@ -185,11 +185,11 @@ def test_slice_window_validates_stored_width():
     tensor = torch.arange(8).reshape(2, 4)
 
     assert torch.equal(
-        slice_window(tensor, seq_length=3, offset=1),
+        slice_window(tensor, context_length=3, offset=1),
         torch.tensor([[0, 1, 2], [4, 5, 6]]),
     )
     assert torch.equal(
-        slice_window(tensor[:, :3], seq_length=3, offset=0), tensor[:, :3]
+        slice_window(tensor[:, :3], context_length=3, offset=0), tensor[:, :3]
     )
 
 
@@ -212,8 +212,8 @@ def test_numpy_to_pytorch_includes_explicit_padding_masks():
         data,
         {"A": torch.float32},
         ["A"],
-        seq_length=3,
-        window_length=4,
+        context_length=3,
+        sample_length=4,
         data_offset=1,
         target_offset=0,
     )
@@ -238,7 +238,7 @@ def test_apply_bert_masking_uses_explicit_valid_mask_for_zero_values():
         categorical_columns=[],
         real_columns=["real_col"],
         n_classes={},
-        seq_length=4,
+        context_length=4,
         training_spec=SimpleNamespace(
             batch_size=1,
             bert_spec=SimpleNamespace(

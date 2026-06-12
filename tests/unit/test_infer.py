@@ -156,7 +156,7 @@ def test_inferer_prepare_inference_batches_split(mock_inferer):
     np.testing.assert_array_equal(batches[2]["cat_col"], [[5]])
 
 
-def test_infer_config_defaults_bert_prediction_length_to_seq_length():
+def test_infer_config_defaults_bert_prediction_length_to_context_length():
     config = InfererModel(
         project_root=".",
         metadata_config_path="dummy.json",
@@ -173,15 +173,15 @@ def test_infer_config_defaults_bert_prediction_length_to_seq_length():
         seed=42,
         device="cpu",
         prediction_length=None,
-        seq_length=3,
-        window_length=4,
+        context_length=3,
+        sample_length=4,
         inference_batch_size=2,
         output_probabilities=False,
         map_to_id=False,
         autoregression=False,
     )
 
-    assert config.prediction_length == config.seq_length
+    assert config.prediction_length == config.context_length
 
 
 def test_infer_config_defaults_causal_prediction_length_to_one():
@@ -201,8 +201,8 @@ def test_infer_config_defaults_causal_prediction_length_to_one():
         seed=42,
         device="cpu",
         prediction_length=None,
-        seq_length=3,
-        window_length=4,
+        context_length=3,
+        sample_length=4,
         inference_batch_size=2,
         output_probabilities=False,
         map_to_id=False,
@@ -230,8 +230,8 @@ def test_infer_config_rejects_bert_prediction_length_mismatch():
             seed=42,
             device="cpu",
             prediction_length=1,
-            seq_length=3,
-            window_length=4,
+            context_length=3,
+            sample_length=4,
             inference_batch_size=2,
             output_probabilities=False,
             map_to_id=False,
@@ -277,7 +277,7 @@ def test_load_inferer_config_rejects_mismatched_metadata_special_token_ids(tmp_p
                 "target_column_types": {"target_col": "categorical"},
                 "seed": 42,
                 "device": "cpu",
-                "seq_length": 3,
+                "context_length": 3,
                 "inference_batch_size": 2,
             }
         )
@@ -350,7 +350,7 @@ def test_infer_pure_rejects_unknown_onnx_input(mock_inferer):
 def test_calculate_item_positions_bert_uses_full_input_window():
     positions = calculate_item_positions(
         np.array([10, 20]),
-        seq_length=4,
+        context_length=4,
         prediction_length=4,
         training_objective="bert",
     )
@@ -361,7 +361,7 @@ def test_calculate_item_positions_bert_uses_full_input_window():
 def test_calculate_item_positions_causal_uses_future_window_tail():
     positions = calculate_item_positions(
         np.array([10, 20]),
-        seq_length=4,
+        context_length=4,
         prediction_length=2,
         training_objective="causal",
     )
@@ -389,8 +389,8 @@ def _bert_inference_config(tmp_path, model_type="generative"):
         seed=42,
         device="cpu",
         prediction_length=None,
-        seq_length=3,
-        window_length=4,
+        context_length=3,
+        sample_length=4,
         inference_batch_size=4,
         output_probabilities=False,
         map_to_id=True,
@@ -597,8 +597,8 @@ def ar_config():
         seed=42,
         device="cpu",
         prediction_length=1,
-        seq_length=3,
-        window_length=4,
+        context_length=3,
+        sample_length=4,
         inference_batch_size=2,
         output_probabilities=False,
         map_to_id=False,  # Set to False to bypass ID mapping requirements

@@ -49,11 +49,11 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
-        folder_layout = sequence_layout_from_metadata(metadata, config.seq_length)
-        if folder_layout.window_length != config.window_length:
+        folder_layout = sequence_layout_from_metadata(metadata, config.context_length)
+        if folder_layout.sample_length != config.sample_length:
             raise ValueError(
-                f"Preprocessed folder window_length={folder_layout.window_length} "
-                f"does not match config window_length={config.window_length}."
+                f"Preprocessed folder sample_length={folder_layout.sample_length} "
+                f"does not match config sample_length={config.sample_length}."
             )
 
         self.n_samples = metadata["total_samples"]
@@ -68,7 +68,7 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         }
 
         # Sequence formatting structures matching long-format schema boundaries
-        train_seq_len = self.config.seq_length
+        train_seq_len = self.config.context_length
         input_seq_cols = sequence_column_names(
             train_seq_len, self.config.training_spec.data_offset
         )
@@ -213,7 +213,7 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         indices_for_worker = indices_for_rank[worker_id::num_workers]
 
         # 5. Extract and pass unified data frames
-        train_seq_len = self.config.seq_length
+        train_seq_len = self.config.context_length
         for i in range(0, len(indices_for_worker), self.batch_size):
             batch_indices = indices_for_worker[i : i + self.batch_size]
 
@@ -231,7 +231,7 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
                 metadata_batch = generate_padding_masks(
                     self.left_pad_lengths[batch_indices],
                     train_seq_len,
-                    self.config.window_length,
+                    self.config.sample_length,
                     self.config.training_spec.data_offset,
                     self.config.training_spec.target_offset,
                 )

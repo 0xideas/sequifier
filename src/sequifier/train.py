@@ -111,14 +111,14 @@ def create_dummy_data_and_metadata(
     for col in config.input_columns:
         dtype = torch.int64 if col in config.categorical_columns else torch.float32
         dummy_data[col] = torch.ones(
-            (config.training_spec.batch_size, config.seq_length),
+            (config.training_spec.batch_size, config.context_length),
             dtype=dtype,
             device=local_rank,
         )
 
     dummy_metadata = {
         "attention_valid_mask": torch.ones(
-            (config.training_spec.batch_size, config.seq_length),
+            (config.training_spec.batch_size, config.context_length),
             dtype=torch.bool,
             device=local_rank,
         )
@@ -627,7 +627,7 @@ class TransformerModel(nn.Module):
         self.target_columns = hparams.target_columns
         self.target_column_types = hparams.target_column_types
         self.loss_weights = hparams.training_spec.loss_weights
-        self.seq_length = hparams.seq_length
+        self.context_length = hparams.context_length
         self.n_classes = hparams.n_classes
         self.inference_batch_size = hparams.inference_batch_size
         self.log_interval = hparams.training_spec.log_interval
@@ -686,12 +686,12 @@ class TransformerModel(nn.Module):
             self.pos_encoder = ModuleDict()
             for col in self.real_columns:
                 self.pos_encoder[col] = nn.Embedding(
-                    self.seq_length, self.feature_embedding_dims[col]
+                    self.context_length, self.feature_embedding_dims[col]
                 )
             for col, n_classes in self.n_classes.items():
                 if col in self.categorical_columns:
                     self.pos_encoder[col] = nn.Embedding(
-                        self.seq_length, self.feature_embedding_dims[col]
+                        self.context_length, self.feature_embedding_dims[col]
                     )
         else:
             self.pos_encoder = None
@@ -704,7 +704,7 @@ class TransformerModel(nn.Module):
                     hparams.model_spec.n_head,
                     hparams.model_spec.dim_feedforward,
                     hparams.training_spec.dropout,
-                    hparams.seq_length,
+                    hparams.context_length,
                 )
                 for _ in range(hparams.model_spec.num_layers)
             ]
@@ -758,13 +758,13 @@ class TransformerModel(nn.Module):
         if hparams.training_spec.training_objective == "causal":
             self.register_buffer(
                 "src_mask",
-                self._generate_square_subsequent_mask(self.seq_length),
+                self._generate_square_subsequent_mask(self.context_length),
                 persistent=False,  # Optional: prevents the mask from being saved in your checkpoints
             )
         elif hparams.training_spec.training_objective == "bert":
             self.register_buffer(
                 "src_mask",
-                torch.zeros(self.seq_length, self.seq_length),
+                torch.zeros(self.context_length, self.context_length),
                 persistent=False,
             )
         else:
@@ -1020,18 +1020,18 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def _build_attention_mask(self, valid_mask: Tensor, dtype: torch.dtype) -> Tensor:
-        batch_size, seq_length = valid_mask.shape
+        batch_size, context_length = valid_mask.shape
         device = valid_mask.device
 
-        expected_seq_length = self.src_mask.shape[-1]
-        if seq_length != expected_seq_length:
+        expected_context_length = self.src_mask.shape[-1]
+        if context_length != expected_context_length:
             raise ValueError(
-                f"valid_mask sequence length ({seq_length}) must match "
-                f"model sequence length ({expected_seq_length})."
+                f"valid_mask sequence length ({context_length}) must match "
+                f"model sequence length ({expected_context_length})."
             )
 
         base_mask = self.src_mask.to(device=device, dtype=dtype)
-        base_mask = base_mask.view(1, 1, seq_length, seq_length)
+        base_mask = base_mask.view(1, 1, context_length, context_length)
 
         invalid_keys = ~valid_mask.bool()
 
@@ -1039,7 +1039,7 @@ class TransformerModel(nn.Module):
             batch_size,
             1,
             1,
-            seq_length,
+            context_length,
             device=device,
             dtype=dtype,
         )
@@ -1055,7 +1055,7 @@ class TransformerModel(nn.Module):
     def _zero_padding_positions(self, x: Tensor, valid_mask: Tensor) -> Tensor:
         """
         x shape:
-            (batch_size, seq_length, dim_model)
+            (batch_size, context_length, dim_model)
 
         Zeroes padded query positions so padded rows do not keep evolving.
         """
@@ -1072,11 +1072,11 @@ class TransformerModel(nn.Module):
 
         Args:
             src: A dictionary mapping column names to input tensors
-                 (batch_size, seq_length).
+                 (batch_size, context_length).
 
         Returns:
             The raw output tensor from the TransformerEncoder
-            (seq_length, batch_size, dim_model).
+            (context_length, batch_size, dim_model).
         """
         srcs = []
         for col in self.categorical_columns:
@@ -1087,7 +1087,7 @@ class TransformerModel(nn.Module):
             if not self.use_rope:
                 pos = (
                     torch.arange(
-                        0, self.seq_length, dtype=torch.long, device=src_t.device
+                        0, self.context_length, dtype=torch.long, device=src_t.device
                     )
                     .repeat(src_t.shape[1], 1)
                     .T
@@ -1115,7 +1115,7 @@ class TransformerModel(nn.Module):
             if not self.use_rope:
                 pos = (
                     torch.arange(
-                        0, self.seq_length, dtype=torch.long, device=src_t.device
+                        0, self.context_length, dtype=torch.long, device=src_t.device
                     )
                     .repeat(src_t.shape[1], 1)
                     .T
@@ -1137,7 +1137,7 @@ class TransformerModel(nn.Module):
         if valid_mask.shape != src2.shape[:2]:
             raise ValueError(
                 f"Invalid attention mask shape: got {tuple(valid_mask.shape)}, "
-                f"expected {tuple(src2.shape[:2])} = (batch_size, seq_length). "
+                f"expected {tuple(src2.shape[:2])} = (batch_size, context_length). "
                 "Check attention_valid_mask / leftPadLength construction."
             )
         src2 = self._zero_padding_positions(src2, valid_mask)
@@ -1163,7 +1163,7 @@ class TransformerModel(nn.Module):
 
         Args:
             src: A dictionary mapping column names to input tensors
-                 (batch_size, seq_length).
+                 (batch_size, context_length).
 
         Returns:
             The embedding tensor for the last token
@@ -1182,11 +1182,11 @@ class TransformerModel(nn.Module):
 
         Args:
             src: A dictionary mapping column names to input tensors
-                 (batch_size, seq_length).
+                 (batch_size, context_length).
 
         Returns:
             A dictionary mapping target column names to their raw output
-            (logit) tensors (seq_length, batch_size, n_classes/1).
+            (logit) tensors (context_length, batch_size, n_classes/1).
         """
         output = self.forward_inner(src, metadata)
         output = {
@@ -1205,11 +1205,11 @@ class TransformerModel(nn.Module):
         Args:
             target_column: The name of the target column to decode.
             output: The raw output tensor from the TransformerEncoder
-                    (seq_length, batch_size, dim_model).
+                    (context_length, batch_size, dim_model).
 
         Returns:
             The decoded output (logits or real value) for the target column
-            (seq_length, batch_size, n_classes/1).
+            (context_length, batch_size, n_classes/1).
         """
 
         target_dtype = self.decoder[target_column].weight.dtype
@@ -1250,7 +1250,7 @@ class TransformerModel(nn.Module):
 
         Args:
             src: A dictionary mapping column names to input tensors
-                 (batch_size, seq_length).
+                 (batch_size, context_length).
             return_logits: Return logits
 
         Returns:
@@ -1724,9 +1724,9 @@ class TransformerModel(nn.Module):
 
         Args:
             output: A dictionary of output tensors from the model
-                    (seq_length, batch_size, n_classes/1).
+                    (context_length, batch_size, n_classes/1).
             targets: A dictionary of target tensors
-                     (batch_size, seq_length).
+                     (batch_size, context_length).
 
         Returns:
             A tuple containing:
@@ -2160,14 +2160,16 @@ class TransformerModel(nn.Module):
 
             x_cat = {
                 col: torch.randint(
-                    0, self.n_classes[col], (self.inference_batch_size, self.seq_length)
+                    0,
+                    self.n_classes[col],
+                    (self.inference_batch_size, self.context_length),
                 ).to(export_device, non_blocking=True)
                 for col in self.categorical_columns
             }
 
             dtype_real = torch.float32 if is_different_type else None
             x_real = {
-                col: torch.rand(self.inference_batch_size, self.seq_length).to(
+                col: torch.rand(self.inference_batch_size, self.context_length).to(
                     export_device, non_blocking=True, dtype=dtype_real
                 )
                 for col in self.real_columns
@@ -2176,7 +2178,7 @@ class TransformerModel(nn.Module):
             input_dict = {**x_cat, **x_real}
             attention_valid_mask = torch.ones(
                 self.inference_batch_size,
-                self.seq_length,
+                self.context_length,
                 dtype=torch.bool,
                 device=export_device,
             )

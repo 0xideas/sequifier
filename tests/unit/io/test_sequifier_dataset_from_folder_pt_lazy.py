@@ -19,8 +19,8 @@ def mock_config(tmp_path):
     config.training_spec.sampling_strategy = "exact"
     config.training_spec.num_workers = 0
     config.seed = 42
-    config.seq_length = 5
-    config.window_length = 6
+    config.context_length = 5
+    config.sample_length = 6
     config.input_columns = ["col1"]
     config.target_columns = ["col1", "tgt1"]
     config.training_spec.data_offset = 1

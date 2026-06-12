@@ -15,8 +15,8 @@ def mock_config():
     config = MagicMock()
     config.project_root = "."
     config.seed = 42
-    config.seq_length = 2
-    config.window_length = 3
+    config.context_length = 2
+    config.sample_length = 3
     config.column_types = {"item": "Float64"}
     config.training_spec.batch_size = 5
     config.training_spec.num_workers = 0

@@ -8,7 +8,7 @@ selected_columns: null
 split_ratios:
 - 0.5
 - 0.5
-seq_length: 8
+context_length: 8
 stride_by_split:
 - 1
 - 1

@@ -54,8 +54,8 @@ class PreprocessorModel(BaseModel):
         selected_columns: A list of columns to be included in the preprocessing. If None, all columns are used.
         split_ratios: A list of floats that define the relative sizes of data splits (e.g., for train, validation, test).
                            The sum of proportions must be 1.0.
-        seq_length: The sequence length for the model inputs.
-        target_max_offset: The maximum retained target offset after the model input window.
+        context_length: The sequence length for the model inputs.
+        max_lookahead: The maximum retained target offset after the model input window.
         stride_by_split: A list of step sizes for creating subsequences within each data split.
         max_rows: The maximum number of input rows to process. If None, all rows are processed.
         seed: A random seed for reproducibility.
@@ -78,8 +78,8 @@ class PreprocessorModel(BaseModel):
     selected_columns: Optional[list[str]] = None
 
     split_ratios: list[float]
-    seq_length: int
-    target_max_offset: int = Field(default=1, ge=0)
+    context_length: int
+    max_lookahead: int = Field(default=1, ge=0)
     stride_by_split: Optional[list[int]] = None
     max_rows: Optional[int] = None
     seed: int
@@ -195,7 +195,9 @@ class PreprocessorModel(BaseModel):
         return self
 
     def __init__(self, **kwargs):
-        default_stride_for_split = [kwargs["seq_length"]] * len(kwargs["split_ratios"])
+        default_stride_for_split = [kwargs["context_length"]] * len(
+            kwargs["split_ratios"]
+        )
         kwargs["stride_by_split"] = kwargs.get(
             "stride_by_split", default_stride_for_split
         )

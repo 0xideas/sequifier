@@ -31,7 +31,7 @@ def _training_spec_kwargs(**overrides):
         "optimizer": {"name": "Adam"},
         "scheduler": {"name": "StepLR", "step_size": 1, "gamma": 0.1},
         "loss_weights": {"cat_col": 1.0, "real_col": 1.0},
-        "window_length": 11,
+        "sample_length": 11,
     }
     values.update(overrides)
     return values
@@ -118,7 +118,7 @@ def model_config(tmp_path):
         optimizer={"name": "Adam"},
         scheduler={"name": "StepLR", "step_size": 1, "gamma": 0.1},
         loss_weights={"cat_col": 1.0, "real_col": 1.0},
-        window_length=11,
+        sample_length=11,
     )
 
     config = TrainModel(
@@ -136,8 +136,8 @@ def model_config(tmp_path):
         # id_maps is needed for constructing index_maps in model init
         id_maps={"cat_col": {"a": 1, "b": 2, "c": 3, "d": 4}},
         n_classes={"cat_col": 5},  # 0 + 4 classes
-        seq_length=10,
-        window_length=11,
+        context_length=10,
+        sample_length=11,
         inference_batch_size=4,
         seed=42,
         export_generative_model=True,
@@ -164,7 +164,7 @@ def causal_model(model_config):
 @pytest.fixture
 def bert_model(model_config):
     config_values = model_config.model_dump()
-    config_values["model_spec"]["prediction_length"] = model_config.seq_length
+    config_values["model_spec"]["prediction_length"] = model_config.context_length
     config_values["training_spec"] = _training_spec_kwargs(
         training_objective="bert",
         bert_spec=_bert_spec(),
@@ -213,9 +213,11 @@ def test_transformer_model_initialization(model, model_config):
         assert "real_col" in model.encoder
 
 
-def test_train_model_requires_bert_prediction_length_to_equal_seq_length(model_config):
+def test_train_model_requires_bert_prediction_length_to_equal_context_length(
+    model_config,
+):
     config_values = model_config.model_dump()
-    config_values["model_spec"]["prediction_length"] = model_config.seq_length - 1
+    config_values["model_spec"]["prediction_length"] = model_config.context_length - 1
     config_values["training_spec"] = _training_spec_kwargs(
         training_objective="bert",
         bert_spec=_bert_spec(),
@@ -295,7 +297,7 @@ def test_load_train_config_defaults_missing_metadata_special_token_ids(
 def test_forward_train_shapes(model, model_config):
     """Tests the output shapes of the forward_train method."""
     batch_size = model_config.training_spec.batch_size
-    seq_len = model_config.seq_length
+    seq_len = model_config.context_length
 
     # Create dummy inputs
     # Categorical: (batch, seq_len) integers
@@ -326,7 +328,7 @@ def test_forward_train_shapes(model, model_config):
 def test_forward_inference_shapes(model, model_config):
     """Tests the output shapes of the forward (inference) method."""
     batch_size = model_config.training_spec.batch_size
-    seq_len = model_config.seq_length
+    seq_len = model_config.context_length
     prediction_length = model_config.model_spec.prediction_length  # 1
 
     x_cat = torch.randint(0, model_config.n_classes["cat_col"], (batch_size, seq_len))
@@ -359,7 +361,7 @@ def test_forward_inference_shapes(model, model_config):
 def test_calculate_loss(model, model_config):
     """Tests that loss calculation returns a scalar tensor."""
     batch_size = model_config.training_spec.batch_size
-    seq_len = model_config.seq_length
+    seq_len = model_config.context_length
 
     # Inputs
     x_cat = torch.randint(0, model_config.n_classes["cat_col"], (batch_size, seq_len))
@@ -448,7 +450,7 @@ def test_calculate_loss_uses_target_columns_for_fallback_mask_inference():
 
 
 def test_padding_keys_are_masked(bert_model):
-    seq_len = bert_model.seq_length
+    seq_len = bert_model.context_length
 
     valid_mask = torch.ones(
         2,
@@ -477,7 +479,7 @@ def test_padding_keys_are_masked(bert_model):
 
 
 def test_causal_and_padding_masks_are_combined(causal_model):
-    seq_len = causal_model.seq_length
+    seq_len = causal_model.context_length
 
     valid_mask = torch.ones(
         1,
@@ -510,7 +512,7 @@ def test_causal_and_padding_masks_are_combined(causal_model):
 
 @pytest.fixture
 def batch(model):
-    seq_len = model.seq_length
+    seq_len = model.context_length
 
     return {
         "cat_col": torch.tensor(
@@ -534,7 +536,7 @@ def batch(model):
 
 @pytest.fixture
 def batch_metadata(model):
-    seq_len = model.seq_length
+    seq_len = model.context_length
     valid_mask = torch.ones(
         2,
         seq_len,

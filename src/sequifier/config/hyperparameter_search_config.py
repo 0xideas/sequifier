@@ -416,7 +416,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         return v
 
     def sample_trial(
-        self, trial: Any, target_max_offset: int, window_length: int
+        self, trial: Any, max_lookahead: int, sample_length: int
     ) -> TrainingSpecModel:
         """Samples training hyperparameters using an Optuna trial.
 
@@ -500,8 +500,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             fsdp_cpu_offload=self.fsdp_cpu_offload,
             torch_compile=self.torch_compile,
             float32_matmul_precision=self.float32_matmul_precision,
-            target_max_offset=target_max_offset,
-            window_length=window_length,
+            max_lookahead=max_lookahead,
+            sample_length=sample_length,
         )
 
 
@@ -669,7 +669,7 @@ class HyperparameterSearchConfig(BaseModel):
         target_columns: The list of target columns for model training.
         target_column_types: A dictionary mapping target columns to their types.
         id_maps: A dictionary mapping categorical values to their indexed representation.
-        seq_length: A list of possible sequence lengths.
+        context_length: A list of possible sequence lengths.
         n_classes: The number of classes for each categorical column.
         inference_batch_size: The batch size for inference.
         export_onnx: If True, exports the model in ONNX format.
@@ -702,8 +702,8 @@ class HyperparameterSearchConfig(BaseModel):
     target_column_types: dict[str, str]
     id_maps: dict[str, dict[str | int, int]]
 
-    seq_length: list[int]
-    target_max_offset: int = Field(default=1, ge=0)
+    context_length: list[int]
+    max_lookahead: int = Field(default=1, ge=0)
     n_classes: dict[str, int]
     inference_batch_size: int
 
@@ -825,15 +825,17 @@ class HyperparameterSearchConfig(BaseModel):
         input_columns_index = trial.suggest_categorical(
             "input_columns_index", list(range(len(self.input_columns)))
         )
-        seq_length = trial.suggest_categorical("seq_length", self.seq_length)
-        window_length = seq_length + self.target_max_offset
+        context_length = trial.suggest_categorical(
+            "context_length", self.context_length
+        )
+        sample_length = context_length + self.max_lookahead
         training_spec = self.training_hyperparameter_sampling.sample_trial(
             trial,
-            target_max_offset=self.target_max_offset,
-            window_length=window_length,
+            max_lookahead=self.max_lookahead,
+            sample_length=sample_length,
         )
 
-        logger.info(f"{input_columns_index = } - {seq_length = }")
+        logger.info(f"{input_columns_index = } - {context_length = }")
 
         return TrainModel(
             project_root=self.project_root,
@@ -849,9 +851,9 @@ class HyperparameterSearchConfig(BaseModel):
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
-            seq_length=seq_length,
-            target_max_offset=self.target_max_offset,
-            window_length=window_length,
+            context_length=context_length,
+            max_lookahead=self.max_lookahead,
+            sample_length=sample_length,
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=101,

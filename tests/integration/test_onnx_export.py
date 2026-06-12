@@ -11,7 +11,7 @@ def test_bert_onnx_export_accepts_attention_valid_mask(tmp_path):
     project_root = str(tmp_path)
     (tmp_path / "logs").mkdir()
 
-    seq_length = 4
+    context_length = 4
     inference_batch_size = 2
     config = TrainModel(
         project_root=project_root,
@@ -27,8 +27,8 @@ def test_bert_onnx_export_accepts_attention_valid_mask(tmp_path):
         real_columns=["real_col"],
         id_maps={"cat_col": {"a": 3, "b": 4, "c": 5}},
         n_classes={"cat_col": 6},
-        seq_length=seq_length,
-        window_length=5,
+        context_length=context_length,
+        sample_length=5,
         inference_batch_size=inference_batch_size,
         seed=42,
         export_generative_model=True,
@@ -41,7 +41,7 @@ def test_bert_onnx_export_accepts_attention_valid_mask(tmp_path):
             n_head=2,
             dim_feedforward=8,
             num_layers=1,
-            prediction_length=seq_length,
+            prediction_length=context_length,
             feature_embedding_dims={"cat_col": 7, "real_col": 1},
             activation_fn="relu",
             normalization="layer_norm",
@@ -72,7 +72,7 @@ def test_bert_onnx_export_accepts_attention_valid_mask(tmp_path):
             loss_weights={"cat_col": 1.0, "real_col": 1.0},
             torch_compile="none",
             layer_autocast=False,
-            window_length=5,
+            sample_length=5,
         ),
     )
     model = TransformerModel(config)
@@ -108,7 +108,7 @@ def test_onnx_export_preserves_feature_name_order(tmp_path):
     project_root = str(tmp_path)
     (tmp_path / "logs").mkdir()
 
-    seq_length = 4
+    context_length = 4
     inference_batch_size = 2
     config = TrainModel(
         project_root=project_root,
@@ -127,8 +127,8 @@ def test_onnx_export_preserves_feature_name_order(tmp_path):
             "cat10": {"x": 3, "y": 4, "z": 5},
         },
         n_classes={"cat2": 7, "cat10": 6},
-        seq_length=seq_length,
-        window_length=5,
+        context_length=context_length,
+        sample_length=5,
         inference_batch_size=inference_batch_size,
         seed=42,
         export_generative_model=True,
@@ -163,7 +163,7 @@ def test_onnx_export_preserves_feature_name_order(tmp_path):
             loss_weights={"cat2": 1.0},
             torch_compile="none",
             layer_autocast=False,
-            window_length=5,
+            sample_length=5,
         ),
     )
     model = TransformerModel(config)
@@ -186,7 +186,7 @@ def test_onnx_export_preserves_feature_name_order(tmp_path):
             "cat2_in": np.array([[3, 4, 5, 6], [6, 5, 4, 3]], dtype=np.int64),
             "cat10_in": np.array([[3, 4, 5, 3], [5, 4, 3, 5]], dtype=np.int64),
             "attention_valid_mask": np.ones(
-                (inference_batch_size, seq_length), dtype=np.bool_
+                (inference_batch_size, context_length), dtype=np.bool_
             ),
         },
     )

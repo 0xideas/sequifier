@@ -59,7 +59,7 @@ Sequifier allows you to search not just for model parameters, but for the best *
 | --- | --- | --- | --- |
 | `input_columns` | `list[list[str]]` | **Yes** | A list of input sets. E.g., `[['col1'], ['col1', 'col2']]`. |
 | `target_columns` | `list[str]` | **Yes** | The target column(s) to predict. Fixed across all runs. |
-| `seq_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
+| `context_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
 | `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
 
@@ -186,7 +186,7 @@ All other parameters are considered **Independent**. Sequifier will test every v
 
   * **Model:** `num_layers`, `dim_feedforward`, `activation_fn`, `normalization`, `norm_first`, `positional_encoding`, `attention_type`, `rope_theta`.
   * **Training:** `batch_size`, `dropout`, `accumulation_steps`, `optimizer`.
-  * **Data:** `seq_length`.
+  * **Data:** `context_length`.
 
 ### 3\. Special Case: `n_kv_heads`
 

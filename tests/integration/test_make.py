@@ -54,7 +54,7 @@ def adapt_configs(config_strings):
                 "selected_columns: [EXAMPLE_INPUT_COLUMN_NAME]", "selected_columns: "
             )
             .replace("input_columns: [EXAMPLE_INPUT_COLUMN_NAME]", "input_columns: ")
-            .replace("seq_length: 48", "seq_length: 10")
+            .replace("context_length: 48", "context_length: 10")
             .replace("max_rows: null", "max_rows: null\nn_cores: 1")
         )
 
@@ -87,8 +87,8 @@ def adapt_configs(config_strings):
             .replace("EXAMPLE_TARGET_COLUMN_NAME: MSELoss", "itemId: CrossEntropyLoss")
             .replace("epochs: 10", "epochs: 3")
             .replace("device: cuda", "device: cpu")
-            .replace("seq_length: 48", "seq_length: 10")
-            .replace("window_length: 49", "window_length: 11")
+            .replace("context_length: 48", "context_length: 10")
+            .replace("sample_length: 49", "sample_length: 11")
             .replace("total_steps: PLEASE FILL", "total_steps: 10000")
         )
 
@@ -118,8 +118,8 @@ def adapt_configs(config_strings):
             )
             .replace("[EXAMPLE_INPUT_COLUMN_NAME]", "[itemId]")
             .replace("[EXAMPLE_TARGET_COLUMN_NAME]", "[itemId]")
-            .replace("seq_length: 48", "seq_length: 10")
-            .replace("window_length: 49", "window_length: 11")
+            .replace("context_length: 48", "context_length: 10")
+            .replace("sample_length: 49", "sample_length: 11")
             .replace("autoregression: true", "autoregression: false")
             .replace("EXAMPLE_TARGET_COLUMN_NAME: real", "itemId: categorical")
         )

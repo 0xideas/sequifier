@@ -33,16 +33,16 @@ RESERVED_MASK_COLUMN = "[mask]"
 def test_extract_subsequences_basic():
     """Tests basic sliding window extraction with sufficient length."""
     input_data = {"col1": [10, 11, 12, 13, 14, 15]}
-    seq_length = 3
+    context_length = 3
     stride = 1
     columns = ["col1"]
 
-    # Expected behavior: Window size is seq_length + 1 (history + target)
+    # Expected behavior: Window size is context_length + 1 (history + target)
     # Windows: [10,11,12,13], [11,12,13,14], [12,13,14,15]
 
     result, left_pad_lengths, subsequence_starts = extract_subsequences(
         input_data,
-        seq_length + 1,
+        context_length + 1,
         stride,
         columns,
         subsequence_start_mode="distribute",
@@ -55,13 +55,13 @@ def test_extract_subsequences_basic():
 
 def test_extract_subsequences_bert_width():
     input_data = {"col1": [10, 11, 12, 13, 14, 15]}
-    seq_length = 3
+    context_length = 3
     stride = 1
     columns = ["col1"]
 
     result, left_pad_lengths, subsequence_starts = extract_subsequences(
         input_data,
-        window_length=seq_length,
+        sample_length=context_length,
         stride_for_split=stride,
         columns=columns,
         subsequence_start_mode="distribute",
@@ -73,16 +73,16 @@ def test_extract_subsequences_bert_width():
 
 
 def test_extract_subsequences_padding():
-    """Tests that sequences shorter than seq_length are padded with 0s."""
+    """Tests that sequences shorter than context_length are padded with 0s."""
     input_data = {"col1": [1, 2]}  # Length 2
-    window_length = 5
+    sample_length = 5
     stride = 1
     columns = ["col1"]
 
     # Expected: [0, 0, 0, 1, 2] -> 3 zeroes padding
 
     result, left_pad_lengths, subsequence_starts = extract_subsequences(
-        input_data, window_length, stride, columns, subsequence_start_mode="distribute"
+        input_data, sample_length, stride, columns, subsequence_start_mode="distribute"
     )
 
     assert len(result["col1"]) == 1
@@ -93,7 +93,7 @@ def test_extract_subsequences_returns_left_pad_lengths_when_requested():
     input_data = {"col1": [0.0, 1.5]}
     result, left_pad_lengths, subsequence_starts = extract_subsequences(
         input_data,
-        window_length=5,
+        sample_length=5,
         stride_for_split=1,
         columns=["col1"],
         subsequence_start_mode="distribute",
@@ -127,7 +127,7 @@ def test_extract_sequences_persists_left_pad_length_metadata():
     sequences = extract_sequences(
         data,
         schema,
-        layout=SequenceLayout(seq_length=4),
+        layout=SequenceLayout(context_length=4),
         stride_for_split=1,
         columns=["col1"],
         subsequence_start_mode="distribute",
@@ -154,7 +154,7 @@ def test_process_and_write_data_pt_persists_left_pad_lengths(tmp_path):
 
     process_and_write_data_pt(
         data,
-        window_length=4,
+        sample_length=4,
         path=str(out_path),
         column_types={"col1": "Float64"},
     )
@@ -242,7 +242,7 @@ def test_preprocessor_applies_mask_column_end_to_end(tmp_path):
         merge_output=True,
         selected_columns=["itemId", "itemValue"],
         split_ratios=[1.0],
-        seq_length=2,
+        context_length=2,
         stride_by_split=[1],
         max_rows=None,
         seed=1010,
@@ -379,7 +379,7 @@ def test_preprocessor_requires_metadata_config_for_mask_column(tmp_path):
             merge_output=True,
             selected_columns=["itemId"],
             split_ratios=[1.0],
-            seq_length=1,
+            context_length=1,
             stride_by_split=[1],
             max_rows=None,
             seed=1010,
@@ -408,7 +408,7 @@ def test_preprocessor_config_defaults_mask_column_to_none(tmp_path):
         project_root=str(tmp_path),
         data_path=str(data_path),
         split_ratios=[1.0],
-        seq_length=1,
+        context_length=1,
         seed=1010,
     )
 
@@ -436,7 +436,7 @@ def test_preprocessor_config_requires_metadata_config_for_mask_column(
             project_root=str(tmp_path),
             data_path=str(data_path),
             split_ratios=[1.0],
-            seq_length=1,
+            context_length=1,
             seed=1010,
             mask_column=RESERVED_MASK_COLUMN,
         )
@@ -449,15 +449,15 @@ def test_extract_subsequences_modes(mode):
     # distribute: adjusts stride to cover data evenly.
     # exact: strictly adheres to stride, throws error if misalignment.
     input_data = {"col1": list(range(10))}
-    seq_length = 2
-    window_length = seq_length + 1
+    context_length = 2
+    sample_length = context_length + 1
     columns = ["col1"]
 
     if mode == "distribute":
         stride = 4
         # distribute might adjust indices to maximize coverage
         result, left_pad_lengths, subsequence_starts = extract_subsequences(
-            input_data, window_length, stride, columns, mode
+            input_data, sample_length, stride, columns, mode
         )
         assert len(result["col1"]) > 0
 
@@ -467,13 +467,13 @@ def test_extract_subsequences_modes(mode):
         )
         # Testing a failing exact case
         with pytest.raises(ValueError):
-            extract_subsequences(input_data, window_length, 4, columns, mode)
+            extract_subsequences(input_data, sample_length, 4, columns, mode)
 
         # Testing a passing exact case
         # (10-1) - 2 = 7. If we change input len to 11: (11-1)-2 = 8. stride 4 works.
         input_data_exact = {"col1": list(range(11))}
         result, left_pad_lengths, subsequence_starts = extract_subsequences(
-            input_data_exact, window_length, 4, columns, mode
+            input_data_exact, sample_length, 4, columns, mode
         )
         assert len(result["col1"]) > 0
 

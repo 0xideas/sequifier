@@ -31,7 +31,7 @@ target_column_types:
 output_probabilities: false
 map_to_id: true
 device: cpu
-seq_length: 8
+context_length: 8
 prediction_length: 1
 inference_batch_size: 10
 enforce_determinism: true

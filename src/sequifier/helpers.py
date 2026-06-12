@@ -51,94 +51,96 @@ EXPLICIT_PADDING_MASK_FALLBACK_WARNING = (
 
 @dataclass(frozen=True)
 class SequenceLayout:
-    seq_length: int
-    target_max_offset: int = 1
+    context_length: int
+    max_lookahead: int = 1
     sequence_layout_version: int = 2
 
     def __post_init__(self) -> None:
-        if self.seq_length < 1:
-            raise ValueError("seq_length must be a positive integer")
-        if self.target_max_offset < 0:
-            raise ValueError("target_max_offset must be non-negative")
+        if self.context_length < 1:
+            raise ValueError("context_length must be a positive integer")
+        if self.max_lookahead < 0:
+            raise ValueError("max_lookahead must be non-negative")
 
     @property
-    def window_length(self) -> int:
-        return self.seq_length + self.target_max_offset
+    def sample_length(self) -> int:
+        return self.context_length + self.max_lookahead
 
     @property
     def input_offset(self) -> int:
-        return self.target_max_offset
+        return self.max_lookahead
 
     def target_offset(self, horizon: int) -> int:
-        offset = self.target_max_offset - horizon
+        offset = self.max_lookahead - horizon
         if offset < 0:
             raise ValueError(
-                f"horizon={horizon} exceeds target_max_offset={self.target_max_offset}"
+                f"horizon={horizon} exceeds max_lookahead={self.max_lookahead}"
             )
         return offset
 
 
 @beartype
-def sequence_column_names(seq_length: int, offset: int) -> list[str]:
+def sequence_column_names(context_length: int, offset: int) -> list[str]:
     if offset < 0:
         raise ValueError("offset must be non-negative")
-    return [str(i) for i in range(seq_length - 1 + offset, offset - 1, -1)]
+    return [str(i) for i in range(context_length - 1 + offset, offset - 1, -1)]
 
 
 @beartype
-def slice_window(tensor: Tensor, seq_length: int, offset: int) -> Tensor:
+def slice_window(tensor: Tensor, context_length: int, offset: int) -> Tensor:
     if offset < 0:
         raise ValueError("offset must be non-negative")
 
     end = -offset if offset else None
-    result = tensor[:, -(seq_length + offset) : end]
+    result = tensor[:, -(context_length + offset) : end]
 
-    if result.shape[1] != seq_length:
+    if result.shape[1] != context_length:
         raise ValueError(
             f"Stored window width {tensor.shape[1]} cannot provide "
-            f"seq_length={seq_length} at offset={offset}"
+            f"context_length={context_length} at offset={offset}"
         )
     return result
 
 
 @beartype
-def validate_stored_window_width(tensor: Tensor, window_length: int) -> None:
-    if tensor.shape[1] != window_length:
+def validate_stored_window_width(tensor: Tensor, sample_length: int) -> None:
+    if tensor.shape[1] != sample_length:
         raise ValueError(
             f"Stored window width {tensor.shape[1]} does not match "
-            f"metadata window_length={window_length}."
+            f"metadata sample_length={sample_length}."
         )
 
 
 @beartype
-def sequence_layout_from_metadata(metadata: dict, seq_length: int) -> SequenceLayout:
-    metadata_seq_length = int(metadata.get("seq_length", seq_length))
-    if metadata_seq_length != seq_length:
+def sequence_layout_from_metadata(
+    metadata: dict, context_length: int
+) -> SequenceLayout:
+    metadata_context_length = int(metadata.get("context_length", context_length))
+    if metadata_context_length != context_length:
         raise ValueError(
-            f"Configured seq_length={seq_length} does not match preprocessed "
-            f"metadata seq_length={metadata_seq_length}."
+            f"Configured context_length={context_length} does not match preprocessed "
+            f"metadata context_length={metadata_context_length}."
         )
 
-    target_max_offset = int(metadata.get("target_max_offset", 1))
-    window_length = int(
-        metadata.get("window_length", metadata_seq_length + target_max_offset)
+    max_lookahead = int(metadata.get("max_lookahead", 1))
+    sample_length = int(
+        metadata.get("sample_length", metadata_context_length + max_lookahead)
     )
-    if window_length != metadata_seq_length + target_max_offset:
+    if sample_length != metadata_context_length + max_lookahead:
         raise ValueError(
-            "Invalid sequence layout metadata: window_length must equal "
-            "seq_length + target_max_offset "
-            f"({window_length} != {metadata_seq_length} + {target_max_offset})."
+            "Invalid sequence layout metadata: sample_length must equal "
+            "context_length + max_lookahead "
+            f"({sample_length} != {metadata_context_length} + {max_lookahead})."
         )
 
     layout = SequenceLayout(
-        seq_length=metadata_seq_length,
-        target_max_offset=target_max_offset,
+        context_length=metadata_context_length,
+        max_lookahead=max_lookahead,
         sequence_layout_version=int(metadata.get("sequence_layout_version", 1)),
     )
-    if layout.window_length != window_length:
+    if layout.sample_length != sample_length:
         raise ValueError(
-            f"Resolved layout window_length={layout.window_length} does not match "
-            f"metadata window_length={window_length}."
+            f"Resolved layout sample_length={layout.sample_length} does not match "
+            f"metadata sample_length={sample_length}."
         )
     return layout
 
@@ -339,8 +341,8 @@ def numpy_to_pytorch(
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
     all_columns: list[str],
-    seq_length: int,
-    window_length: int,
+    context_length: int,
+    sample_length: int,
     data_offset: int,
     target_offset: int,
 ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
@@ -357,7 +359,7 @@ def numpy_to_pytorch(
     2.  A "target" tensor (from time steps L-1 down to 0).
 
     Example:
-        For `seq_length = 3` and `all_columns = ['price']`, it will create:
+        For `context_length = 3` and `all_columns = ['price']`, it will create:
         - 'price': Tensor from columns ["3", "2", "1"]
         - 'price_target': Tensor from columns ["2", "1", "0"]
 
@@ -368,7 +370,7 @@ def numpy_to_pytorch(
             to their desired `torch.dtype`.
         all_columns: A list of all feature names (from "inputCol") to
             be processed and converted into tensors.
-        seq_length: The total sequence length (L). This determines the
+        context_length: The total sequence length (L). This determines the
             column names for time steps (e.g., "0" to "L").
 
     Returns:
@@ -378,8 +380,8 @@ def numpy_to_pytorch(
           (e.g., `{'price': <tensor>, 'price_target': <tensor>}`).
         - a metadata dictionary containing any explicit masks.
     """
-    input_seq_cols = sequence_column_names(seq_length, data_offset)
-    target_seq_cols = sequence_column_names(seq_length, target_offset)
+    input_seq_cols = sequence_column_names(context_length, data_offset)
+    target_seq_cols = sequence_column_names(context_length, target_offset)
 
     # We will create a unified dictionary
     unified_tensors = {}
@@ -408,8 +410,8 @@ def numpy_to_pytorch(
     if left_pad_lengths is not None:
         metadata = generate_padding_masks(
             left_pad_lengths,
-            seq_length,
-            window_length,
+            context_length,
+            sample_length,
             data_offset,
             target_offset,
         )
@@ -424,7 +426,7 @@ def build_valid_mask(
     left_pad_lengths: Tensor,
     full_length: int,
     offset: int,
-    seq_length: int,
+    context_length: int,
 ) -> Tensor:
     """Builds a boolean validity mask from explicit left-padding metadata."""
 
@@ -433,7 +435,7 @@ def build_valid_mask(
     )
     full_valid = full_positions[None, :] >= left_pad_lengths[:, None]
 
-    return full_valid[:, -(seq_length + offset) : (-offset if offset > 0 else None)]
+    return full_valid[:, -(context_length + offset) : (-offset if offset > 0 else None)]
 
 
 @beartype
@@ -457,18 +459,18 @@ def get_left_pad_lengths_from_preprocessed_data(data: pl.DataFrame) -> Optional[
 @beartype
 def generate_padding_masks(
     left_pad_lengths: Tensor,
-    seq_length: int,
-    window_length: int,
+    context_length: int,
+    sample_length: int,
     data_offset: int,
     target_offset: int,
 ) -> dict[str, Tensor]:
     """Generates explicit attention and target masks as a metadata dictionary."""
     return {
         "attention_valid_mask": build_valid_mask(
-            left_pad_lengths, window_length, data_offset, seq_length
+            left_pad_lengths, sample_length, data_offset, context_length
         ),
         "target_valid_mask": build_valid_mask(
-            left_pad_lengths, window_length, target_offset, seq_length
+            left_pad_lengths, sample_length, target_offset, context_length
         ),
     }
 

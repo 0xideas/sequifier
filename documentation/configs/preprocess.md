@@ -45,10 +45,10 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `seq_length` | `int` | **Yes** | - | The length of the context window (history) fed into the model. |
-| `target_max_offset` | `int` | No | `1` | Number of future items retained after the input context. The stored window width is `seq_length + target_max_offset`. Use `0` for BERT-style preprocessing where inputs and targets have the same width; keep `1` for legacy causal next-item training. |
+| `context_length` | `int` | **Yes** | - | The length of the context window (history) fed into the model. |
+| `max_lookahead` | `int` | No | `1` | Number of future items retained after the input context. The stored window width is `context_length + max_lookahead`. Use `0` for BERT-style preprocessing where inputs and targets have the same width; keep `1` for legacy causal next-item training. |
 | `split_ratios` | `list[float]`| **Yes** | - | Proportions for data splits (e.g., `[0.8, 0.1, 0.1]` for train/val/test). Must sum to 1.0. |
-| `stride_by_split` | `list[int]` | No | `[seq_length]*N` | The step size used to slide the window for each split. Corresponds to `split_ratios`. |
+| `stride_by_split` | `list[int]` | No | `[context_length]*N` | The step size used to slide the window for each split. Corresponds to `split_ratios`. |
 | `subsequence_start_mode`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
 
 ### 4\. Performance & System
@@ -73,10 +73,10 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 This controls data augmentation and redundancy.
 
-  * **Stride = `seq_length` (Non-overlapping):** The model sees every data point exactly once as a target. Training is faster, but the model might miss patterns that cross the window boundary.
+  * **Stride = `context_length` (Non-overlapping):** The model sees every data point exactly once as a target. Training is faster, but the model might miss patterns that cross the window boundary.
   * **Stride = 1 (Maximum Overlap):** Maximizes data volume. The model sees every possible sequence. This yields the highest accuracy but significantly increases the size of the preprocessed data and training time.
   * **Hybrid Approach:** It is common practice to set a large stride for the training and validation splits (index 0) to reduce the size on disk of the dataset, and a stride=1 for the test split to evaluate the model on each point in the test set. This supposes that the test split value is low.
-      * *Example:* `stride_by_split: [24, 24, 1]` (assuming `seq_length: 48`).
+      * *Example:* `stride_by_split: [24, 24, 1]` (assuming `context_length: 48`).
 
 ### 3\. `subsequence_start_mode`: `distribute` vs `exact`
 

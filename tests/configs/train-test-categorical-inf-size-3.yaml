@@ -10,8 +10,8 @@ target_column_types:
   supCat1: categorical
   supCat2: categorical
 
-seq_length: 8
-window_length: 9
+context_length: 8
+sample_length: 9
 inference_batch_size: 10
 
 export_generative_model: true
@@ -39,7 +39,7 @@ model_spec:
   n_kv_heads: 1
   rope_theta: 10000.0
 training_spec:
-  window_length: 9
+  sample_length: 9
   training_objective: causal
   device: cpu
   epochs: 3

@@ -9,7 +9,7 @@ split_ratios:
 - 0.6
 - 0.2
 - 0.2
-seq_length: 8
+context_length: 8
 stride_by_split:
 - 1
 - 1

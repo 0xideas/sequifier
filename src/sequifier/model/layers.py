@@ -106,7 +106,7 @@ class SelfAttention(nn.Module):
         n_kv_heads,
         attention_type,
         dropout,
-        seq_length,
+        context_length,
         use_rope=False,
         rope_theta=10000.0,
     ):
@@ -127,7 +127,7 @@ class SelfAttention(nn.Module):
 
         if use_rope:
             self.rope = RotaryEmbedding(
-                self.head_dim, max_seq_len=seq_length, theta=rope_theta
+                self.head_dim, max_seq_len=context_length, theta=rope_theta
             )
             if self.head_dim % 2 != 0:
                 raise ValueError(f"head_dim ({self.head_dim}) must be even for RoPE")
@@ -176,7 +176,9 @@ class SelfAttention(nn.Module):
 
 
 class SequifierEncoderLayer(nn.Module):
-    def __init__(self, config, dim_model, n_head, dim_feedforward, dropout, seq_length):
+    def __init__(
+        self, config, dim_model, n_head, dim_feedforward, dropout, context_length
+    ):
         super().__init__()
         self.norm_first = config.norm_first
 
@@ -192,7 +194,7 @@ class SequifierEncoderLayer(nn.Module):
             n_kv_heads=config.n_kv_heads,
             attention_type=config.attention_type,
             dropout=dropout,
-            seq_length=seq_length,
+            context_length=context_length,
             use_rope=(config.positional_encoding == "rope"),
             rope_theta=config.rope_theta,
         )

@@ -46,8 +46,8 @@ class SequifierDatasetFromFile(IterableDataset):
             data=data_df,
             column_types=column_types,
             all_columns=all_columns,
-            seq_length=config.seq_length,
-            window_length=config.window_length,
+            context_length=config.context_length,
+            sample_length=config.sample_length,
             data_offset=config.training_spec.data_offset,
             target_offset=config.training_spec.target_offset,
         )

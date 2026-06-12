@@ -8,8 +8,8 @@ target_columns: [itemValue]
 target_column_types:
   itemValue: real
 
-seq_length: 8
-window_length: 9
+context_length: 8
+sample_length: 9
 inference_batch_size: 10
 
 export_generative_model: false
@@ -33,7 +33,7 @@ model_spec:
   rope_theta: 10000.0
   prediction_length: 1
 training_spec:
-  window_length: 9
+  sample_length: 9
   training_objective: causal
   device: cpu
   epochs: 3

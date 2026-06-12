@@ -7,7 +7,7 @@ read_format: pt
 target_columns: [itemId]
 target_column_types:
   itemId: categorical
-seq_length: [8]
+context_length: [8]
 inference_batch_size: 10
 
 # Search Strategy
