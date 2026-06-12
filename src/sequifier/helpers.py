@@ -52,8 +52,8 @@ EXPLICIT_PADDING_MASK_FALLBACK_WARNING = (
 @dataclass(frozen=True)
 class SequenceLayout:
     context_length: int
-    max_lookahead: int = 1
-    sequence_layout_version: int = 2
+    max_lookahead: int
+    sequence_layout_version: int
 
     def __post_init__(self) -> None:
         if self.context_length < 1:

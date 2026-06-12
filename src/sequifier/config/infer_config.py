@@ -157,7 +157,7 @@ class InfererModel(BaseModel):
     context_length: int
     max_lookahead: int = Field(default=1, ge=0)
     sample_length: int
-    sequence_layout_version: int = 1
+    sequence_layout_version: int
     prediction_length: Optional[int] = None
     inference_batch_size: int
 

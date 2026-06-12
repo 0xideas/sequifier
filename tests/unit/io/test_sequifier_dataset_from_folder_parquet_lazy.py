@@ -101,7 +101,9 @@ def test_iteration_yields_correct_batches(mock_config, dataset_path):
     assert len(batches) == 8  # 40 samples / batch_size 5
 
     # Check structural integrity of first batch
-    seq_batch, tgt_batch, _, _, _ = batches[0]
+    batch = batches[0]
+    seq_batch = batch.inputs
+    tgt_batch = batch.targets
     assert "item" in seq_batch
     assert "item" in tgt_batch
     assert isinstance(seq_batch["item"], torch.Tensor)
@@ -142,7 +144,8 @@ def test_iteration_attaches_explicit_padding_masks(mock_config, tmp_path):
     dataset = SequifierDatasetFromFolderParquetLazy(
         str(data_dir), mock_config, shuffle=False
     )
-    seq_batch, tgt_batch, metadata_batch, _, _ = next(iter(dataset))
+    batch = next(iter(dataset))
+    metadata_batch = batch.metadata
 
     assert torch.equal(
         metadata_batch["attention_valid_mask"],
@@ -185,8 +188,8 @@ def test_distributed_sharding(mock_ws, mock_rank, mock_init, mock_config, datase
     assert len(batches) == 4
 
     # Verify input mapping structures
-    for seq_batch, _, _, _, _ in batches:
-        assert seq_batch["item"].shape[0] == 5
+    for batch in batches:
+        assert batch.inputs["item"].shape[0] == 5
 
 
 def test_exact_strategy_uneven_files_exception(mock_config, tmp_path):

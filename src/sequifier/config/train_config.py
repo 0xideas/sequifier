@@ -593,7 +593,7 @@ class TrainModel(BaseModel):
     context_length: int
     max_lookahead: int = Field(default=1, ge=0)
     sample_length: int
-    sequence_layout_version: int = 1
+    sequence_layout_version: int
     n_classes: dict[str, int]
     inference_batch_size: int
     seed: int

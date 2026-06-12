@@ -138,6 +138,7 @@ def model_config(tmp_path):
         n_classes={"cat_col": 5},  # 0 + 4 classes
         context_length=10,
         sample_length=11,
+        sequence_layout_version=2,
         inference_batch_size=4,
         seed=42,
         export_generative_model=True,

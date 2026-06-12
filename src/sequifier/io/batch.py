@@ -1,7 +1,9 @@
 from dataclasses import dataclass
-from typing import Iterator, Optional
+from typing import Optional
 
 import torch
+
+REQUIRED_METADATA_KEYS = frozenset({"attention_valid_mask", "target_valid_mask"})
 
 
 @dataclass(frozen=True)
@@ -12,9 +14,11 @@ class SequifierBatch:
     sequence_ids: Optional[torch.Tensor] = None
     subsequence_ids: Optional[torch.Tensor] = None
 
-    def __iter__(self) -> Iterator[object]:
-        yield self.inputs
-        yield self.targets
-        yield self.metadata
-        yield self.sequence_ids
-        yield self.subsequence_ids
+    def __post_init__(self) -> None:
+        metadata_keys = self.metadata.keys() if self.metadata is not None else set()
+        missing_keys = REQUIRED_METADATA_KEYS - metadata_keys
+        if missing_keys:
+            missing = ", ".join(sorted(missing_keys))
+            raise ValueError(
+                f"SequifierBatch metadata is missing required keys: {missing}"
+            )

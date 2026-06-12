@@ -127,7 +127,7 @@ def test_extract_sequences_persists_left_pad_length_metadata():
     sequences = extract_sequences(
         data,
         schema,
-        layout=SequenceLayout(context_length=4),
+        layout=SequenceLayout(4, 1, 2),
         stride_for_split=1,
         columns=["col1"],
         subsequence_start_mode="distribute",
@@ -186,7 +186,7 @@ def test_apply_mask_column_replaces_values_and_drops_column():
         {
             "cat_col": [3, 4, 5, 6],
             "num_col": [-1.0, 2.5, 3.5, 4.5],
-            RESERVED_MASK_COLUMN: ["0", "1", "0", "1"],
+            RESERVED_MASK_COLUMN: [0, 1, 0, 1],
         }
     )
 

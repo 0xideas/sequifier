@@ -74,13 +74,14 @@ def mock_torch_load():
 
         def side_effect(path, map_location, weights_only):
             dummy_seq = {"col1": torch.ones((10, 6)), "tgt1": torch.zeros((10, 6))}
+            left_pad_lengths = torch.zeros(10, dtype=torch.int64)
 
             return (
                 dummy_seq,
                 None,
                 None,
                 None,
-                None,
+                left_pad_lengths,
             )
 
         mock_load.side_effect = side_effect
@@ -114,7 +115,9 @@ def test_iteration_yields_correct_batches(mock_config, dataset_path, mock_torch_
     assert mock_torch_load.call_count == 4
 
     # Verify the structure of a yielded batch
-    seq_dict, tgt_dict, _, _, _ = batches[0]
+    batch = batches[0]
+    seq_dict = batch.inputs
+    tgt_dict = batch.targets
 
     assert "col1" in seq_dict, f"{seq_dict = }"
 
@@ -145,7 +148,8 @@ def test_iteration_attaches_explicit_padding_masks(mock_config, dataset_path):
         dataset = SequifierDatasetFromFolderPtLazy(
             dataset_path, mock_config, shuffle=False
         )
-        seq_dict, tgt_dict, metadata_dict, _, _ = next(iter(dataset))
+        batch = next(iter(dataset))
+        metadata_dict = batch.metadata
 
     assert torch.equal(
         metadata_dict["attention_valid_mask"],

@@ -84,20 +84,6 @@ from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS  # noqa: E402
 
 
-def _as_sequifier_batch(batch: Any) -> SequifierBatch:
-    if isinstance(batch, SequifierBatch):
-        return batch
-
-    data, targets, metadata, sequence_ids, subsequence_ids = batch
-    return SequifierBatch(
-        inputs=data,
-        targets=targets,
-        metadata=metadata,
-        sequence_ids=sequence_ids,
-        subsequence_ids=subsequence_ids,
-    )
-
-
 def cleanup():
     """Cleans up the distributed training environment."""
     dist.destroy_process_group()
@@ -1538,8 +1524,12 @@ class TransformerModel(nn.Module):
 
         model_to_call.train()
 
-        for batch_count, raw_batch in enumerate(train_loader):
-            batch = _as_sequifier_batch(raw_batch)
+        for batch_count, batch in enumerate(train_loader):
+            if not isinstance(batch, SequifierBatch):
+                raise TypeError(
+                    "Training DataLoader must yield SequifierBatch objects, "
+                    f"got {type(batch).__name__}."
+                )
             if batch_count >= start_batch:
                 data = batch.inputs
                 targets = batch.targets
@@ -1555,8 +1545,7 @@ class TransformerModel(nn.Module):
                     if k in self.target_column_types
                 }
                 metadata = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in (metadata or {}).items()
+                    k: v.to(self.device, non_blocking=True) for k, v in metadata.items()
                 }
                 if self.hparams.training_spec.training_objective == "bert":
                     data, targets, metadata = apply_bert_masking(
@@ -1872,8 +1861,12 @@ class TransformerModel(nn.Module):
         model_to_call.eval()
 
         with torch.no_grad():
-            for batch_idx, raw_batch in enumerate(valid_loader):
-                batch = _as_sequifier_batch(raw_batch)
+            for batch_idx, batch in enumerate(valid_loader):
+                if not isinstance(batch, SequifierBatch):
+                    raise TypeError(
+                        "Validation DataLoader must yield SequifierBatch objects, "
+                        f"got {type(batch).__name__}."
+                    )
                 data = batch.inputs
                 targets = batch.targets
                 metadata = batch.metadata
@@ -1889,8 +1882,7 @@ class TransformerModel(nn.Module):
                     if k in self.target_column_types
                 }
                 metadata = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in (metadata or {}).items()
+                    k: v.to(self.device, non_blocking=True) for k, v in metadata.items()
                 }
                 if self.hparams.training_spec.training_objective == "bert":
                     data, targets, metadata = apply_bert_masking(
@@ -1980,8 +1972,12 @@ class TransformerModel(nn.Module):
             baseline_losses_local_collect = {col: [] for col in self.target_columns}
 
             # Iterate over the sharded validation loader
-            for batch_idx, raw_batch in enumerate(valid_loader):
-                batch = _as_sequifier_batch(raw_batch)
+            for batch_idx, batch in enumerate(valid_loader):
+                if not isinstance(batch, SequifierBatch):
+                    raise TypeError(
+                        "Validation DataLoader must yield SequifierBatch objects, "
+                        f"got {type(batch).__name__}."
+                    )
                 data = batch.inputs
                 targets = batch.targets
                 metadata = batch.metadata
@@ -1996,8 +1992,7 @@ class TransformerModel(nn.Module):
                     if k in self.target_column_types
                 }
                 metadata = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in (metadata or {}).items()
+                    k: v.to(self.device, non_blocking=True) for k, v in metadata.items()
                 }
 
                 if self.hparams.training_spec.training_objective == "bert":

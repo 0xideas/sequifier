@@ -18,6 +18,7 @@ from sequifier.config.train_config import (
     TrainModel,
 )
 from sequifier.helpers import normalize_path, try_catch_excess_keys
+from sequifier.preprocess import CURRENT_SEQUENCE_LAYOUT_VERSION
 from sequifier.special_tokens import validate_special_token_ids
 
 
@@ -200,6 +201,9 @@ def load_hyperparameter_search_config(
 
         config_values["n_classes"] = config_values.get(
             "n_classes", metadata_config["n_classes"]
+        )
+        config_values["sequence_layout_version"] = int(
+            metadata_config["sequence_layout_version"]
         )
         config_values["training_data_path"] = normalize_path(
             config_values.get("training_data_path", metadata_config["split_paths"][0]),
@@ -854,6 +858,7 @@ class HyperparameterSearchConfig(BaseModel):
             context_length=context_length,
             max_lookahead=self.max_lookahead,
             sample_length=sample_length,
+            sequence_layout_version=CURRENT_SEQUENCE_LAYOUT_VERSION,
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=101,

@@ -31,6 +31,7 @@ from sequifier.special_tokens import (
 
 INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
 REAL_MASK_VALUE = 0.0
+CURRENT_SEQUENCE_LAYOUT_VERSION = 2
 
 
 @beartype
@@ -144,7 +145,11 @@ class Preprocessor:
         np.random.seed(seed)
         self.n_cores = n_cores or multiprocessing.cpu_count()
         self.continue_preprocessing = continue_preprocessing
-        self.layout = SequenceLayout(context_length, max_lookahead)
+        self.layout = SequenceLayout(
+            context_length,
+            max_lookahead,
+            sequence_layout_version=CURRENT_SEQUENCE_LAYOUT_VERSION,
+        )
         self._setup_directories()
 
         if selected_columns is not None:
@@ -1020,20 +1025,23 @@ def _selected_columns_with_optional_mask(
 
 
 @beartype
-def _mask_column_expr(mask_dtype: Any, mask_column: str) -> pl.Expr:
+def _validate_and_create_mask_column_expr(
+    series: Any, mask_dtype: Any, mask_column: str
+) -> pl.Expr:
     mask_col = pl.col(mask_column)
 
     if mask_dtype == pl.Boolean:
         return mask_col
 
     if mask_dtype.is_numeric():
+        if not series.drop_nulls().is_in([0, 1]).all():
+            raise ValueError(
+                f"Mask column {mask_column} contains inadmissible values not in (0, 1)"
+            )
         return mask_col == 1
 
-    if mask_dtype in (pl.String, pl.Utf8):
-        return mask_col.str.to_lowercase().is_in(["1"])
-
     raise ValueError(
-        f"Column {mask_column} must be boolean, numeric, or string, got {mask_dtype}"
+        f"Column {mask_column} must be boolean or numeric, got {mask_dtype}"
     )
 
 
@@ -1049,7 +1057,9 @@ def _apply_mask_column(
     if mask_column not in data.columns:
         raise ValueError(f"mask_column '{mask_column}' not found in input data")
 
-    mask_expr = _mask_column_expr(data.schema[mask_column], mask_column)
+    mask_expr = _validate_and_create_mask_column_expr(
+        data[mask_column], data.schema[mask_column], mask_column
+    )
     updates = []
     for col in data_columns:
         mask_value = (
@@ -1273,7 +1283,9 @@ def _get_column_statistics(
             string, integer, nor float).
     """
     if mask_column is not None and mask_column in data.columns:
-        mask_expr = _mask_column_expr(data.schema[mask_column], mask_column)
+        mask_expr = _validate_and_create_mask_column_expr(
+            data[mask_column], data.schema[mask_column], mask_column
+        )
         data = data.filter(~mask_expr)
 
     if data.is_empty():
