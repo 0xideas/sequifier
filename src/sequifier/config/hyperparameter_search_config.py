@@ -18,6 +18,7 @@ from sequifier.config.train_config import (
     TrainModel,
 )
 from sequifier.helpers import normalize_path, try_catch_excess_keys
+from sequifier.special_tokens import validate_special_token_ids
 
 
 class FloatDistribution(BaseModel):
@@ -119,8 +120,8 @@ class BERTSpecHyperparameterSampling(BaseModel):
 
         replacement_distribution = self.replacement_distribution[
             replacement_distribution_index
-        ].model_copy(deep=True)
-        span_masking = self.span_masking[span_masking_index].model_copy(deep=True)
+        ].model_copy(deep=True)  # type: ignore
+        span_masking = self.span_masking[span_masking_index].model_copy(deep=True)  # type: ignore
 
         logger.info(
             f"{masking_probability = } - {replacement_distribution = } - {span_masking = }"
@@ -163,6 +164,11 @@ def load_hyperparameter_search_config(
             normalize_path(metadata_config_path, config_values["project_root"]), "r"
         ) as f:
             metadata_config = json.loads(f.read())
+
+        validate_special_token_ids(
+            metadata_config.get("special_token_ids"),
+            source=f"metadata config '{metadata_config_path}'",
+        )
 
         config_values["column_types"] = config_values.get(
             "column_types", [metadata_config["column_types"]]

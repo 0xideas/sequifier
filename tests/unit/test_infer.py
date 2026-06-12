@@ -1,11 +1,13 @@
+import json
 from unittest.mock import patch
 
 import numpy as np
 import polars as pl
 import pytest
 import torch
+import yaml
 
-from sequifier.config.infer_config import InfererModel
+from sequifier.config.infer_config import InfererModel, load_inferer_config
 from sequifier.infer import (
     Inferer,
     calculate_item_positions,
@@ -232,6 +234,54 @@ def test_infer_config_rejects_bert_prediction_length_mismatch():
             map_to_id=False,
             autoregression=False,
         )
+
+
+def test_load_inferer_config_rejects_mismatched_metadata_special_token_ids(tmp_path):
+    data_path = tmp_path / "data.parquet"
+    data_path.touch()
+    metadata_path = tmp_path / "metadata.json"
+    config_path = tmp_path / "infer.yaml"
+
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "split_paths": [str(data_path)],
+                "column_types": {"target_col": "int64"},
+                "id_maps": {"target_col": {"A": 3}},
+                "selected_columns_statistics": {},
+                "special_token_ids": {
+                    "[unknown]": 10,
+                    "[other]": 11,
+                    "[mask]": 12,
+                },
+            }
+        )
+    )
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "project_root": str(tmp_path),
+                "metadata_config_path": metadata_path.name,
+                "model_path": "dummy.onnx",
+                "model_type": "generative",
+                "training_objective": "causal",
+                "data_path": str(data_path),
+                "input_columns": ["target_col"],
+                "categorical_columns": ["target_col"],
+                "real_columns": [],
+                "target_columns": ["target_col"],
+                "column_types": {"target_col": "int64"},
+                "target_column_types": {"target_col": "categorical"},
+                "seed": 42,
+                "device": "cpu",
+                "seq_length": 3,
+                "inference_batch_size": 2,
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="special_token_ids must match"):
+        load_inferer_config(str(config_path), {}, skip_metadata=False)
 
 
 def test_infer_pure_passes_attention_valid_mask_to_onnx(mock_inferer):

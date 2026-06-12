@@ -194,6 +194,7 @@ def test_preprocessor_applies_mask_column_end_to_end(tmp_path):
                 "selected_columns_statistics": {
                     "itemValue": {"mean": 60.0, "std": 10.0}
                 },
+                "special_token_ids": {"[unknown]": 0, "[other]": 1, "[mask]": 2},
             }
         )
     )

@@ -23,7 +23,7 @@ from pydantic import (
 import sequifier
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.helpers import normalize_path, try_catch_excess_keys
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 
 AnyType = str | int | float
 
@@ -98,8 +98,9 @@ def load_train_config(
         )
 
         config_values["id_maps"] = metadata_config["id_maps"]
-        config_values["special_token_ids"] = metadata_config.get(
-            "special_token_ids", SPECIAL_TOKEN_IDS.ids_by_label
+        config_values["special_token_ids"] = validate_special_token_ids(
+            metadata_config.get("special_token_ids"),
+            source=f"metadata config '{metadata_config_path}'",
         )
 
     return try_catch_excess_keys(config_path, TrainModel, config_values)
@@ -574,6 +575,11 @@ class TrainModel(BaseModel):
 
     model_spec: ModelSpecModel
     training_spec: TrainingSpecModel
+
+    @field_validator("special_token_ids")
+    @classmethod
+    def validate_special_token_ids_match_runtime(cls, v):
+        return validate_special_token_ids(v, source="TrainModel")
 
     @model_validator(mode="after")
     def validate_bert_prediction_length_matches_seq_length(self):

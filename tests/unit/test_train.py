@@ -1,7 +1,9 @@
 import copy
+import json
 
 import pytest
 import torch
+import yaml
 from pydantic import ValidationError
 
 from sequifier.config.probabilities import PoissonDistributionFloor
@@ -11,7 +13,9 @@ from sequifier.config.train_config import (
     ReplacementDistribution,
     TrainingSpecModel,
     TrainModel,
+    load_train_config,
 )
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.train import TransformerModel
 
 
@@ -216,6 +220,73 @@ def test_train_model_requires_bert_prediction_length_to_equal_seq_length(model_c
 
     with pytest.raises(ValidationError, match="prediction_length must be equal"):
         TrainModel(**config_values)
+
+
+def test_train_model_rejects_mismatched_special_token_ids(model_config):
+    config_values = model_config.model_dump()
+    config_values["special_token_ids"] = {
+        "[unknown]": 10,
+        "[other]": 11,
+        "[mask]": 12,
+    }
+
+    with pytest.raises(ValidationError, match="special_token_ids must match"):
+        TrainModel(**config_values)
+
+
+def test_load_train_config_rejects_mismatched_metadata_special_token_ids(
+    tmp_path, model_config
+):
+    config_path = tmp_path / "train.yaml"
+    metadata_path = tmp_path / "metadata.json"
+    config_values = model_config.model_dump()
+    config_values["project_root"] = str(tmp_path)
+    config_values["metadata_config_path"] = metadata_path.name
+    config_path.write_text(yaml.safe_dump(config_values))
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "split_paths": ["data/train.pt", "data/val.pt"],
+                "column_types": config_values["column_types"],
+                "n_classes": config_values["n_classes"],
+                "id_maps": config_values["id_maps"],
+                "special_token_ids": {
+                    "[unknown]": 10,
+                    "[other]": 11,
+                    "[mask]": 12,
+                },
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="special_token_ids must match"):
+        load_train_config(str(config_path), {}, skip_metadata=False)
+
+
+def test_load_train_config_defaults_missing_metadata_special_token_ids(
+    tmp_path, model_config
+):
+    config_path = tmp_path / "train.yaml"
+    metadata_path = tmp_path / "metadata.json"
+    config_values = model_config.model_dump()
+    config_values["project_root"] = str(tmp_path)
+    config_values["metadata_config_path"] = metadata_path.name
+    config_path.write_text(yaml.safe_dump(config_values))
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "split_paths": ["data/train.pt", "data/val.pt"],
+                "column_types": config_values["column_types"],
+                "n_classes": config_values["n_classes"],
+                "id_maps": config_values["id_maps"],
+                "special_token_ids": {"[unknown]": 0, "[other]": 1, "[mask]": 2},
+            }
+        )
+    )
+
+    config = load_train_config(str(config_path), {}, skip_metadata=False)
+
+    assert config.special_token_ids == SPECIAL_TOKEN_IDS.ids_by_label
 
 
 def test_forward_train_shapes(model, model_config):

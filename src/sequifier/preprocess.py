@@ -26,6 +26,7 @@ from sequifier.special_tokens import (
     SPECIAL_TOKEN_ID_VALUES,
     SPECIAL_TOKEN_IDS,
     SPECIAL_TOKEN_LABELS,
+    validate_special_token_ids,
 )
 
 INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
@@ -192,6 +193,10 @@ class Preprocessor:
                 with open(metadata_path, "r") as f:
                     preexisting_metadata = json.load(f)
 
+                validate_special_token_ids(
+                    preexisting_metadata.get("special_token_ids"),
+                    source=f"metadata config '{self.metadata_config_path}'",
+                )
                 id_maps = preexisting_metadata["id_maps"]
                 selected_columns_statistics = preexisting_metadata[
                     "selected_columns_statistics"
@@ -282,6 +287,10 @@ class Preprocessor:
                 with open(metadata_path, "r") as f:
                     preexisting_metadata = json.load(f)
 
+                validate_special_token_ids(
+                    preexisting_metadata.get("special_token_ids"),
+                    source=f"metadata config '{self.metadata_config_path}'",
+                )
                 id_maps = preexisting_metadata["id_maps"]
                 selected_columns_statistics = preexisting_metadata[
                     "selected_columns_statistics"

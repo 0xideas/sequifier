@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from sequifier.helpers import normalize_path, try_catch_excess_keys
+from sequifier.special_tokens import validate_special_token_ids
 
 
 @beartype
@@ -45,6 +46,11 @@ def load_inferer_config(
             normalize_path(metadata_config_path, config_values["project_root"]), "r"
         ) as f:
             metadata_config = json.load(f)
+
+        validate_special_token_ids(
+            metadata_config.get("special_token_ids"),
+            source=f"metadata config '{metadata_config_path}'",
+        )
 
         config_values["column_types"] = config_values.get(
             "column_types", metadata_config["column_types"]

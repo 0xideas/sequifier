@@ -24,6 +24,7 @@ from sequifier.helpers import (
     unpack_preprocessed_pt_tuple,
     write_data,
 )
+from sequifier.special_tokens import validate_special_token_ids
 from sequifier.train import (
     infer_with_embedding_model,
     infer_with_generative_model,
@@ -66,6 +67,10 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
             normalize_path(config.metadata_config_path, config.project_root), "r"
         ) as f:
             metadata_config = json.loads(f.read())
+            validate_special_token_ids(
+                metadata_config.get("special_token_ids"),
+                source=f"metadata config '{config.metadata_config_path}'",
+            )
             id_maps = metadata_config["id_maps"]
             selected_columns_statistics = metadata_config["selected_columns_statistics"]
     else:
