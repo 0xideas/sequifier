@@ -284,7 +284,6 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
 
             # Process Long format data structures into PyTorch Tensors
             new_seq, new_tgt = {}, {}
-            expected_samples = len(worker_indices_np)
 
             # 2. Iterate over the expected config columns, not the dynamically found ones
             # Process inputs
@@ -296,10 +295,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
                         dtype=self.column_torch_types[col_name],
                     )
                 else:
-                    new_seq[col_name] = torch.zeros(
-                        (expected_samples, train_seq_len),
-                        dtype=self.column_torch_types[col_name],
-                    )
+                    raise ValueError(f"Column not found in input data: {col_name}")
 
             # Process targets
             for col_name in self.config.target_columns:

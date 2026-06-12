@@ -92,7 +92,7 @@ def _as_sequifier_batch(batch: Any) -> SequifierBatch:
     return SequifierBatch(
         inputs=data,
         targets=targets,
-        metadata=metadata or {},
+        metadata=metadata,
         sequence_ids=sequence_ids,
         subsequence_ids=subsequence_ids,
     )

@@ -21,7 +21,7 @@ def _folder_metadata(total_samples, batch_files):
         "context_length": CONTEXT_LENGTH,
         "max_lookahead": MAX_LOOKAHEAD,
         "sample_length": SAMPLE_LENGTH,
-        "sequence_layout_version": 1,
+        "sequence_layout_version": 2,
     }
 
 
@@ -54,6 +54,7 @@ def dataset_path(tmp_path):
         "sequenceId": pl.Int64,
         "subsequenceId": pl.Int64,
         "startItemPosition": pl.Int64,
+        "leftPadLength": pl.Int64,
         "inputCol": pl.String,
         "2": pl.Float64,
         "1": pl.Float64,
@@ -66,7 +67,7 @@ def dataset_path(tmp_path):
         filename = f"file_{i}.parquet"
         rows = []
         for s in range(10):
-            rows.append((s, 0, s * 2, "item", float(s), float(s + 1), float(s + 2)))
+            rows.append((s, 0, s * 2, 0, "item", float(s), float(s + 1), float(s + 2)))
 
         df = pl.DataFrame(rows, schema=schema, orient="row")
         df.write_parquet(data_dir / filename)

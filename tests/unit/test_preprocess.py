@@ -218,6 +218,10 @@ def test_preprocessor_applies_mask_column_end_to_end(tmp_path):
                 "selected_columns_statistics": {
                     "itemValue": {"mean": 60.0, "std": 10.0}
                 },
+                "context_length": 2,
+                "max_lookahead": 1,
+                "sample_length": 3,
+                "sequence_layout_version": 2,
                 "special_token_ids": {"[unknown]": 0, "[other]": 1, "[mask]": 2},
             }
         )
@@ -656,15 +660,3 @@ def test_load_precomputed_id_maps_allows_reserved_entries(tmp_path):
 
     assert id_maps["itemId"]["[mask]"] == 2
     assert id_maps["itemId"]["a"] == 3
-
-
-def test_load_precomputed_id_maps_migrates_legacy_user_ids(tmp_path):
-    project_root = tmp_path / "project"
-    id_map_dir = project_root / "configs" / "id_maps"
-    id_map_dir.mkdir(parents=True)
-    (id_map_dir / "itemId.json").write_text(json.dumps({"a": 2, "b": 3}))
-
-    with pytest.warns(UserWarning, match="legacy user IDs"):
-        id_maps = load_precomputed_id_maps(str(project_root), ["itemId"])
-
-    assert id_maps["itemId"] == {"a": 3, "b": 4}

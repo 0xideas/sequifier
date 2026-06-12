@@ -20,7 +20,7 @@ def _folder_metadata(total_samples, batch_files):
         "context_length": CONTEXT_LENGTH,
         "max_lookahead": MAX_LOOKAHEAD,
         "sample_length": SAMPLE_LENGTH,
-        "sequence_layout_version": 1,
+        "sequence_layout_version": 2,
     }
 
 

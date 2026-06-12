@@ -74,6 +74,10 @@ def test_numpy_to_pytorch_shapes_and_shifting():
     # Seq 1: [10, 20, 30, 40] (where 40 is t=0, 30 is t=1, etc.)
     data = pl.DataFrame(
         {
+            "sequenceId": [1, 2],
+            "subsequenceId": [0, 0],
+            "startItemPosition": [0, 0],
+            "leftPadLength": [0, 0],
             "inputCol": ["A", "A"],
             "3": [10, 11],
             "2": [20, 21],
@@ -99,7 +103,14 @@ def test_numpy_to_pytorch_shapes_and_shifting():
     # 1. Check Keys
     assert "A" in tensors
     assert "A_target" in tensors
-    assert metadata == {}
+    assert torch.equal(
+        metadata["attention_valid_mask"],
+        torch.tensor([[True, True, True], [True, True, True]]),
+    )
+    assert torch.equal(
+        metadata["target_valid_mask"],
+        torch.tensor([[True, True, True], [True, True, True]]),
+    )
 
     # 2. Check Input Tensor (Cols 3, 2, 1)
     # Row 0: [10, 20, 30]
@@ -123,7 +134,17 @@ def test_numpy_to_pytorch_dtypes():
     # (Polars columns usually have a single type).
 
     # Case 1: Integer
-    data_int = pl.DataFrame({"inputCol": ["int_col"], "1": [10], "0": [20]})
+    data_int = pl.DataFrame(
+        {
+            "sequenceId": [1],
+            "subsequenceId": [0],
+            "startItemPosition": [0],
+            "leftPadLength": [0],
+            "inputCol": ["int_col"],
+            "1": [10],
+            "0": [20],
+        }
+    )
     tensors_int, _ = numpy_to_pytorch(
         data_int,
         {"int_col": torch.int64},
@@ -136,7 +157,17 @@ def test_numpy_to_pytorch_dtypes():
     assert tensors_int["int_col"].dtype == torch.int64
 
     # Case 2: Float
-    data_float = pl.DataFrame({"inputCol": ["float_col"], "1": [10.5], "0": [20.5]})
+    data_float = pl.DataFrame(
+        {
+            "sequenceId": [1],
+            "subsequenceId": [0],
+            "startItemPosition": [0],
+            "leftPadLength": [0],
+            "inputCol": ["float_col"],
+            "1": [10.5],
+            "0": [20.5],
+        }
+    )
     tensors_float, _ = numpy_to_pytorch(
         data_float,
         {"float_col": torch.float32},

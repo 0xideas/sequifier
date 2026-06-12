@@ -249,6 +249,10 @@ def test_load_inferer_config_rejects_mismatched_metadata_special_token_ids(tmp_p
         json.dumps(
             {
                 "split_paths": [str(data_path)],
+                "context_length": 3,
+                "max_lookahead": 1,
+                "sample_length": 4,
+                "sequence_layout_version": 2,
                 "column_types": {"target_col": "int64"},
                 "id_maps": {"target_col": {"A": 3}},
                 "selected_columns_statistics": {},

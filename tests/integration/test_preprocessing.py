@@ -40,6 +40,7 @@ def test_metadata_config(metadata_configs):
     for file_name, metadata_config in metadata_configs.items():
         print(f"Verifying metadata_config for: {file_name}")
         assert list(metadata_config.keys()) == expected_metadata_keys
+        assert metadata_config["sequence_layout_version"] == 2
         assert metadata_config["special_token_ids"] == {
             "[unknown]": 0,
             "[other]": 1,

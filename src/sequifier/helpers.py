@@ -128,7 +128,7 @@ def sequence_layout_from_metadata(
     layout = SequenceLayout(
         context_length=metadata_context_length,
         max_lookahead=max_lookahead,
-        sequence_layout_version=int(metadata.get("sequence_layout_version", 1)),
+        sequence_layout_version=int(metadata["sequence_layout_version"]),
     )
     if layout.sample_length != sample_length:
         raise ValueError(
@@ -432,10 +432,8 @@ def build_valid_mask(
 
 
 @beartype
-def get_left_pad_lengths_from_preprocessed_data(data: pl.DataFrame) -> Optional[Tensor]:
+def get_left_pad_lengths_from_preprocessed_data(data: pl.DataFrame) -> Tensor:
     """Extracts one leftPadLength value per long-format subsequence."""
-    if "leftPadLength" not in data.columns:
-        return None
 
     assert {"sequenceId", "subsequenceId"}.issubset(data.columns)
 
