@@ -56,6 +56,11 @@ def load_inferer_config(
             source=f"metadata config '{metadata_config_path}'",
         )
         sequence_layout = sequence_layout_from_metadata(metadata_config)
+        if sequence_layout.sequence_layout_version != 2:
+            raise ValueError(
+                "Inference requires metadata sequence_layout_version=2, "
+                f"got {sequence_layout.sequence_layout_version}."
+            )
         config_values["max_lookahead"] = sequence_layout.max_lookahead
         config_values["sample_length"] = sequence_layout.sample_length
         config_values["sequence_layout_version"] = (
