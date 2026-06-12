@@ -65,6 +65,7 @@ def mock_torch_load():
                 None,
                 None,
                 None,
+                None,
             )
 
         mock_load.side_effect = side_effect

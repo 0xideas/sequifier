@@ -16,12 +16,7 @@ from beartype import beartype
 from loguru import logger
 
 from sequifier.config.preprocess_config import load_preprocessor_config
-from sequifier.helpers import (
-    PANDAS_TO_TORCH_TYPES,
-    read_data,
-    unpack_preprocessed_pt_tuple,
-    write_data,
-)
+from sequifier.helpers import PANDAS_TO_TORCH_TYPES, read_data, write_data
 from sequifier.special_tokens import (
     SPECIAL_TOKEN_ID_VALUES,
     SPECIAL_TOKEN_IDS,
@@ -882,8 +877,8 @@ class Preprocessor:
         for file_path in files:
             try:
                 if write_format == "pt":
-                    sequences_dict, _, _, _, _ = unpack_preprocessed_pt_tuple(
-                        torch.load(file_path, weights_only=False)
+                    sequences_dict, _, _, _, _ = torch.load(
+                        file_path, weights_only=False
                     )
                     if sequences_dict:
                         n_samples = sequences_dict[

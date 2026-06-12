@@ -9,11 +9,7 @@ from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
-from sequifier.helpers import (
-    generate_padding_masks,
-    normalize_path,
-    unpack_preprocessed_pt_tuple,
-)
+from sequifier.helpers import generate_padding_masks, normalize_path
 from sequifier.io.batch import SequifierBatch
 
 
@@ -65,9 +61,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                 _,
                 _,
                 left_pad_lengths_batch,
-            ) = unpack_preprocessed_pt_tuple(
-                torch.load(file_path, map_location="cpu", weights_only=False)
-            )
+            ) = torch.load(file_path, map_location="cpu", weights_only=False)
             for col in all_sequences.keys():
                 if col in sequences_batch:
                     all_sequences[col].append(sequences_batch[col])

@@ -1,3 +1,4 @@
+import copy
 import os
 import shutil
 import subprocess
@@ -5,6 +6,7 @@ import time
 
 import polars as pl
 import pytest
+import torch
 import yaml
 
 SELECTED_COLUMNS = {
@@ -318,77 +320,83 @@ def format_configs_locally(
 ):
     from sys import platform
 
-    if platform == "windows":
-        config_paths = [
-            preprocessing_config_path_cat,
-            preprocessing_config_path_cat_multitarget,
-            preprocessing_config_path_real,
-            preprocessing_config_path_multi_file,
-            preprocessing_config_path_interrupted,
-            training_config_path_cat,
-            training_config_path_cat_multitarget,
-            training_config_path_real,
-            training_config_path_cat_inf_size_1,
-            training_config_path_cat_inf_size_3,
-            training_config_path_cat_bert,
-            training_config_path_real_bert,
-            training_config_path_distributed,
-            training_config_path_distributed_lazy_parquet,
-            training_config_path_lazy,
-            training_config_path_resume_epoch,
-            training_config_path_resume_mid_epoch,
-            inference_config_path_cat,
-            inference_config_path_cat_multitarget,
-            training_config_path_cat_multitarget_eager,
-            inference_config_path_real,
-            inference_config_path_real_autoregression,
-            inference_config_path_categorical_autoregression,
-            inference_config_path_cat_inf_size_1,
-            inference_config_path_cat_inf_size_3,
-            inference_config_path_cat_bert,
-            inference_config_path_cat_bert_embedding,
-            inference_config_path_distributed,
-            inference_config_path_distributed_parquet,
-            inference_config_path_lazy,
-            hp_search_configs["grid"],
-            hp_search_configs["sample"],
-            hp_search_configs["bert"],
-            hp_search_configs["bayesian"],
-            hp_search_configs["custom-eval"],
-        ]
-        for config_path in config_paths:
+    config_paths = [
+        preprocessing_config_path_cat,
+        preprocessing_config_path_cat_multitarget,
+        preprocessing_config_path_real,
+        preprocessing_config_path_multi_file,
+        preprocessing_config_path_interrupted,
+        training_config_path_cat,
+        training_config_path_cat_multitarget,
+        training_config_path_real,
+        training_config_path_cat_inf_size_1,
+        training_config_path_cat_inf_size_3,
+        training_config_path_cat_bert,
+        training_config_path_real_bert,
+        training_config_path_distributed,
+        training_config_path_distributed_lazy_parquet,
+        training_config_path_lazy,
+        training_config_path_resume_epoch,
+        training_config_path_resume_mid_epoch,
+        inference_config_path_cat,
+        inference_config_path_cat_multitarget,
+        training_config_path_cat_multitarget_eager,
+        inference_config_path_real,
+        inference_config_path_real_autoregression,
+        inference_config_path_categorical_autoregression,
+        inference_config_path_cat_inf_size_1,
+        inference_config_path_cat_inf_size_3,
+        inference_config_path_cat_bert,
+        inference_config_path_cat_bert_embedding,
+        inference_config_path_distributed,
+        inference_config_path_distributed_parquet,
+        inference_config_path_lazy,
+        hp_search_configs["grid"],
+        hp_search_configs["sample"],
+        hp_search_configs["bert"],
+        hp_search_configs["bayesian"],
+        hp_search_configs["custom-eval"],
+    ]
+    original_configs = {}
+
+    cuda_available = torch.cuda.is_available()
+
+    for config_path in config_paths:
+        if str(platform).startswith("win") or cuda_available:
             with open(config_path, "r") as f:
                 config = yaml.safe_load(f)
+
+            original_config = copy.deepcopy(config)
+            original_configs[config_path] = original_config
 
             assert config is not None, config_path
 
-            config_formatted = {
-                attr: reformat_parameter(attr, param, "linux->local")
-                for attr, param in config.items()
-            }
+            if platform == "windows":
+                config = {
+                    attr: reformat_parameter(attr, param, "linux->local")
+                    for attr, param in config.items()
+                }
+
+            if cuda_available:
+                if "training_spec" in config:
+                    config["training_spec"]["device"] = "cuda"  # type: ignore
+                if "device" in config:
+                    config["device"] = "cuda"
 
             with open(config_path, "w") as f:
-                yaml.dump(
-                    config_formatted, f, default_flow_style=False, sort_keys=False
-                )
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
-        yield
+    yield
 
+    if str(platform).startswith("win") or cuda_available:
         for config_path in config_paths:
-            with open(config_path, "r") as f:
-                config = yaml.safe_load(f)
-
-            config_formatted = {
-                attr: reformat_parameter(attr, param, "local->linux")
-                for attr, param in config.items()
-            }
-
             with open(config_path, "w") as f:
                 yaml.dump(
-                    config_formatted, f, default_flow_style=False, sort_keys=False
+                    original_configs[config_path],
+                    f,
+                    default_flow_style=False,
+                    sort_keys=False,
                 )
-    else:
-        yield
 
 
 @pytest.fixture(scope="session")

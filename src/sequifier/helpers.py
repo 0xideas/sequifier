@@ -378,32 +378,6 @@ def generate_padding_masks(
 
 
 @beartype
-def unpack_preprocessed_pt_tuple(
-    data: tuple[Any, ...],
-) -> tuple[Any, Any, Any, Any, Optional[Any]]:
-    """Unpacks both v1 four-item and v2 five-item preprocessed PT tuples."""
-    if len(data) == 4:
-        sequences_dict, sequence_ids, subsequence_ids, start_positions = data
-        return sequences_dict, sequence_ids, subsequence_ids, start_positions, None
-    if len(data) == 5:
-        (
-            sequences_dict,
-            sequence_ids,
-            subsequence_ids,
-            start_positions,
-            left_pad_lengths,
-        ) = data
-        return (
-            sequences_dict,
-            sequence_ids,
-            subsequence_ids,
-            start_positions,
-            left_pad_lengths,
-        )
-    raise ValueError(f"Expected a 4- or 5-item preprocessed PT tuple, got {len(data)}")
-
-
-@beartype
 def normalize_path(path: str, project_root: str) -> str:
     """Normalizes a path to be relative to a project path, then joins them.
 

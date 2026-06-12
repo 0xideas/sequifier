@@ -21,7 +21,6 @@ from sequifier.helpers import (
     normalize_path,
     numpy_to_pytorch,
     subset_to_input_columns,
-    unpack_preprocessed_pt_tuple,
     write_data,
 )
 from sequifier.special_tokens import validate_special_token_ids
@@ -491,7 +490,7 @@ def infer_embedding(
                 subsequence_ids_tensor,
                 start_positions_tensor,
                 left_pad_lengths_tensor,
-            ) = unpack_preprocessed_pt_tuple(data)
+            ) = data
             metadata = {}
             if left_pad_lengths_tensor is not None:
                 target_offset = 0 if config.training_objective == "causal" else 1
@@ -738,7 +737,7 @@ def infer_generative(
                 _,
                 start_positions_tensor,
                 left_pad_lengths_tensor,
-            ) = unpack_preprocessed_pt_tuple(data)
+            ) = data
             total_steps = (
                 1
                 if config.autoregression_total_steps is None
