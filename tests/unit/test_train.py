@@ -252,6 +252,10 @@ def test_load_train_config_rejects_mismatched_metadata_special_token_ids(
         json.dumps(
             {
                 "split_paths": ["data/train.pt", "data/val.pt"],
+                "context_length": config_values["context_length"],
+                "max_lookahead": 1,
+                "sample_length": config_values["context_length"] + 1,
+                "sequence_layout_version": 1,
                 "column_types": config_values["column_types"],
                 "n_classes": config_values["n_classes"],
                 "id_maps": config_values["id_maps"],
@@ -281,6 +285,10 @@ def test_load_train_config_defaults_missing_metadata_special_token_ids(
         json.dumps(
             {
                 "split_paths": ["data/train.pt", "data/val.pt"],
+                "context_length": config_values["context_length"],
+                "max_lookahead": 1,
+                "sample_length": config_values["context_length"] + 1,
+                "sequence_layout_version": 1,
                 "column_types": config_values["column_types"],
                 "n_classes": config_values["n_classes"],
                 "id_maps": config_values["id_maps"],

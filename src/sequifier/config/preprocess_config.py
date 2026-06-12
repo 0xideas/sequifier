@@ -192,6 +192,8 @@ class PreprocessorModel(BaseModel):
     def validate_mask_column_requires_metadata(self) -> "PreprocessorModel":
         if self.mask_column is not None and self.metadata_config_path is None:
             raise ValueError("metadata_config_path must be set when mask_column is set")
+        if self.mask_column in ("sequenceId", "itemPosition"):
+            raise ValueError("mask_column cannot be sequenceId or itemPosition")
         return self
 
     def __init__(self, **kwargs):

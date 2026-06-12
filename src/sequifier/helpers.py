@@ -114,17 +114,10 @@ def validate_stored_window_width(tensor: Tensor, sample_length: int) -> None:
 def sequence_layout_from_metadata(
     metadata: dict, context_length: int
 ) -> SequenceLayout:
-    metadata_context_length = int(metadata.get("context_length", context_length))
-    if metadata_context_length != context_length:
-        raise ValueError(
-            f"Configured context_length={context_length} does not match preprocessed "
-            f"metadata context_length={metadata_context_length}."
-        )
+    metadata_context_length = int(metadata["context_length"])
 
-    max_lookahead = int(metadata.get("max_lookahead", 1))
-    sample_length = int(
-        metadata.get("sample_length", metadata_context_length + max_lookahead)
-    )
+    max_lookahead = int(metadata["max_lookahead"])
+    sample_length = int(metadata["sample_length"])
     if sample_length != metadata_context_length + max_lookahead:
         raise ValueError(
             "Invalid sequence layout metadata: sample_length must equal "

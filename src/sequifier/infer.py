@@ -305,7 +305,7 @@ def calculate_item_positions(
 @beartype
 def _flatten_bert_target_valid_mask(
     config: InfererModel,
-    metadata: Optional[dict[str, Any]],
+    metadata: dict[str, Any],
     prediction_length: int,
 ) -> Optional[np.ndarray]:
     if config.training_objective != "bert" or not metadata:
@@ -768,7 +768,7 @@ def infer_generative(
                 )
 
             probs, preds = get_probs_preds_from_dict(
-                config, inferer, sequences_dict, total_steps, metadata=metadata
+                config, inferer, sequences_dict, metadata, total_steps
             )
 
             prediction_length = inferer.prediction_length  # Get prediction_length
@@ -923,7 +923,7 @@ def get_embeddings_pt(
     config: Any,
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
-    metadata: Optional[dict[str, torch.Tensor]] = None,
+    metadata: dict[str, torch.Tensor],
 ) -> np.ndarray:
     """Generates embeddings from a batch of PyTorch tensor data.
 
@@ -950,9 +950,7 @@ def get_embeddings_pt(
         for key, val in data.items()
         if key in config.input_columns
     }
-    metadata_np = (
-        {key: val.numpy() for key, val in metadata.items()} if metadata else None
-    )
+    metadata_np = {key: val.numpy() for key, val in metadata.items()}
     embeddings = inferer.infer_embedding(X, metadata=metadata_np)
     return embeddings
 
@@ -962,8 +960,8 @@ def get_probs_preds_from_dict(
     config: Any,
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
+    metadata: dict[str, torch.Tensor],
     total_steps: int = 1,
-    metadata: Optional[dict[str, torch.Tensor]] = None,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """Generates predictions from PyTorch tensor data, supporting autoregression.
 
@@ -1006,9 +1004,7 @@ def get_probs_preds_from_dict(
         for key, tensor in data.items()
         if key in config.input_columns
     }
-    metadata_np = (
-        {key: tensor.numpy() for key, tensor in metadata.items()} if metadata else None
-    )
+    metadata_np = {key: tensor.numpy() for key, tensor in metadata.items()}
     all_probs_list = {col: [] for col in target_cols}
     all_preds_list = {col: [] for col in target_cols}
 
@@ -1017,14 +1013,18 @@ def get_probs_preds_from_dict(
     for i in range(total_steps):
         if config.output_probabilities:
             probs_for_step = inferer.infer_generative(
-                X, return_probs=True, metadata=metadata_for_step
+                X,
+                metadata_for_step,
+                return_probs=True,
             )
-            preds_for_step = inferer.infer_generative(None, probs_for_step)
+            preds_for_step = inferer.infer_generative(
+                None, metadata_for_step, probs_for_step
+            )
             for col in target_cols:
                 all_probs_list[col].append(probs_for_step[col])
         else:
             preds_for_step = inferer.infer_generative(
-                X, return_probs=False, metadata=metadata_for_step
+                X, metadata_for_step, return_probs=False
             )
 
         for col in target_cols:
@@ -1106,11 +1106,7 @@ def get_embeddings(
         config.target_offset,
     )
     X = {col: X_col.numpy() for col, X_col in X.items()}
-    metadata_np = (
-        {col: metadata_col.numpy() for col, metadata_col in metadata.items()}
-        if metadata
-        else None
-    )
+    metadata_np = {col: metadata_col.numpy() for col, metadata_col in metadata.items()}
     del data
 
     embeddings = inferer.infer_embedding(X, metadata=metadata_np)
@@ -1159,19 +1155,15 @@ def get_probs_preds_from_df(
         config.target_offset,
     )
     X = {col: X_col.numpy() for col, X_col in X.items()}
-    metadata_np = (
-        {col: metadata_col.numpy() for col, metadata_col in metadata.items()}
-        if metadata
-        else None
-    )
+    metadata_np = {col: metadata_col.numpy() for col, metadata_col in metadata.items()}
     del data
 
     if config.output_probabilities:
-        probs = inferer.infer_generative(X, return_probs=True, metadata=metadata_np)
-        preds = inferer.infer_generative(None, probs)
+        probs = inferer.infer_generative(X, metadata_np, return_probs=True)
+        preds = inferer.infer_generative(None, metadata_np, probs)
     else:
         probs = None
-        preds = inferer.infer_generative(X, metadata=metadata_np)
+        preds = inferer.infer_generative(X, metadata_np)
 
     return (probs, preds)
 
@@ -1294,8 +1286,8 @@ def get_probs_preds_autoregression(
         config,
         inferer,
         head_data,
-        total_steps=config.autoregression_total_steps,
-        metadata=metadata,
+        metadata,
+        config.autoregression_total_steps,
     )
 
     # 4. Generate the final output arrays using the perfectly aligned bases
@@ -1456,7 +1448,7 @@ class Inferer:
     def infer_embedding(
         self,
         x: dict[str, np.ndarray],
-        metadata: Optional[dict[str, np.ndarray]] = None,
+        metadata: dict[str, np.ndarray],
     ) -> np.ndarray:
         """Performs inference with an embedding model.
 
@@ -1473,7 +1465,7 @@ class Inferer:
         """
         assert x is not None
         size = x[list(x.keys())[0]].shape[0]
-        embedding = self.adjust_and_infer_embedding(x, size, metadata=metadata)
+        embedding = self.adjust_and_infer_embedding(x, size, metadata)
 
         return embedding
 
@@ -1481,9 +1473,9 @@ class Inferer:
     def infer_generative(
         self,
         x: Optional[dict[str, np.ndarray]],
+        metadata: dict[str, np.ndarray],
         probs: Optional[dict[str, np.ndarray]] = None,
         return_probs: bool = False,
-        metadata: Optional[dict[str, np.ndarray]] = None,
     ) -> dict[str, np.ndarray]:
         """Performs generative inference, returning probabilities or predictions.
 
@@ -1529,7 +1521,7 @@ class Inferer:
                     f"Not all keys in x are in probs - {x.keys() = } != {probs.keys() = }. Full inference is executed."
                 )
 
-            outs = self.adjust_and_infer_generative(x, size, metadata=metadata)
+            outs = self.adjust_and_infer_generative(x, size, metadata)
 
             for target_column, target_outs in outs.items():
                 if np.any(target_outs == np.inf):
@@ -1571,7 +1563,7 @@ class Inferer:
         self,
         x: dict[str, np.ndarray],
         size: int,
-        metadata: Optional[dict[str, np.ndarray]] = None,
+        metadata: dict[str, np.ndarray],
     ):
         """Handles batching and backend-specific calls for embedding inference.
 
@@ -1590,11 +1582,10 @@ class Inferer:
         if self.inference_model_type == "onnx":
             assert x is not None
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
-            metadata_adjusted = (
-                self.prepare_inference_batches(metadata, pad_to_batch_size=True)
-                if metadata
-                else [None] * len(x_adjusted)
+            metadata_adjusted = self.prepare_inference_batches(
+                metadata, pad_to_batch_size=True
             )
+
             inference_batch_embeddings = [
                 self.infer_pure(x_sub, metadata_sub)[0]
                 for x_sub, metadata_sub in zip(x_adjusted, metadata_adjusted)
@@ -1602,11 +1593,10 @@ class Inferer:
             embeddings = np.concatenate(inference_batch_embeddings, axis=0)[:size]
         elif self.inference_model_type == "pt":
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
-            metadata_adjusted = (
-                self.prepare_inference_batches(metadata, pad_to_batch_size=False)
-                if metadata
-                else None
+            metadata_adjusted = self.prepare_inference_batches(
+                metadata, pad_to_batch_size=False
             )
+
             embeddings = infer_with_embedding_model(
                 self.inference_model,
                 x_adjusted,
@@ -1624,7 +1614,7 @@ class Inferer:
         self,
         x: dict[str, np.ndarray],
         size: int,
-        metadata: Optional[dict[str, np.ndarray]] = None,
+        metadata: dict[str, np.ndarray],
     ):
         """Handles batching and backend-specific calls for generative inference.
 
@@ -1645,10 +1635,8 @@ class Inferer:
         if self.inference_model_type == "onnx":
             assert x is not None
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
-            metadata_adjusted = (
-                self.prepare_inference_batches(metadata, pad_to_batch_size=True)
-                if metadata
-                else [None] * len(x_adjusted)
+            metadata_adjusted = self.prepare_inference_batches(
+                metadata, pad_to_batch_size=True
             )
             out_subs = [
                 dict(zip(self.target_columns, self.infer_pure(x_sub, metadata_sub)))
@@ -1663,10 +1651,8 @@ class Inferer:
         elif self.inference_model_type == "pt":
             assert x is not None
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
-            metadata_adjusted = (
-                self.prepare_inference_batches(metadata, pad_to_batch_size=False)
-                if metadata
-                else None
+            metadata_adjusted = self.prepare_inference_batches(
+                metadata, pad_to_batch_size=False
             )
             outs = infer_with_generative_model(
                 self.inference_model,
@@ -1731,7 +1717,7 @@ class Inferer:
     def infer_pure(
         self,
         x: dict[str, np.ndarray],
-        metadata: Optional[dict[str, np.ndarray]] = None,
+        metadata: dict[str, np.ndarray],
     ) -> list[np.ndarray]:
         """Performs a single inference pass using the ONNX session.
 
@@ -1748,15 +1734,10 @@ class Inferer:
             ONNX model.
         """
         metadata = metadata or {}
-        reference_shape = next(iter(x.values())).shape
         ort_inputs = {}
         for session_input in self.ort_session.get_inputs():
             input_name = session_input.name
-            if input_name == "attention_valid_mask":
-                value = metadata.get(input_name)
-                if value is None:
-                    value = np.ones(reference_shape[:2], dtype=np.bool_)
-            elif input_name in metadata:
+            if input_name in metadata:
                 value = metadata[input_name]
             elif input_name.endswith("_in") and input_name[:-3] in x:
                 feature_column = input_name[:-3]

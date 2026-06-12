@@ -1714,7 +1714,7 @@ class TransformerModel(nn.Module):
         self,
         output: dict[str, Tensor],
         targets: dict[str, Tensor],
-        metadata: Optional[dict[str, Tensor]] = None,
+        metadata: dict[str, Tensor],
     ) -> tuple[Tensor, dict[str, Tensor]]:
         """Calculates the loss for the given output and targets.
 
@@ -1738,9 +1738,9 @@ class TransformerModel(nn.Module):
         if not target_names:
             raise RuntimeError("Loss calculation failed; no target columns were found.")
 
-        valid_mask = metadata["attention_valid_mask"].bool()  # type: ignore
+        valid_mask = metadata["target_valid_mask"].bool()  # type: ignore
 
-        if metadata is not None and "bert_mask" in metadata:
+        if "bert_mask" in metadata:
             valid_mask = valid_mask & metadata["bert_mask"].bool()
 
         mask = valid_mask.T.contiguous().reshape(-1)
@@ -2555,7 +2555,7 @@ def infer_with_embedding_model(
     device: str,
     size: int,
     target_columns: list[str],
-    metadata: Optional[list[dict[str, np.ndarray]]] = None,
+    metadata: list[dict[str, np.ndarray]],
 ) -> np.ndarray:
     """Performs inference with an embedding model.
 
@@ -2615,7 +2615,7 @@ def infer_with_generative_model(
     device: str,
     size: int,
     target_columns: list[str],
-    metadata: Optional[list[dict[str, np.ndarray]]] = None,
+    metadata: list[dict[str, np.ndarray]],
 ) -> dict[str, np.ndarray]:
     """Performs inference with a generative model.
 

@@ -8,6 +8,21 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (
     SequifierDatasetFromFolderPtLazy,
 )
 
+CONTEXT_LENGTH = 5
+MAX_LOOKAHEAD = 1
+SAMPLE_LENGTH = CONTEXT_LENGTH + MAX_LOOKAHEAD
+
+
+def _folder_metadata(total_samples, batch_files):
+    return {
+        "total_samples": total_samples,
+        "batch_files": batch_files,
+        "context_length": CONTEXT_LENGTH,
+        "max_lookahead": MAX_LOOKAHEAD,
+        "sample_length": SAMPLE_LENGTH,
+        "sequence_layout_version": 1,
+    }
+
 
 # --- Fixtures ---
 @pytest.fixture
@@ -19,8 +34,8 @@ def mock_config(tmp_path):
     config.training_spec.sampling_strategy = "exact"
     config.training_spec.num_workers = 0
     config.seed = 42
-    config.context_length = 5
-    config.sample_length = 6
+    config.context_length = CONTEXT_LENGTH
+    config.sample_length = SAMPLE_LENGTH
     config.input_columns = ["col1"]
     config.target_columns = ["col1", "tgt1"]
     config.training_spec.data_offset = 1
@@ -36,15 +51,15 @@ def dataset_path(tmp_path):
 
     # Create dummy metadata.json
     # We define 4 files with 10 samples each = 40 total samples
-    metadata = {
-        "total_samples": 40,
-        "batch_files": [
+    metadata = _folder_metadata(
+        40,
+        [
             {"path": "file1.pt", "samples": 10},
             {"path": "file2.pt", "samples": 10},
             {"path": "file3.pt", "samples": 10},
             {"path": "file4.pt", "samples": 10},
         ],
-    }
+    )
 
     with open(data_dir / "metadata.json", "w") as f:
         json.dump(metadata, f)
@@ -229,15 +244,15 @@ def test_exact_strategy_uneven_files_exception(
 
     # Rank 0 will get file1 (10) + file3 (10) = 20 samples
     # Rank 1 will get file2 (10) + file4 (5) = 15 samples
-    metadata = {
-        "total_samples": 35,
-        "batch_files": [
+    metadata = _folder_metadata(
+        35,
+        [
             {"path": "file1.pt", "samples": 10},
             {"path": "file2.pt", "samples": 10},
             {"path": "file3.pt", "samples": 10},
             {"path": "file4.pt", "samples": 5},
         ],
-    }
+    )
     with open(data_dir / "metadata.json", "w") as f:
         json.dump(metadata, f)
 
@@ -265,14 +280,14 @@ def test_oversampling_strategy(
 
     # Rank 0 gets file1 (10) + file3 (5) = 15 samples
     # Rank 1 gets file2 (10) = 10 samples
-    metadata = {
-        "total_samples": 25,
-        "batch_files": [
+    metadata = _folder_metadata(
+        25,
+        [
             {"path": "file1.pt", "samples": 10},
             {"path": "file2.pt", "samples": 10},
             {"path": "file3.pt", "samples": 5},
         ],
-    }
+    )
     with open(data_dir / "metadata.json", "w") as f:
         json.dump(metadata, f)
 
@@ -311,14 +326,14 @@ def test_undersampling_strategy(
 
     # Rank 0 gets file1 (10) + file3 (5) = 15 samples
     # Rank 1 gets file2 (10) = 10 samples
-    metadata = {
-        "total_samples": 25,
-        "batch_files": [
+    metadata = _folder_metadata(
+        25,
+        [
             {"path": "file1.pt", "samples": 10},
             {"path": "file2.pt", "samples": 10},
             {"path": "file3.pt", "samples": 5},
         ],
-    }
+    )
     with open(data_dir / "metadata.json", "w") as f:
         json.dump(metadata, f)
 

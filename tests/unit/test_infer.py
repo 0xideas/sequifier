@@ -337,13 +337,15 @@ def test_infer_pure_rejects_unknown_onnx_input(mock_inferer):
             return [Input("unexpected_input")]
 
     mock_inferer.ort_session = Session()
+    metadata = {}
 
     with pytest.raises(ValueError, match="Could not map ONNX input"):
         mock_inferer.infer_pure(
             {
                 "cat_col": np.array([[1, 2]], dtype=np.int64),
                 "real_col": np.array([[1.0, 2.0]], dtype=np.float32),
-            }
+            },
+            metadata,
         )
 
 
@@ -451,6 +453,14 @@ def _mock_bert_inferer(config):
         args_config={},
         training_config_path=config.training_config_path,
     )
+
+
+def _dummy_attention_metadata(batch_size, context_length):
+    return {
+        "attention_valid_mask": torch.ones(
+            (batch_size, context_length), dtype=torch.bool
+        )
+    }
 
 
 def test_bert_generative_inference_filters_left_padded_positions(tmp_path):
@@ -641,6 +651,7 @@ def test_get_probs_preds_from_dict_shifting_and_looping(ar_config, ar_inferer):
     and accurately shifts the input tensor to append the latest prediction.
     """
     initial_data = {"target_col": torch.tensor([[1.0, 2.0, 3.0], [10.0, 20.0, 30.0]])}
+    metadata = _dummy_attention_metadata(batch_size=2, context_length=3)
 
     # Patch the method on the actual instance
     with patch.object(ar_inferer, "infer_generative") as mock_infer:
@@ -653,7 +664,7 @@ def test_get_probs_preds_from_dict_shifting_and_looping(ar_config, ar_inferer):
 
         total_steps = 2
         probs, preds = get_probs_preds_from_dict(
-            ar_config, ar_inferer, initial_data, total_steps=total_steps
+            ar_config, ar_inferer, initial_data, metadata, total_steps=total_steps
         )
 
         # 1. Verify Loop Count
@@ -700,12 +711,14 @@ def test_get_probs_preds_from_dict_with_probabilities(
     # What we want our mock sample_with_cumsum to return
     mock_sample.return_value = np.array([1])
 
+    metadata = _dummy_attention_metadata(batch_size=1, context_length=2)
+
     # Mock the *inner* backend call, allowing infer_generative to execute its actual logic
     with patch.object(
         ar_inferer, "adjust_and_infer_generative", return_value=dummy_logits
     ) as mock_adjust:
         probs, preds = get_probs_preds_from_dict(
-            ar_config, ar_inferer, initial_data, total_steps=1
+            ar_config, ar_inferer, initial_data, metadata, total_steps=1
         )
 
         assert mock_adjust.call_count == 1
@@ -735,12 +748,13 @@ def test_get_probs_preds_from_dict_ignores_unselected_columns(ar_config, ar_infe
         "target_col": torch.tensor([[1.0, 2.0]]),
         "ignored_col": torch.tensor([[9.0, 9.0]]),
     }
+    metadata = _dummy_attention_metadata(batch_size=1, context_length=2)
 
     with patch.object(ar_inferer, "infer_generative") as mock_infer:
         mock_infer.return_value = {"target_col": np.array([[3.0]])}
 
         _, _ = get_probs_preds_from_dict(
-            ar_config, ar_inferer, initial_data, total_steps=1
+            ar_config, ar_inferer, initial_data, metadata, total_steps=1
         )
 
         first_call_args = mock_infer.call_args_list[0][0][0]

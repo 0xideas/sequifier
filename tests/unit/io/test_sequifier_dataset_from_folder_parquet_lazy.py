@@ -9,14 +9,29 @@ from sequifier.io.sequifier_dataset_from_folder_parquet_lazy import (
     SequifierDatasetFromFolderParquetLazy,
 )
 
+CONTEXT_LENGTH = 2
+MAX_LOOKAHEAD = 1
+SAMPLE_LENGTH = CONTEXT_LENGTH + MAX_LOOKAHEAD
+
+
+def _folder_metadata(total_samples, batch_files):
+    return {
+        "total_samples": total_samples,
+        "batch_files": batch_files,
+        "context_length": CONTEXT_LENGTH,
+        "max_lookahead": MAX_LOOKAHEAD,
+        "sample_length": SAMPLE_LENGTH,
+        "sequence_layout_version": 1,
+    }
+
 
 @pytest.fixture
 def mock_config():
     config = MagicMock()
     config.project_root = "."
     config.seed = 42
-    config.context_length = 2
-    config.sample_length = 3
+    config.context_length = CONTEXT_LENGTH
+    config.sample_length = SAMPLE_LENGTH
     config.column_types = {"item": "Float64"}
     config.training_spec.batch_size = 5
     config.training_spec.num_workers = 0
@@ -57,7 +72,7 @@ def dataset_path(tmp_path):
         df.write_parquet(data_dir / filename)
         batch_files.append({"path": filename, "samples": 10})
 
-    metadata = {"total_samples": 40, "batch_files": batch_files}
+    metadata = _folder_metadata(40, batch_files)
 
     with open(data_dir / "metadata.json", "w") as f:
         json.dump(metadata, f)
@@ -119,10 +134,7 @@ def test_iteration_attaches_explicit_padding_masks(mock_config, tmp_path):
     )
     with open(data_dir / "metadata.json", "w") as f:
         json.dump(
-            {
-                "total_samples": 5,
-                "batch_files": [{"path": "file.parquet", "samples": 5}],
-            },
+            _folder_metadata(5, [{"path": "file.parquet", "samples": 5}]),
             f,
         )
 
@@ -186,7 +198,7 @@ def test_exact_strategy_uneven_files_exception(mock_config, tmp_path):
         {"path": "file_1.parquet", "samples": 15},
         {"path": "file_2.parquet", "samples": 10},
     ]
-    metadata = {"total_samples": 25, "batch_files": batch_files}
+    metadata = _folder_metadata(25, batch_files)
     with open(data_dir / "metadata.json", "w") as f:
         json.dump(metadata, f)
 
@@ -228,7 +240,7 @@ def test_oversampling_strategy(mock_config, tmp_path):
         {"path": "file_1.parquet", "samples": 15},
         {"path": "file_2.parquet", "samples": 10},
     ]
-    metadata = {"total_samples": 25, "batch_files": batch_files}
+    metadata = _folder_metadata(25, batch_files)
     with open(data_dir / "metadata.json", "w") as f:
         json.dump(metadata, f)
 
@@ -272,7 +284,7 @@ def test_undersampling_strategy(mock_config, tmp_path):
         {"path": "file_1.parquet", "samples": 15},
         {"path": "file_2.parquet", "samples": 10},
     ]
-    metadata = {"total_samples": 25, "batch_files": batch_files}
+    metadata = _folder_metadata(25, batch_files)
     with open(data_dir / "metadata.json", "w") as f:
         json.dump(metadata, f)
 

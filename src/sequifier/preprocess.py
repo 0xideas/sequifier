@@ -236,14 +236,14 @@ class Preprocessor:
                 col_types=col_types,
             )
             data = _apply_mask_column(data, data_columns, col_types, self.mask_column)
-            self._export_metadata(
-                id_maps, n_classes, col_types, selected_columns_statistics
-            )
 
             self._write_or_validate_resume_manifest(
                 selected_columns,
                 write_format,
                 data_columns,
+            )
+            self._export_metadata(
+                id_maps, n_classes, col_types, selected_columns_statistics
             )
 
             schema = self._create_schema(col_types, self.layout.sample_length)
@@ -334,13 +334,13 @@ class Preprocessor:
                 for col in id_maps:
                     col_types[col] = "Int64"
 
-            self._export_metadata(
-                id_maps, n_classes, col_types, selected_columns_statistics
-            )
             self._write_or_validate_resume_manifest(
                 selected_columns,
                 write_format,
                 data_columns,
+            )
+            self._export_metadata(
+                id_maps, n_classes, col_types, selected_columns_statistics
             )
             schema = self._create_schema(col_types, self.layout.sample_length)
 
