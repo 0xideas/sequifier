@@ -167,7 +167,7 @@ def load_hyperparameter_search_config(
             metadata_config = json.loads(f.read())
 
         validate_special_token_ids(
-            metadata_config.get("special_token_ids"),
+            metadata_config["special_token_ids"],
             source=f"metadata config '{metadata_config_path}'",
         )
 

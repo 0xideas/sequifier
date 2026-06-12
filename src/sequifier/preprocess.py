@@ -202,7 +202,7 @@ class Preprocessor:
                     preexisting_metadata = json.load(f)
 
                 validate_special_token_ids(
-                    preexisting_metadata.get("special_token_ids"),
+                    preexisting_metadata["special_token_ids"],
                     source=f"metadata config '{self.metadata_config_path}'",
                 )
                 id_maps = preexisting_metadata["id_maps"]
@@ -302,7 +302,7 @@ class Preprocessor:
                     preexisting_metadata = json.load(f)
 
                 validate_special_token_ids(
-                    preexisting_metadata.get("special_token_ids"),
+                    preexisting_metadata["special_token_ids"],
                     source=f"metadata config '{self.metadata_config_path}'",
                 )
                 id_maps = preexisting_metadata["id_maps"]

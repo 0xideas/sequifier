@@ -62,9 +62,7 @@ def load_train_config(
         ) as f:
             metadata_config = json.loads(f.read())
 
-        sequence_layout = sequence_layout_from_metadata(
-            metadata_config, config_values["context_length"]
-        )
+        sequence_layout = sequence_layout_from_metadata(metadata_config)
         config_values["max_lookahead"] = sequence_layout.max_lookahead
         config_values["sample_length"] = sequence_layout.sample_length
         config_values["sequence_layout_version"] = (
@@ -115,7 +113,7 @@ def load_train_config(
 
         config_values["id_maps"] = metadata_config["id_maps"]
         config_values["special_token_ids"] = validate_special_token_ids(
-            metadata_config.get("special_token_ids"),
+            metadata_config["special_token_ids"],
             source=f"metadata config '{metadata_config_path}'",
         )
 

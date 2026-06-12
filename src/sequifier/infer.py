@@ -69,7 +69,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         ) as f:
             metadata_config = json.loads(f.read())
             validate_special_token_ids(
-                metadata_config.get("special_token_ids"),
+                metadata_config["special_token_ids"],
                 source=f"metadata config '{config.metadata_config_path}'",
             )
             id_maps = metadata_config["id_maps"]

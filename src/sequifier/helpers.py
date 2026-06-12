@@ -42,12 +42,6 @@ PANDAS_TO_TORCH_TYPES = {
     "uint8": torch.int16,
 }
 
-EXPLICIT_PADDING_MASK_FALLBACK_WARNING = (
-    "Explicit padding mask not found. Falling back to value-based padding "
-    "inference for real-valued data; leading 0.0 values may be treated as "
-    "padding. Re-run preprocessing to generate explicit masks."
-)
-
 
 @dataclass(frozen=True)
 class SequenceLayout:
@@ -111,9 +105,7 @@ def validate_stored_window_width(tensor: Tensor, sample_length: int) -> None:
 
 
 @beartype
-def sequence_layout_from_metadata(
-    metadata: dict, context_length: int
-) -> SequenceLayout:
+def sequence_layout_from_metadata(metadata: dict) -> SequenceLayout:
     metadata_context_length = int(metadata["context_length"])
 
     max_lookahead = int(metadata["max_lookahead"])

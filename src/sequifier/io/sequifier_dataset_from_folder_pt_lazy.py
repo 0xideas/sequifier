@@ -63,7 +63,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
-        folder_layout = sequence_layout_from_metadata(metadata, config.context_length)
+        folder_layout = sequence_layout_from_metadata(metadata)
         if folder_layout.sample_length != config.sample_length:
             raise ValueError(
                 f"Preprocessed folder sample_length={folder_layout.sample_length} "

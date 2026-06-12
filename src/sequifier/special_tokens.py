@@ -32,12 +32,12 @@ SPECIAL_TOKEN_ID_VALUES = frozenset(SPECIAL_TOKEN_IDS.labels_by_id.keys())
 
 
 def validate_special_token_ids(
-    special_token_ids: Mapping[str, Any] | None,
+    special_token_ids: Mapping[str, Any],
     source: str = "metadata",
 ) -> dict[str, int]:
     """Validate persisted special token IDs against runtime constants."""
     expected = SPECIAL_TOKEN_IDS.ids_by_label
-    assert special_token_ids is not None
+
     try:
         normalized = {str(label): int(id_) for label, id_ in special_token_ids.items()}
     except (AttributeError, TypeError, ValueError) as exc:
