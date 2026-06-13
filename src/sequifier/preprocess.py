@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import multiprocessing
@@ -32,6 +33,30 @@ from sequifier.special_tokens import (
 INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
 REAL_MASK_VALUE = 0.0
 CURRENT_STORED_WINDOW_LAYOUT_VERSION = 2
+
+
+def _stable_json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _stable_json_value(val)
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_stable_json_value(item) for item in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, float) and math.isnan(value):
+        return "NaN"
+    return value
+
+
+def _stable_json_digest(value: Any) -> str:
+    encoded = json.dumps(
+        _stable_json_value(value),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 @beartype
@@ -123,6 +148,9 @@ class Preprocessor:
         """
         self.project_root = project_root
         self.batches_per_file = batches_per_file
+        self.data_path = data_path
+        self.read_format = read_format
+        self.write_format = write_format
 
         self.data_name_root = os.path.splitext(os.path.basename(data_path))[0]
         self.merge_output = merge_output
@@ -138,6 +166,11 @@ class Preprocessor:
         self.use_precomputed_maps = use_precomputed_maps
         self.metadata_config_path = metadata_config_path
         self.mask_column = mask_column
+        self.split_ratios = split_ratios
+        self.stride_by_split = stride_by_split
+        self.max_rows = max_rows
+        self.process_by_file = process_by_file
+        self.subsequence_start_mode = subsequence_start_mode
         if self.mask_column is not None and self.metadata_config_path is None:
             raise ValueError("metadata_config_path must be set when mask_column is set")
 
@@ -246,6 +279,10 @@ class Preprocessor:
                 selected_columns,
                 write_format,
                 data_columns,
+                id_maps,
+                n_classes,
+                col_types,
+                selected_columns_statistics,
             )
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
@@ -345,6 +382,10 @@ class Preprocessor:
                 selected_columns,
                 write_format,
                 data_columns,
+                id_maps,
+                n_classes,
+                col_types,
+                selected_columns_statistics,
             )
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
@@ -835,12 +876,40 @@ class Preprocessor:
         selected_columns: Optional[list[str]],
         write_format: str,
         data_columns: list[str],
+        id_maps: dict[str, dict[Union[str, int], int]],
+        n_classes: dict[str, int],
+        col_types: dict[str, str],
+        selected_columns_statistics: dict[str, dict[str, float]],
     ) -> None:
+        effective_metadata = {
+            "n_classes": n_classes,
+            "id_maps": id_maps,
+            "column_types": col_types,
+            "selected_columns_statistics": selected_columns_statistics,
+            "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
+        }
         manifest = {
-            **self._layout_metadata(),
-            "selected_columns": selected_columns,
-            "data_columns": data_columns,
-            "write_format": write_format,
+            "manifest_version": 1,
+            "preprocessing_config": {
+                **self._layout_metadata(),
+                "read_format": self.read_format,
+                "write_format": write_format,
+                "merge_output": self.merge_output,
+                "selected_columns": selected_columns,
+                "data_columns": data_columns,
+                "split_ratios": self.split_ratios,
+                "stride_by_split": self.stride_by_split,
+                "max_rows": self.max_rows,
+                "process_by_file": self.process_by_file,
+                "subsequence_start_mode": self.subsequence_start_mode,
+                "mask_column": self.mask_column,
+                "metadata_config_path": self.metadata_config_path,
+                "use_precomputed_maps": self.use_precomputed_maps,
+            },
+            "effective_metadata_digest": {
+                "algorithm": "sha256",
+                "value": _stable_json_digest(effective_metadata),
+            },
         }
         manifest_path = os.path.join(
             self.project_root, "data", self.target_dir, "preprocess-manifest.json"
@@ -853,10 +922,13 @@ class Preprocessor:
                 )
             with open(manifest_path, "r") as f:
                 previous_manifest = json.load(f)
-            if previous_manifest != manifest:
+            if _stable_json_value(previous_manifest) != _stable_json_value(manifest):
                 raise ValueError(
-                    "Cannot continue preprocessing with different sequence layout, "
-                    "selected columns, or write format."
+                    "Cannot continue preprocessing with a different preprocessing "
+                    "manifest. Check sequence layout, input path, selected/data "
+                    "columns, output format, mask/metadata settings, split/stride "
+                    "settings, max_rows, process_by_file, subsequence_start_mode, "
+                    "or metadata/maps/statistics."
                 )
             return
 

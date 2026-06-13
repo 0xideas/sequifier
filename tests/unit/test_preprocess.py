@@ -292,6 +292,117 @@ def test_preprocessor_applies_mask_column_end_to_end(tmp_path):
     }
 
 
+def test_preprocessor_writes_expanded_resume_manifest(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    data_path = tmp_path / "manifest-input.csv"
+    pl.DataFrame(
+        {
+            "sequenceId": [0, 0, 0],
+            "itemPosition": [0, 1, 2],
+            "itemId": ["a", "b", "c"],
+        }
+    ).write_csv(data_path)
+
+    Preprocessor(
+        project_root=str(project_root),
+        continue_preprocessing=False,
+        data_path=str(data_path),
+        read_format="csv",
+        write_format="parquet",
+        merge_output=False,
+        selected_columns=["itemId"],
+        split_ratios=[1.0],
+        stored_context_width=3,
+        max_target_offset=1,
+        stride_by_split=[2],
+        max_rows=2,
+        seed=1010,
+        n_cores=1,
+        batches_per_file=1024,
+        process_by_file=True,
+        subsequence_start_mode="exact",
+        use_precomputed_maps=None,
+        metadata_config_path=None,
+        mask_column=None,
+    )
+
+    manifest_path = (
+        project_root / "data" / "manifest-input-temp" / "preprocess-manifest.json"
+    )
+    manifest = json.loads(manifest_path.read_text())
+    config = manifest["preprocessing_config"]
+
+    assert manifest["manifest_version"] == 1
+    assert config["read_format"] == "csv"
+    assert config["write_format"] == "parquet"
+    assert config["merge_output"] is False
+    assert config["selected_columns"] == ["sequenceId", "itemPosition", "itemId"]
+    assert config["data_columns"] == ["itemId"]
+    assert config["split_ratios"] == [1.0]
+    assert config["stride_by_split"] == [2]
+    assert config["max_rows"] == 2
+    assert config["process_by_file"] is True
+    assert config["subsequence_start_mode"] == "exact"
+    assert config["mask_column"] is None
+    assert config["metadata_config_path"] is None
+    assert config["use_precomputed_maps"] is None
+    assert manifest["effective_metadata_digest"]["algorithm"] == "sha256"
+    assert len(manifest["effective_metadata_digest"]["value"]) == 64
+
+
+def test_resume_manifest_rejects_changed_preprocessing_config(tmp_path):
+    project_root = tmp_path / "project"
+    manifest_dir = project_root / "data" / "input-temp"
+    manifest_dir.mkdir(parents=True)
+
+    preprocessor = object.__new__(Preprocessor)
+    preprocessor.project_root = str(project_root)
+    preprocessor.target_dir = "input-temp"
+    preprocessor.continue_preprocessing = False
+    preprocessor.storage_layout = StoredWindowLayout(
+        stored_context_width=3,
+        max_target_offset=1,
+        version=2,
+    )
+    preprocessor.data_path = "data/input.csv"
+    preprocessor.data_name_root = "input"
+    preprocessor.read_format = "csv"
+    preprocessor.merge_output = False
+    preprocessor.split_ratios = [1.0]
+    preprocessor.stride_by_split = [1]
+    preprocessor.max_rows = None
+    preprocessor.process_by_file = True
+    preprocessor.subsequence_start_mode = "distribute"
+    preprocessor.mask_column = None
+    preprocessor.metadata_config_path = None
+    preprocessor.use_precomputed_maps = None
+
+    preprocessor._write_or_validate_resume_manifest(
+        selected_columns=None,
+        write_format="parquet",
+        data_columns=["itemId"],
+        id_maps={"itemId": {"a": 3}},
+        n_classes={"itemId": 4},
+        col_types={"itemId": "Int64"},
+        selected_columns_statistics={},
+    )
+
+    preprocessor.continue_preprocessing = True
+    preprocessor.stride_by_split = [2]
+
+    with pytest.raises(ValueError, match="different preprocessing manifest"):
+        preprocessor._write_or_validate_resume_manifest(
+            selected_columns=None,
+            write_format="parquet",
+            data_columns=["itemId"],
+            id_maps={"itemId": {"a": 3}},
+            n_classes={"itemId": 4},
+            col_types={"itemId": "Int64"},
+            selected_columns_statistics={},
+        )
+
+
 def test_load_and_preprocess_data_requests_mask_column_for_csv_projection(tmp_path):
     data_path = tmp_path / "masked-input.csv"
     captured_columns = None
