@@ -15,6 +15,7 @@ from sequifier.config.train_config import (
     TrainModel,
     load_train_config,
 )
+from sequifier.helpers import SequenceLayout
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.train import TransformerModel
 
@@ -31,7 +32,6 @@ def _training_spec_kwargs(**overrides):
         "optimizer": {"name": "Adam"},
         "scheduler": {"name": "StepLR", "step_size": 1, "gamma": 0.1},
         "loss_weights": {"cat_col": 1.0, "real_col": 1.0},
-        "sample_length": 11,
     }
     values.update(overrides)
     return values
@@ -77,7 +77,8 @@ def test_training_spec_model_dump_excludes_runtime_offsets():
 
     assert "data_offset" not in dumped
     assert "target_offset" not in dumped
-    assert TrainingSpecModel(**dumped).target_offset == 0
+    assert "sample_length" not in dumped
+    assert "max_lookahead" not in dumped
 
 
 def test_poisson_span_masking_samples_at_least_one_token():
@@ -118,7 +119,6 @@ def model_config(tmp_path):
         optimizer={"name": "Adam"},
         scheduler={"name": "StepLR", "step_size": 1, "gamma": 0.1},
         loss_weights={"cat_col": 1.0, "real_col": 1.0},
-        sample_length=11,
     )
 
     config = TrainModel(
@@ -136,9 +136,9 @@ def model_config(tmp_path):
         # id_maps is needed for constructing index_maps in model init
         id_maps={"cat_col": {"a": 1, "b": 2, "c": 3, "d": 4}},
         n_classes={"cat_col": 5},  # 0 + 4 classes
-        context_length=10,
-        sample_length=11,
-        sequence_layout_version=2,
+        layout=SequenceLayout(
+            context_length=10, max_lookahead=1, sequence_layout_version=2
+        ),
         inference_batch_size=4,
         seed=42,
         export_generative_model=True,
@@ -165,7 +165,9 @@ def causal_model(model_config):
 @pytest.fixture
 def bert_model(model_config):
     config_values = model_config.model_dump()
-    config_values["model_spec"]["prediction_length"] = model_config.context_length
+    config_values["model_spec"]["prediction_length"] = (
+        model_config.layout.context_length
+    )
     config_values["training_spec"] = _training_spec_kwargs(
         training_objective="bert",
         bert_spec=_bert_spec(),
@@ -218,7 +220,9 @@ def test_train_model_requires_bert_prediction_length_to_equal_context_length(
     model_config,
 ):
     config_values = model_config.model_dump()
-    config_values["model_spec"]["prediction_length"] = model_config.context_length - 1
+    config_values["model_spec"]["prediction_length"] = (
+        model_config.layout.context_length - 1
+    )
     config_values["training_spec"] = _training_spec_kwargs(
         training_objective="bert",
         bert_spec=_bert_spec(),
@@ -248,15 +252,16 @@ def test_load_train_config_rejects_mismatched_metadata_special_token_ids(
     config_values = model_config.model_dump()
     config_values["project_root"] = str(tmp_path)
     config_values["metadata_config_path"] = metadata_path.name
+    layout = config_values["layout"]
     config_path.write_text(yaml.safe_dump(config_values))
     metadata_path.write_text(
         json.dumps(
             {
                 "split_paths": ["data/train.pt", "data/val.pt"],
-                "context_length": config_values["context_length"],
-                "max_lookahead": 1,
-                "sample_length": config_values["context_length"] + 1,
-                "sequence_layout_version": 2,
+                "context_length": layout["context_length"],
+                "max_lookahead": layout["max_lookahead"],
+                "sample_length": layout["context_length"] + layout["max_lookahead"],
+                "sequence_layout_version": layout["sequence_layout_version"],
                 "column_types": config_values["column_types"],
                 "n_classes": config_values["n_classes"],
                 "id_maps": config_values["id_maps"],
@@ -281,15 +286,16 @@ def test_load_train_config_defaults_missing_metadata_special_token_ids(
     config_values = model_config.model_dump()
     config_values["project_root"] = str(tmp_path)
     config_values["metadata_config_path"] = metadata_path.name
+    layout = config_values["layout"]
     config_path.write_text(yaml.safe_dump(config_values))
     metadata_path.write_text(
         json.dumps(
             {
                 "split_paths": ["data/train.pt", "data/val.pt"],
-                "context_length": config_values["context_length"],
-                "max_lookahead": 1,
-                "sample_length": config_values["context_length"] + 1,
-                "sequence_layout_version": 2,
+                "context_length": layout["context_length"],
+                "max_lookahead": layout["max_lookahead"],
+                "sample_length": layout["context_length"] + layout["max_lookahead"],
+                "sequence_layout_version": layout["sequence_layout_version"],
                 "column_types": config_values["column_types"],
                 "n_classes": config_values["n_classes"],
                 "id_maps": config_values["id_maps"],
@@ -306,7 +312,7 @@ def test_load_train_config_defaults_missing_metadata_special_token_ids(
 def test_forward_train_shapes(model, model_config):
     """Tests the output shapes of the forward_train method."""
     batch_size = model_config.training_spec.batch_size
-    seq_len = model_config.context_length
+    seq_len = model_config.layout.context_length
 
     # Create dummy inputs
     # Categorical: (batch, seq_len) integers
@@ -337,7 +343,7 @@ def test_forward_train_shapes(model, model_config):
 def test_forward_inference_shapes(model, model_config):
     """Tests the output shapes of the forward (inference) method."""
     batch_size = model_config.training_spec.batch_size
-    seq_len = model_config.context_length
+    seq_len = model_config.layout.context_length
     prediction_length = model_config.model_spec.prediction_length  # 1
 
     x_cat = torch.randint(0, model_config.n_classes["cat_col"], (batch_size, seq_len))
@@ -370,7 +376,7 @@ def test_forward_inference_shapes(model, model_config):
 def test_calculate_loss(model, model_config):
     """Tests that loss calculation returns a scalar tensor."""
     batch_size = model_config.training_spec.batch_size
-    seq_len = model_config.context_length
+    seq_len = model_config.layout.context_length
 
     # Inputs
     x_cat = torch.randint(0, model_config.n_classes["cat_col"], (batch_size, seq_len))
@@ -459,7 +465,7 @@ def test_calculate_loss_uses_target_columns_for_fallback_mask_inference():
 
 
 def test_padding_keys_are_masked(bert_model):
-    seq_len = bert_model.context_length
+    seq_len = bert_model.layout.context_length
 
     valid_mask = torch.ones(
         2,
@@ -488,7 +494,7 @@ def test_padding_keys_are_masked(bert_model):
 
 
 def test_causal_and_padding_masks_are_combined(causal_model):
-    seq_len = causal_model.context_length
+    seq_len = causal_model.layout.context_length
 
     valid_mask = torch.ones(
         1,

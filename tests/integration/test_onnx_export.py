@@ -4,6 +4,7 @@ import numpy as np
 import onnxruntime
 
 from sequifier.config.train_config import ModelSpecModel, TrainingSpecModel, TrainModel
+from sequifier.helpers import SequenceLayout
 from sequifier.train import TransformerModel
 
 
@@ -27,9 +28,11 @@ def test_bert_onnx_export_accepts_attention_valid_mask(tmp_path):
         real_columns=["real_col"],
         id_maps={"cat_col": {"a": 3, "b": 4, "c": 5}},
         n_classes={"cat_col": 6},
-        context_length=context_length,
-        sample_length=5,
-        sequence_layout_version=2,
+        layout=SequenceLayout(
+            context_length=context_length,
+            max_lookahead=1,
+            sequence_layout_version=2,
+        ),
         inference_batch_size=inference_batch_size,
         seed=42,
         export_generative_model=True,
@@ -73,7 +76,6 @@ def test_bert_onnx_export_accepts_attention_valid_mask(tmp_path):
             loss_weights={"cat_col": 1.0, "real_col": 1.0},
             torch_compile="none",
             layer_autocast=False,
-            sample_length=5,
         ),
     )
     model = TransformerModel(config)
@@ -128,9 +130,11 @@ def test_onnx_export_preserves_feature_name_order(tmp_path):
             "cat10": {"x": 3, "y": 4, "z": 5},
         },
         n_classes={"cat2": 7, "cat10": 6},
-        context_length=context_length,
-        sample_length=5,
-        sequence_layout_version=2,
+        layout=SequenceLayout(
+            context_length=context_length,
+            max_lookahead=1,
+            sequence_layout_version=2,
+        ),
         inference_batch_size=inference_batch_size,
         seed=42,
         export_generative_model=True,
@@ -165,7 +169,6 @@ def test_onnx_export_preserves_feature_name_order(tmp_path):
             loss_weights={"cat2": 1.0},
             torch_compile="none",
             layer_autocast=False,
-            sample_length=5,
         ),
     )
     model = TransformerModel(config)

@@ -48,10 +48,10 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             metadata = json.load(f)
 
         folder_layout = sequence_layout_from_metadata(metadata)
-        if folder_layout.sample_length != config.sample_length:
+        if folder_layout.sample_length != config.layout.sample_length:
             raise ValueError(
                 f"Preprocessed folder sample_length={folder_layout.sample_length} "
-                f"does not match config sample_length={config.sample_length}."
+                f"does not match config sample_length={config.layout.sample_length}."
             )
 
         self.n_samples = metadata["total_samples"]
@@ -78,7 +78,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             for col in all_sequences.keys():
                 if col in sequences_batch:
                     validate_stored_window_width(
-                        sequences_batch[col], config.sample_length
+                        sequences_batch[col], config.layout.sample_length
                     )
                     all_sequences[col].append(sequences_batch[col])
             all_left_pad_lengths.append(left_pad_lengths_batch)
@@ -169,12 +169,14 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         indices_for_worker = indices_for_rank[worker_id::num_workers]
 
         # 5. Yield full batches
-        train_seq_len = self.config.context_length
+        train_seq_len = self.config.layout.context_length
         for i in range(0, len(indices_for_worker), self.batch_size):
             batch_indices = indices_for_worker[i : i + self.batch_size]
 
-            data_offset = self.config.training_spec.data_offset
-            target_offset = self.config.training_spec.target_offset
+            data_offset = self.config.layout.input_offset
+            target_offset = self.config.layout.get_target_offset(
+                self.config.training_spec.training_objective
+            )
             data_batch = {
                 key: slice_window(tensor[batch_indices], train_seq_len, data_offset)
                 for key, tensor in self.sequences.items()
@@ -191,7 +193,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                 metadata_batch = generate_padding_masks(
                     self.left_pad_lengths[batch_indices],
                     train_seq_len,
-                    self.config.sample_length,
+                    self.config.layout.sample_length,
                     data_offset,
                     target_offset,
                 )

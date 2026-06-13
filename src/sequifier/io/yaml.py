@@ -8,6 +8,7 @@ from sequifier.config.train_config import (
     TrainingSpecModel,
     TrainModel,
 )
+from sequifier.helpers import SequenceLayout
 
 
 def represent_sequifier_object(dumper, data):
@@ -78,6 +79,7 @@ class TrainModelDumper(yaml.Dumper):
 TrainModelDumper.add_representer(TrainModel, represent_sequifier_object)
 TrainModelDumper.add_representer(ModelSpecModel, represent_sequifier_object)
 TrainModelDumper.add_representer(TrainingSpecModel, represent_sequifier_object)
+TrainModelDumper.add_representer(SequenceLayout, represent_sequifier_object)
 TrainModelDumper.add_multi_representer(BaseModel, represent_sequifier_object)
 TrainModelDumper.add_representer(DotDict, represent_dot_dict)
 TrainModelDumper.add_representer(numpy.float64, represent_numpy_float)

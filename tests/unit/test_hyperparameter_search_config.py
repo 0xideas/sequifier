@@ -63,7 +63,7 @@ def bert_spec_sampling_config():
 
 
 def sample_training_spec(sampling, trial):
-    return sampling.sample_trial(trial, max_lookahead=1, sample_length=9)
+    return sampling.sample_trial(trial)
 
 
 def test_training_objective_defaults_to_causal_without_bert_spec():
@@ -74,7 +74,6 @@ def test_training_objective_defaults_to_causal_without_bert_spec():
 
     assert training_spec.training_objective == "causal"
     assert training_spec.bert_spec is None
-    assert training_spec.sample_length == 9
     assert trial.params["training_objective"] == "causal"
 
 

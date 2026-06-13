@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
+from sequifier.helpers import SequenceLayout
 from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (
     SequifierDatasetFromFolderPtLazy,
 )
@@ -34,12 +35,14 @@ def mock_config(tmp_path):
     config.training_spec.sampling_strategy = "exact"
     config.training_spec.num_workers = 0
     config.seed = 42
-    config.context_length = CONTEXT_LENGTH
-    config.sample_length = SAMPLE_LENGTH
+    config.layout = SequenceLayout(
+        context_length=CONTEXT_LENGTH,
+        max_lookahead=MAX_LOOKAHEAD,
+        sequence_layout_version=2,
+    )
     config.input_columns = ["col1"]
     config.target_columns = ["col1", "tgt1"]
-    config.training_spec.data_offset = 1
-    config.training_spec.target_offset = 0
+    config.training_spec.training_objective = "causal"
     return config
 
 

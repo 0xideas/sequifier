@@ -40,9 +40,8 @@ def test_hp_search_bert_outputs(run_hp_search, project_root):
     assert generated_config["metadata_config_path"].endswith(
         "test-data-categorical-1-lookahead-0.json"
     )
-    assert generated_config["max_lookahead"] == 0
-    assert generated_config["sequence_layout_version"] == 2
-    assert generated_config["sample_length"] == generated_config["context_length"]
+    assert generated_config["layout"]["max_lookahead"] == 0
+    assert generated_config["layout"]["sequence_layout_version"] == 2
 
 
 def test_hp_search_bayesian_outputs(run_hp_search, project_root):

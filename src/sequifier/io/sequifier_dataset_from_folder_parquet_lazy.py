@@ -66,10 +66,10 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             metadata = json.load(f)
 
         folder_layout = sequence_layout_from_metadata(metadata)
-        if folder_layout.sample_length != config.sample_length:
+        if folder_layout.sample_length != config.layout.sample_length:
             raise ValueError(
                 f"Preprocessed folder sample_length={folder_layout.sample_length} "
-                f"does not match config sample_length={config.sample_length}."
+                f"does not match config sample_length={config.layout.sample_length}."
             )
 
         self.batch_files_info = metadata["batch_files"]
@@ -219,14 +219,17 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
 
         # 5. Stream data using precise global boundaries and a CROSS-FILE BUFFER
         yielded_samples = 0
-        train_seq_len = self.config.context_length
+        train_seq_len = self.config.layout.context_length
         global_file_start_sample = 0
 
         input_seq_cols = sequence_column_names(
-            train_seq_len, self.config.training_spec.data_offset
+            train_seq_len, self.config.layout.input_offset
         )
         target_seq_cols = sequence_column_names(
-            train_seq_len, self.config.training_spec.target_offset
+            train_seq_len,
+            self.config.layout.get_target_offset(
+                self.config.training_spec.training_objective
+            ),
         )
 
         # Initialize cross-file buffers
@@ -313,9 +316,11 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             new_meta = generate_padding_masks(
                 left_pad_lengths[worker_indices],
                 train_seq_len,
-                self.config.sample_length,
-                self.config.training_spec.data_offset,
-                self.config.training_spec.target_offset,
+                self.config.layout.sample_length,
+                self.config.layout.input_offset,
+                self.config.layout.get_target_offset(
+                    self.config.training_spec.training_objective
+                ),
             )
 
             del df

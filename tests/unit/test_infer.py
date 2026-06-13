@@ -8,6 +8,7 @@ import torch
 import yaml
 
 from sequifier.config.infer_config import InfererModel, load_inferer_config
+from sequifier.helpers import SequenceLayout
 from sequifier.infer import (
     Inferer,
     calculate_item_positions,
@@ -173,16 +174,16 @@ def test_infer_config_defaults_bert_prediction_length_to_context_length():
         seed=42,
         device="cpu",
         prediction_length=None,
-        context_length=3,
-        sample_length=4,
-        sequence_layout_version=2,
+        layout=SequenceLayout(
+            context_length=3, max_lookahead=1, sequence_layout_version=2
+        ),
         inference_batch_size=2,
         output_probabilities=False,
         map_to_id=False,
         autoregression=False,
     )
 
-    assert config.prediction_length == config.context_length
+    assert config.prediction_length == config.layout.context_length
 
 
 def test_infer_config_defaults_causal_prediction_length_to_one():
@@ -202,9 +203,9 @@ def test_infer_config_defaults_causal_prediction_length_to_one():
         seed=42,
         device="cpu",
         prediction_length=None,
-        context_length=3,
-        sample_length=4,
-        sequence_layout_version=2,
+        layout=SequenceLayout(
+            context_length=3, max_lookahead=1, sequence_layout_version=2
+        ),
         inference_batch_size=2,
         output_probabilities=False,
         map_to_id=False,
@@ -232,9 +233,9 @@ def test_infer_config_rejects_bert_prediction_length_mismatch():
             seed=42,
             device="cpu",
             prediction_length=1,
-            context_length=3,
-            sample_length=4,
-            sequence_layout_version=2,
+            layout=SequenceLayout(
+                context_length=3, max_lookahead=1, sequence_layout_version=2
+            ),
             inference_batch_size=2,
             output_probabilities=False,
             map_to_id=False,
@@ -398,9 +399,9 @@ def _bert_inference_config(tmp_path, model_type="generative"):
         seed=42,
         device="cpu",
         prediction_length=None,
-        context_length=3,
-        sample_length=4,
-        sequence_layout_version=2,
+        layout=SequenceLayout(
+            context_length=3, max_lookahead=1, sequence_layout_version=2
+        ),
         inference_batch_size=4,
         output_probabilities=False,
         map_to_id=True,
@@ -615,9 +616,9 @@ def ar_config():
         seed=42,
         device="cpu",
         prediction_length=1,
-        context_length=3,
-        sample_length=4,
-        sequence_layout_version=2,
+        layout=SequenceLayout(
+            context_length=3, max_lookahead=1, sequence_layout_version=2
+        ),
         inference_batch_size=2,
         output_probabilities=False,
         map_to_id=False,  # Set to False to bypass ID mapping requirements

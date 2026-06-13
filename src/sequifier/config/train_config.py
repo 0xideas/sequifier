@@ -23,6 +23,7 @@ from pydantic import (
 import sequifier
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.helpers import (
+    SequenceLayout,
     normalize_path,
     sequence_layout_from_metadata,
     try_catch_excess_keys,
@@ -68,14 +69,16 @@ def load_train_config(
                 "Training requires metadata sequence_layout_version=2, "
                 f"got {sequence_layout.sequence_layout_version}."
             )
-        config_values["max_lookahead"] = sequence_layout.max_lookahead
-        config_values["sample_length"] = sequence_layout.sample_length
-        config_values["sequence_layout_version"] = (
-            sequence_layout.sequence_layout_version
-        )
-        config_values.setdefault("training_spec", {})
-        config_values["training_spec"]["max_lookahead"] = sequence_layout.max_lookahead
-        config_values["training_spec"]["sample_length"] = sequence_layout.sample_length
+        config_values["layout"] = sequence_layout
+        for key in (
+            "context_length",
+            "max_lookahead",
+            "sample_length",
+            "sequence_layout_version",
+        ):
+            config_values.pop(key, None)
+        for key in ("max_lookahead", "sample_length"):
+            config_values.get("training_spec", {}).pop(key, None)
 
         split_paths = metadata_config["split_paths"]
 
@@ -246,8 +249,6 @@ class TrainingSpecModel(BaseModel):
     fsdp_cpu_offload: Optional[bool] = None
     torch_compile: str = "outer"
     float32_matmul_precision: str = "highest"
-    max_lookahead: int = Field(default=1, ge=0)
-    sample_length: int
 
     def __init__(self, **kwargs):
         super().__init__(
@@ -262,16 +263,6 @@ class TrainingSpecModel(BaseModel):
     @field_serializer("optimizer", "scheduler")
     def serialize_dotdict(self, value: DotDict) -> dict[str, Any]:
         return dict(value)
-
-    @property
-    def data_offset(self) -> int:
-        return self.max_lookahead
-
-    @property
-    def target_offset(self) -> int:
-        if self.training_objective == "bert":
-            return self.max_lookahead
-        return self.max_lookahead - 1
 
     @field_validator("layer_type_dtypes")
     @classmethod
@@ -380,14 +371,6 @@ class TrainingSpecModel(BaseModel):
         if self.bert_spec is None and self.training_objective == "bert":
             raise ValueError(
                 "If the training_objective is 'bert', the BERT hyperparameters must be set"
-            )
-        return self
-
-    @model_validator(mode="after")
-    def validate_sequence_layout(self):
-        if self.training_objective == "causal" and self.max_lookahead < 1:
-            raise ValueError(
-                "Causal training requires data preprocessed with max_lookahead >= 1"
             )
         return self
 
@@ -593,10 +576,7 @@ class TrainModel(BaseModel):
         default_factory=lambda: SPECIAL_TOKEN_IDS.ids_by_label
     )
 
-    context_length: int
-    max_lookahead: int = Field(default=1, ge=0)
-    sample_length: int
-    sequence_layout_version: int
+    layout: SequenceLayout
     n_classes: dict[str, int]
     inference_batch_size: int
     seed: int
@@ -617,20 +597,14 @@ class TrainModel(BaseModel):
 
     @model_validator(mode="after")
     def validate_bert_prediction_length_matches_context_length(self):
-        if self.sample_length != self.context_length + self.max_lookahead:
-            raise ValueError(
-                "sample_length must equal context_length + max_lookahead "
-                f"({self.sample_length} != {self.context_length} + {self.max_lookahead})."
-            )
-        self.training_spec.max_lookahead = self.max_lookahead
-        self.training_spec.sample_length = self.sample_length
+        self.layout.get_target_offset(self.training_spec.training_objective)
         if (
             self.training_spec.training_objective == "bert"
-            and self.model_spec.prediction_length != self.context_length
+            and self.model_spec.prediction_length != self.layout.context_length
         ):
             raise ValueError(
                 "For BERT training, model_spec.prediction_length must be equal to context_length "
-                f"(got prediction_length={self.model_spec.prediction_length}, context_length={self.context_length})."
+                f"(got prediction_length={self.model_spec.prediction_length}, context_length={self.layout.context_length})."
             )
         return self
 

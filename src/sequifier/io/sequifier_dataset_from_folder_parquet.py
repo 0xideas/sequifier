@@ -50,10 +50,10 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
             metadata = json.load(f)
 
         folder_layout = sequence_layout_from_metadata(metadata)
-        if folder_layout.sample_length != config.sample_length:
+        if folder_layout.sample_length != config.layout.sample_length:
             raise ValueError(
                 f"Preprocessed folder sample_length={folder_layout.sample_length} "
-                f"does not match config sample_length={config.sample_length}."
+                f"does not match config sample_length={config.layout.sample_length}."
             )
 
         self.n_samples = metadata["total_samples"]
@@ -68,12 +68,15 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         }
 
         # Sequence formatting structures matching long-format schema boundaries
-        train_seq_len = self.config.context_length
+        train_seq_len = self.config.layout.context_length
         input_seq_cols = sequence_column_names(
-            train_seq_len, self.config.training_spec.data_offset
+            train_seq_len, self.config.layout.input_offset
         )
         target_seq_cols = sequence_column_names(
-            train_seq_len, self.config.training_spec.target_offset
+            train_seq_len,
+            self.config.layout.get_target_offset(
+                self.config.training_spec.training_objective
+            ),
         )
         all_sequences: Dict[str, list[torch.Tensor]] = {
             col: [] for col in config.input_columns
@@ -208,7 +211,7 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         indices_for_worker = indices_for_rank[worker_id::num_workers]
 
         # 5. Extract and pass unified data frames
-        train_seq_len = self.config.context_length
+        train_seq_len = self.config.layout.context_length
         for i in range(0, len(indices_for_worker), self.batch_size):
             batch_indices = indices_for_worker[i : i + self.batch_size]
 
@@ -226,9 +229,11 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
                 metadata_batch = generate_padding_masks(
                     self.left_pad_lengths[batch_indices],
                     train_seq_len,
-                    self.config.sample_length,
-                    self.config.training_spec.data_offset,
-                    self.config.training_spec.target_offset,
+                    self.config.layout.sample_length,
+                    self.config.layout.input_offset,
+                    self.config.layout.get_target_offset(
+                        self.config.training_spec.training_objective
+                    ),
                 )
 
             yield SequifierBatch(

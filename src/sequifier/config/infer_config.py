@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from sequifier.helpers import (
+    SequenceLayout,
     normalize_path,
     sequence_layout_from_metadata,
     try_catch_excess_keys,
@@ -61,11 +62,14 @@ def load_inferer_config(
                 "Inference requires metadata sequence_layout_version=2, "
                 f"got {sequence_layout.sequence_layout_version}."
             )
-        config_values["max_lookahead"] = sequence_layout.max_lookahead
-        config_values["sample_length"] = sequence_layout.sample_length
-        config_values["sequence_layout_version"] = (
-            sequence_layout.sequence_layout_version
-        )
+        config_values["layout"] = sequence_layout
+        for key in (
+            "context_length",
+            "max_lookahead",
+            "sample_length",
+            "sequence_layout_version",
+        ):
+            config_values.pop(key, None)
 
         config_values["column_types"] = config_values.get(
             "column_types", metadata_config["column_types"]
@@ -157,10 +161,7 @@ class InfererModel(BaseModel):
     map_to_id: bool = Field(default=True)
     seed: int
     device: str
-    context_length: int
-    max_lookahead: int = Field(default=1, ge=0)
-    sample_length: int
-    sequence_layout_version: int
+    layout: SequenceLayout
     prediction_length: Optional[int] = None
     inference_batch_size: int
 
@@ -171,36 +172,19 @@ class InfererModel(BaseModel):
 
     @model_validator(mode="after")
     def normalize_prediction_length(self):
-        if self.sample_length != self.context_length + self.max_lookahead:
-            raise ValueError(
-                "sample_length must equal context_length + max_lookahead "
-                f"({self.sample_length} != {self.context_length} + {self.max_lookahead})."
-            )
         if self.prediction_length is None:
             self.prediction_length = (
-                self.context_length if self.training_objective == "bert" else 1
+                self.layout.context_length if self.training_objective == "bert" else 1
             )
         if self.training_objective == "bert":
-            if self.prediction_length != self.context_length:
+            if self.prediction_length != self.layout.context_length:
                 raise ValueError(
                     "For BERT inference, prediction_length must be equal to context_length "
-                    f"(got prediction_length={self.prediction_length}, context_length={self.context_length})."
+                    f"(got prediction_length={self.prediction_length}, context_length={self.layout.context_length})."
                 )
-        elif self.max_lookahead < 1:
-            raise ValueError(
-                "Causal inference requires data preprocessed with max_lookahead >= 1"
-            )
+        else:
+            self.layout.get_target_offset(self.training_objective)
         return self
-
-    @property
-    def data_offset(self) -> int:
-        return self.max_lookahead
-
-    @property
-    def target_offset(self) -> int:
-        if self.training_objective == "bert":
-            return self.max_lookahead
-        return self.max_lookahead - 1
 
     @field_validator("training_objective")
     @classmethod

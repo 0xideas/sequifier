@@ -18,6 +18,7 @@ from sequifier.config.train_config import (
     TrainModel,
 )
 from sequifier.helpers import (
+    SequenceLayout,
     normalize_path,
     sequence_layout_from_metadata,
     try_catch_excess_keys,
@@ -433,9 +434,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
                     )
         return v
 
-    def sample_trial(
-        self, trial: Any, max_lookahead: int, sample_length: int
-    ) -> TrainingSpecModel:
+    def sample_trial(self, trial: Any) -> TrainingSpecModel:
         """Samples training hyperparameters using an Optuna trial.
 
         This method leverages the provided Optuna trial to suggest values for
@@ -518,8 +517,6 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             fsdp_cpu_offload=self.fsdp_cpu_offload,
             torch_compile=self.torch_compile,
             float32_matmul_precision=self.float32_matmul_precision,
-            max_lookahead=max_lookahead,
-            sample_length=sample_length,
         )
 
 
@@ -859,12 +856,12 @@ class HyperparameterSearchConfig(BaseModel):
         context_length = trial.suggest_categorical(
             "context_length", self.context_length
         )
-        sample_length = context_length + self.max_lookahead
-        training_spec = self.training_hyperparameter_sampling.sample_trial(
-            trial,
+        layout = SequenceLayout(
+            context_length=context_length,
             max_lookahead=self.max_lookahead,
-            sample_length=sample_length,
+            sequence_layout_version=self.sequence_layout_version,
         )
+        training_spec = self.training_hyperparameter_sampling.sample_trial(trial)
 
         logger.info(f"{input_columns_index = } - {context_length = }")
 
@@ -882,10 +879,7 @@ class HyperparameterSearchConfig(BaseModel):
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
-            context_length=context_length,
-            max_lookahead=self.max_lookahead,
-            sample_length=sample_length,
-            sequence_layout_version=self.sequence_layout_version,
+            layout=layout,
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=101,

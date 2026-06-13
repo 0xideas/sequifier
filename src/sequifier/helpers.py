@@ -63,13 +63,18 @@ class SequenceLayout:
     def input_offset(self) -> int:
         return self.max_lookahead
 
-    def target_offset(self, horizon: int) -> int:
-        offset = self.max_lookahead - horizon
-        if offset < 0:
-            raise ValueError(
-                f"horizon={horizon} exceeds max_lookahead={self.max_lookahead}"
-            )
-        return offset
+    def get_target_offset(self, training_objective: str) -> int:
+        if training_objective == "bert":
+            return self.max_lookahead
+        if training_objective == "causal":
+            if self.max_lookahead < 1:
+                raise ValueError(
+                    "Causal training requires data preprocessed with max_lookahead >= 1"
+                )
+            return self.max_lookahead - 1
+        raise ValueError(
+            f"Only 'causal' and 'bert' are allowed, found {training_objective}"
+        )
 
 
 @beartype

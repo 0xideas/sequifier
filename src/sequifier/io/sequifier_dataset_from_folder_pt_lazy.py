@@ -64,10 +64,10 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             metadata = json.load(f)
 
         folder_layout = sequence_layout_from_metadata(metadata)
-        if folder_layout.sample_length != config.sample_length:
+        if folder_layout.sample_length != config.layout.sample_length:
             raise ValueError(
                 f"Preprocessed folder sample_length={folder_layout.sample_length} "
-                f"does not match config sample_length={config.sample_length}."
+                f"does not match config sample_length={config.layout.sample_length}."
             )
 
         self.batch_files_info = metadata["batch_files"]
@@ -212,7 +212,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
 
         # 5. Stream data using precise global boundaries and a CROSS-FILE BUFFER
         yielded_samples = 0
-        train_seq_len = self.config.context_length
+        train_seq_len = self.config.layout.context_length
         global_file_start_sample = 0
 
         # Initialize cross-file buffers
@@ -244,7 +244,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 left_pad_lengths_batch,
             ) = torch.load(file_path, map_location="cpu", weights_only=False)
             for tensor in sequences_batch.values():
-                validate_stored_window_width(tensor, self.config.sample_length)
+                validate_stored_window_width(tensor, self.config.layout.sample_length)
 
             # Generate indices for the whole file
             indices = torch.arange(file_samples)
@@ -265,8 +265,10 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 continue
 
             # Extract the data subset for this worker (Advanced indexing copies the data)
-            data_offset = self.config.training_spec.data_offset
-            target_offset = self.config.training_spec.target_offset
+            data_offset = self.config.layout.input_offset
+            target_offset = self.config.layout.get_target_offset(
+                self.config.training_spec.training_objective
+            )
             new_seq = {
                 k: slice_window(v[worker_indices], train_seq_len, data_offset)
                 for k, v in sequences_batch.items()
@@ -281,7 +283,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             new_meta = generate_padding_masks(
                 left_pad_lengths_batch[worker_indices],
                 train_seq_len,
-                self.config.sample_length,
+                self.config.layout.sample_length,
                 data_offset,
                 target_offset,
             )

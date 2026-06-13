@@ -46,10 +46,12 @@ class SequifierDatasetFromFile(IterableDataset):
             data=data_df,
             column_types=column_types,
             all_columns=all_columns,
-            context_length=config.context_length,
-            sample_length=config.sample_length,
-            data_offset=config.training_spec.data_offset,
-            target_offset=config.training_spec.target_offset,
+            context_length=config.layout.context_length,
+            sample_length=config.layout.sample_length,
+            data_offset=config.layout.input_offset,
+            target_offset=config.layout.get_target_offset(
+                config.training_spec.training_objective
+            ),
         )
         self.n_samples = all_tensors[all_columns[0]].shape[0]
 
