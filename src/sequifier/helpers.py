@@ -104,7 +104,7 @@ class ResolvedWindowView:
 @beartype
 def _right_aligned_slice(width: int, length: int, offset: int) -> slice:
     start = width - (length + offset)
-    stop = width - offset if offset else width
+    stop = width - offset
     return slice(start, stop)
 
 

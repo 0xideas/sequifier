@@ -305,30 +305,21 @@ def calculate_item_positions(
 
 
 @beartype
-def _flatten_bert_target_valid_mask(
+def _flatten_valid_mask(
     config: InfererModel,
     metadata: dict[str, Any],
     prediction_length: int,
-) -> Optional[np.ndarray]:
-    if config.training_objective != "bert" or not metadata:
-        return None
-    if "target_valid_mask" not in metadata:
-        return None
-
-    valid_mask = metadata["target_valid_mask"]
+    mask_key: str = "target_valid_mask",
+) -> np.ndarray:
+    valid_mask = metadata.get(mask_key)
     if isinstance(valid_mask, torch.Tensor):
-        valid_mask = valid_mask.detach().cpu().numpy()
+        valid_mask = valid_mask.detach().cpu().numpy()  # type: ignore
     valid_mask = np.asarray(valid_mask, dtype=bool)
 
     if valid_mask.ndim != 2:
-        raise ValueError(f"target_valid_mask must be 2D, got shape {valid_mask.shape}.")
-    if valid_mask.shape[1] != prediction_length:
-        raise ValueError(
-            "target_valid_mask width must match prediction_length "
-            f"(got {valid_mask.shape[1]} and {prediction_length})."
-        )
+        raise ValueError(f"{mask_key} must be 2D, got shape {valid_mask.shape}.")
 
-    return valid_mask.reshape(-1)
+    return valid_mask[:, -prediction_length:].reshape(-1)
 
 
 @beartype
@@ -347,41 +338,34 @@ def _bert_reference_column(config: InfererModel, data_columns: set[str]) -> str:
 
 
 @beartype
-def _bert_target_valid_mask_from_preprocessed_data(
+def _valid_mask_from_preprocessed_data(
     config: InfererModel,
     data: pl.DataFrame,
     prediction_length: int,
-) -> Optional[np.ndarray]:
-    if config.training_objective != "bert":
-        return None
-
+    mask_key: str = "target_valid_mask",
+) -> np.ndarray:
     data_columns = set(data.get_column("inputCol").unique())
     column_name = _bert_reference_column(config, data_columns)
     reference_rows = data.filter(pl.col("inputCol") == column_name)
 
-    if "leftPadLength" in reference_rows.columns:
-        left_pad_lengths = torch.tensor(
-            reference_rows.get_column("leftPadLength").to_numpy(), dtype=torch.int64
-        )
-        resolved_view = resolve_window_view(config.storage_layout, config.window_view)
-        metadata = resolved_view.build_masks(left_pad_lengths)
-        return _flatten_bert_target_valid_mask(config, metadata, prediction_length)
-
-    return None
+    left_pad_lengths = torch.tensor(
+        reference_rows.get_column("leftPadLength").to_numpy(), dtype=torch.int64
+    )
+    resolved_view = resolve_window_view(config.storage_layout, config.window_view)
+    metadata = resolved_view.build_masks(left_pad_lengths)
+    return _flatten_valid_mask(config, metadata, prediction_length, mask_key)
 
 
 @beartype
 def _apply_valid_prediction_mask(
     values: np.ndarray,
-    valid_prediction_mask: Optional[np.ndarray],
+    valid_prediction_mask: np.ndarray,
     label: str,
 ) -> np.ndarray:
     values = np.asarray(values)
-    if valid_prediction_mask is None:
-        return values
     if values.shape[0] != valid_prediction_mask.shape[0]:
         raise ValueError(
-            f"{label} has {values.shape[0]} rows, but target_valid_mask has "
+            f"{label} has {values.shape[0]} rows, but valid_prediction_mask has "
             f"{valid_prediction_mask.shape[0]} rows."
         )
     return values[valid_prediction_mask]
@@ -390,7 +374,7 @@ def _apply_valid_prediction_mask(
 @beartype
 def _apply_valid_prediction_mask_to_dict(
     values: Optional[dict[str, np.ndarray]],
-    valid_prediction_mask: Optional[np.ndarray],
+    valid_prediction_mask: np.ndarray,
     label: str,
 ) -> Optional[dict[str, np.ndarray]]:
     if values is None:
@@ -451,8 +435,8 @@ def infer_embedding(
             mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
 
             embeddings = get_embeddings(config, inferer, data, column_types)
-            valid_prediction_mask = _bert_target_valid_mask_from_preprocessed_data(
-                config, data, prediction_length
+            valid_prediction_mask = _valid_mask_from_preprocessed_data(
+                config, data, prediction_length, mask_key="attention_valid_mask"
             )
 
             sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
@@ -469,8 +453,8 @@ def infer_embedding(
             mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
 
             embeddings = get_embeddings(config, inferer, data, column_types)
-            valid_prediction_mask = _bert_target_valid_mask_from_preprocessed_data(
-                config, data, prediction_length
+            valid_prediction_mask = _valid_mask_from_preprocessed_data(
+                config, data, prediction_length, mask_key="attention_valid_mask"
             )
 
             sequence_ids_for_preds = (
@@ -503,8 +487,8 @@ def infer_embedding(
             embeddings = get_embeddings_pt(
                 config, inferer, sequences_dict, metadata=metadata
             )
-            valid_prediction_mask = _flatten_bert_target_valid_mask(
-                config, metadata, prediction_length
+            valid_prediction_mask = _flatten_valid_mask(
+                config, metadata, prediction_length, mask_key="attention_valid_mask"
             )
 
             sequence_ids_for_preds = sequence_ids_tensor.numpy()
@@ -538,6 +522,7 @@ def infer_embedding(
         subsequence_ids_repeated = np.repeat(
             subsequence_ids_for_preds, prediction_length
         )
+        assert valid_prediction_mask is not None
         embeddings = _apply_valid_prediction_mask(
             embeddings, valid_prediction_mask, "embeddings"
         )
@@ -628,8 +613,6 @@ def infer_generative(
             `torch.dtype`.
     """
     for data_id, data in enumerate(dataset):
-        valid_prediction_mask = None
-
         # Step 1: Adapt Data Subsetting (now works on Polars DF)
         is_folder_input = os.path.isdir(
             normalize_path(config.data_path, config.project_root)
@@ -653,7 +636,7 @@ def infer_generative(
                     data.get_column("startItemPosition").filter(mask).to_numpy()
                 )
                 prediction_length = inferer.prediction_length
-                valid_prediction_mask = _bert_target_valid_mask_from_preprocessed_data(
+                valid_prediction_mask = _valid_mask_from_preprocessed_data(
                     config, data, prediction_length
                 )
 
@@ -676,14 +659,18 @@ def infer_generative(
                         f"prediction_length must be 1 for autoregression, got {inferer.prediction_length}"
                     )
                 # Unpack the new third return value
-                probs, preds, sequence_ids_for_preds, item_positions_for_preds = (
-                    get_probs_preds_autoregression(
-                        config,
-                        inferer,
-                        data,
-                        column_types,
-                        config.window_view.context_length,
-                    )
+                (
+                    probs,
+                    preds,
+                    sequence_ids_for_preds,
+                    item_positions_for_preds,
+                    valid_prediction_mask,
+                ) = get_probs_preds_autoregression(
+                    config,
+                    inferer,
+                    data,
+                    column_types,
+                    config.window_view.context_length,
                 )
         elif config.read_format == "parquet" and is_folder_input:
             # Folder-based Parquet chunk logic
@@ -709,7 +696,7 @@ def infer_generative(
                     data.get_column("startItemPosition").filter(mask).to_numpy()
                 )
                 prediction_length = inferer.prediction_length
-                valid_prediction_mask = _bert_target_valid_mask_from_preprocessed_data(
+                valid_prediction_mask = _valid_mask_from_preprocessed_data(
                     config, data, prediction_length
                 )
 
@@ -730,14 +717,18 @@ def infer_generative(
                         f"prediction_length must be 1 for autoregression, got {inferer.prediction_length}"
                     )
 
-                probs, preds, sequence_ids_for_preds, item_positions_for_preds = (
-                    get_probs_preds_autoregression(
-                        config,
-                        inferer,
-                        data,
-                        column_types,
-                        config.window_view.context_length,
-                    )
+                (
+                    probs,
+                    preds,
+                    sequence_ids_for_preds,
+                    item_positions_for_preds,
+                    valid_prediction_mask,
+                ) = get_probs_preds_autoregression(
+                    config,
+                    inferer,
+                    data,
+                    column_types,
+                    config.window_view.context_length,
                 )
         elif config.read_format == "pt":
             (
@@ -773,7 +764,7 @@ def infer_generative(
             )
 
             prediction_length = inferer.prediction_length  # Get prediction_length
-            valid_prediction_mask = _flatten_bert_target_valid_mask(
+            valid_prediction_mask = _flatten_valid_mask(
                 config, metadata, prediction_length
             )
 
@@ -798,6 +789,7 @@ def infer_generative(
                 sequence_ids_for_preds = np.repeat(
                     sequence_ids_tensor.numpy(), total_steps
                 )
+                valid_prediction_mask = np.repeat(valid_prediction_mask, total_steps)
                 item_position_boundaries = zip(
                     list(start_positions_tensor + config.window_view.context_length),
                     list(
@@ -825,6 +817,8 @@ def infer_generative(
                 preds[target_column] = inferer.invert_normalization(
                     predictions, target_column
                 )
+
+        assert valid_prediction_mask is not None
 
         sequence_ids_for_preds = _apply_valid_prediction_mask(
             sequence_ids_for_preds, valid_prediction_mask, "sequenceId"
@@ -1235,7 +1229,11 @@ def get_probs_preds_autoregression(
     column_types: dict[str, torch.dtype],
     context_length: int,
 ) -> tuple[
-    Optional[dict[str, np.ndarray]], dict[str, np.ndarray], np.ndarray, np.ndarray
+    Optional[dict[str, np.ndarray]],
+    dict[str, np.ndarray],
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
 ]:
     """Generates autoregressive predictions and aligns them with sequence IDs and positions.
 
@@ -1303,7 +1301,16 @@ def get_probs_preds_autoregression(
         aligned_sequence_ids, config.autoregression_total_steps
     )
 
-    return probs, preds, sequence_ids_for_preds, item_positions_for_preds
+    base_mask = _flatten_valid_mask(config, metadata, 1)
+    valid_prediction_mask = np.repeat(base_mask, config.autoregression_total_steps)
+
+    return (
+        probs,
+        preds,
+        sequence_ids_for_preds,
+        item_positions_for_preds,
+        valid_prediction_mask,
+    )
 
 
 class Inferer:

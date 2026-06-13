@@ -544,35 +544,6 @@ def test_bert_generative_inference_uses_dataframe_order_for_padding_masks(tmp_pa
     assert predictions.get_column("target_col").to_list() == ["B", "A", "B"]
 
 
-def test_bert_generative_inference_keeps_data_without_left_pad(tmp_path):
-    config = _bert_inference_config(tmp_path)
-    data = _bert_preprocessed_frame().drop("leftPadLength")
-    written = []
-
-    with patch("sequifier.infer.onnxruntime.InferenceSession"), patch(
-        "sequifier.infer.load_inference_model"
-    ):
-        inferer = _mock_bert_inferer(config)
-
-    def capture_write(dataframe, path, write_format):
-        written.append((path, dataframe, write_format))
-
-    preds = {"target_col": np.array([3, 4, 3])}
-    with patch(
-        "sequifier.infer.get_probs_preds_from_df", return_value=(None, preds)
-    ), patch("sequifier.infer.write_data", side_effect=capture_write):
-        infer_generative(
-            config, inferer, "bert-model", [data], {"target_col": torch.int64}
-        )
-
-    predictions = next(frame for path, frame, _ in written if "predictions" in path)
-
-    assert predictions.height == 3
-    assert predictions.get_column("sequenceId").to_list() == [7, 7, 7]
-    assert predictions.get_column("itemPosition").to_list() == [100, 101, 102]
-    assert predictions.get_column("target_col").to_list() == ["A", "B", "A"]
-
-
 def test_bert_embedding_inference_filters_left_padded_positions(tmp_path):
     config = _bert_inference_config(tmp_path, model_type="embedding")
     data = _bert_preprocessed_frame()
