@@ -748,6 +748,13 @@ class HyperparameterSearchConfig(BaseModel):
                     f"({self.storage_layout.max_target_offset}) > stored_context_width ({self.storage_layout.stored_context_width}). "
                     "Model inputs cannot exceed the preprocessed sequence length."
                 )
+        if self.training_hyperparameter_sampling.training_objective == "causal":
+            if self.storage_layout.max_target_offset < 1:
+                raise ValueError(
+                    "The hyperparameter search space includes the 'causal' objective, "
+                    "but the preprocessed dataset has max_target_offset=0. "
+                    "Causal modeling requires max_target_offset >= 1."
+                )
         return self
 
     @model_validator(mode="after")
@@ -856,6 +863,11 @@ class HyperparameterSearchConfig(BaseModel):
             "context_length", self.context_length
         )
         training_spec = self.training_hyperparameter_sampling.sample_trial(trial)
+        if training_spec.training_objective == "bert":
+            model_spec = model_spec.model_copy(
+                update={"prediction_length": context_length}
+            )
+
         window_view = ModelWindowView(
             context_length=context_length,
             objective=training_spec.training_objective,
