@@ -11,10 +11,9 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
-    generate_padding_masks,
     normalize_path,
-    sequence_layout_from_metadata,
-    slice_window,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
     validate_stored_window_width,
 )
 from sequifier.io.batch import SequifierBatch
@@ -63,12 +62,8 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
-        folder_layout = sequence_layout_from_metadata(metadata)
-        if folder_layout.sample_length != config.layout.sample_length:
-            raise ValueError(
-                f"Preprocessed folder sample_length={folder_layout.sample_length} "
-                f"does not match config sample_length={config.layout.sample_length}."
-            )
+        self.folder_layout = stored_window_layout_from_metadata(metadata)
+        self.resolved_view = resolve_window_view(self.folder_layout, config.window_view)
 
         self.batch_files_info = metadata["batch_files"]
         self.total_samples = metadata["total_samples"]
@@ -212,7 +207,6 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
 
         # 5. Stream data using precise global boundaries and a CROSS-FILE BUFFER
         yielded_samples = 0
-        train_seq_len = self.config.layout.context_length
         global_file_start_sample = 0
 
         # Initialize cross-file buffers
@@ -244,7 +238,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 left_pad_lengths_batch,
             ) = torch.load(file_path, map_location="cpu", weights_only=False)
             for tensor in sequences_batch.values():
-                validate_stored_window_width(tensor, self.config.layout.sample_length)
+                validate_stored_window_width(tensor, self.folder_layout.stored_width)
 
             # Generate indices for the whole file
             indices = torch.arange(file_samples)
@@ -265,27 +259,19 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 continue
 
             # Extract the data subset for this worker (Advanced indexing copies the data)
-            data_offset = self.config.layout.input_offset
-            target_offset = self.config.layout.get_target_offset(
-                self.config.training_spec.training_objective
-            )
             new_seq = {
-                k: slice_window(v[worker_indices], train_seq_len, data_offset)
+                k: v[worker_indices, self.resolved_view.input_slice]
                 for k, v in sequences_batch.items()
                 if k in self.config.input_columns
             }
             new_tgt = {
-                k: slice_window(v[worker_indices], train_seq_len, target_offset)
+                k: v[worker_indices, self.resolved_view.target_slice]
                 for k, v in sequences_batch.items()
                 if k in self.config.target_columns
             }
 
-            new_meta = generate_padding_masks(
-                left_pad_lengths_batch[worker_indices],
-                train_seq_len,
-                self.config.layout.sample_length,
-                data_offset,
-                target_offset,
+            new_meta = self.resolved_view.build_masks(
+                left_pad_lengths_batch[worker_indices]
             )
 
             # Free the large file immediately to keep RAM down

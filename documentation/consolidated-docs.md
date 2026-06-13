@@ -97,7 +97,7 @@ Let's start with the data format expected by sequifier. The basic data format th
 
 The two columns "sequenceId" and "itemPosition" have to be present, and then there must be at least one feature column. There can also be many feature columns, and these can be categorical or real valued.
 
-Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Each stored window has width `context_length + max_lookahead` (`max_lookahead` defaults to `1`; set it to `0` for BERT-style same-width inputs and targets):
+Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Preprocessing defines the physical `stored_width` and `future_capacity`; training and inference choose the model-facing `context_length` from that stored capacity:
 
 |sequenceId|subsequenceId|startItemPosition|leftPadLength|inputCol|[Window Length - 1]|[Window Length - 2]|...|0|
 |----------|-------------|-----------------|-------------|--------|-------------------|-------------------| - |-|
@@ -253,10 +253,10 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `context_length` | `int` | **Yes** | - | The length of the context window (history) fed into the model. |
-| `max_lookahead` | `int` | No | `1` | Number of future items retained after the input context. The stored window width is `context_length + max_lookahead`. Use `0` for BERT-style preprocessing where inputs and targets have the same width; keep `1` for legacy causal next-item training. |
+| `stored_width` | `int` | **Yes** | - | The physical serialized window width written to preprocessed data. |
+| `future_capacity` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
 | `split_ratios` | `list[float]`| **Yes** | - | Proportions for data splits (e.g., `[0.8, 0.1, 0.1]` for train/val/test). Must sum to 1.0. |
-| `stride_by_split` | `list[int]` | No | `[context_length]*N` | The step size used to slide the window for each split. Corresponds to `split_ratios`. |
+| `stride_by_split` | `list[int]` | No | `[stored_width]*N` | The step size used to slide the window for each split. Corresponds to `split_ratios`. |
 | `subsequence_start_mode`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
 
 ### 4\. Performance & System
@@ -284,7 +284,7 @@ This controls data augmentation and redundancy.
   * **Stride = `context_length` (Non-overlapping):** The model sees every data point exactly once as a target. Training is faster, but the model might miss patterns that cross the window boundary.
   * **Stride = 1 (Maximum Overlap):** Maximizes data volume. The model sees every possible sequence. This yields the highest accuracy but significantly increases the size of the preprocessed data and training time.
   * **Hybrid Approach:** It is common practice to set a large stride for the training and validation splits (index 0) to reduce the size on disk of the dataset, and a stride=1 for the test split to evaluate the model on each point in the test set. This supposes that the test split value is low.
-      * *Example:* `stride_by_split: [24, 24, 1]` (assuming `context_length: 48`).
+      * *Example:* `stride_by_split: [24, 24, 1]` (assuming `stored_width: 49`).
 
 ### 3\. `subsequence_start_mode`: `distribute` vs `exact`
 
@@ -379,7 +379,7 @@ The configuration is defined in a YAML file (e.g., `train.yaml`). The file is st
 | `target_columns` | `list[str]`| **Yes** | - | The specific column(s) the model should learn to predict. |
 | `target_column_types`| `dict` | **Yes** | - | Map of target columns to their type: `'categorical'` or `'real'`. The key order in target_column_types must exactly match the list order in target_columns |
 | `input_columns` | `list[str]`| No | All | Subset of columns to use as input features. Defaults to all available in metadata. |
-| `context_length` | `int` | **Yes** | - | Must match the `context_length` used in preprocessing. |
+| `context_length` | `int` | **Yes** | - | Model input context length. It must fit inside the metadata `stored_width` with the stored `future_capacity`. |
 
 ### 3\. Model Architecture (`model_spec`)
 
@@ -604,7 +604,7 @@ These fields tell the inference engine which columns to extract from the new dat
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `model_type` | `str` | **Yes** | - | `generative` (predict next value) or `embedding` (extract vector representation). |
-| `context_length` | `int` | **Yes** | - | The context window size. Must match training. |
+| `context_length` | `int` | **Yes** | - | The model context window size. It must match the trained model view and fit inside the stored metadata capacity. |
 | `prediction_length` | `int` | No | `1` | Number of steps to predict *simultaneously*. **Must be 1** if `autoregression: true`. |
 | `inference_batch_size`| `int` | **Yes** | - | Number of sequences to process at once. |
 | `autoregression` | `bool` | No | `false` | If `true`, feeds predictions back into the model to predict further into the future. |

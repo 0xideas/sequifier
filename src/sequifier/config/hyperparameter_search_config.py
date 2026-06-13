@@ -18,9 +18,11 @@ from sequifier.config.train_config import (
     TrainModel,
 )
 from sequifier.helpers import (
-    SequenceLayout,
+    ModelWindowView,
+    StoredWindowLayout,
     normalize_path,
-    sequence_layout_from_metadata,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
     try_catch_excess_keys,
 )
 from sequifier.special_tokens import validate_special_token_ids
@@ -207,18 +209,14 @@ def load_hyperparameter_search_config(
             "n_classes", metadata_config["n_classes"]
         )
 
-        sequence_layout = sequence_layout_from_metadata(metadata_config)
-        if sequence_layout.sequence_layout_version != 2:
+        storage_layout = stored_window_layout_from_metadata(metadata_config)
+        if storage_layout.version != 2:
             raise ValueError(
-                "Hyperparameter search requires metadata sequence_layout_version=2, "
-                f"got {sequence_layout.sequence_layout_version}."
+                "Hyperparameter search requires metadata stored_window_layout_version=2, "
+                f"got {storage_layout.version}."
             )
 
-        config_values["max_lookahead"] = sequence_layout.max_lookahead
-        config_values["sample_length"] = sequence_layout.sample_length
-        config_values["sequence_layout_version"] = (
-            sequence_layout.sequence_layout_version
-        )
+        config_values["storage_layout"] = storage_layout
 
         config_values["training_data_path"] = normalize_path(
             config_values.get("training_data_path", metadata_config["split_paths"][0]),
@@ -718,9 +716,7 @@ class HyperparameterSearchConfig(BaseModel):
     id_maps: dict[str, dict[str | int, int]]
 
     context_length: list[int]
-    max_lookahead: int = Field(default=1, ge=0)
-    sample_length: int
-    sequence_layout_version: int
+    storage_layout: StoredWindowLayout
     n_classes: dict[str, int]
     inference_batch_size: int
 
@@ -743,10 +739,13 @@ class HyperparameterSearchConfig(BaseModel):
     @model_validator(mode="after")
     def validate_sequence_layout(self):
         for cl in self.context_length:
-            if cl + self.max_lookahead > self.sample_length:
+            if (
+                cl + self.storage_layout.future_capacity
+                > self.storage_layout.stored_width
+            ):
                 raise ValueError(
-                    f"Sample length mismatch: context_length ({cl}) + max_lookahead "
-                    f"({self.max_lookahead}) > stored sample_length ({self.sample_length}). "
+                    f"Window capacity mismatch: context_length ({cl}) + future_capacity "
+                    f"({self.storage_layout.future_capacity}) > stored_width ({self.storage_layout.stored_width}). "
                     "Model inputs cannot exceed the preprocessed sequence length."
                 )
         return self
@@ -856,12 +855,13 @@ class HyperparameterSearchConfig(BaseModel):
         context_length = trial.suggest_categorical(
             "context_length", self.context_length
         )
-        layout = SequenceLayout(
-            context_length=context_length,
-            max_lookahead=self.max_lookahead,
-            sequence_layout_version=self.sequence_layout_version,
-        )
         training_spec = self.training_hyperparameter_sampling.sample_trial(trial)
+        window_view = ModelWindowView(
+            context_length=context_length,
+            objective=training_spec.training_objective,
+            target_shift=0 if training_spec.training_objective == "bert" else 1,
+        )
+        resolve_window_view(self.storage_layout, window_view)
 
         logger.info(f"{input_columns_index = } - {context_length = }")
 
@@ -879,7 +879,8 @@ class HyperparameterSearchConfig(BaseModel):
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
-            layout=layout,
+            storage_layout=self.storage_layout,
+            window_view=window_view,
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=101,

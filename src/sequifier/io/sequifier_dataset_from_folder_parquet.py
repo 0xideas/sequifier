@@ -12,11 +12,11 @@ from torch.utils.data import IterableDataset, get_worker_info
 from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
-    generate_padding_masks,
+    columns_from_slice,
     get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
-    sequence_column_names,
-    sequence_layout_from_metadata,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
 )
 from sequifier.io.batch import SequifierBatch
 
@@ -49,12 +49,8 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
-        folder_layout = sequence_layout_from_metadata(metadata)
-        if folder_layout.sample_length != config.layout.sample_length:
-            raise ValueError(
-                f"Preprocessed folder sample_length={folder_layout.sample_length} "
-                f"does not match config sample_length={config.layout.sample_length}."
-            )
+        self.folder_layout = stored_window_layout_from_metadata(metadata)
+        self.resolved_view = resolve_window_view(self.folder_layout, config.window_view)
 
         self.n_samples = metadata["total_samples"]
 
@@ -68,15 +64,11 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         }
 
         # Sequence formatting structures matching long-format schema boundaries
-        train_seq_len = self.config.layout.context_length
-        input_seq_cols = sequence_column_names(
-            train_seq_len, self.config.layout.input_offset
+        input_seq_cols = columns_from_slice(
+            self.resolved_view.input_slice, self.folder_layout.stored_width
         )
-        target_seq_cols = sequence_column_names(
-            train_seq_len,
-            self.config.layout.get_target_offset(
-                self.config.training_spec.training_objective
-            ),
+        target_seq_cols = columns_from_slice(
+            self.resolved_view.target_slice, self.folder_layout.stored_width
         )
         all_sequences: Dict[str, list[torch.Tensor]] = {
             col: [] for col in config.input_columns
@@ -211,29 +203,20 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         indices_for_worker = indices_for_rank[worker_id::num_workers]
 
         # 5. Extract and pass unified data frames
-        train_seq_len = self.config.layout.context_length
         for i in range(0, len(indices_for_worker), self.batch_size):
             batch_indices = indices_for_worker[i : i + self.batch_size]
 
             data_batch = {
-                key: tensor[batch_indices, -train_seq_len:]
-                for key, tensor in self.sequences.items()
+                key: tensor[batch_indices] for key, tensor in self.sequences.items()
             }
             targets_batch = {
-                key: tensor[batch_indices, -train_seq_len:]
-                for key, tensor in self.targets.items()
+                key: tensor[batch_indices] for key, tensor in self.targets.items()
             }
 
             metadata_batch = {}
             if self.left_pad_lengths is not None:
-                metadata_batch = generate_padding_masks(
-                    self.left_pad_lengths[batch_indices],
-                    train_seq_len,
-                    self.config.layout.sample_length,
-                    self.config.layout.input_offset,
-                    self.config.layout.get_target_offset(
-                        self.config.training_spec.training_objective
-                    ),
+                metadata_batch = self.resolved_view.build_masks(
+                    self.left_pad_lengths[batch_indices]
                 )
 
             yield SequifierBatch(

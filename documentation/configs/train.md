@@ -30,7 +30,7 @@ The configuration is defined in a YAML file (e.g., `train.yaml`). The file is st
 | `target_columns` | `list[str]`| **Yes** | - | The specific column(s) the model should learn to predict. |
 | `target_column_types`| `dict` | **Yes** | - | Map of target columns to their type: `'categorical'` or `'real'`. The key order in target_column_types must exactly match the list order in target_columns |
 | `input_columns` | `list[str]`| No | All | Subset of columns to use as input features. Defaults to all available in metadata. |
-| `context_length` | `int` | **Yes** | - | Must match the `context_length` used in preprocessing. |
+| `context_length` | `int` | **Yes** | - | Model input context length. It must fit inside the metadata `stored_width` with the stored `future_capacity`. |
 
 ### 3\. Model Architecture (`model_spec`)
 

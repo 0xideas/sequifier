@@ -5,24 +5,23 @@ import polars as pl
 import pytest
 import torch
 
-from sequifier.helpers import SequenceLayout
+from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.io.sequifier_dataset_from_folder_parquet_lazy import (
     SequifierDatasetFromFolderParquetLazy,
 )
 
 CONTEXT_LENGTH = 2
-MAX_LOOKAHEAD = 1
-SAMPLE_LENGTH = CONTEXT_LENGTH + MAX_LOOKAHEAD
+FUTURE_CAPACITY = 1
+STORED_WIDTH = CONTEXT_LENGTH + FUTURE_CAPACITY
 
 
 def _folder_metadata(total_samples, batch_files):
     return {
         "total_samples": total_samples,
         "batch_files": batch_files,
-        "context_length": CONTEXT_LENGTH,
-        "max_lookahead": MAX_LOOKAHEAD,
-        "sample_length": SAMPLE_LENGTH,
-        "sequence_layout_version": 2,
+        "stored_width": STORED_WIDTH,
+        "future_capacity": FUTURE_CAPACITY,
+        "stored_window_layout_version": 2,
     }
 
 
@@ -31,10 +30,11 @@ def mock_config():
     config = MagicMock()
     config.project_root = "."
     config.seed = 42
-    config.layout = SequenceLayout(
-        context_length=CONTEXT_LENGTH,
-        max_lookahead=MAX_LOOKAHEAD,
-        sequence_layout_version=2,
+    config.storage_layout = StoredWindowLayout(
+        stored_width=STORED_WIDTH, future_capacity=FUTURE_CAPACITY, version=2
+    )
+    config.window_view = ModelWindowView(
+        context_length=CONTEXT_LENGTH, objective="causal", target_shift=1
     )
     config.column_types = {"item": "Float64"}
     config.training_spec.batch_size = 5

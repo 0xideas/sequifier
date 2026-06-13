@@ -13,11 +13,11 @@ from torch.utils.data import IterableDataset, get_worker_info
 from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
-    generate_padding_masks,
+    columns_from_slice,
     get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
-    sequence_column_names,
-    sequence_layout_from_metadata,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
 )
 from sequifier.io.batch import SequifierBatch
 
@@ -65,12 +65,8 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
-        folder_layout = sequence_layout_from_metadata(metadata)
-        if folder_layout.sample_length != config.layout.sample_length:
-            raise ValueError(
-                f"Preprocessed folder sample_length={folder_layout.sample_length} "
-                f"does not match config sample_length={config.layout.sample_length}."
-            )
+        self.folder_layout = stored_window_layout_from_metadata(metadata)
+        self.resolved_view = resolve_window_view(self.folder_layout, config.window_view)
 
         self.batch_files_info = metadata["batch_files"]
         self.total_samples = metadata["total_samples"]
@@ -219,17 +215,13 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
 
         # 5. Stream data using precise global boundaries and a CROSS-FILE BUFFER
         yielded_samples = 0
-        train_seq_len = self.config.layout.context_length
         global_file_start_sample = 0
 
-        input_seq_cols = sequence_column_names(
-            train_seq_len, self.config.layout.input_offset
+        input_seq_cols = columns_from_slice(
+            self.resolved_view.input_slice, self.folder_layout.stored_width
         )
-        target_seq_cols = sequence_column_names(
-            train_seq_len,
-            self.config.layout.get_target_offset(
-                self.config.training_spec.training_objective
-            ),
+        target_seq_cols = columns_from_slice(
+            self.resolved_view.target_slice, self.folder_layout.stored_width
         )
 
         # Initialize cross-file buffers
@@ -313,15 +305,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
                         f"Missing required column {col_name} in Parquet partition"
                     )
 
-            new_meta = generate_padding_masks(
-                left_pad_lengths[worker_indices],
-                train_seq_len,
-                self.config.layout.sample_length,
-                self.config.layout.input_offset,
-                self.config.layout.get_target_offset(
-                    self.config.training_spec.training_objective
-                ),
-            )
+            new_meta = self.resolved_view.build_masks(left_pad_lengths[worker_indices])
 
             del df
 

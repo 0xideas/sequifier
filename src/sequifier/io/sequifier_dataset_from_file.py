@@ -7,7 +7,12 @@ from loguru import logger
 from torch.utils.data import IterableDataset
 
 from sequifier.config.train_config import TrainModel
-from sequifier.helpers import PANDAS_TO_TORCH_TYPES, numpy_to_pytorch, read_data
+from sequifier.helpers import (
+    PANDAS_TO_TORCH_TYPES,
+    numpy_to_pytorch,
+    read_data,
+    resolve_window_view,
+)
 from sequifier.io.batch import SequifierBatch
 
 
@@ -42,16 +47,12 @@ class SequifierDatasetFromFile(IterableDataset):
         }
 
         # self.all_tensors now holds both inputs and targets
+        resolved_view = resolve_window_view(config.storage_layout, config.window_view)
         all_tensors, metadata_tensors = numpy_to_pytorch(
             data=data_df,
             column_types=column_types,
             all_columns=all_columns,
-            context_length=config.layout.context_length,
-            sample_length=config.layout.sample_length,
-            data_offset=config.layout.input_offset,
-            target_offset=config.layout.get_target_offset(
-                config.training_spec.training_objective
-            ),
+            resolved_view=resolved_view,
         )
         self.n_samples = all_tensors[all_columns[0]].shape[0]
 

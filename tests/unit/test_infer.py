@@ -8,7 +8,7 @@ import torch
 import yaml
 
 from sequifier.config.infer_config import InfererModel, load_inferer_config
-from sequifier.helpers import SequenceLayout
+from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.infer import (
     Inferer,
     calculate_item_positions,
@@ -174,16 +174,15 @@ def test_infer_config_defaults_bert_prediction_length_to_context_length():
         seed=42,
         device="cpu",
         prediction_length=None,
-        layout=SequenceLayout(
-            context_length=3, max_lookahead=1, sequence_layout_version=2
-        ),
+        storage_layout=StoredWindowLayout(stored_width=4, future_capacity=1, version=2),
+        window_view=ModelWindowView(context_length=3, objective="bert", target_shift=0),
         inference_batch_size=2,
         output_probabilities=False,
         map_to_id=False,
         autoregression=False,
     )
 
-    assert config.prediction_length == config.layout.context_length
+    assert config.prediction_length == config.window_view.context_length
 
 
 def test_infer_config_defaults_causal_prediction_length_to_one():
@@ -203,8 +202,9 @@ def test_infer_config_defaults_causal_prediction_length_to_one():
         seed=42,
         device="cpu",
         prediction_length=None,
-        layout=SequenceLayout(
-            context_length=3, max_lookahead=1, sequence_layout_version=2
+        storage_layout=StoredWindowLayout(stored_width=4, future_capacity=1, version=2),
+        window_view=ModelWindowView(
+            context_length=3, objective="causal", target_shift=1
         ),
         inference_batch_size=2,
         output_probabilities=False,
@@ -233,8 +233,11 @@ def test_infer_config_rejects_bert_prediction_length_mismatch():
             seed=42,
             device="cpu",
             prediction_length=1,
-            layout=SequenceLayout(
-                context_length=3, max_lookahead=1, sequence_layout_version=2
+            storage_layout=StoredWindowLayout(
+                stored_width=4, future_capacity=1, version=2
+            ),
+            window_view=ModelWindowView(
+                context_length=3, objective="bert", target_shift=0
             ),
             inference_batch_size=2,
             output_probabilities=False,
@@ -253,10 +256,9 @@ def test_load_inferer_config_rejects_mismatched_metadata_special_token_ids(tmp_p
         json.dumps(
             {
                 "split_paths": [str(data_path)],
-                "context_length": 3,
-                "max_lookahead": 1,
-                "sample_length": 4,
-                "sequence_layout_version": 2,
+                "stored_width": 4,
+                "future_capacity": 1,
+                "stored_window_layout_version": 2,
                 "column_types": {"target_col": "int64"},
                 "id_maps": {"target_col": {"A": 3}},
                 "selected_columns_statistics": {},
@@ -399,9 +401,8 @@ def _bert_inference_config(tmp_path, model_type="generative"):
         seed=42,
         device="cpu",
         prediction_length=None,
-        layout=SequenceLayout(
-            context_length=3, max_lookahead=1, sequence_layout_version=2
-        ),
+        storage_layout=StoredWindowLayout(stored_width=4, future_capacity=1, version=2),
+        window_view=ModelWindowView(context_length=3, objective="bert", target_shift=0),
         inference_batch_size=4,
         output_probabilities=False,
         map_to_id=True,
@@ -616,8 +617,9 @@ def ar_config():
         seed=42,
         device="cpu",
         prediction_length=1,
-        layout=SequenceLayout(
-            context_length=3, max_lookahead=1, sequence_layout_version=2
+        storage_layout=StoredWindowLayout(stored_width=4, future_capacity=1, version=2),
+        window_view=ModelWindowView(
+            context_length=3, objective="causal", target_shift=1
         ),
         inference_batch_size=2,
         output_probabilities=False,

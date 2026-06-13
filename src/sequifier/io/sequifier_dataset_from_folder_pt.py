@@ -10,10 +10,9 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
-    generate_padding_masks,
     normalize_path,
-    sequence_layout_from_metadata,
-    slice_window,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
     validate_stored_window_width,
 )
 from sequifier.io.batch import SequifierBatch
@@ -47,12 +46,8 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
-        folder_layout = sequence_layout_from_metadata(metadata)
-        if folder_layout.sample_length != config.layout.sample_length:
-            raise ValueError(
-                f"Preprocessed folder sample_length={folder_layout.sample_length} "
-                f"does not match config sample_length={config.layout.sample_length}."
-            )
+        self.folder_layout = stored_window_layout_from_metadata(metadata)
+        self.resolved_view = resolve_window_view(self.folder_layout, config.window_view)
 
         self.n_samples = metadata["total_samples"]
 
@@ -78,7 +73,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             for col in all_sequences.keys():
                 if col in sequences_batch:
                     validate_stored_window_width(
-                        sequences_batch[col], config.layout.sample_length
+                        sequences_batch[col], self.folder_layout.stored_width
                     )
                     all_sequences[col].append(sequences_batch[col])
             all_left_pad_lengths.append(left_pad_lengths_batch)
@@ -169,33 +164,24 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         indices_for_worker = indices_for_rank[worker_id::num_workers]
 
         # 5. Yield full batches
-        train_seq_len = self.config.layout.context_length
         for i in range(0, len(indices_for_worker), self.batch_size):
             batch_indices = indices_for_worker[i : i + self.batch_size]
 
-            data_offset = self.config.layout.input_offset
-            target_offset = self.config.layout.get_target_offset(
-                self.config.training_spec.training_objective
-            )
             data_batch = {
-                key: slice_window(tensor[batch_indices], train_seq_len, data_offset)
+                key: tensor[batch_indices, self.resolved_view.input_slice]
                 for key, tensor in self.sequences.items()
                 if key in self.config.input_columns
             }
             targets_batch = {
-                key: slice_window(tensor[batch_indices], train_seq_len, target_offset)
+                key: tensor[batch_indices, self.resolved_view.target_slice]
                 for key, tensor in self.sequences.items()
                 if key in self.config.target_columns
             }
 
             metadata_batch = {}
             if self.left_pad_lengths is not None:
-                metadata_batch = generate_padding_masks(
-                    self.left_pad_lengths[batch_indices],
-                    train_seq_len,
-                    self.config.layout.sample_length,
-                    data_offset,
-                    target_offset,
+                metadata_batch = self.resolved_view.build_masks(
+                    self.left_pad_lengths[batch_indices]
                 )
 
             yield SequifierBatch(

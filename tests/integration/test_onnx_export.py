@@ -4,7 +4,7 @@ import numpy as np
 import onnxruntime
 
 from sequifier.config.train_config import ModelSpecModel, TrainingSpecModel, TrainModel
-from sequifier.helpers import SequenceLayout
+from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.train import TransformerModel
 
 
@@ -28,10 +28,15 @@ def test_bert_onnx_export_accepts_attention_valid_mask(tmp_path):
         real_columns=["real_col"],
         id_maps={"cat_col": {"a": 3, "b": 4, "c": 5}},
         n_classes={"cat_col": 6},
-        layout=SequenceLayout(
+        storage_layout=StoredWindowLayout(
+            stored_width=context_length + 1,
+            future_capacity=1,
+            version=2,
+        ),
+        window_view=ModelWindowView(
             context_length=context_length,
-            max_lookahead=1,
-            sequence_layout_version=2,
+            objective="bert",
+            target_shift=0,
         ),
         inference_batch_size=inference_batch_size,
         seed=42,
@@ -130,10 +135,15 @@ def test_onnx_export_preserves_feature_name_order(tmp_path):
             "cat10": {"x": 3, "y": 4, "z": 5},
         },
         n_classes={"cat2": 7, "cat10": 6},
-        layout=SequenceLayout(
+        storage_layout=StoredWindowLayout(
+            stored_width=context_length + 1,
+            future_capacity=1,
+            version=2,
+        ),
+        window_view=ModelWindowView(
             context_length=context_length,
-            max_lookahead=1,
-            sequence_layout_version=2,
+            objective="causal",
+            target_shift=1,
         ),
         inference_batch_size=inference_batch_size,
         seed=42,

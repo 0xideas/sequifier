@@ -4,11 +4,13 @@ import polars as pl
 import torch
 
 from sequifier.helpers import (
+    ModelWindowView,
+    StoredWindowLayout,
     apply_bert_masking,
     build_valid_mask,
     construct_index_maps,
     numpy_to_pytorch,
-    slice_window,
+    resolve_window_view,
 )
 
 # ==========================================
@@ -88,16 +90,16 @@ def test_numpy_to_pytorch_shapes_and_shifting():
 
     column_types = {"A": torch.float32}
     all_columns = ["A"]
-    context_length = 3
+    resolved_view = resolve_window_view(
+        StoredWindowLayout(stored_width=4, future_capacity=1, version=2),
+        ModelWindowView(context_length=3, objective="causal", target_shift=1),
+    )
 
     tensors, metadata = numpy_to_pytorch(
         data,
         column_types,
         all_columns,
-        context_length,
-        context_length + 1,
-        data_offset=1,
-        target_offset=0,
+        resolved_view,
     )
 
     # 1. Check Keys
@@ -149,10 +151,10 @@ def test_numpy_to_pytorch_dtypes():
         data_int,
         {"int_col": torch.int64},
         ["int_col"],
-        context_length=1,
-        sample_length=2,
-        data_offset=1,
-        target_offset=0,
+        resolve_window_view(
+            StoredWindowLayout(stored_width=2, future_capacity=1, version=2),
+            ModelWindowView(context_length=1, objective="causal", target_shift=1),
+        ),
     )
     assert tensors_int["int_col"].dtype == torch.int64
 
@@ -172,10 +174,10 @@ def test_numpy_to_pytorch_dtypes():
         data_float,
         {"float_col": torch.float32},
         ["float_col"],
-        context_length=1,
-        sample_length=2,
-        data_offset=1,
-        target_offset=0,
+        resolve_window_view(
+            StoredWindowLayout(stored_width=2, future_capacity=1, version=2),
+            ModelWindowView(context_length=1, objective="causal", target_shift=1),
+        ),
     )
     assert tensors_float["float_col"].dtype == torch.float32
 
@@ -183,11 +185,15 @@ def test_numpy_to_pytorch_dtypes():
 def test_build_valid_mask_from_left_pad_lengths():
     left_pad_lengths = torch.tensor([0, 2, 5], dtype=torch.int64)
 
+    resolved_view = resolve_window_view(
+        StoredWindowLayout(stored_width=6, future_capacity=1, version=2),
+        ModelWindowView(context_length=5, objective="causal", target_shift=1),
+    )
     input_mask = build_valid_mask(
-        left_pad_lengths, full_length=6, offset=1, context_length=5
+        left_pad_lengths, full_length=6, view_slice=resolved_view.input_slice
     )
     target_mask = build_valid_mask(
-        left_pad_lengths, full_length=6, offset=0, context_length=5
+        left_pad_lengths, full_length=6, view_slice=resolved_view.target_slice
     )
 
     assert torch.equal(
@@ -212,15 +218,20 @@ def test_build_valid_mask_from_left_pad_lengths():
     )
 
 
-def test_slice_window_validates_stored_width():
+def test_resolve_window_view_slices_tensors():
     tensor = torch.arange(8).reshape(2, 4)
+    resolved_view = resolve_window_view(
+        StoredWindowLayout(stored_width=4, future_capacity=1, version=2),
+        ModelWindowView(context_length=3, objective="causal", target_shift=1),
+    )
 
     assert torch.equal(
-        slice_window(tensor, context_length=3, offset=1),
+        tensor[:, resolved_view.input_slice],
         torch.tensor([[0, 1, 2], [4, 5, 6]]),
     )
     assert torch.equal(
-        slice_window(tensor[:, :3], context_length=3, offset=0), tensor[:, :3]
+        tensor[:, resolved_view.target_slice],
+        torch.tensor([[1, 2, 3], [5, 6, 7]]),
     )
 
 
@@ -243,10 +254,10 @@ def test_numpy_to_pytorch_includes_explicit_padding_masks():
         data,
         {"A": torch.float32},
         ["A"],
-        context_length=3,
-        sample_length=4,
-        data_offset=1,
-        target_offset=0,
+        resolve_window_view(
+            StoredWindowLayout(stored_width=4, future_capacity=1, version=2),
+            ModelWindowView(context_length=3, objective="causal", target_shift=1),
+        ),
     )
 
     assert torch.equal(

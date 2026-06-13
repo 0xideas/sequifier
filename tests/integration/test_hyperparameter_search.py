@@ -40,8 +40,13 @@ def test_hp_search_bert_outputs(run_hp_search, project_root):
     assert generated_config["metadata_config_path"].endswith(
         "test-data-categorical-1-lookahead-0.json"
     )
-    assert generated_config["layout"]["max_lookahead"] == 0
-    assert generated_config["layout"]["sequence_layout_version"] == 2
+    assert generated_config["metadata_config_path"].endswith(
+        "test-data-categorical-1-lookahead-0.json"
+    )
+    assert "storage_layout" not in generated_config
+    assert "window_view" not in generated_config
+    assert generated_config["target_shift"] == 0
+    assert generated_config["training_spec"]["training_objective"] == "bert"
 
 
 def test_hp_search_bayesian_outputs(run_hp_search, project_root):

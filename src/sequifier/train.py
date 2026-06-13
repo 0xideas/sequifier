@@ -97,14 +97,14 @@ def create_dummy_data_and_metadata(
     for col in config.input_columns:
         dtype = torch.int64 if col in config.categorical_columns else torch.float32
         dummy_data[col] = torch.ones(
-            (config.training_spec.batch_size, config.layout.context_length),
+            (config.training_spec.batch_size, config.window_view.context_length),
             dtype=dtype,
             device=local_rank,
         )
 
     dummy_metadata = {
         "attention_valid_mask": torch.ones(
-            (config.training_spec.batch_size, config.layout.context_length),
+            (config.training_spec.batch_size, config.window_view.context_length),
             dtype=torch.bool,
             device=local_rank,
         )
@@ -613,8 +613,9 @@ class TransformerModel(nn.Module):
         self.target_columns = hparams.target_columns
         self.target_column_types = hparams.target_column_types
         self.loss_weights = hparams.training_spec.loss_weights
-        self.layout = hparams.layout
-        self.context_length = hparams.layout.context_length
+        self.storage_layout = hparams.storage_layout
+        self.window_view = hparams.window_view
+        self.context_length = hparams.window_view.context_length
         self.n_classes = hparams.n_classes
         self.inference_batch_size = hparams.inference_batch_size
         self.log_interval = hparams.training_spec.log_interval
@@ -691,7 +692,7 @@ class TransformerModel(nn.Module):
                     hparams.model_spec.n_head,
                     hparams.model_spec.dim_feedforward,
                     hparams.training_spec.dropout,
-                    hparams.layout.context_length,
+                    hparams.window_view.context_length,
                 )
                 for _ in range(hparams.model_spec.num_layers)
             ]

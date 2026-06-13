@@ -17,7 +17,6 @@ output_probabilities: false
 map_to_id: true
 device: cpu
 context_length: 8
-sample_length: 9
 inference_batch_size: 10
 enforce_determinism: true
 

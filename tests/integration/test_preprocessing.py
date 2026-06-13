@@ -31,16 +31,15 @@ def test_metadata_config(metadata_configs):
         "split_paths",
         "column_types",
         "selected_columns_statistics",
-        "context_length",
-        "max_lookahead",
-        "sample_length",
-        "sequence_layout_version",
+        "stored_width",
+        "future_capacity",
+        "stored_window_layout_version",
     ]
 
     for file_name, metadata_config in metadata_configs.items():
         print(f"Verifying metadata_config for: {file_name}")
         assert list(metadata_config.keys()) == expected_metadata_keys
-        assert metadata_config["sequence_layout_version"] == 2
+        assert metadata_config["stored_window_layout_version"] == 2
         assert metadata_config["special_token_ids"] == {
             "[unknown]": 0,
             "[other]": 1,
@@ -273,8 +272,8 @@ def test_preprocessed_data_categorical_lookahead_0(run_preprocessing, project_ro
     with open(metadata_path, "r") as f:
         metadata_config = json.load(f)
 
-    assert metadata_config["max_lookahead"] == 0
-    assert metadata_config["sample_length"] == metadata_config["context_length"]
+    assert metadata_config["future_capacity"] == 0
+    assert metadata_config["stored_width"] == 8
 
     for split in range(3):
         data = read_preprocessing_outputs(

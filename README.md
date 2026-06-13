@@ -97,7 +97,7 @@ Let's start with the data format expected by sequifier. The basic data format th
 
 The two columns "sequenceId" and "itemPosition" have to be present, and then there must be at least one feature column. There can also be many feature columns, and these can be categorical or real valued.
 
-Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Each stored window has width `context_length + max_lookahead` (`max_lookahead` defaults to `1`; set it to `0` for BERT-style same-width inputs and targets):
+Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Preprocessing defines the physical `stored_width` and `future_capacity`; training and inference choose the model-facing `context_length` from that stored capacity:
 
 |sequenceId|subsequenceId|startItemPosition|leftPadLength|inputCol|[Window Length - 1]|[Window Length - 2]|...|0|
 |----------|-------------|-----------------|-------------|--------|-------------------|-------------------| - |-|

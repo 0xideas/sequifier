@@ -4,24 +4,23 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from sequifier.helpers import SequenceLayout
+from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (
     SequifierDatasetFromFolderPtLazy,
 )
 
 CONTEXT_LENGTH = 5
-MAX_LOOKAHEAD = 1
-SAMPLE_LENGTH = CONTEXT_LENGTH + MAX_LOOKAHEAD
+FUTURE_CAPACITY = 1
+STORED_WIDTH = CONTEXT_LENGTH + FUTURE_CAPACITY
 
 
 def _folder_metadata(total_samples, batch_files):
     return {
         "total_samples": total_samples,
         "batch_files": batch_files,
-        "context_length": CONTEXT_LENGTH,
-        "max_lookahead": MAX_LOOKAHEAD,
-        "sample_length": SAMPLE_LENGTH,
-        "sequence_layout_version": 2,
+        "stored_width": STORED_WIDTH,
+        "future_capacity": FUTURE_CAPACITY,
+        "stored_window_layout_version": 2,
     }
 
 
@@ -35,10 +34,11 @@ def mock_config(tmp_path):
     config.training_spec.sampling_strategy = "exact"
     config.training_spec.num_workers = 0
     config.seed = 42
-    config.layout = SequenceLayout(
-        context_length=CONTEXT_LENGTH,
-        max_lookahead=MAX_LOOKAHEAD,
-        sequence_layout_version=2,
+    config.storage_layout = StoredWindowLayout(
+        stored_width=STORED_WIDTH, future_capacity=FUTURE_CAPACITY, version=2
+    )
+    config.window_view = ModelWindowView(
+        context_length=CONTEXT_LENGTH, objective="causal", target_shift=1
     )
     config.input_columns = ["col1"]
     config.target_columns = ["col1", "tgt1"]

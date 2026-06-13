@@ -40,7 +40,7 @@ These fields tell the inference engine which columns to extract from the new dat
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `model_type` | `str` | **Yes** | - | `generative` (predict next value) or `embedding` (extract vector representation). |
-| `context_length` | `int` | **Yes** | - | The context window size. Must match training. |
+| `context_length` | `int` | **Yes** | - | The model context window size. It must match the trained model view and fit inside the stored metadata capacity. |
 | `prediction_length` | `int` | No | `1` | Number of steps to predict *simultaneously*. **Must be 1** if `autoregression: true`. |
 | `inference_batch_size`| `int` | **Yes** | - | Number of sequences to process at once. |
 | `autoregression` | `bool` | No | `false` | If `true`, feeds predictions back into the model to predict further into the future. |

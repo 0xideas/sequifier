@@ -23,9 +23,11 @@ from pydantic import (
 import sequifier
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.helpers import (
-    SequenceLayout,
+    ModelWindowView,
+    StoredWindowLayout,
     normalize_path,
-    sequence_layout_from_metadata,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
     try_catch_excess_keys,
 )
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
@@ -63,21 +65,36 @@ def load_train_config(
         ) as f:
             metadata_config = json.loads(f.read())
 
-        sequence_layout = sequence_layout_from_metadata(metadata_config)
-        if sequence_layout.sequence_layout_version != 2:
+        storage_layout = stored_window_layout_from_metadata(metadata_config)
+        if storage_layout.version != 2:
             raise ValueError(
-                "Training requires metadata sequence_layout_version=2, "
-                f"got {sequence_layout.sequence_layout_version}."
+                "Training requires metadata stored_window_layout_version=2, "
+                f"got {storage_layout.version}."
             )
-        config_values["layout"] = sequence_layout
+        training_objective = config_values["training_spec"]["training_objective"]
+        target_shift = (
+            0
+            if training_objective == "bert"
+            else int(config_values.pop("target_shift", 1))
+        )
+        window_view = ModelWindowView(
+            context_length=int(config_values.pop("context_length")),
+            objective=training_objective,
+            target_shift=target_shift,
+        )
+        resolve_window_view(storage_layout, window_view)
+        config_values["storage_layout"] = storage_layout
+        config_values["window_view"] = window_view
+        for key in ("stored_width", "future_capacity", "stored_window_layout_version"):
+            config_values.pop(key, None)
         for key in (
-            "context_length",
-            "max_lookahead",
-            "sample_length",
-            "sequence_layout_version",
+            "target_shift",
+            "stored_width",
+            "future_capacity",
+            "stored_window_layout_version",
         ):
             config_values.pop(key, None)
-        for key in ("max_lookahead", "sample_length"):
+        for key in ("target_shift", "stored_width", "future_capacity"):
             config_values.get("training_spec", {}).pop(key, None)
 
         split_paths = metadata_config["split_paths"]
@@ -576,7 +593,8 @@ class TrainModel(BaseModel):
         default_factory=lambda: SPECIAL_TOKEN_IDS.ids_by_label
     )
 
-    layout: SequenceLayout
+    storage_layout: StoredWindowLayout
+    window_view: ModelWindowView
     n_classes: dict[str, int]
     inference_batch_size: int
     seed: int
@@ -597,14 +615,19 @@ class TrainModel(BaseModel):
 
     @model_validator(mode="after")
     def validate_bert_prediction_length_matches_context_length(self):
-        self.layout.get_target_offset(self.training_spec.training_objective)
+        if self.window_view.objective != self.training_spec.training_objective:
+            raise ValueError(
+                "window_view objective must match training_spec.training_objective "
+                f"({self.window_view.objective} != {self.training_spec.training_objective})."
+            )
+        resolve_window_view(self.storage_layout, self.window_view)
         if (
             self.training_spec.training_objective == "bert"
-            and self.model_spec.prediction_length != self.layout.context_length
+            and self.model_spec.prediction_length != self.window_view.context_length
         ):
             raise ValueError(
                 "For BERT training, model_spec.prediction_length must be equal to context_length "
-                f"(got prediction_length={self.model_spec.prediction_length}, context_length={self.layout.context_length})."
+                f"(got prediction_length={self.model_spec.prediction_length}, context_length={self.window_view.context_length})."
             )
         return self
 

@@ -18,7 +18,7 @@ from loguru import logger
 from sequifier.config.preprocess_config import load_preprocessor_config
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
-    SequenceLayout,
+    StoredWindowLayout,
     read_data,
     write_data,
 )
@@ -31,7 +31,7 @@ from sequifier.special_tokens import (
 
 INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
 REAL_MASK_VALUE = 0.0
-CURRENT_SEQUENCE_LAYOUT_VERSION = 2
+CURRENT_STORED_WINDOW_LAYOUT_VERSION = 2
 
 
 @beartype
@@ -86,7 +86,7 @@ class Preprocessor:
         merge_output: bool,
         selected_columns: Optional[list[str]],
         split_ratios: list[float],
-        context_length: int,
+        stored_width: int,
         stride_by_split: list[int],
         max_rows: Optional[int],
         seed: int,
@@ -96,7 +96,7 @@ class Preprocessor:
         subsequence_start_mode: str,
         use_precomputed_maps: Optional[list[str]],
         metadata_config_path: Optional[str],
-        max_lookahead: int = 1,
+        future_capacity: int = 1,
         mask_column: Optional[str] = None,
     ):
         """Initializes the Preprocessor with the given parameters.
@@ -109,8 +109,8 @@ class Preprocessor:
             merge_output: Whether to combine the output into a single file.
             selected_columns: A list of columns to be included in the preprocessing.
             split_ratios: A list of floats that define the relative sizes of data splits.
-            context_length: The sequence length for the model inputs.
-            max_lookahead: The maximum target horizon retained after each input window.
+            stored_width: The physical serialized window width.
+            future_capacity: The number of future items retained after each input window.
             stride_by_split: A list of step sizes for creating subsequences.
             max_rows: The maximum number of input rows to process.
             seed: A random seed for reproducibility.
@@ -145,10 +145,10 @@ class Preprocessor:
         np.random.seed(seed)
         self.n_cores = n_cores or multiprocessing.cpu_count()
         self.continue_preprocessing = continue_preprocessing
-        self.layout = SequenceLayout(
-            context_length,
-            max_lookahead,
-            sequence_layout_version=CURRENT_SEQUENCE_LAYOUT_VERSION,
+        self.storage_layout = StoredWindowLayout(
+            stored_width=stored_width,
+            future_capacity=future_capacity,
+            version=CURRENT_STORED_WINDOW_LAYOUT_VERSION,
         )
         self._setup_directories()
 
@@ -251,7 +251,7 @@ class Preprocessor:
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
 
-            schema = self._create_schema(col_types, self.layout.sample_length)
+            schema = self._create_schema(col_types, self.storage_layout.stored_width)
 
             data = data.sort(["sequenceId", "itemPosition"])
             n_batches = _process_batches_single_file(
@@ -260,7 +260,7 @@ class Preprocessor:
                 data,
                 schema,
                 self.n_cores,
-                self.layout,
+                self.storage_layout,
                 stride_by_split,
                 data_columns,
                 col_types,
@@ -347,7 +347,7 @@ class Preprocessor:
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
-            schema = self._create_schema(col_types, self.layout.sample_length)
+            schema = self._create_schema(col_types, self.storage_layout.stored_width)
 
             self._process_batches_multiple_files(
                 files_to_process,
@@ -356,7 +356,7 @@ class Preprocessor:
                 max_rows,
                 schema,
                 self.n_cores,
-                self.layout,
+                self.storage_layout,
                 stride_by_split,
                 data_columns,
                 n_classes,
@@ -373,7 +373,7 @@ class Preprocessor:
 
     @beartype
     def _create_schema(
-        self, col_types: dict[str, str], sample_length: int
+        self, col_types: dict[str, str], stored_width: int
     ) -> dict[str, Any]:
         """Creates the Polars schema for the intermediate sequence DataFrame.
 
@@ -385,7 +385,7 @@ class Preprocessor:
         Args:
             col_types: A dictionary mapping data column names to their Polars
                 string representations (e.g., "Int64", "Float64").
-            sample_length: The number of items stored for each extracted window.
+            stored_width: The number of items stored for each extracted window.
 
         Returns:
             A dictionary defining the Polars schema. Keys are column names
@@ -415,7 +415,7 @@ class Preprocessor:
             sequence_position_type = pl.Float64
 
         schema.update(
-            {str(i): sequence_position_type for i in range(sample_length - 1, -1, -1)}
+            {str(i): sequence_position_type for i in range(stored_width - 1, -1, -1)}
         )
 
         return schema
@@ -618,7 +618,7 @@ class Preprocessor:
         max_rows: Optional[int],
         schema: Any,
         n_cores: int,
-        layout: SequenceLayout,
+        layout: StoredWindowLayout,
         stride_by_split: list[int],
         data_columns: list[str],
         n_classes: dict[str, int],
@@ -817,10 +817,9 @@ class Preprocessor:
     @beartype
     def _layout_metadata(self) -> dict[str, int]:
         return {
-            "context_length": self.layout.context_length,
-            "max_lookahead": self.layout.max_lookahead,
-            "sample_length": self.layout.sample_length,
-            "sequence_layout_version": self.layout.sequence_layout_version,
+            "stored_width": self.storage_layout.stored_width,
+            "future_capacity": self.storage_layout.future_capacity,
+            "stored_window_layout_version": self.storage_layout.version,
         }
 
     @beartype
@@ -1465,7 +1464,7 @@ def _process_batches_multiple_files_inner(
     max_rows: Optional[int],
     schema: Any,
     n_cores: int,
-    layout: SequenceLayout,
+    layout: StoredWindowLayout,
     stride_by_split: list[int],
     data_columns: list[str],
     n_classes: dict[str, int],
@@ -1623,7 +1622,7 @@ def _process_batches_single_file(
     data: pl.DataFrame,
     schema: Any,
     n_cores: Optional[int],
-    layout: SequenceLayout,
+    layout: StoredWindowLayout,
     stride_by_split: list[int],
     data_columns: list[str],
     col_types: dict[str, str],
@@ -1902,7 +1901,7 @@ def get_group_bounds(data_subset: pl.DataFrame, split_ratios: list[float]):
 @beartype
 def process_and_write_data_pt(
     data: pl.DataFrame,
-    sample_length: int,
+    stored_width: int,
     path: str,
     column_types: dict[str, str],
 ):
@@ -1915,13 +1914,13 @@ def process_and_write_data_pt(
 
     It then converts these lists into NumPy arrays and stores one full
     sequence tensor per feature. Each tensor has shape
-    `(batch_size, sample_length)`. The final five-element tuple
+    `(batch_size, stored_width)`. The final five-element tuple
     `(sequences_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor, left_pad_lengths_tensor)`
     is saved to a .pt file using `torch.save`.
 
     Args:
         data: The long-format Polars DataFrame of extracted sequences.
-        sample_length: The stored serialized window width.
+        stored_width: The stored serialized window width.
         path: The output file path (e.g., "data/batch_0.pt").
         column_types: A dictionary mapping column names to their
             string data types, used to determine the correct torch dtype.
@@ -1929,7 +1928,7 @@ def process_and_write_data_pt(
     if data.is_empty():
         return
 
-    sequence_cols = [str(c) for c in range(sample_length - 1, -1, -1)]
+    sequence_cols = [str(c) for c in range(stored_width - 1, -1, -1)]
 
     all_feature_cols = data.get_column("inputCol").unique().to_list()
 
@@ -1998,7 +1997,7 @@ def _write_accumulated_sequences(
     process_id: int,
     file_index_str: str,
     target_dir: str,
-    layout: SequenceLayout,
+    layout: StoredWindowLayout,
     col_types: dict[str, str],
 ):
     """Helper to write a batch of accumulated sequences to a single .pt file.
@@ -2029,9 +2028,7 @@ def _write_accumulated_sequences(
     out_path = insert_top_folder(split_path_batch_seq, target_dir)
 
     if write_format == "pt":
-        process_and_write_data_pt(
-            combined_df, layout.sample_length, out_path, col_types
-        )
+        process_and_write_data_pt(combined_df, layout.stored_width, out_path, col_types)
     elif write_format == "parquet":
         combined_df.write_parquet(out_path)
 
@@ -2044,7 +2041,7 @@ def preprocess_batch(
     batch: pl.DataFrame,
     schema: Any,
     split_paths: list[str],
-    layout: SequenceLayout,
+    layout: StoredWindowLayout,
     stride_by_split: list[int],
     data_columns: list[str],
     col_types: dict[str, str],
@@ -2183,7 +2180,7 @@ def preprocess_batch(
 def extract_sequences(
     data: pl.DataFrame,
     schema: Any,
-    layout: SequenceLayout,
+    layout: StoredWindowLayout,
     stride_for_split: int,
     columns: list[str],
     subsequence_start_mode: str,
@@ -2225,7 +2222,7 @@ def extract_sequences(
 
         subsequences, left_pad_lengths, subsequence_starts = extract_subsequences(
             in_seq_lists_only,
-            layout.sample_length,
+            layout.stored_width,
             stride_for_split,
             columns,
             subsequence_start_mode,
@@ -2241,7 +2238,7 @@ def extract_sequences(
                     left_pad_lengths[subsequence_id],
                     col,
                 ] + subseqs[subsequence_id]
-                expected_row_length = 5 + layout.sample_length
+                expected_row_length = 5 + layout.stored_width
                 if len(row) != expected_row_length:
                     raise RuntimeError(
                         f"Row length mismatch. Expected {expected_row_length}, got {len(row)}. Row: {row}"
@@ -2259,21 +2256,21 @@ def extract_sequences(
 @beartype
 def get_subsequence_starts(
     in_context_length: int,
-    sample_length: int,
+    stored_width: int,
     stride_for_split: int,
     subsequence_start_mode: str,
 ) -> np.ndarray:
     """Calculates the start indices for extracting subsequences.
 
     This function determines the starting indices for sliding a window of
-    `sample_length` over an input sequence of `in_context_length`. It aims to
+    `stored_width` over an input sequence of `in_context_length`. It aims to
     use `stride_for_split`, but adjusts the step size slightly to ensure
     that the windows are distributed as evenly as possible and cover the
     full sequence from the beginning to the end.
 
     Args:
         in_context_length: The length of the original input sequence.
-        sample_length: The stored window length to extract.
+        stored_width: The stored window length to extract.
         stride_for_split: The *desired* step size between subsequences.
         subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
 
@@ -2286,7 +2283,7 @@ def get_subsequence_starts(
         )
 
     if subsequence_start_mode == "distribute":
-        last_available_start = in_context_length - sample_length
+        last_available_start = in_context_length - stored_width
         raw_starts = np.arange(
             0, last_available_start + stride_for_split, stride_for_split
         )
@@ -2297,11 +2294,11 @@ def get_subsequence_starts(
         return np.unique(starts)
 
     if subsequence_start_mode == "exact":
-        if (in_context_length - sample_length) % stride_for_split != 0:
+        if (in_context_length - stored_width) % stride_for_split != 0:
             raise ValueError(
-                f"'exact' mode requires sequence length alignment, i.e. if: (in_context_length - sample_length) % stride_for_split == 0, {in_context_length = }, {sample_length = }, {stride_for_split = }"
+                f"'exact' mode requires sequence length alignment, i.e. if: (in_context_length - stored_width) % stride_for_split == 0, {in_context_length = }, {stored_width = }, {stride_for_split = }"
             )
-        last_possible_start = in_context_length - sample_length
+        last_possible_start = in_context_length - stored_width
         return np.arange(0, last_possible_start + 1, stride_for_split)
     return np.array([])
 
@@ -2309,7 +2306,7 @@ def get_subsequence_starts(
 @beartype
 def extract_subsequences(
     in_seq: dict[str, list],
-    sample_length: int,
+    stored_width: int,
     stride_for_split: int,
     columns: list[str],
     subsequence_start_mode: str,
@@ -2319,14 +2316,14 @@ def extract_subsequences(
     This function takes a dictionary `in_seq` where keys are column
     names and values are lists of items for a single full sequence.
     It first pads the sequences with 0s at the beginning if they are
-    shorter than `sample_length`. Then, it calculates the subsequence
+    shorter than `stored_width`. Then, it calculates the subsequence
     start indices using `get_subsequence_starts` and extracts all
     subsequences.
 
     Args:
         in_seq: A dictionary mapping column names to lists of items
             (e.g., `{'col_A': [1, 2, 3, 4, 5], 'col_B': [6, 7, 8, 9, 10]}`).
-        sample_length: The stored window length to extract.
+        stored_width: The stored window length to extract.
         stride_for_split: The desired step size between subsequences.
         columns: A list of the column names (keys in `in_seq`) to process.
         subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
@@ -2337,13 +2334,13 @@ def extract_subsequences(
     """
     in_seq_len = len(in_seq[columns[0]])
     pad_len = 0
-    if in_seq_len < sample_length:
-        pad_len = sample_length - in_seq_len
+    if in_seq_len < stored_width:
+        pad_len = stored_width - in_seq_len
         in_seq = {col: ([0] * pad_len) + in_seq[col] for col in columns}
     in_context_length = len(in_seq[columns[0]])
 
     subsequence_starts = get_subsequence_starts(
-        in_context_length, sample_length, stride_for_split, subsequence_start_mode
+        in_context_length, stored_width, stride_for_split, subsequence_start_mode
     )
     subsequence_starts_diff = subsequence_starts[1:] - subsequence_starts[:-1]
     if not np.all(subsequence_starts_diff <= stride_for_split):
@@ -2352,7 +2349,7 @@ def extract_subsequences(
         )
 
     result = {
-        col: [list(in_seq[col][i : i + sample_length]) for i in subsequence_starts]
+        col: [list(in_seq[col][i : i + stored_width]) for i in subsequence_starts]
         for col in columns
     }
     left_pad_lengths = [pad_len] * len(subsequence_starts)

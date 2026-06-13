@@ -9,7 +9,8 @@ split_ratios:
 - 0.6
 - 0.2
 - 0.2
-context_length: 8
+stored_width: 9
+future_capacity: 1
 stride_by_split:
 - 1
 - 1

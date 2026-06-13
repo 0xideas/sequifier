@@ -8,7 +8,6 @@ target_columns: [itemId]
 target_column_types:
   itemId: categorical
 context_length: [8]
-max_lookahead: 0
 inference_batch_size: 10
 
 search_strategy: sample

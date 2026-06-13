@@ -7,7 +7,8 @@ selected_columns: null
 
 split_ratios:
 - 1.0
-context_length: 5
+stored_width: 6
+future_capacity: 1
 stride_by_split:
 - 5
 max_rows: null

@@ -9,7 +9,6 @@ target_column_types:
   itemId: categorical
 
 context_length: 8
-sample_length: 9
 inference_batch_size: 2
 
 export_generative_model: true
@@ -26,7 +25,6 @@ model_spec:
   prediction_length: 1
 
 training_spec:
-  sample_length: 9
   training_objective: causal
   device: cpu
   epochs: 3

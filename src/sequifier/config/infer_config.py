@@ -15,9 +15,11 @@ from pydantic import (
 )
 
 from sequifier.helpers import (
-    SequenceLayout,
+    ModelWindowView,
+    StoredWindowLayout,
     normalize_path,
-    sequence_layout_from_metadata,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
     try_catch_excess_keys,
 )
 from sequifier.special_tokens import validate_special_token_ids
@@ -56,18 +58,31 @@ def load_inferer_config(
             metadata_config["special_token_ids"],
             source=f"metadata config '{metadata_config_path}'",
         )
-        sequence_layout = sequence_layout_from_metadata(metadata_config)
-        if sequence_layout.sequence_layout_version != 2:
+        storage_layout = stored_window_layout_from_metadata(metadata_config)
+        if storage_layout.version != 2:
             raise ValueError(
-                "Inference requires metadata sequence_layout_version=2, "
-                f"got {sequence_layout.sequence_layout_version}."
+                "Inference requires metadata stored_window_layout_version=2, "
+                f"got {storage_layout.version}."
             )
-        config_values["layout"] = sequence_layout
+        training_objective = config_values["training_objective"]
+        target_shift = (
+            0
+            if training_objective == "bert"
+            else int(config_values.pop("target_shift", 1))
+        )
+        window_view = ModelWindowView(
+            context_length=int(config_values.pop("context_length")),
+            objective=training_objective,
+            target_shift=target_shift,
+        )
+        resolve_window_view(storage_layout, window_view)
+        config_values["storage_layout"] = storage_layout
+        config_values["window_view"] = window_view
         for key in (
-            "context_length",
-            "max_lookahead",
-            "sample_length",
-            "sequence_layout_version",
+            "target_shift",
+            "stored_width",
+            "future_capacity",
+            "stored_window_layout_version",
         ):
             config_values.pop(key, None)
 
@@ -161,7 +176,8 @@ class InfererModel(BaseModel):
     map_to_id: bool = Field(default=True)
     seed: int
     device: str
-    layout: SequenceLayout
+    storage_layout: StoredWindowLayout
+    window_view: ModelWindowView
     prediction_length: Optional[int] = None
     inference_batch_size: int
 
@@ -172,18 +188,25 @@ class InfererModel(BaseModel):
 
     @model_validator(mode="after")
     def normalize_prediction_length(self):
+        if self.window_view.objective != self.training_objective:
+            raise ValueError(
+                "window_view objective must match training_objective "
+                f"({self.window_view.objective} != {self.training_objective})."
+            )
         if self.prediction_length is None:
             self.prediction_length = (
-                self.layout.context_length if self.training_objective == "bert" else 1
+                self.window_view.context_length
+                if self.training_objective == "bert"
+                else 1
             )
         if self.training_objective == "bert":
-            if self.prediction_length != self.layout.context_length:
+            if self.prediction_length != self.window_view.context_length:
                 raise ValueError(
                     "For BERT inference, prediction_length must be equal to context_length "
-                    f"(got prediction_length={self.prediction_length}, context_length={self.layout.context_length})."
+                    f"(got prediction_length={self.prediction_length}, context_length={self.window_view.context_length})."
                 )
         else:
-            self.layout.get_target_offset(self.training_objective)
+            resolve_window_view(self.storage_layout, self.window_view)
         return self
 
     @field_validator("training_objective")

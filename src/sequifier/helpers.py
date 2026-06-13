@@ -44,95 +44,116 @@ PANDAS_TO_TORCH_TYPES = {
 
 
 @dataclass(frozen=True)
-class SequenceLayout:
+class StoredWindowLayout:
+    stored_width: int
+    future_capacity: int
+    version: int
+
+    def __post_init__(self) -> None:
+        if self.stored_width < 1:
+            raise ValueError("stored_width must be a positive integer")
+        if self.future_capacity < 0:
+            raise ValueError("future_capacity must be non-negative")
+        if self.future_capacity >= self.stored_width:
+            raise ValueError("future_capacity must be smaller than stored_width")
+
+
+@dataclass(frozen=True)
+class ModelWindowView:
     context_length: int
-    max_lookahead: int
-    sequence_layout_version: int
+    objective: str
+    target_shift: int = 1
 
     def __post_init__(self) -> None:
         if self.context_length < 1:
             raise ValueError("context_length must be a positive integer")
-        if self.max_lookahead < 0:
-            raise ValueError("max_lookahead must be non-negative")
+        if self.objective not in {"causal", "bert"}:
+            raise ValueError(
+                f"Only 'causal' and 'bert' are allowed, found {self.objective}"
+            )
+        if self.target_shift < 0:
+            raise ValueError("target_shift must be non-negative")
+        if self.objective == "bert" and self.target_shift != 0:
+            raise ValueError("BERT views require target_shift=0")
+        if self.objective == "causal" and self.target_shift < 1:
+            raise ValueError("Causal views require target_shift >= 1")
 
-    @property
-    def sample_length(self) -> int:
-        return self.context_length + self.max_lookahead
 
-    @property
-    def input_offset(self) -> int:
-        return self.max_lookahead
+@dataclass(frozen=True)
+class ResolvedWindowView:
+    storage: StoredWindowLayout
+    view: ModelWindowView
+    required_width: int
+    input_slice: slice
+    target_slice: slice
 
-    def get_target_offset(self, training_objective: str) -> int:
-        if training_objective == "bert":
-            return self.max_lookahead
-        if training_objective == "causal":
-            if self.max_lookahead < 1:
-                raise ValueError(
-                    "Causal training requires data preprocessed with max_lookahead >= 1"
-                )
-            return self.max_lookahead - 1
+    def build_masks(self, left_pad_lengths: Tensor) -> dict[str, Tensor]:
+        """Build explicit input-attention and target-validity masks for this view."""
+        return {
+            "attention_valid_mask": build_valid_mask(
+                left_pad_lengths, self.storage.stored_width, self.input_slice
+            ),
+            "target_valid_mask": build_valid_mask(
+                left_pad_lengths, self.storage.stored_width, self.target_slice
+            ),
+        }
+
+
+@beartype
+def _right_aligned_slice(width: int, length: int, offset: int) -> slice:
+    start = width - (length + offset)
+    stop = width - offset if offset else width
+    return slice(start, stop)
+
+
+@beartype
+def resolve_window_view(
+    storage: StoredWindowLayout, view: ModelWindowView
+) -> ResolvedWindowView:
+    if view.target_shift > storage.future_capacity:
         raise ValueError(
-            f"Only 'causal' and 'bert' are allowed, found {training_objective}"
+            f"Model target_shift={view.target_shift} exceeds stored "
+            f"future_capacity={storage.future_capacity}."
         )
 
-
-@beartype
-def sequence_column_names(context_length: int, offset: int) -> list[str]:
-    if offset < 0:
-        raise ValueError("offset must be non-negative")
-    return [str(i) for i in range(context_length - 1 + offset, offset - 1, -1)]
-
-
-@beartype
-def slice_window(tensor: Tensor, context_length: int, offset: int) -> Tensor:
-    if offset < 0:
-        raise ValueError("offset must be non-negative")
-
-    end = -offset if offset else None
-    result = tensor[:, -(context_length + offset) : end]
-
-    if result.shape[1] != context_length:
+    input_offset = storage.future_capacity
+    target_offset = storage.future_capacity - view.target_shift
+    required_width = view.context_length + max(input_offset, target_offset)
+    if required_width > storage.stored_width:
         raise ValueError(
-            f"Stored window width {tensor.shape[1]} cannot provide "
-            f"context_length={context_length} at offset={offset}"
+            f"Model view requires width {required_width}, but storage only has "
+            f"stored_width={storage.stored_width}."
         )
-    return result
+
+    return ResolvedWindowView(
+        storage=storage,
+        view=view,
+        required_width=required_width,
+        input_slice=_right_aligned_slice(
+            storage.stored_width, view.context_length, input_offset
+        ),
+        target_slice=_right_aligned_slice(
+            storage.stored_width, view.context_length, target_offset
+        ),
+    )
 
 
 @beartype
-def validate_stored_window_width(tensor: Tensor, sample_length: int) -> None:
-    if tensor.shape[1] != sample_length:
+def validate_stored_window_width(tensor: Tensor, stored_width: int) -> None:
+    if tensor.shape[1] != stored_width:
         raise ValueError(
             f"Stored window width {tensor.shape[1]} does not match "
-            f"metadata sample_length={sample_length}."
+            f"metadata stored_width={stored_width}."
         )
 
 
 @beartype
-def sequence_layout_from_metadata(metadata: dict) -> SequenceLayout:
-    metadata_context_length = int(metadata["context_length"])
-
-    max_lookahead = int(metadata["max_lookahead"])
-    sample_length = int(metadata["sample_length"])
-    if sample_length != metadata_context_length + max_lookahead:
-        raise ValueError(
-            "Invalid sequence layout metadata: sample_length must equal "
-            "context_length + max_lookahead "
-            f"({sample_length} != {metadata_context_length} + {max_lookahead})."
-        )
-
-    layout = SequenceLayout(
-        context_length=metadata_context_length,
-        max_lookahead=max_lookahead,
-        sequence_layout_version=int(metadata["sequence_layout_version"]),
+def stored_window_layout_from_metadata(metadata: dict) -> StoredWindowLayout:
+    return StoredWindowLayout(
+        stored_width=int(metadata["stored_width"]),
+        future_capacity=int(metadata["future_capacity"]),
+        version=int(metadata["stored_window_layout_version"]),
     )
-    if layout.sample_length != sample_length:
-        raise ValueError(
-            f"Resolved layout sample_length={layout.sample_length} does not match "
-            f"metadata sample_length={sample_length}."
-        )
-    return layout
 
 
 # Check an environment variable to see if we are in a testing context
@@ -331,10 +352,7 @@ def numpy_to_pytorch(
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
     all_columns: list[str],
-    context_length: int,
-    sample_length: int,
-    data_offset: int,
-    target_offset: int,
+    resolved_view: ResolvedWindowView,
 ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     """Converts a long-format Polars DataFrame to a dict of sequence tensors.
 
@@ -370,8 +388,12 @@ def numpy_to_pytorch(
           (e.g., `{'price': <tensor>, 'price_target': <tensor>}`).
         - a metadata dictionary containing any explicit masks.
     """
-    input_seq_cols = sequence_column_names(context_length, data_offset)
-    target_seq_cols = sequence_column_names(context_length, target_offset)
+    input_seq_cols = columns_from_slice(
+        resolved_view.input_slice, resolved_view.storage.stored_width
+    )
+    target_seq_cols = columns_from_slice(
+        resolved_view.target_slice, resolved_view.storage.stored_width
+    )
 
     # We will create a unified dictionary
     unified_tensors = {}
@@ -397,13 +419,7 @@ def numpy_to_pytorch(
         unified_tensors[f"{col_name}_target"] = target_tensor
 
     left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(data)
-    metadata = generate_padding_masks(
-        left_pad_lengths,
-        context_length,
-        sample_length,
-        data_offset,
-        target_offset,
-    )
+    metadata = resolved_view.build_masks(left_pad_lengths)
 
     return unified_tensors, metadata
 
@@ -412,8 +428,7 @@ def numpy_to_pytorch(
 def build_valid_mask(
     left_pad_lengths: Tensor,
     full_length: int,
-    offset: int,
-    context_length: int,
+    view_slice: slice,
 ) -> Tensor:
     """Builds a boolean validity mask from explicit left-padding metadata."""
 
@@ -422,7 +437,14 @@ def build_valid_mask(
     )
     full_valid = full_positions[None, :] >= left_pad_lengths[:, None]
 
-    return full_valid[:, -(context_length + offset) : (-offset if offset > 0 else None)]
+    return full_valid[:, view_slice]
+
+
+@beartype
+def columns_from_slice(view_slice: slice, stored_width: int) -> list[str]:
+    if view_slice.start is None or view_slice.stop is None:
+        raise ValueError("Resolved window slices must have concrete bounds")
+    return [str(stored_width - 1 - i) for i in range(view_slice.start, view_slice.stop)]
 
 
 @beartype
@@ -443,25 +465,6 @@ def get_left_pad_lengths_from_preprocessed_data(data: pl.DataFrame) -> Tensor:
     )
 
     return torch.tensor(lengths.to_numpy(), dtype=torch.int64)
-
-
-@beartype
-def generate_padding_masks(
-    left_pad_lengths: Tensor,
-    context_length: int,
-    sample_length: int,
-    data_offset: int,
-    target_offset: int,
-) -> dict[str, Tensor]:
-    """Generates explicit attention and target masks as a metadata dictionary."""
-    return {
-        "attention_valid_mask": build_valid_mask(
-            left_pad_lengths, sample_length, data_offset, context_length
-        ),
-        "target_valid_mask": build_valid_mask(
-            left_pad_lengths, sample_length, target_offset, context_length
-        ),
-    }
 
 
 @beartype
