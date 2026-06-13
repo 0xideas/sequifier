@@ -31,8 +31,8 @@ def test_metadata_config(metadata_configs):
         "split_paths",
         "column_types",
         "selected_columns_statistics",
-        "stored_width",
-        "future_capacity",
+        "stored_context_width",
+        "max_target_offset",
         "stored_window_layout_version",
     ]
 
@@ -272,8 +272,8 @@ def test_preprocessed_data_categorical_lookahead_0(run_preprocessing, project_ro
     with open(metadata_path, "r") as f:
         metadata_config = json.load(f)
 
-    assert metadata_config["future_capacity"] == 0
-    assert metadata_config["stored_width"] == 8
+    assert metadata_config["max_target_offset"] == 0
+    assert metadata_config["stored_context_width"] == 8
 
     for split in range(3):
         data = read_preprocessing_outputs(

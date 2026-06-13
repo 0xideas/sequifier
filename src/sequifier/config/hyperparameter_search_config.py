@@ -740,12 +740,12 @@ class HyperparameterSearchConfig(BaseModel):
     def validate_sequence_layout(self):
         for cl in self.context_length:
             if (
-                cl + self.storage_layout.future_capacity
-                > self.storage_layout.stored_width
+                cl + self.storage_layout.max_target_offset
+                > self.storage_layout.stored_context_width
             ):
                 raise ValueError(
-                    f"Window capacity mismatch: context_length ({cl}) + future_capacity "
-                    f"({self.storage_layout.future_capacity}) > stored_width ({self.storage_layout.stored_width}). "
+                    f"Window capacity mismatch: context_length ({cl}) + max_target_offset "
+                    f"({self.storage_layout.max_target_offset}) > stored_context_width ({self.storage_layout.stored_context_width}). "
                     "Model inputs cannot exceed the preprocessed sequence length."
                 )
         return self
@@ -859,7 +859,7 @@ class HyperparameterSearchConfig(BaseModel):
         window_view = ModelWindowView(
             context_length=context_length,
             objective=training_spec.training_objective,
-            target_shift=0 if training_spec.training_objective == "bert" else 1,
+            target_offset=0 if training_spec.training_objective == "bert" else 1,
         )
         resolve_window_view(self.storage_layout, window_view)
 

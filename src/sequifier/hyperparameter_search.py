@@ -61,7 +61,7 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
 
     run_config_dict = run_config.model_dump()
     run_config_dict["context_length"] = run_config_dict["window_view"]["context_length"]
-    run_config_dict["target_shift"] = run_config_dict["window_view"]["target_shift"]
+    run_config_dict["target_offset"] = run_config_dict["window_view"]["target_offset"]
 
     del run_config_dict["window_view"]
     del run_config_dict["storage_layout"]

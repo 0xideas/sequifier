@@ -218,10 +218,10 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         global_file_start_sample = 0
 
         input_seq_cols = columns_from_slice(
-            self.resolved_view.input_slice, self.folder_layout.stored_width
+            self.resolved_view.input_slice, self.folder_layout.stored_context_width
         )
         target_seq_cols = columns_from_slice(
-            self.resolved_view.target_slice, self.folder_layout.stored_width
+            self.resolved_view.target_slice, self.folder_layout.stored_context_width
         )
 
         # Initialize cross-file buffers

@@ -238,7 +238,9 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 left_pad_lengths_batch,
             ) = torch.load(file_path, map_location="cpu", weights_only=False)
             for tensor in sequences_batch.values():
-                validate_stored_window_width(tensor, self.folder_layout.stored_width)
+                validate_stored_window_width(
+                    tensor, self.folder_layout.stored_context_width
+                )
 
             # Generate indices for the whole file
             indices = torch.arange(file_samples)

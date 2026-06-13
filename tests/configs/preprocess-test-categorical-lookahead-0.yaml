@@ -9,8 +9,8 @@ split_ratios:
 - 0.6
 - 0.2
 - 0.2
-stored_width: 8
-future_capacity: 0
+stored_context_width: 8
+max_target_offset: 0
 stride_by_split:
 - 1
 - 1

@@ -174,8 +174,12 @@ def test_infer_config_defaults_bert_prediction_length_to_context_length():
         seed=42,
         device="cpu",
         prediction_length=None,
-        storage_layout=StoredWindowLayout(stored_width=4, future_capacity=1, version=2),
-        window_view=ModelWindowView(context_length=3, objective="bert", target_shift=0),
+        storage_layout=StoredWindowLayout(
+            stored_context_width=4, max_target_offset=1, version=2
+        ),
+        window_view=ModelWindowView(
+            context_length=3, objective="bert", target_offset=0
+        ),
         inference_batch_size=2,
         output_probabilities=False,
         map_to_id=False,
@@ -202,9 +206,11 @@ def test_infer_config_defaults_causal_prediction_length_to_one():
         seed=42,
         device="cpu",
         prediction_length=None,
-        storage_layout=StoredWindowLayout(stored_width=4, future_capacity=1, version=2),
+        storage_layout=StoredWindowLayout(
+            stored_context_width=4, max_target_offset=1, version=2
+        ),
         window_view=ModelWindowView(
-            context_length=3, objective="causal", target_shift=1
+            context_length=3, objective="causal", target_offset=1
         ),
         inference_batch_size=2,
         output_probabilities=False,
@@ -234,10 +240,10 @@ def test_infer_config_rejects_bert_prediction_length_mismatch():
             device="cpu",
             prediction_length=1,
             storage_layout=StoredWindowLayout(
-                stored_width=4, future_capacity=1, version=2
+                stored_context_width=4, max_target_offset=1, version=2
             ),
             window_view=ModelWindowView(
-                context_length=3, objective="bert", target_shift=0
+                context_length=3, objective="bert", target_offset=0
             ),
             inference_batch_size=2,
             output_probabilities=False,
@@ -256,8 +262,8 @@ def test_load_inferer_config_rejects_mismatched_metadata_special_token_ids(tmp_p
         json.dumps(
             {
                 "split_paths": [str(data_path)],
-                "stored_width": 4,
-                "future_capacity": 1,
+                "stored_context_width": 4,
+                "max_target_offset": 1,
                 "stored_window_layout_version": 2,
                 "column_types": {"target_col": "int64"},
                 "id_maps": {"target_col": {"A": 3}},
@@ -401,8 +407,12 @@ def _bert_inference_config(tmp_path, model_type="generative"):
         seed=42,
         device="cpu",
         prediction_length=None,
-        storage_layout=StoredWindowLayout(stored_width=4, future_capacity=1, version=2),
-        window_view=ModelWindowView(context_length=3, objective="bert", target_shift=0),
+        storage_layout=StoredWindowLayout(
+            stored_context_width=4, max_target_offset=1, version=2
+        ),
+        window_view=ModelWindowView(
+            context_length=3, objective="bert", target_offset=0
+        ),
         inference_batch_size=4,
         output_probabilities=False,
         map_to_id=True,
@@ -617,9 +627,11 @@ def ar_config():
         seed=42,
         device="cpu",
         prediction_length=1,
-        storage_layout=StoredWindowLayout(stored_width=4, future_capacity=1, version=2),
+        storage_layout=StoredWindowLayout(
+            stored_context_width=4, max_target_offset=1, version=2
+        ),
         window_view=ModelWindowView(
-            context_length=3, objective="causal", target_shift=1
+            context_length=3, objective="causal", target_offset=1
         ),
         inference_batch_size=2,
         output_probabilities=False,

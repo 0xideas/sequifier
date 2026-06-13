@@ -492,7 +492,9 @@ def infer_embedding(
                 left_pad_lengths_tensor,
             ) = data
             for tensor in sequences_dict.values():
-                validate_stored_window_width(tensor, config.storage_layout.stored_width)
+                validate_stored_window_width(
+                    tensor, config.storage_layout.stored_context_width
+                )
 
             resolved_view = resolve_window_view(
                 config.storage_layout, config.window_view
@@ -746,7 +748,9 @@ def infer_generative(
                 left_pad_lengths_tensor,
             ) = data
             for tensor in sequences_dict.values():
-                validate_stored_window_width(tensor, config.storage_layout.stored_width)
+                validate_stored_window_width(
+                    tensor, config.storage_layout.stored_context_width
+                )
             total_steps = (
                 1
                 if config.autoregression_total_steps is None
@@ -946,7 +950,7 @@ def get_embeddings_pt(
     """
     resolved_view = resolve_window_view(config.storage_layout, config.window_view)
     for tensor in data.values():
-        validate_stored_window_width(tensor, config.storage_layout.stored_width)
+        validate_stored_window_width(tensor, config.storage_layout.stored_context_width)
     X = {
         key: val[:, resolved_view.input_slice].numpy()
         for key, val in data.items()

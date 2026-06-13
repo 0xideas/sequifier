@@ -45,7 +45,7 @@ def test_hp_search_bert_outputs(run_hp_search, project_root):
     )
     assert "storage_layout" not in generated_config
     assert "window_view" not in generated_config
-    assert generated_config["target_shift"] == 0
+    assert generated_config["target_offset"] == 0
     assert generated_config["training_spec"]["training_objective"] == "bert"
 
 

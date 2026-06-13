@@ -45,24 +45,26 @@ PANDAS_TO_TORCH_TYPES = {
 
 @dataclass(frozen=True)
 class StoredWindowLayout:
-    stored_width: int
-    future_capacity: int
+    stored_context_width: int
+    max_target_offset: int
     version: int
 
     def __post_init__(self) -> None:
-        if self.stored_width < 1:
-            raise ValueError("stored_width must be a positive integer")
-        if self.future_capacity < 0:
-            raise ValueError("future_capacity must be non-negative")
-        if self.future_capacity >= self.stored_width:
-            raise ValueError("future_capacity must be smaller than stored_width")
+        if self.stored_context_width < 1:
+            raise ValueError("stored_context_width must be a positive integer")
+        if self.max_target_offset < 0:
+            raise ValueError("max_target_offset must be non-negative")
+        if self.max_target_offset >= self.stored_context_width:
+            raise ValueError(
+                "max_target_offset must be smaller than stored_context_width"
+            )
 
 
 @dataclass(frozen=True)
 class ModelWindowView:
     context_length: int
     objective: str
-    target_shift: int = 1
+    target_offset: int
 
     def __post_init__(self) -> None:
         if self.context_length < 1:
@@ -71,12 +73,12 @@ class ModelWindowView:
             raise ValueError(
                 f"Only 'causal' and 'bert' are allowed, found {self.objective}"
             )
-        if self.target_shift < 0:
-            raise ValueError("target_shift must be non-negative")
-        if self.objective == "bert" and self.target_shift != 0:
-            raise ValueError("BERT views require target_shift=0")
-        if self.objective == "causal" and self.target_shift < 1:
-            raise ValueError("Causal views require target_shift >= 1")
+        if self.target_offset < 0:
+            raise ValueError("target_offset must be non-negative")
+        if self.objective == "bert" and self.target_offset != 0:
+            raise ValueError("BERT views require target_offset=0")
+        if self.objective == "causal" and self.target_offset < 1:
+            raise ValueError("Causal views require target_offset >= 1")
 
 
 @dataclass(frozen=True)
@@ -91,10 +93,10 @@ class ResolvedWindowView:
         """Build explicit input-attention and target-validity masks for this view."""
         return {
             "attention_valid_mask": build_valid_mask(
-                left_pad_lengths, self.storage.stored_width, self.input_slice
+                left_pad_lengths, self.storage.stored_context_width, self.input_slice
             ),
             "target_valid_mask": build_valid_mask(
-                left_pad_lengths, self.storage.stored_width, self.target_slice
+                left_pad_lengths, self.storage.stored_context_width, self.target_slice
             ),
         }
 
@@ -110,19 +112,19 @@ def _right_aligned_slice(width: int, length: int, offset: int) -> slice:
 def resolve_window_view(
     storage: StoredWindowLayout, view: ModelWindowView
 ) -> ResolvedWindowView:
-    if view.target_shift > storage.future_capacity:
+    if view.target_offset > storage.max_target_offset:
         raise ValueError(
-            f"Model target_shift={view.target_shift} exceeds stored "
-            f"future_capacity={storage.future_capacity}."
+            f"Model target_offset={view.target_offset} exceeds stored "
+            f"max_target_offset={storage.max_target_offset}."
         )
 
-    input_offset = storage.future_capacity
-    target_offset = storage.future_capacity - view.target_shift
+    input_offset = storage.max_target_offset
+    target_offset = storage.max_target_offset - view.target_offset
     required_width = view.context_length + max(input_offset, target_offset)
-    if required_width > storage.stored_width:
+    if required_width > storage.stored_context_width:
         raise ValueError(
             f"Model view requires width {required_width}, but storage only has "
-            f"stored_width={storage.stored_width}."
+            f"stored_context_width={storage.stored_context_width}."
         )
 
     return ResolvedWindowView(
@@ -130,28 +132,28 @@ def resolve_window_view(
         view=view,
         required_width=required_width,
         input_slice=_right_aligned_slice(
-            storage.stored_width, view.context_length, input_offset
+            storage.stored_context_width, view.context_length, input_offset
         ),
         target_slice=_right_aligned_slice(
-            storage.stored_width, view.context_length, target_offset
+            storage.stored_context_width, view.context_length, target_offset
         ),
     )
 
 
 @beartype
-def validate_stored_window_width(tensor: Tensor, stored_width: int) -> None:
-    if tensor.shape[1] != stored_width:
+def validate_stored_window_width(tensor: Tensor, stored_context_width: int) -> None:
+    if tensor.shape[1] != stored_context_width:
         raise ValueError(
             f"Stored window width {tensor.shape[1]} does not match "
-            f"metadata stored_width={stored_width}."
+            f"metadata stored_context_width={stored_context_width}."
         )
 
 
 @beartype
 def stored_window_layout_from_metadata(metadata: dict) -> StoredWindowLayout:
     return StoredWindowLayout(
-        stored_width=int(metadata["stored_width"]),
-        future_capacity=int(metadata["future_capacity"]),
+        stored_context_width=int(metadata["stored_context_width"]),
+        max_target_offset=int(metadata["max_target_offset"]),
         version=int(metadata["stored_window_layout_version"]),
     )
 
@@ -389,10 +391,10 @@ def numpy_to_pytorch(
         - a metadata dictionary containing any explicit masks.
     """
     input_seq_cols = columns_from_slice(
-        resolved_view.input_slice, resolved_view.storage.stored_width
+        resolved_view.input_slice, resolved_view.storage.stored_context_width
     )
     target_seq_cols = columns_from_slice(
-        resolved_view.target_slice, resolved_view.storage.stored_width
+        resolved_view.target_slice, resolved_view.storage.stored_context_width
     )
 
     # We will create a unified dictionary
@@ -441,10 +443,13 @@ def build_valid_mask(
 
 
 @beartype
-def columns_from_slice(view_slice: slice, stored_width: int) -> list[str]:
+def columns_from_slice(view_slice: slice, stored_context_width: int) -> list[str]:
     if view_slice.start is None or view_slice.stop is None:
         raise ValueError("Resolved window slices must have concrete bounds")
-    return [str(stored_width - 1 - i) for i in range(view_slice.start, view_slice.stop)]
+    return [
+        str(stored_context_width - 1 - i)
+        for i in range(view_slice.start, view_slice.stop)
+    ]
 
 
 @beartype

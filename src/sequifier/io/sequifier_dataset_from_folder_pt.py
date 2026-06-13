@@ -73,7 +73,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             for col in all_sequences.keys():
                 if col in sequences_batch:
                     validate_stored_window_width(
-                        sequences_batch[col], self.folder_layout.stored_width
+                        sequences_batch[col], self.folder_layout.stored_context_width
                     )
                     all_sequences[col].append(sequences_batch[col])
             all_left_pad_lengths.append(left_pad_lengths_batch)

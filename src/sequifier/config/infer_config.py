@@ -65,23 +65,23 @@ def load_inferer_config(
                 f"got {storage_layout.version}."
             )
         training_objective = config_values["training_objective"]
-        target_shift = (
+        target_offset = (
             0
             if training_objective == "bert"
-            else int(config_values.pop("target_shift", 1))
+            else int(config_values.pop("target_offset", 1))
         )
         window_view = ModelWindowView(
             context_length=int(config_values.pop("context_length")),
             objective=training_objective,
-            target_shift=target_shift,
+            target_offset=target_offset,
         )
         resolve_window_view(storage_layout, window_view)
         config_values["storage_layout"] = storage_layout
         config_values["window_view"] = window_view
         for key in (
-            "target_shift",
-            "stored_width",
-            "future_capacity",
+            "target_offset",
+            "stored_context_width",
+            "max_target_offset",
             "stored_window_layout_version",
         ):
             config_values.pop(key, None)

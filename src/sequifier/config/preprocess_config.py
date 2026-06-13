@@ -54,8 +54,8 @@ class PreprocessorModel(BaseModel):
         selected_columns: A list of columns to be included in the preprocessing. If None, all columns are used.
         split_ratios: A list of floats that define the relative sizes of data splits (e.g., for train, validation, test).
                            The sum of proportions must be 1.0.
-        stored_width: The physical serialized window width.
-        future_capacity: The number of future items retained after the input window.
+        stored_context_width: The physical serialized window width.
+        max_target_offset: The number of future items retained after the input window.
         stride_by_split: A list of step sizes for creating subsequences within each data split.
         max_rows: The maximum number of input rows to process. If None, all rows are processed.
         seed: A random seed for reproducibility.
@@ -78,8 +78,8 @@ class PreprocessorModel(BaseModel):
     selected_columns: Optional[list[str]] = None
 
     split_ratios: list[float]
-    stored_width: int = Field(gt=0)
-    future_capacity: int = Field(default=1, ge=0)
+    stored_context_width: int = Field(gt=0)
+    max_target_offset: int = Field(default=1, ge=0)
     stride_by_split: Optional[list[int]] = None
     max_rows: Optional[int] = None
     seed: int
@@ -194,12 +194,14 @@ class PreprocessorModel(BaseModel):
             raise ValueError("metadata_config_path must be set when mask_column is set")
         if self.mask_column in ("sequenceId", "itemPosition"):
             raise ValueError("mask_column cannot be sequenceId or itemPosition")
-        if self.future_capacity >= self.stored_width:
-            raise ValueError("future_capacity must be smaller than stored_width")
+        if self.max_target_offset >= self.stored_context_width:
+            raise ValueError(
+                "max_target_offset must be smaller than stored_context_width"
+            )
         return self
 
     def __init__(self, **kwargs):
-        default_stride_for_split = [kwargs["stored_width"]] * len(
+        default_stride_for_split = [kwargs["stored_context_width"]] * len(
             kwargs["split_ratios"]
         )
         kwargs["stride_by_split"] = kwargs.get(

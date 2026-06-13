@@ -54,7 +54,7 @@ def adapt_configs(config_strings):
                 "selected_columns: [EXAMPLE_INPUT_COLUMN_NAME]", "selected_columns: "
             )
             .replace("input_columns: [EXAMPLE_INPUT_COLUMN_NAME]", "input_columns: ")
-            .replace("stored_width: 49", "stored_width: 11")
+            .replace("stored_context_width: 49", "stored_context_width: 11")
             .replace("max_rows: null", "max_rows: null\nn_cores: 1")
         )
 

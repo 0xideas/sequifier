@@ -18,8 +18,8 @@ def _folder_metadata(total_samples, batch_files):
     return {
         "total_samples": total_samples,
         "batch_files": batch_files,
-        "stored_width": STORED_WIDTH,
-        "future_capacity": FUTURE_CAPACITY,
+        "stored_context_width": STORED_WIDTH,
+        "max_target_offset": FUTURE_CAPACITY,
         "stored_window_layout_version": 2,
     }
 
@@ -35,10 +35,10 @@ def mock_config(tmp_path):
     config.training_spec.num_workers = 0
     config.seed = 42
     config.storage_layout = StoredWindowLayout(
-        stored_width=STORED_WIDTH, future_capacity=FUTURE_CAPACITY, version=2
+        stored_context_width=STORED_WIDTH, max_target_offset=FUTURE_CAPACITY, version=2
     )
     config.window_view = ModelWindowView(
-        context_length=CONTEXT_LENGTH, objective="causal", target_shift=1
+        context_length=CONTEXT_LENGTH, objective="causal", target_offset=1
     )
     config.input_columns = ["col1"]
     config.target_columns = ["col1", "tgt1"]

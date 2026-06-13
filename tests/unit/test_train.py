@@ -77,8 +77,8 @@ def test_training_spec_model_dump_excludes_runtime_offsets():
 
     assert "data_offset" not in dumped
     assert "target_offset" not in dumped
-    assert "stored_width" not in dumped
-    assert "max_lookahead" not in dumped
+    assert "stored_context_width" not in dumped
+    assert "max_target_offset" not in dumped
 
 
 def test_poisson_span_masking_samples_at_least_one_token():
@@ -137,10 +137,10 @@ def model_config(tmp_path):
         id_maps={"cat_col": {"a": 1, "b": 2, "c": 3, "d": 4}},
         n_classes={"cat_col": 5},  # 0 + 4 classes
         storage_layout=StoredWindowLayout(
-            stored_width=11, future_capacity=1, version=2
+            stored_context_width=11, max_target_offset=1, version=2
         ),
         window_view=ModelWindowView(
-            context_length=10, objective="causal", target_shift=1
+            context_length=10, objective="causal", target_offset=1
         ),
         inference_batch_size=4,
         seed=42,
@@ -178,7 +178,7 @@ def bert_model(model_config):
     config_values["window_view"] = {
         **config_values["window_view"],
         "objective": "bert",
-        "target_shift": 0,
+        "target_offset": 0,
     }
     config = TrainModel(**config_values)
     return TransformerModel(config)
@@ -238,7 +238,7 @@ def test_train_model_requires_bert_prediction_length_to_equal_context_length(
     config_values["window_view"] = {
         **config_values["window_view"],
         "objective": "bert",
-        "target_shift": 0,
+        "target_offset": 0,
     }
 
     with pytest.raises(ValidationError, match="prediction_length must be equal"):
@@ -273,8 +273,8 @@ def test_load_train_config_rejects_mismatched_metadata_special_token_ids(
         json.dumps(
             {
                 "split_paths": ["data/train.pt", "data/val.pt"],
-                "stored_width": storage_layout["stored_width"],
-                "future_capacity": storage_layout["future_capacity"],
+                "stored_context_width": storage_layout["stored_context_width"],
+                "max_target_offset": storage_layout["max_target_offset"],
                 "stored_window_layout_version": storage_layout["version"],
                 "column_types": config_values["column_types"],
                 "n_classes": config_values["n_classes"],
@@ -308,8 +308,8 @@ def test_load_train_config_defaults_missing_metadata_special_token_ids(
         json.dumps(
             {
                 "split_paths": ["data/train.pt", "data/val.pt"],
-                "stored_width": storage_layout["stored_width"],
-                "future_capacity": storage_layout["future_capacity"],
+                "stored_context_width": storage_layout["stored_context_width"],
+                "max_target_offset": storage_layout["max_target_offset"],
                 "stored_window_layout_version": storage_layout["version"],
                 "column_types": config_values["column_types"],
                 "n_classes": config_values["n_classes"],
