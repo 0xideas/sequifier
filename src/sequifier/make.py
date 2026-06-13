@@ -13,10 +13,6 @@ split_ratios:
 - 0.1
 stored_context_width: 49
 max_target_offset: 1
-stride_by_split:
-- 1
-- 1
-- 1
 max_rows: null
 """
 
@@ -52,7 +48,7 @@ training_spec:
   device: cuda
   epochs: 10
   save_interval_epochs: 10
-  batch_size: 100
+  batch_size: 10
   log_interval: 10
   learning_rate: 0.0001
   accumulation_steps: 1

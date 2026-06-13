@@ -17,7 +17,7 @@ from sequifier.config.train_config import (
 )
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
-from sequifier.train import TransformerModel
+from sequifier.train import TransformerModel, _get_evaluation_loss_mask
 
 
 def _training_spec_kwargs(**overrides):
@@ -477,6 +477,85 @@ def test_calculate_loss_uses_target_columns_for_fallback_mask_inference():
 
     assert torch.isclose(total_loss, torch.tensor(1.0))
     assert torch.isclose(component_losses["real_target"], torch.tensor(1.0))
+
+
+def test_evaluation_loss_mask_intersects_target_bert_and_sample_masks():
+    metadata = {
+        "target_valid_mask": torch.tensor(
+            [
+                [True, True, False],
+                [True, True, True],
+            ]
+        ),
+        "bert_mask": torch.tensor(
+            [
+                [True, False, True],
+                [True, True, True],
+            ]
+        ),
+        "sample_valid_mask": torch.tensor([True, False]),
+    }
+
+    loss_mask = _get_evaluation_loss_mask(metadata)
+
+    assert torch.equal(
+        loss_mask,
+        torch.tensor(
+            [
+                [True, False, False],
+                [False, False, False],
+            ]
+        ),
+    )
+
+
+def test_calculate_loss_components_aggregate_by_token_count():
+    model = TransformerModel.__new__(TransformerModel)
+    model.target_column_types = {"real_col": "real"}
+    model.criterion = {"real_col": torch.nn.MSELoss(reduction="none")}
+    model.loss_weights = {"real_col": 1.0}
+
+    first_sums, first_counts = TransformerModel._calculate_loss_components(
+        model,
+        {"real_col": torch.zeros(1, 1, 1)},
+        {"real_col": torch.tensor([[10.0]])},
+        torch.ones(1, 1, dtype=torch.bool),
+    )
+    second_sums, second_counts = TransformerModel._calculate_loss_components(
+        model,
+        {"real_col": torch.zeros(100, 1, 1)},
+        {"real_col": torch.ones(1, 100)},
+        torch.ones(1, 100, dtype=torch.bool),
+    )
+
+    aggregate = (first_sums["real_col"] + second_sums["real_col"]) / (
+        first_counts["real_col"] + second_counts["real_col"]
+    )
+
+    assert torch.isclose(aggregate, torch.tensor(200.0 / 101.0, dtype=torch.float64))
+
+
+def test_calculate_loss_zero_token_training_batch_is_differentiable():
+    model = TransformerModel.__new__(TransformerModel)
+    model.target_column_types = {"real_col": "real"}
+    model.criterion = {"real_col": torch.nn.MSELoss(reduction="none")}
+    model.loss_weights = None
+
+    output = {"real_col": torch.ones(3, 1, 1, requires_grad=True)}
+    targets = {"real_col": torch.zeros(1, 3)}
+    metadata = {
+        "attention_valid_mask": torch.zeros(1, 3, dtype=torch.bool),
+        "target_valid_mask": torch.zeros(1, 3, dtype=torch.bool),
+    }
+
+    total_loss, component_losses = TransformerModel._calculate_loss(
+        model, output, targets, metadata
+    )
+    total_loss.backward()
+
+    assert torch.equal(total_loss.detach(), torch.tensor(0.0))
+    assert torch.equal(component_losses["real_col"].detach(), torch.tensor(0.0))
+    assert torch.equal(output["real_col"].grad, torch.zeros_like(output["real_col"]))
 
 
 def test_padding_keys_are_masked(bert_model):

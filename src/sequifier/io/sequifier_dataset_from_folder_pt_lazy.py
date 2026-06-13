@@ -163,7 +163,11 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
 
         # 1. Distribute files among ranks
         num_files = len(self.batch_files_info)
-        files_for_this_rank = list(range(rank, num_files, world_size))
+        original_files_for_this_rank = list(range(rank, num_files, world_size))
+        rank_real_samples = sum(
+            self.batch_files_info[i]["samples"] for i in original_files_for_this_rank
+        )
+        files_for_this_rank = original_files_for_this_rank.copy()
 
         if not files_for_this_rank:
             if self.sampling_strategy == "oversampling":
@@ -254,6 +258,12 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             worker_file_end_idx = min(file_samples, worker_end_sample - file_start)
 
             worker_indices = indices[worker_file_start_idx:worker_file_end_idx]
+            logical_positions = torch.arange(
+                file_start + worker_file_start_idx,
+                file_start + worker_file_end_idx,
+                dtype=torch.int64,
+            )
+            sample_is_real = logical_positions < rank_real_samples
             num_new_samples = len(worker_indices)
 
             if num_new_samples == 0:
@@ -275,6 +285,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             new_meta = self.resolved_view.build_masks(
                 left_pad_lengths_batch[worker_indices]
             )
+            new_meta["sample_valid_mask"] = sample_is_real
 
             # Free the large file immediately to keep RAM down
             del sequences_batch, left_pad_lengths_batch

@@ -189,22 +189,36 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
 
         # 2. Slice metrics based on GPU distribution metrics
         indices_for_rank = indices[rank::world_size].tolist()
+        sample_is_real = [True] * len(indices_for_rank)
 
         # 3. Synchronize cross-device oversampling/undersampling rules
         if self.sampling_strategy == "oversampling":
+            real_count = len(indices_for_rank)
+            if real_count == 0:
+                fallback_indices = indices.tolist()
+                while len(indices_for_rank) < self.target_samples and fallback_indices:
+                    n = min(
+                        len(fallback_indices),
+                        self.target_samples - len(indices_for_rank),
+                    )
+                    indices_for_rank.extend(fallback_indices[:n])
+                    sample_is_real.extend([False] * n)
             while len(indices_for_rank) < self.target_samples:
-                indices_for_rank.extend(
-                    indices_for_rank[: self.target_samples - len(indices_for_rank)]
-                )
+                n = min(real_count, self.target_samples - len(indices_for_rank))
+                indices_for_rank.extend(indices_for_rank[:n])
+                sample_is_real.extend([False] * n)
         elif self.sampling_strategy == "undersampling":
             indices_for_rank = indices_for_rank[: self.target_samples]
+            sample_is_real = sample_is_real[: self.target_samples]
 
         # 4. Map worker task splits
         indices_for_worker = indices_for_rank[worker_id::num_workers]
+        sample_is_real_for_worker = sample_is_real[worker_id::num_workers]
 
         # 5. Extract and pass unified data frames
         for i in range(0, len(indices_for_worker), self.batch_size):
             batch_indices = indices_for_worker[i : i + self.batch_size]
+            batch_sample_is_real = sample_is_real_for_worker[i : i + self.batch_size]
 
             data_batch = {
                 key: tensor[batch_indices] for key, tensor in self.sequences.items()
@@ -218,6 +232,9 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
                 metadata_batch = self.resolved_view.build_masks(
                     self.left_pad_lengths[batch_indices]
                 )
+            metadata_batch["sample_valid_mask"] = torch.tensor(
+                batch_sample_is_real, dtype=torch.bool
+            )
 
             yield SequifierBatch(
                 inputs=data_batch,

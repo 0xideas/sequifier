@@ -499,6 +499,27 @@ def format_number(number: Union[int, float, np.float32]) -> str:
     return f"{number_adjusted:5.2f}e{order_of_magnitude}"
 
 
+def _get_evaluation_loss_mask(metadata: dict[str, Tensor]) -> Tensor:
+    valid_mask = metadata["target_valid_mask"].bool()
+
+    if "bert_mask" in metadata:
+        valid_mask = valid_mask & metadata["bert_mask"].bool()
+
+    if "sample_valid_mask" in metadata:
+        sample_valid_mask = metadata["sample_valid_mask"].bool()
+
+        if sample_valid_mask.ndim != 1:
+            raise ValueError("sample_valid_mask must have shape [batch_size].")
+        if sample_valid_mask.shape[0] != valid_mask.shape[0]:
+            raise ValueError(
+                "sample_valid_mask batch dimension does not match target_valid_mask."
+            )
+
+        valid_mask = valid_mask & sample_valid_mask.unsqueeze(1)
+
+    return valid_mask
+
+
 class TransformerEmbeddingModel(nn.Module):
     """A wrapper around the TransformerModel to expose the embedding functionality."""
 
@@ -1730,40 +1751,41 @@ class TransformerModel(nn.Module):
             raise RuntimeError("Loss calculation failed; no target columns were found.")
 
         valid_mask = metadata["target_valid_mask"].bool()  # type: ignore
-
         if "bert_mask" in metadata:
             valid_mask = valid_mask & metadata["bert_mask"].bool()
 
         mask = valid_mask.T.contiguous().reshape(-1)
+        token_count = mask.sum(dtype=torch.int64)
 
         losses = {}
         for target_column in target_names:
             target_column_type = self.target_column_types[target_column]
             if target_column_type == "categorical":
-                output[target_column] = (
+                output_tensor = (
                     output[target_column]
                     .float()
                     .reshape(-1, self.n_classes[target_column])
                 )
             elif target_column_type == "real":
-                output[target_column] = (
+                output_tensor = (
                     output[target_column].to(dtype=torch.float32).reshape(-1)
+                )
+            else:
+                raise ValueError(
+                    f"Target column type {target_column_type} not in ['categorical', 'real']"
                 )
 
             target_tensor = targets[target_column].T.contiguous().reshape(-1)
 
             if self.target_column_types[target_column] == "real":
-                target_tensor = target_tensor.to(dtype=output[target_column].dtype)
+                target_tensor = target_tensor.to(dtype=output_tensor.dtype)
 
-            raw_loss = self.criterion[target_column](
-                output[target_column], target_tensor
-            )
+            raw_loss = self.criterion[target_column](output_tensor, target_tensor)
 
             current_mask = mask.to(dtype=raw_loss.dtype)
+            denominator = token_count.clamp_min(1).to(dtype=raw_loss.dtype)
 
-            losses[target_column] = (raw_loss * current_mask).sum() / (
-                current_mask.sum() + 1e-9
-            )
+            losses[target_column] = (raw_loss * current_mask).sum() / denominator
 
         loss = None
         for target_column in target_names:
@@ -1783,6 +1805,57 @@ class TransformerModel(nn.Module):
             )
 
         return loss, losses
+
+    @beartype
+    def _calculate_loss_components(
+        self,
+        output: dict[str, Tensor],
+        targets: dict[str, Tensor],
+        valid_mask: Tensor,
+    ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+        target_names = [k for k in targets.keys() if k in self.target_column_types]
+        if not target_names:
+            raise RuntimeError("Loss calculation failed; no target columns were found.")
+
+        mask = valid_mask.bool().T.contiguous().reshape(-1)
+        token_count = mask.sum(dtype=torch.int64)
+
+        loss_sums = {}
+        token_counts = {}
+        for target_column in target_names:
+            target_column_type = self.target_column_types[target_column]
+            if target_column_type == "categorical":
+                output_tensor = (
+                    output[target_column]
+                    .float()
+                    .reshape(-1, self.n_classes[target_column])
+                )
+            elif target_column_type == "real":
+                output_tensor = (
+                    output[target_column].to(dtype=torch.float32).reshape(-1)
+                )
+            else:
+                raise ValueError(
+                    f"Target column type {target_column_type} not in ['categorical', 'real']"
+                )
+
+            target_tensor = targets[target_column].T.contiguous().reshape(-1)
+
+            if self.target_column_types[target_column] == "real":
+                target_tensor = target_tensor.to(dtype=output_tensor.dtype)
+
+            raw_loss = self.criterion[target_column](output_tensor, target_tensor)
+            current_mask = mask.to(dtype=raw_loss.dtype)
+
+            loss_sum = (raw_loss * current_mask).sum(dtype=torch.float64)
+            loss_sums[target_column] = loss_sum * (
+                self.loss_weights[target_column]
+                if self.loss_weights is not None
+                else 1.0
+            )
+            token_counts[target_column] = token_count
+
+        return loss_sums, token_counts
 
     @beartype
     def _copy_model(self):
@@ -1853,232 +1926,246 @@ class TransformerModel(nn.Module):
             - The output tensor dictionary from the last batch (used for class share logging).
         """
 
-        total_loss_collect = []
-        # Initialize a dict to hold lists of losses for each target
-        total_losses_collect = {col: [] for col in self.target_columns}
+        model_to_call = ddp_model if ddp_model is not None else self
+        target_names = list(self.target_columns)
         output = {}  # for type checking
 
-        model_to_call = ddp_model if ddp_model is not None else self
+        def new_accumulators() -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+            return (
+                {
+                    col: torch.zeros((), device=self.device, dtype=torch.float64)
+                    for col in target_names
+                },
+                {
+                    col: torch.zeros((), device=self.device, dtype=torch.float64)
+                    for col in target_names
+                },
+            )
 
+        def accumulate_components(
+            sums: dict[str, Tensor],
+            counts: dict[str, Tensor],
+            batch_sums: dict[str, Tensor],
+            batch_counts: dict[str, Tensor],
+        ) -> None:
+            for col in batch_sums:
+                sums[col] = sums[col] + batch_sums[col].detach().double()
+                counts[col] = counts[col] + batch_counts[col].detach().double()
+
+        def finalize_components(
+            sums: dict[str, Tensor],
+            counts: dict[str, Tensor],
+            label: str,
+        ) -> tuple[Tensor, dict[str, Tensor]]:
+            packed = torch.stack(
+                [sums[col] for col in target_names]
+                + [counts[col] for col in target_names]
+            )
+
+            if self.hparams.training_spec.distributed:
+                dist.all_reduce(packed, op=dist.ReduceOp.SUM)
+
+            n_targets = len(target_names)
+            reduced_sums = dict(zip(target_names, packed[:n_targets]))
+            reduced_counts = dict(zip(target_names, packed[n_targets:]))
+
+            losses = {}
+            total = torch.zeros((), device=self.device, dtype=torch.float64)
+            for col in target_names:
+                if reduced_counts[col].detach().cpu().item() == 0:
+                    raise RuntimeError(
+                        f"No valid {label} tokens found for target column {col!r}."
+                    )
+                losses[col] = reduced_sums[col] / reduced_counts[col]
+                total = total + losses[col]
+            return total, losses
+
+        was_training = model_to_call.training
         model_to_call.eval()
 
-        with torch.no_grad():
-            for batch_idx, batch in enumerate(valid_loader):
-                if not isinstance(batch, SequifierBatch):
-                    raise TypeError(
-                        "Validation DataLoader must yield SequifierBatch objects, "
-                        f"got {type(batch).__name__}."
-                    )
-                data = batch.inputs
-                targets = batch.targets
-                metadata = batch.metadata
-                # Move data to the current process's assigned GPU
-                data = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in data.items()
-                    if k in self.input_columns
-                }
-                targets = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in targets.items()
-                    if k in self.target_column_types
-                }
-                metadata = {
-                    k: v.to(self.device, non_blocking=True) for k, v in metadata.items()
-                }
-                if self.hparams.training_spec.training_objective == "bert":
-                    data, targets, metadata = apply_bert_masking(
-                        data,
-                        targets,
-                        metadata,
-                        self.hparams,
-                        eval_seed=self.hparams.seed + batch_idx,
-                    )
+        try:
+            total_loss_sums, total_loss_counts = new_accumulators()
 
-                if (
-                    self.hparams.training_spec.layer_autocast
-                    and self.hparams.training_spec.data_parallelism != "FSDP"
-                ):
-                    amp_dtype = get_torch_dtype(
-                        self.hparams.training_spec.layer_type_dtypes.get(
-                            "linear", "bfloat16"
+            with torch.no_grad():
+                for batch_idx, batch in enumerate(valid_loader):
+                    if not isinstance(batch, SequifierBatch):
+                        raise TypeError(
+                            "Validation DataLoader must yield SequifierBatch objects, "
+                            f"got {type(batch).__name__}."
                         )
-                        if self.hparams.training_spec.layer_type_dtypes
-                        else "bfloat16"
-                    )
-                    with torch.autocast(
-                        device_type=self.device.split(":")[0], dtype=amp_dtype
+                    data = batch.inputs
+                    targets = batch.targets
+                    metadata = batch.metadata
+                    # Move data to the current process's assigned GPU
+                    data = {
+                        k: v.to(self.device, non_blocking=True)
+                        for k, v in data.items()
+                        if k in self.input_columns
+                    }
+                    targets = {
+                        k: v.to(self.device, non_blocking=True)
+                        for k, v in targets.items()
+                        if k in self.target_column_types
+                    }
+                    metadata = {
+                        k: v.to(self.device, non_blocking=True)
+                        for k, v in metadata.items()
+                    }
+                    if self.hparams.training_spec.training_objective == "bert":
+                        data, targets, metadata = apply_bert_masking(
+                            data,
+                            targets,
+                            metadata,
+                            self.hparams,
+                            eval_seed=self.hparams.seed + batch_idx,
+                        )
+
+                    valid_mask = _get_evaluation_loss_mask(metadata)
+
+                    if (
+                        self.hparams.training_spec.layer_autocast
+                        and self.hparams.training_spec.data_parallelism != "FSDP"
                     ):
+                        amp_dtype = get_torch_dtype(
+                            self.hparams.training_spec.layer_type_dtypes.get(
+                                "linear", "bfloat16"
+                            )
+                            if self.hparams.training_spec.layer_type_dtypes
+                            else "bfloat16"
+                        )
+                        with torch.autocast(
+                            device_type=self.device.split(":")[0], dtype=amp_dtype
+                        ):
+                            output = model_to_call(
+                                data, metadata=metadata, return_logits=True
+                            )
+                            loss_sums, token_counts = self._calculate_loss_components(
+                                output, targets, valid_mask
+                            )
+                    else:
                         output = model_to_call(
                             data, metadata=metadata, return_logits=True
                         )
-                        loss, losses = self._calculate_loss(output, targets, metadata)
-                else:
-                    output = model_to_call(data, metadata=metadata, return_logits=True)
-                    loss, losses = self._calculate_loss(output, targets, metadata)
+                        loss_sums, token_counts = self._calculate_loss_components(
+                            output, targets, valid_mask
+                        )
 
-                total_loss_collect.append(loss.item())
-                for col, loss in losses.items():
-                    total_losses_collect[col].append(loss.item())
+                    accumulate_components(
+                        total_loss_sums,
+                        total_loss_counts,
+                        loss_sums,
+                        token_counts,
+                    )
 
-                # Free up GPU memory
-                del data, targets, metadata, loss, losses
-                if self.device == "cuda":
-                    torch.cuda.empty_cache()
-
-        if len(total_loss_collect) > 0:
-            total_loss_local = np.mean(total_loss_collect)
-            total_losses_local = {
-                col: np.mean(loss_list)
-                for col, loss_list in total_losses_collect.items()
-            }
-        else:
-            # Handle empty validation set case
-            total_loss_local = 0.0
-            total_losses_local = {col: 0.0 for col in self.target_columns}
-
-        # 2. Aggregate losses across all GPUs if in distributed mode
-        if self.hparams.training_spec.distributed:
-            # Put local losses into tensors for reduction
-            total_loss_tensor = torch.tensor(
-                total_loss_local, device=self.device, dtype=torch.float32
+            total_loss_global, total_losses_global = finalize_components(
+                total_loss_sums, total_loss_counts, "validation"
             )
 
-            # Ensure consistent order for the losses tensor
-            loss_keys = sorted(total_losses_local.keys())
-            losses_values = [total_losses_local[k] for k in loss_keys]
-            losses_tensor = torch.tensor(
-                losses_values, device=self.device, dtype=torch.float32
+            # Handle one-time baseline loss calculation with the same aggregation semantics.
+            if not hasattr(self, "baseline_loss"):
+                baseline_loss_sums, baseline_loss_counts = new_accumulators()
+
+                with torch.no_grad():
+                    for batch_idx, batch in enumerate(valid_loader):
+                        if not isinstance(batch, SequifierBatch):
+                            raise TypeError(
+                                "Validation DataLoader must yield SequifierBatch objects, "
+                                f"got {type(batch).__name__}."
+                            )
+                        data = batch.inputs
+                        targets = batch.targets
+                        metadata = batch.metadata
+                        data = {
+                            k: v.to(self.device, non_blocking=True)
+                            for k, v in data.items()
+                            if k in self.input_columns
+                        }
+                        targets = {
+                            k: v.to(self.device, non_blocking=True)
+                            for k, v in targets.items()
+                            if k in self.target_column_types
+                        }
+                        metadata = {
+                            k: v.to(self.device, non_blocking=True)
+                            for k, v in metadata.items()
+                        }
+
+                        if self.hparams.training_spec.training_objective == "bert":
+                            _, _, metadata = apply_bert_masking(
+                                data,
+                                targets,
+                                metadata,
+                                self.hparams,
+                                eval_seed=self.hparams.seed + batch_idx,
+                            )
+
+                        valid_mask = _get_evaluation_loss_mask(metadata)
+
+                        pseudo_output = {}
+                        targets_for_baseline = {}
+                        for col in self.target_columns:
+                            if col in targets:
+                                if (
+                                    self.hparams.training_spec.training_objective
+                                    == "causal"
+                                ):
+                                    pseudo_output[col] = self._transform_val(
+                                        col, data[col].transpose(0, 1)
+                                    )
+                                elif (
+                                    self.hparams.training_spec.training_objective
+                                    == "bert"
+                                ):
+                                    shifted_targets = torch.roll(
+                                        targets[col], shifts=1, dims=1
+                                    )
+
+                                    if self.target_column_types[col] == "categorical":
+                                        shifted_targets[:, 0] = (
+                                            SPECIAL_TOKEN_IDS.unknown
+                                        )
+                                    else:
+                                        shifted_targets[:, 0] = 0.0
+                                    pseudo_output[col] = self._transform_val(
+                                        col, shifted_targets.transpose(0, 1)
+                                    )
+                                else:
+                                    raise ValueError("Impossible")
+                                targets_for_baseline[col] = targets[col]
+
+                        if len(pseudo_output) > 0:
+                            loss_sums, token_counts = self._calculate_loss_components(
+                                pseudo_output,
+                                targets_for_baseline,
+                                valid_mask,
+                            )
+                            accumulate_components(
+                                baseline_loss_sums,
+                                baseline_loss_counts,
+                                loss_sums,
+                                token_counts,
+                            )
+
+                baseline_loss, baseline_losses = finalize_components(
+                    baseline_loss_sums, baseline_loss_counts, "baseline validation"
+                )
+                self.baseline_loss = baseline_loss.detach().cpu().item()
+                self.baseline_losses = {
+                    col: loss.detach().cpu().item()
+                    for col, loss in baseline_losses.items()
+                }
+
+            return (
+                np.float32(total_loss_global.detach().cpu().item()),
+                {
+                    k: np.float32(v.detach().cpu().item())
+                    for k, v in total_losses_global.items()
+                },
+                output,
             )
-
-            # Sum losses from all processes. The result is broadcast back to all processes.
-            dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
-            dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
-
-            world_size = dist.get_world_size()
-            total_loss_tensor /= world_size
-            losses_tensor /= world_size
-
-            # Update local variables with the aggregated global results
-            total_loss_global = total_loss_tensor.cpu().numpy()
-            losses_global_values = losses_tensor.cpu().numpy()
-            total_losses_global = dict(zip(loss_keys, losses_global_values))
-        else:
-            # If not distributed, local losses are the global losses
-            total_loss_global = total_loss_local
-            total_losses_global = total_losses_local
-
-        # 3. Handle one-time baseline loss calculation (must also be synchronized)
-        if not hasattr(self, "baseline_loss"):
-            baseline_loss_local_collect = []
-            baseline_losses_local_collect = {col: [] for col in self.target_columns}
-
-            # Iterate over the sharded validation loader
-            for batch_idx, batch in enumerate(valid_loader):
-                if not isinstance(batch, SequifierBatch):
-                    raise TypeError(
-                        "Validation DataLoader must yield SequifierBatch objects, "
-                        f"got {type(batch).__name__}."
-                    )
-                data = batch.inputs
-                targets = batch.targets
-                metadata = batch.metadata
-                data = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in data.items()
-                    if k in self.input_columns
-                }
-                targets = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in targets.items()
-                    if k in self.target_column_types
-                }
-                metadata = {
-                    k: v.to(self.device, non_blocking=True) for k, v in metadata.items()
-                }
-
-                if self.hparams.training_spec.training_objective == "bert":
-                    _, _, metadata = apply_bert_masking(
-                        data,
-                        targets,
-                        metadata,
-                        self.hparams,
-                        eval_seed=self.hparams.seed + batch_idx,
-                    )
-
-                pseudo_output = {}
-                targets_for_baseline = {}
-                for col in self.target_columns:
-                    if col in targets:
-                        if self.hparams.training_spec.training_objective == "causal":
-                            pseudo_output[col] = self._transform_val(
-                                col, data[col].transpose(0, 1)
-                            )
-                        elif self.hparams.training_spec.training_objective == "bert":
-                            shifted_targets = torch.roll(targets[col], shifts=1, dims=1)
-
-                            if self.target_column_types[col] == "categorical":
-                                shifted_targets[:, 0] = SPECIAL_TOKEN_IDS.unknown
-                            else:
-                                shifted_targets[:, 0] = 0.0
-                            pseudo_output[col] = self._transform_val(
-                                col, shifted_targets.transpose(0, 1)
-                            )
-                        else:
-                            raise ValueError("Impossible")
-                        targets_for_baseline[col] = targets[col]
-
-                if len(pseudo_output) > 0:
-                    loss, losses = self._calculate_loss(
-                        pseudo_output, targets_for_baseline, metadata
-                    )
-                    baseline_loss_local_collect.append(loss.item())
-                    for col, loss_ in losses.items():
-                        baseline_losses_local_collect[col].append(loss_.item())
-
-            # Sum the losses for the local shard
-            if len(baseline_loss_local_collect):
-                baseline_loss_local = np.mean(baseline_loss_local_collect)
-                baseline_losses_local = {
-                    col: np.mean(loss_list)
-                    for col, loss_list in baseline_losses_local_collect.items()
-                }
-            else:
-                baseline_loss_local = -1.0
-                baseline_losses_local = {col: -1.0 for col in self.target_columns}
-
-            # Broadcast the baseline values from the main process to all others
-            if self.hparams.training_spec.distributed:
-                total_loss_tensor = torch.tensor(
-                    baseline_loss_local, device=self.device, dtype=torch.float32
-                )
-                dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
-                loss_keys = sorted(baseline_losses_local.keys())
-                losses_values = [baseline_losses_local[k] for k in loss_keys]
-                losses_tensor = torch.tensor(
-                    losses_values, device=self.device, dtype=torch.float32
-                )
-                dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
-
-                world_size = dist.get_world_size()
-                total_loss_tensor /= world_size
-                losses_tensor /= world_size
-
-                self.baseline_loss = total_loss_tensor.item()
-                self.baseline_losses = dict(zip(loss_keys, losses_tensor.cpu().numpy()))
-            else:
-                # If not distributed, local is global
-                self.baseline_loss = baseline_loss_local
-                self.baseline_losses = baseline_losses_local
-
-        model_to_call.train()
-        torch.clear_autocast_cache()
-
-        return (
-            np.float32(total_loss_global),
-            {k: np.float32(v) for k, v in total_losses_global.items()},
-            output,
-        )
+        finally:
+            model_to_call.train(was_training)
+            torch.clear_autocast_cache()
 
     @beartype
     def _export(
@@ -2457,20 +2544,29 @@ class TransformerModel(nn.Module):
 
             for categorical_column in self.class_share_log_columns:
                 output_values = (
-                    output[categorical_column].argmax(1).cpu().detach().numpy()
+                    output[categorical_column]
+                    .argmax(dim=-1)  # class dimension
+                    .reshape(-1)  # scalar category ID per token
+                    .detach()
+                    .cpu()
+                    .numpy()
                 )
-                output_counts_df = (
-                    pl.Series("values", output_values).value_counts().sort("values")
-                )
-                output_counts = output_counts_df.get_column("count")
 
-                output_counts = output_counts / output_counts.sum()
-                value_shares = " | ".join(
-                    [
-                        f"{self.index_maps[categorical_column][row['values']]}: {row['count']:5.5f}"
-                        for row in output_counts_df.iter_rows(named=True)
-                    ]
+                output_counts_df = (
+                    pl.Series("values", output_values)
+                    .value_counts()
+                    .with_columns(
+                        (pl.col("count") / pl.col("count").sum()).alias("share")
+                    )
+                    .sort("values")
                 )
+
+                value_shares = " | ".join(
+                    f"{self.index_maps[categorical_column][int(row['values'])]}: "
+                    f"{row['share']:5.5f}"
+                    for row in output_counts_df.iter_rows(named=True)
+                )
+
                 self.logger.info(f"[INFO] {categorical_column}: {value_shares}")
 
             self.logger.info("-" * 89)
