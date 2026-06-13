@@ -310,15 +310,13 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
                         f"Missing required column {col_name} in Parquet partition"
                     )
 
-            new_meta = {}
-            if left_pad_lengths is not None:
-                new_meta = generate_padding_masks(
-                    left_pad_lengths[worker_indices],
-                    train_seq_len,
-                    self.config.sample_length,
-                    self.config.training_spec.data_offset,
-                    self.config.training_spec.target_offset,
-                )
+            new_meta = generate_padding_masks(
+                left_pad_lengths[worker_indices],
+                train_seq_len,
+                self.config.sample_length,
+                self.config.training_spec.data_offset,
+                self.config.training_spec.target_offset,
+            )
 
             del df
 

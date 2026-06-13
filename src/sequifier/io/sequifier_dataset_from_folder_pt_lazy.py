@@ -278,15 +278,13 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 if k in self.config.target_columns
             }
 
-            new_meta = {}
-            if left_pad_lengths_batch is not None:
-                new_meta = generate_padding_masks(
-                    left_pad_lengths_batch[worker_indices],
-                    train_seq_len,
-                    self.config.sample_length,
-                    data_offset,
-                    target_offset,
-                )
+            new_meta = generate_padding_masks(
+                left_pad_lengths_batch[worker_indices],
+                train_seq_len,
+                self.config.sample_length,
+                data_offset,
+                target_offset,
+            )
 
             # Free the large file immediately to keep RAM down
             del sequences_batch, left_pad_lengths_batch

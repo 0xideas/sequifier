@@ -392,16 +392,13 @@ def numpy_to_pytorch(
         unified_tensors[f"{col_name}_target"] = target_tensor
 
     left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(data)
-    if left_pad_lengths is not None:
-        metadata = generate_padding_masks(
-            left_pad_lengths,
-            context_length,
-            sample_length,
-            data_offset,
-            target_offset,
-        )
-    else:
-        metadata = {}
+    metadata = generate_padding_masks(
+        left_pad_lengths,
+        context_length,
+        sample_length,
+        data_offset,
+        target_offset,
+    )
 
     return unified_tensors, metadata
 
@@ -426,7 +423,11 @@ def build_valid_mask(
 @beartype
 def get_left_pad_lengths_from_preprocessed_data(data: pl.DataFrame) -> Tensor:
     """Extracts one leftPadLength value per long-format subsequence."""
-
+    if "leftPadLength" not in data.columns:
+        raise ValueError(
+            "Dataset layout v1 does not contain explicit padding metadata. "
+            "Please re-run preprocessing."
+        )
     assert {"sequenceId", "subsequenceId"}.issubset(data.columns)
 
     lengths = (

@@ -122,12 +122,7 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
             for col, tensors in all_targets.items()
             if tensors
         }
-        self.left_pad_lengths = (
-            torch.cat(all_left_pad_lengths)
-            if all_left_pad_lengths
-            and len(all_left_pad_lengths) == len(metadata["batch_files"])
-            else None
-        )
+        self.left_pad_lengths = torch.cat(all_left_pad_lengths)
 
         # Step 3: Prevent serialization duplications across worker forks via shared memory flags
         for tensor in self.sequences.values():

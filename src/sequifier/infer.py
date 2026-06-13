@@ -496,15 +496,14 @@ def infer_embedding(
             ) = data
             for tensor in sequences_dict.values():
                 validate_stored_window_width(tensor, config.sample_length)
-            metadata = {}
-            if left_pad_lengths_tensor is not None:
-                metadata = generate_padding_masks(
-                    left_pad_lengths_tensor,
-                    config.context_length,
-                    config.sample_length,
-                    data_offset=config.data_offset,
-                    target_offset=config.target_offset,
-                )
+
+            metadata = generate_padding_masks(
+                left_pad_lengths_tensor,
+                config.context_length,
+                config.sample_length,
+                data_offset=config.data_offset,
+                target_offset=config.target_offset,
+            )
             embeddings = get_embeddings_pt(
                 config, inferer, sequences_dict, metadata=metadata
             )
@@ -757,15 +756,13 @@ def infer_generative(
                 if key in config.input_columns
             }
 
-            metadata = {}
-            if left_pad_lengths_tensor is not None:
-                metadata = generate_padding_masks(
-                    left_pad_lengths_tensor,
-                    config.context_length,
-                    config.sample_length,
-                    data_offset=config.data_offset,
-                    target_offset=config.target_offset,
-                )
+            metadata = generate_padding_masks(
+                left_pad_lengths_tensor,
+                config.context_length,
+                config.sample_length,
+                data_offset=config.data_offset,
+                target_offset=config.target_offset,
+            )
 
             probs, preds = get_probs_preds_from_dict(
                 config, inferer, sequences_dict, metadata, total_steps

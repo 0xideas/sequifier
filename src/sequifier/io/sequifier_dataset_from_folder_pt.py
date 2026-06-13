@@ -81,18 +81,12 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                         sequences_batch[col], config.sample_length
                     )
                     all_sequences[col].append(sequences_batch[col])
-            if left_pad_lengths_batch is not None:
-                all_left_pad_lengths.append(left_pad_lengths_batch)
+            all_left_pad_lengths.append(left_pad_lengths_batch)
 
         self.sequences: Dict[str, torch.Tensor] = {
             col: torch.cat(tensors) for col, tensors in all_sequences.items() if tensors
         }
-        self.left_pad_lengths = (
-            torch.cat(all_left_pad_lengths)
-            if all_left_pad_lengths
-            and len(all_left_pad_lengths) == len(metadata["batch_files"])
-            else None
-        )
+        self.left_pad_lengths = torch.cat(all_left_pad_lengths)
         for tensor in self.sequences.values():
             tensor.share_memory_()
         if self.left_pad_lengths is not None:

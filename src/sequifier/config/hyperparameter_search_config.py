@@ -17,8 +17,11 @@ from sequifier.config.train_config import (
     TrainingSpecModel,
     TrainModel,
 )
-from sequifier.helpers import normalize_path, try_catch_excess_keys
-from sequifier.preprocess import CURRENT_SEQUENCE_LAYOUT_VERSION
+from sequifier.helpers import (
+    normalize_path,
+    sequence_layout_from_metadata,
+    try_catch_excess_keys,
+)
 from sequifier.special_tokens import validate_special_token_ids
 
 
@@ -202,9 +205,20 @@ def load_hyperparameter_search_config(
         config_values["n_classes"] = config_values.get(
             "n_classes", metadata_config["n_classes"]
         )
-        config_values["sequence_layout_version"] = int(
-            metadata_config["sequence_layout_version"]
+
+        sequence_layout = sequence_layout_from_metadata(metadata_config)
+        if sequence_layout.sequence_layout_version != 2:
+            raise ValueError(
+                "Hyperparameter search requires metadata sequence_layout_version=2, "
+                f"got {sequence_layout.sequence_layout_version}."
+            )
+
+        config_values["max_lookahead"] = sequence_layout.max_lookahead
+        config_values["sample_length"] = sequence_layout.sample_length
+        config_values["sequence_layout_version"] = (
+            sequence_layout.sequence_layout_version
         )
+
         config_values["training_data_path"] = normalize_path(
             config_values.get("training_data_path", metadata_config["split_paths"][0]),
             config_values["project_root"],
@@ -708,6 +722,8 @@ class HyperparameterSearchConfig(BaseModel):
 
     context_length: list[int]
     max_lookahead: int = Field(default=1, ge=0)
+    sample_length: int
+    sequence_layout_version: int
     n_classes: dict[str, int]
     inference_batch_size: int
 
@@ -726,6 +742,17 @@ class HyperparameterSearchConfig(BaseModel):
     training_hyperparameter_sampling: TrainingSpecHyperparameterSampling
 
     override_input: bool = False
+
+    @model_validator(mode="after")
+    def validate_sequence_layout(self):
+        for cl in self.context_length:
+            if cl + self.max_lookahead > self.sample_length:
+                raise ValueError(
+                    f"Sample length mismatch: context_length ({cl}) + max_lookahead "
+                    f"({self.max_lookahead}) > stored sample_length ({self.sample_length}). "
+                    "Model inputs cannot exceed the preprocessed sequence length."
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_prune_trials(self):
@@ -858,7 +885,7 @@ class HyperparameterSearchConfig(BaseModel):
             context_length=context_length,
             max_lookahead=self.max_lookahead,
             sample_length=sample_length,
-            sequence_layout_version=CURRENT_SEQUENCE_LAYOUT_VERSION,
+            sequence_layout_version=self.sequence_layout_version,
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=101,
