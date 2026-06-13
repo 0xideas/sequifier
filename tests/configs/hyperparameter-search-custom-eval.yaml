@@ -54,7 +54,7 @@ model_hyperparameter_sampling:
 training_hyperparameter_sampling:
   training_objective: ["causal"]
   device: cpu
-  epochs: [1, 1]
+  epochs: [3, 3]
   save_interval_epochs: 10
   batch_size: [5, 10]
   learning_rate: [0.001, 0.0001]
