@@ -1,14 +1,254 @@
 import json
 import os
+import re
+from collections import Counter
 
 import numpy as np
 import polars as pl
 import torch
 
+from sequifier.helpers import (
+    ModelWindowView,
+    StoredWindowLayout,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
+)
+
 TARGET_VARIABLE_DICT = {"categorical": "itemId", "real": "itemValue"}
 BERT_SEQ_LENGTH = 8
 BERT_EMBEDDING_DIM = 16
 BERT_DATA_NAME = "test-data-categorical-1-lookahead-0"
+CAUSAL_CONTEXT_LENGTH = 8
+
+
+def _project_path(project_root, path):
+    if os.path.isabs(path) or path.startswith(project_root):
+        return path
+    return os.path.join(project_root, path)
+
+
+def _causal_storage_layout(data_path):
+    metadata_path = (
+        os.path.join(data_path, "metadata.json") if os.path.isdir(data_path) else None
+    )
+    if metadata_path is not None and os.path.exists(metadata_path):
+        with open(metadata_path, "r") as f:
+            return stored_window_layout_from_metadata(json.load(f))
+
+    return StoredWindowLayout(
+        stored_context_width=CAUSAL_CONTEXT_LENGTH + 1,
+        max_target_offset=1,
+        version=2,
+    )
+
+
+def _target_valid_mask(left_pad_lengths, storage_layout, prediction_length):
+    resolved_view = resolve_window_view(
+        storage_layout,
+        ModelWindowView(
+            context_length=CAUSAL_CONTEXT_LENGTH,
+            objective="causal",
+            target_offset=1,
+        ),
+    )
+    masks = resolved_view.build_masks(torch.tensor(left_pad_lengths, dtype=torch.int64))
+    return masks["target_valid_mask"][:, -prediction_length:].reshape(-1).numpy()
+
+
+def _read_pt_window_metadata(data_path):
+    contents = []
+    for root, _, files in os.walk(data_path):
+        for file in sorted(files):
+            if not file.endswith(".pt"):
+                continue
+
+            loaded = torch.load(os.path.join(root, file), weights_only=False)
+            if len(loaded) == 5:
+                _, sequence_ids, _, start_positions, left_pad_lengths = loaded
+            else:
+                _, sequence_ids, _, start_positions = loaded
+                left_pad_lengths = torch.zeros_like(sequence_ids)
+
+            contents.append(
+                pl.DataFrame(
+                    {
+                        "sequenceId": sequence_ids.detach().cpu().numpy(),
+                        "startItemPosition": start_positions.detach().cpu().numpy(),
+                        "leftPadLength": left_pad_lengths.detach().cpu().numpy(),
+                    }
+                )
+            )
+
+    assert len(contents) > 0, f"no files found for {data_path}"
+    return pl.concat(contents, how="vertical")
+
+
+def _read_long_window_metadata(data_path):
+    paths = []
+    if os.path.isdir(data_path):
+        for root, _, files in os.walk(data_path):
+            paths.extend(
+                os.path.join(root, file)
+                for file in sorted(files)
+                if file.endswith((".csv", ".parquet"))
+            )
+    else:
+        paths = [data_path]
+
+    contents = []
+    for path in paths:
+        data = pl.read_csv(path) if path.endswith(".csv") else pl.read_parquet(path)
+        if "leftPadLength" not in data.columns:
+            data = data.with_columns(pl.lit(0).alias("leftPadLength"))
+        contents.append(
+            data.group_by(["sequenceId", "subsequenceId"], maintain_order=True).agg(
+                pl.col("startItemPosition").first(),
+                pl.col("leftPadLength").first(),
+            )
+        )
+
+    assert len(contents) > 0, f"no files found for {data_path}"
+    return pl.concat(contents, how="vertical")
+
+
+def _prediction_source_spec(project_root, model_name):
+    if model_name == "model-categorical-multitarget-5-best-3":
+        return {
+            "path": _project_path(
+                project_root, "data/test-data-categorical-multitarget-5-split2"
+            ),
+            "format": "parquet",
+            "prediction_length": 1,
+            "autoregression_total_steps": None,
+        }
+    if model_name == "model-categorical-multitarget-5-last-3":
+        return {
+            "path": _project_path(
+                project_root, "data/test-data-categorical-multitarget-5-split2"
+            ),
+            "format": "parquet",
+            "prediction_length": 1,
+            "autoregression_total_steps": None,
+        }
+    if model_name == "model-categorical-distributed-best-3":
+        return {
+            "path": _project_path(project_root, "data/test-data-categorical-3-split2"),
+            "format": "pt",
+            "prediction_length": 1,
+            "autoregression_total_steps": None,
+        }
+    if model_name == "model-categorical-lazy-best-3":
+        return {
+            "path": _project_path(project_root, "data/test-data-categorical-3-split2"),
+            "format": "pt",
+            "prediction_length": 1,
+            "autoregression_total_steps": None,
+        }
+    if model_name == "model-categorical-1-best-3-autoregression":
+        return {
+            "path": _project_path(project_root, "data/test-data-categorical-1-split2"),
+            "format": "pt",
+            "prediction_length": 1,
+            "autoregression_total_steps": 20,
+        }
+    if model_name == "model-real-1-best-3-autoregression":
+        return {
+            "path": _project_path(
+                project_root, "data/test-data-real-1-split1-autoregression.csv"
+            ),
+            "format": "csv",
+            "prediction_length": 1,
+            "autoregression_total_steps": 20,
+            "csv_autoregression": True,
+        }
+
+    match = re.fullmatch(r"model-categorical-(\d+)-inf-size-best-3", model_name)
+    if match is not None:
+        data_number = int(match.group(1))
+        return {
+            "path": _project_path(
+                project_root, f"data/test-data-categorical-{data_number}-split2"
+            ),
+            "format": "pt",
+            "prediction_length": 3,
+            "autoregression_total_steps": None,
+        }
+
+    match = re.fullmatch(r"model-categorical-(\d+)-best-3", model_name)
+    if match is not None:
+        data_number = int(match.group(1))
+        return {
+            "path": _project_path(
+                project_root, f"data/test-data-categorical-{data_number}-split2"
+            ),
+            "format": "pt",
+            "prediction_length": 1,
+            "autoregression_total_steps": None,
+        }
+
+    match = re.fullmatch(r"model-real-(\d+)-best-3", model_name)
+    if match is not None:
+        data_number = int(match.group(1))
+        return {
+            "path": _project_path(
+                project_root, f"data/test-data-real-{data_number}-split1.parquet"
+            ),
+            "format": "parquet",
+            "prediction_length": 1,
+            "autoregression_total_steps": None,
+        }
+
+    raise AssertionError(f"No source metadata mapping for {model_name}")
+
+
+def _expected_prediction_positions(project_root, model_name):
+    spec = _prediction_source_spec(project_root, model_name)
+    metadata = (
+        _read_pt_window_metadata(spec["path"])
+        if spec["format"] == "pt"
+        else _read_long_window_metadata(spec["path"])
+    )
+    storage_layout = _causal_storage_layout(spec["path"])
+    prediction_length = spec["prediction_length"]
+
+    if spec["autoregression_total_steps"] is not None:
+        total_steps = spec["autoregression_total_steps"]
+        if spec.get("csv_autoregression", False):
+            metadata = metadata.group_by("sequenceId", maintain_order=True).head(1)
+
+        sequence_ids = np.repeat(metadata["sequenceId"].to_numpy(), total_steps)
+        item_positions = np.concatenate(
+            [
+                np.arange(start, start + total_steps)
+                for start in (
+                    metadata["startItemPosition"].to_numpy() + CAUSAL_CONTEXT_LENGTH
+                )
+            ],
+            axis=0,
+        )
+        valid_mask = np.repeat(
+            _target_valid_mask(
+                metadata["leftPadLength"].to_numpy(), storage_layout, prediction_length
+            ),
+            total_steps,
+        )
+    else:
+        starts = metadata["startItemPosition"].to_numpy()
+        offsets = np.arange(-prediction_length + 1, 1)
+        sequence_ids = np.repeat(metadata["sequenceId"].to_numpy(), prediction_length)
+        item_positions = np.repeat(
+            starts + CAUSAL_CONTEXT_LENGTH, prediction_length
+        ) + np.tile(offsets, len(starts))
+        valid_mask = _target_valid_mask(
+            metadata["leftPadLength"].to_numpy(), storage_layout, prediction_length
+        )
+
+    return pl.DataFrame(
+        {
+            "sequenceId": sequence_ids[valid_mask],
+            "itemPosition": item_positions[valid_mask],
+        }
+    )
 
 
 def _categorical_metadata(project_root):
@@ -260,67 +500,37 @@ def test_bert_embeddings(bert_predictions, bert_embeddings, project_root):
     )
 
 
-def test_predictions_item_position(predictions):
-    """
-    Checks if itemPosition increments correctly within each sequenceId.
-    """
+def test_predictions_item_position(predictions, project_root):
+    """Check itemPosition values against source preprocessing metadata."""
     for model_name, preds_df in predictions.items():
-        # Ensure correct sorting for comparison
-        preds_df_sorted = preds_df.sort("sequenceId", "itemPosition")
+        expected_positions = _expected_prediction_positions(project_root, model_name)
+        actual_pairs = list(preds_df.select(["sequenceId", "itemPosition"]).iter_rows())
+        expected_pairs = list(expected_positions.iter_rows())
 
-        # Calculate differences and sequence changes
-        preds_with_diffs = preds_df_sorted.with_columns(
-            (pl.col("itemPosition") - pl.col("itemPosition").shift(1)).alias(
-                "pos_diff"
-            ),
-            (pl.col("sequenceId") == pl.col("sequenceId").shift(1)).alias("same_seq"),
+        duplicate_pairs = [
+            pair for pair, count in Counter(actual_pairs).items() if count > 1
+        ]
+        assert duplicate_pairs == [], (
+            f"Model '{model_name}': Found duplicate sequence-position pairs:\n"
+            f"{duplicate_pairs[:10]}"
         )
 
-        # Filter for rows within the same sequence (excluding the first row of each sequence)
-        within_sequence_diffs = preds_with_diffs.filter(pl.col("same_seq"))
-
-        # Check if all position differences within sequences are 1
-        incorrect_increments = within_sequence_diffs.filter(pl.col("pos_diff") != 1)
-
-        assert incorrect_increments.height == 0, (
-            f"Model '{model_name}': Found incorrect itemPosition increments within sequences:\n"
-            f"{incorrect_increments}"
-        )
+        assert Counter(actual_pairs) == Counter(
+            expected_pairs
+        ), f"Model '{model_name}': itemPosition values do not match source metadata."
 
 
 def test_embeddings_subsequence_id(embeddings):
     """Check subsequenceId increments within each sequence."""
     for model_name, embeds_df in embeddings.items():
-        embeds_df_sorted = embeds_df.sort("sequenceId", "subsequenceId")
-
-        shift_val = 0
-        if "categorical-1" in model_name:
-            shift_val = 1
-        if "categorical-3" in model_name:
-            shift_val = 3
-
-        # Calculate differences and sequence changes
-        embeds_with_diffs = embeds_df_sorted.with_columns(
-            (pl.col("subsequenceId") - pl.col("subsequenceId").shift(shift_val)).alias(
-                "subseq_diff"
-            ),
-            (pl.col("sequenceId") == pl.col("sequenceId").shift(shift_val)).alias(
-                "same_seq"
-            ),
-        )
-
-        first_subsequences = embeds_with_diffs.filter(
-            pl.col("same_seq") == False  # noqa: E712
-        )
-        incorrect_starts = first_subsequences.filter(pl.col("subsequenceId") != 0)
-        assert incorrect_starts.height == 0, (
-            f"Model '{model_name}': Found sequences where subsequenceId does not start at 0:\n"
-            f"{incorrect_starts}"
-        )
-
-        within_sequence_diffs = embeds_with_diffs.filter(pl.col("same_seq"))
-        incorrect_increments = within_sequence_diffs.filter(pl.col("subseq_diff") != 1)
-        assert incorrect_increments.height == 0, (
-            f"Model '{model_name}': Found incorrect subsequenceId increments within sequences:\n"
-            f"{incorrect_increments}"
-        )
+        for sequence_id, sequence_df in embeds_df.group_by(
+            "sequenceId", maintain_order=True
+        ):
+            subsequence_ids = sorted(
+                sequence_df.get_column("subsequenceId").unique().to_list()
+            )
+            expected_ids = list(range(len(subsequence_ids)))
+            assert subsequence_ids == expected_ids, (
+                f"Model '{model_name}', sequenceId {sequence_id}: expected "
+                f"subsequenceIds {expected_ids}, found {subsequence_ids}."
+            )

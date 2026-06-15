@@ -45,21 +45,65 @@ def test_normalize():
     np.testing.assert_allclose(probs.sum(axis=1), [1.0, 1.0, 1.0])
 
 
+def test_normalize_is_stable_for_large_logits():
+    """Softmax remains finite for large-magnitude logits."""
+    outs = {
+        "target_col": np.array(
+            [[1000.0, 1001.0], [-1001.0, -1000.0], [1000.0, -1000.0]]
+        )
+    }
+
+    probs = normalize(outs)["target_col"]
+
+    assert np.isfinite(probs).all()
+    np.testing.assert_allclose(probs.sum(axis=1), [1.0, 1.0, 1.0])
+    np.testing.assert_allclose(
+        probs[0],
+        [1.0 / (1.0 + np.e), np.e / (1.0 + np.e)],
+    )
+
+
 @patch("numpy.random.rand")
 def test_sample_with_cumsum(mock_rand):
-    """Inverse-CDF sampling for logits and probabilities."""
+    """Inverse-CDF sampling for log-probabilities and probabilities."""
     # Mock the random thresholds to strictly control the sampling outcome.
     mock_rand.return_value = np.array([[0.05], [0.90]])
 
-    # Path 1: Test with logits=True (default)
-    raw_logits = np.array([[np.log(0.1), np.log(0.9)], [np.log(0.8), np.log(0.2)]])
-    sampled_from_logits = sample_with_cumsum(raw_logits, is_log_probs=True)
-    np.testing.assert_array_equal(sampled_from_logits, [0, 1])
+    # Path 1: Test with log-probabilities=True (default)
+    log_probs = np.array([[np.log(0.1), np.log(0.9)], [np.log(0.8), np.log(0.2)]])
+    sampled_from_log_probs = sample_with_cumsum(log_probs, is_log_probs=True)
+    np.testing.assert_array_equal(sampled_from_log_probs, [0, 1])
 
     # Path 2: Test with logits=False (pre-normalized probabilities)
     pure_probs = np.array([[0.1, 0.9], [0.8, 0.2]])
     sampled_from_probs = sample_with_cumsum(pure_probs, is_log_probs=False)
     np.testing.assert_array_equal(sampled_from_probs, [0, 1])
+
+
+@patch("numpy.random.rand")
+def test_sample_with_cumsum_clamps_final_cumulative_probability(mock_rand):
+    """Tiny floating-point deficits still allow the final class to be sampled."""
+    mock_rand.return_value = np.array([[0.9999999999999999]])
+    probs = np.array([[0.1, 0.8999999999999998]])
+
+    sampled = sample_with_cumsum(probs, is_log_probs=False)
+
+    np.testing.assert_array_equal(sampled, [1])
+
+
+def test_sample_with_cumsum_rejects_invalid_probability_mass():
+    """Invalid probability rows fail instead of falling through to class zero."""
+    with pytest.raises(ValueError, match="sum to 1.0"):
+        sample_with_cumsum(np.array([[0.4, 0.4]]), is_log_probs=False)
+
+
+@pytest.fixture
+def empty_parquet_path(tmp_path):
+    path = tmp_path / "empty.parquet"
+    pl.DataFrame({"target_col": []}, schema={"target_col": pl.Float64}).write_parquet(
+        path
+    )
+    return str(path)
 
 
 @pytest.fixture
@@ -157,14 +201,16 @@ def test_inferer_prepare_inference_batches_split(mock_inferer):
     np.testing.assert_array_equal(batches[2]["cat_col"], [[5]])
 
 
-def test_infer_config_defaults_bert_prediction_length_to_context_length():
+def test_infer_config_defaults_bert_prediction_length_to_context_length(
+    empty_parquet_path,
+):
     config = InfererModel(
         project_root=".",
         metadata_config_path="dummy.json",
         model_path="dummy.onnx",
         model_type="generative",
         training_objective="bert",
-        data_path="tests/unit/data/empty.parquet",
+        data_path=empty_parquet_path,
         input_columns=["target_col"],
         categorical_columns=[],
         real_columns=["target_col"],
@@ -189,14 +235,14 @@ def test_infer_config_defaults_bert_prediction_length_to_context_length():
     assert config.prediction_length == config.window_view.context_length
 
 
-def test_infer_config_defaults_causal_prediction_length_to_one():
+def test_infer_config_defaults_causal_prediction_length_to_one(empty_parquet_path):
     config = InfererModel(
         project_root=".",
         metadata_config_path="dummy.json",
         model_path="dummy.onnx",
         model_type="generative",
         training_objective="causal",
-        data_path="tests/unit/data/empty.parquet",
+        data_path=empty_parquet_path,
         input_columns=["target_col"],
         categorical_columns=[],
         real_columns=["target_col"],
@@ -221,7 +267,7 @@ def test_infer_config_defaults_causal_prediction_length_to_one():
     assert config.prediction_length == 1
 
 
-def test_infer_config_rejects_bert_prediction_length_mismatch():
+def test_infer_config_rejects_bert_prediction_length_mismatch(empty_parquet_path):
     with pytest.raises(ValueError, match="prediction_length must be equal"):
         InfererModel(
             project_root=".",
@@ -229,7 +275,7 @@ def test_infer_config_rejects_bert_prediction_length_mismatch():
             model_path="dummy.onnx",
             model_type="generative",
             training_objective="bert",
-            data_path="tests/unit/data/empty.parquet",
+            data_path=empty_parquet_path,
             input_columns=["target_col"],
             categorical_columns=[],
             real_columns=["target_col"],
@@ -580,7 +626,7 @@ def test_bert_embedding_inference_filters_left_padded_positions(tmp_path):
 
 
 @pytest.fixture
-def ar_config():
+def ar_config(empty_parquet_path):
     """Provides an actual InfererModel configuration for autoregressive inference."""
     return InfererModel(
         project_root=".",
@@ -588,7 +634,7 @@ def ar_config():
         model_path="dummy.onnx",
         model_type="generative",
         training_objective="causal",
-        data_path="tests/unit/data/empty.parquet",
+        data_path=empty_parquet_path,
         input_columns=["target_col"],
         categorical_columns=[],
         real_columns=["target_col"],

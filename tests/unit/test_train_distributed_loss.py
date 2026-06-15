@@ -7,7 +7,9 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader
 
+from sequifier.io.batch import SequifierBatch
 from sequifier.train import TransformerModel
 
 
@@ -17,6 +19,16 @@ class _TinyRealModel(torch.nn.Module):
         self.param = torch.nn.Parameter(torch.tensor(0.0))
 
     def forward(self, seq_len):
+        return {"real_col": self.param.expand(seq_len, 1, 1)}
+
+
+class _TinyTrainEpochRealModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.param = torch.nn.Parameter(torch.tensor(0.0))
+
+    def forward(self, data, metadata=None, return_logits=False):
+        seq_len = data["real_col"].shape[1]
         return {"real_col": self.param.expand(seq_len, 1, 1)}
 
 
@@ -46,7 +58,13 @@ def _loss_shell(target_column_types, *, data_parallelism=None, loss_weights=None
     model.loss_weights = loss_weights
     model.device = "cpu"
     model.hparams = SimpleNamespace(
-        training_spec=SimpleNamespace(data_parallelism=data_parallelism)
+        training_spec=SimpleNamespace(
+            data_parallelism=data_parallelism,
+            distributed=data_parallelism is not None,
+            training_objective="causal",
+            layer_autocast=False,
+            layer_type_dtypes=None,
+        )
     )
     model.criterion = {}
     model.n_classes = {}
@@ -63,12 +81,46 @@ def _loss_shell(target_column_types, *, data_parallelism=None, loss_weights=None
     return model
 
 
+class _IdentityScaler:
+    def scale(self, loss):
+        return loss
+
+    def unscale_(self, optimizer):
+        return None
+
+    def step(self, optimizer):
+        optimizer.step()
+
+    def update(self):
+        return None
+
+
+class _NoopLogger:
+    def info(self, *args, **kwargs):
+        return None
+
+    def warning(self, *args, **kwargs):
+        return None
+
+
 def _real_batch(seq_len, selected_count, target_value):
     targets = {"real_col": torch.full((1, seq_len), float(target_value))}
     mask = torch.zeros(1, seq_len, dtype=torch.bool)
     mask[:, :selected_count] = True
     metadata = {"target_valid_mask": mask}
     return targets, metadata
+
+
+def _real_epoch_batch(seq_len, selected_count, target_value):
+    targets, metadata = _real_batch(seq_len, selected_count, target_value)
+    return SequifierBatch(
+        inputs={"real_col": torch.ones(1, seq_len, dtype=torch.float32)},
+        targets=targets,
+        metadata={
+            "attention_valid_mask": torch.ones(1, seq_len, dtype=torch.bool),
+            **metadata,
+        },
+    )
 
 
 def _concat_real_batch(seq_lens, selected_counts, target_values):
@@ -138,6 +190,37 @@ def _single_process_accumulated_real_update(microbatches, lr):
     return model.param.detach().clone()
 
 
+def _analytical_accumulated_real_update(microbatches, lr):
+    accumulated_grad = 0.0
+    for microbatch in microbatches:
+        selected_counts = torch.tensor(microbatch["selected_counts"], dtype=torch.float)
+        target_values = torch.tensor(microbatch["target_values"], dtype=torch.float)
+        token_count = selected_counts.sum().item()
+        if token_count == 0:
+            continue
+
+        weighted_target_mean = (
+            selected_counts * target_values
+        ).sum().item() / token_count
+        accumulated_grad += -2.0 * weighted_target_mean
+
+    return torch.tensor(-lr * accumulated_grad)
+
+
+def _analytical_combined_real_update(microbatches, lr):
+    weighted_target_sum = 0.0
+    token_count = 0.0
+    for microbatch in microbatches:
+        selected_counts = torch.tensor(microbatch["selected_counts"], dtype=torch.float)
+        target_values = torch.tensor(microbatch["target_values"], dtype=torch.float)
+        weighted_target_sum += (selected_counts * target_values).sum().item()
+        token_count += selected_counts.sum().item()
+
+    if token_count == 0:
+        return torch.tensor(0.0)
+    return torch.tensor(lr * 2.0 * weighted_target_sum / token_count)
+
+
 def _single_process_multi_target_grad(
     seq_lens, cat_targets, real_targets, loss_weights
 ):
@@ -190,7 +273,67 @@ def _ddp_case_worker(rank, world_size, init_method, case, queue):
             "empty_grad",
             "accumulation_update",
             "empty_window_state",
+            "train_epoch_empty_window_state",
         }:
+            if case["kind"] == "train_epoch_empty_window_state":
+                model = _TinyTrainEpochRealModel()
+                ddp_model = DDP(model)
+                shell = _loss_shell({"real_col": "real"}, data_parallelism="DDP")
+                shell.input_columns = ["real_col"]
+                shell.rank = rank
+                shell.device = "cpu"
+                shell.accumulation_steps = case["accumulation_steps"]
+                shell.scheduler_step_on = "batch"
+                shell.start_batch = 0
+                shell.log_interval = case["accumulation_steps"]
+                shell.scaler = _IdentityScaler()
+                shell.logger = _NoopLogger()
+                shell.save_latest_interval_minutes = None
+                shell.save_batch_interval_minutes = None
+                shell.save_batch_interval_minutes_val_loss = False
+                shell.last_latest_save_time = 0.0
+                shell.last_batch_save_time = 0.0
+                shell.parameters = model.parameters
+                shell.optimizer = torch.optim.AdamW(
+                    model.parameters(),
+                    lr=case["lr"],
+                    weight_decay=case["weight_decay"],
+                )
+                shell.scheduler = torch.optim.lr_scheduler.StepLR(
+                    shell.optimizer,
+                    step_size=1,
+                    gamma=0.1,
+                )
+
+                train_loader = [
+                    _real_epoch_batch(
+                        microbatch["seq_lens"][rank],
+                        microbatch["selected_counts"][rank],
+                        microbatch["target_values"][rank],
+                    )
+                    for microbatch in case["microbatches"]
+                ]
+                before = model.param.detach().clone()
+
+                TransformerModel._train_epoch(
+                    shell,
+                    DataLoader(train_loader, batch_size=None),
+                    DataLoader([], batch_size=None),
+                    epoch=1,
+                    ddp_model=ddp_model,
+                )
+
+                if rank == 0:
+                    queue.put(
+                        [
+                            float((model.param.detach() - before).abs().item()),
+                            float(shell.scheduler.get_last_lr()[0]),
+                            float(shell.scheduler.last_epoch),
+                            float(len(shell.optimizer.state)),
+                        ]
+                    )
+                return
+
             model = _TinyRealModel()
             ddp_model = DDP(model)
             shell = _loss_shell({"real_col": "real"}, data_parallelism="DDP")
@@ -517,16 +660,44 @@ def test_ddp_globally_empty_accumulation_window_leaves_state_unchanged():
     assert optimizer_state_len == 0
 
 
+def test_ddp_train_epoch_globally_empty_accumulation_window_leaves_state_unchanged():
+    case = {
+        "kind": "train_epoch_empty_window_state",
+        "microbatches": [
+            {
+                "seq_lens": [3, 4],
+                "selected_counts": [0, 0],
+                "target_values": [1.0, 3.0],
+            },
+            {
+                "seq_lens": [2, 5],
+                "selected_counts": [0, 0],
+                "target_values": [2.0, 4.0],
+            },
+        ],
+        "accumulation_steps": 2,
+        "lr": 0.01,
+        "weight_decay": 0.1,
+    }
+
+    param_delta, lr, scheduler_epoch, optimizer_state_len = _run_ddp_case(case)
+
+    assert param_delta == 0
+    assert lr == pytest.approx(case["lr"])
+    assert scheduler_epoch == 0
+    assert optimizer_state_len == 0
+
+
 def test_ddp_gradient_accumulation_preserves_per_microbatch_weighting():
     microbatches = [
         {
-            "seq_lens": [4, 2],
-            "selected_counts": [4, 2],
+            "seq_lens": [1, 1],
+            "selected_counts": [1, 1],
             "target_values": [1.0, 3.0],
         },
         {
-            "seq_lens": [1, 5],
-            "selected_counts": [1, 5],
+            "seq_lens": [5, 5],
+            "selected_counts": [5, 5],
             "target_values": [10.0, 2.0],
         },
     ]
@@ -537,9 +708,11 @@ def test_ddp_gradient_accumulation_preserves_per_microbatch_weighting():
     }
 
     ddp_param = _run_ddp_case(case)
-    reference_param = _single_process_accumulated_real_update(microbatches, case["lr"])
+    reference_param = _analytical_accumulated_real_update(microbatches, case["lr"])
+    combined_batch_param = _analytical_combined_real_update(microbatches, case["lr"])
 
     assert torch.allclose(ddp_param, reference_param, atol=1e-6)
+    assert not torch.allclose(ddp_param, combined_batch_param, atol=1e-3)
 
 
 def test_ddp_global_training_metric_finalization_matches_manual_sum_count():

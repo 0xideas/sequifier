@@ -561,7 +561,7 @@ def test_calculate_loss_uses_explicit_target_mask_for_real_zero_targets():
     assert torch.isclose(component_losses["real_col"], torch.tensor(2.0))
 
 
-def test_calculate_loss_uses_target_columns_for_fallback_mask_inference():
+def test_calculate_loss_uses_explicit_target_mask_for_target_columns():
     model = TransformerModel.__new__(TransformerModel)
     model.target_column_types = {"real_target": "real"}
     model.criterion = {"real_target": torch.nn.MSELoss(reduction="none")}

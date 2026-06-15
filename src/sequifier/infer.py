@@ -1368,26 +1368,40 @@ class Inferer:
 @beartype
 def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """Softmax logits by target column."""
-    normalizer = {
-        target_column: np.repeat(
-            np.sum(np.exp(target_values), axis=1), target_values.shape[1]
-        ).reshape(target_values.shape)
+    shifted_values = {
+        target_column: target_values - np.max(target_values, axis=1, keepdims=True)
         for target_column, target_values in outs.items()
     }
+    exp_values = {
+        target_column: np.exp(target_values)
+        for target_column, target_values in shifted_values.items()
+    }
     probs = {
-        target_column: np.exp(target_values) / normalizer[target_column]
-        for target_column, target_values in outs.items()
+        target_column: target_values / np.sum(target_values, axis=1, keepdims=True)
+        for target_column, target_values in exp_values.items()
     }
     return probs
 
 
 @beartype
 def sample_with_cumsum(probs: np.ndarray, is_log_probs: bool = True) -> np.ndarray:
-    """Sample class indices from logits or probabilities."""
+    """Sample class indices from log-probabilities or probabilities."""
     if is_log_probs:
-        cumulative_probs = np.cumsum(np.exp(probs), axis=1)
+        sampling_probs = np.exp(probs)
     else:
-        cumulative_probs = np.cumsum(probs, axis=1)
+        sampling_probs = probs
+
+    if not np.isfinite(sampling_probs).all():
+        raise ValueError("Sampling probabilities must be finite.")
+    if np.any(sampling_probs < 0):
+        raise ValueError("Sampling probabilities must be non-negative.")
+
+    row_sums = sampling_probs.sum(axis=1)
+    if not np.allclose(row_sums, 1.0):
+        raise ValueError("Sampling probabilities must sum to 1.0 for each row.")
+
+    cumulative_probs = np.cumsum(sampling_probs, axis=1)
+    cumulative_probs[:, -1] = 1.0
     random_threshold = np.random.rand(cumulative_probs.shape[0], 1)
     random_threshold = np.repeat(random_threshold, probs.shape[1], axis=1)
     return (random_threshold < cumulative_probs).argmax(axis=1)

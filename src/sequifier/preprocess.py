@@ -1518,32 +1518,51 @@ def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]
 @beartype
 def get_batch_limits(data: pl.DataFrame, n_batches: int) -> list[tuple[int, int]]:
     """Split rows into batches without crossing sequenceId boundaries."""
-    sequence_ids = data.get_column("sequenceId").to_numpy()
-    new_sequence_id_indices = np.concatenate(
-        [
-            [0],
-            np.where(
-                np.concatenate([[False], sequence_ids[1:] != sequence_ids[:-1]], axis=0)
-            )[0],
-        ]
-    )
+    if n_batches <= 0:
+        raise ValueError("n_batches must be positive.")
+    if data.is_empty():
+        raise ValueError("Cannot split an empty dataset into batches.")
 
-    ideal_step = math.ceil(data.shape[0] / n_batches)
-    ideal_limits = np.array(
-        [ideal_step * m for m in range(n_batches)] + [data.shape[0]]
+    sequence_ids = data.get_column("sequenceId").to_numpy()
+    sequence_start_indices = np.concatenate(
+        [[0], np.where(sequence_ids[1:] != sequence_ids[:-1])[0] + 1]
     )
-    distances = [
-        np.abs(new_sequence_id_indices - ideal_limit)
-        for ideal_limit in ideal_limits[:-1]
-    ]
-    actual_limit_indices = [
-        np.where(distance == np.min(distance))[0] for distance in distances
-    ]
-    actual_limits = [
-        int(new_sequence_id_indices[limit_index[0]])
-        for limit_index in actual_limit_indices
-    ] + [data.shape[0]]
-    return list(zip(actual_limits[:-1], actual_limits[1:]))
+    sequence_boundaries = np.concatenate([sequence_start_indices, [data.shape[0]]])
+    sequence_count = len(sequence_start_indices)
+
+    if n_batches > sequence_count:
+        raise ValueError(
+            "Cannot create more non-empty batches than there are sequences without "
+            "splitting a sequence."
+        )
+
+    interior_boundaries = sequence_boundaries[1:-1]
+    ideal_limits = np.linspace(0, data.shape[0], n_batches + 1)[1:-1]
+
+    selected_boundaries: list[int] = []
+    previous_boundary = 0
+    for batch_index, ideal_limit in enumerate(ideal_limits):
+        remaining_boundaries_needed = len(ideal_limits) - batch_index - 1
+        candidates = [
+            int(boundary)
+            for boundary in interior_boundaries
+            if boundary > previous_boundary
+            and (data.shape[0] - boundary) >= remaining_boundaries_needed
+        ]
+        if not candidates:
+            raise ValueError(
+                "Cannot create requested non-empty batches without splitting a sequence."
+            )
+
+        selected_boundary = min(
+            candidates,
+            key=lambda boundary: abs(boundary - ideal_limit),
+        )
+        selected_boundaries.append(selected_boundary)
+        previous_boundary = selected_boundary
+
+    limits = [0, *selected_boundaries, data.shape[0]]
+    return list(zip(limits[:-1], limits[1:]))
 
 
 @beartype

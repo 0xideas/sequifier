@@ -625,6 +625,15 @@ def test_get_batch_limits_uneven_split():
 
     limits = get_batch_limits(data, n_batches=2)
 
+    assert len(limits) == 2
+    assert limits[0][0] == 0
+    assert limits[-1][1] == data.height
+    assert all(start < end for start, end in limits)
+    assert all(
+        left_end == right_start
+        for (_, left_end), (right_start, _) in zip(limits, limits[1:])
+    )
+
     # Check that split points are valid sequence boundaries
     for start, end in limits:
         # Start of batch must match start of a sequence (unless 0)
@@ -632,6 +641,18 @@ def test_get_batch_limits_uneven_split():
             prev_id = data["sequenceId"][start - 1]
             curr_id = data["sequenceId"][start]
             assert prev_id != curr_id, f"Batch split at {start} broke a sequence"
+        if end != data.height:
+            prev_id = data["sequenceId"][end - 1]
+            curr_id = data["sequenceId"][end]
+            assert prev_id != curr_id, f"Batch split at {end} broke a sequence"
+
+
+def test_get_batch_limits_rejects_too_many_nonempty_batches():
+    """Too many requested chunks fail instead of producing empty batches."""
+    data = pl.DataFrame({"sequenceId": [1, 2, 3, 3], "val": np.arange(4)})
+
+    with pytest.raises(ValueError, match="more non-empty batches"):
+        get_batch_limits(data, n_batches=4)
 
 
 def test_get_combined_statistics_logic():

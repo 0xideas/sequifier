@@ -64,13 +64,25 @@ def dataset_path(tmp_path):
         "0": pl.Float64,
     }
 
-    # Populate 4 files with 10 rows (10 sequences) each
+    # Populate 4 files with distinct row markers so sharding can be observed.
     batch_files = []
     for i in range(1, 5):
         filename = f"file_{i}.parquet"
         rows = []
         for s in range(10):
-            rows.append((s, 0, s * 2, 0, "item", float(s), float(s + 1), float(s + 2)))
+            marker = i * 100 + s
+            rows.append(
+                (
+                    s,
+                    0,
+                    s * 2,
+                    0,
+                    "item",
+                    float(marker),
+                    float(marker + 1),
+                    float(marker + 2),
+                )
+            )
 
         df = pl.DataFrame(rows, schema=schema, orient="row")
         df.write_parquet(data_dir / filename)
@@ -82,6 +94,16 @@ def dataset_path(tmp_path):
         json.dump(metadata, f)
 
     return str(data_dir)
+
+
+def _input_markers(batches):
+    return torch.cat([batch.inputs["item"][:, 0] for batch in batches]).tolist()
+
+
+def _sample_valid_mask(batches):
+    return torch.cat(
+        [batch.metadata["sample_valid_mask"] for batch in batches]
+    ).tolist()
 
 
 def test_initialization(mock_config, dataset_path):
@@ -194,6 +216,12 @@ def test_distributed_sharding(mock_ws, mock_rank, mock_init, mock_config, datase
     for batch in batches:
         assert batch.inputs["item"].shape[0] == 5
 
+    assert _input_markers(batches) == [
+        *[float(100 + i) for i in range(10)],
+        *[float(300 + i) for i in range(10)],
+    ]
+    assert _sample_valid_mask(batches) == [True] * 20
+
 
 def test_exact_strategy_uneven_files_exception(mock_config, tmp_path):
     """FSDP exact mode rejects uneven ranks."""
@@ -218,7 +246,8 @@ def test_exact_strategy_uneven_files_exception(mock_config, tmp_path):
         assert "different number of samples per rank/GPU" in str(exc_info.value)
 
 
-def test_oversampling_strategy(mock_config, tmp_path):
+@patch("torch.distributed.get_rank", return_value=1)
+def test_oversampling_strategy(mock_rank, mock_config, tmp_path):
     """Oversampling pads short ranks."""
     data_dir = tmp_path / "oversample_parquet_data"
     data_dir.mkdir()
@@ -227,6 +256,7 @@ def test_oversampling_strategy(mock_config, tmp_path):
         "sequenceId": pl.Int64,
         "subsequenceId": pl.Int64,
         "startItemPosition": pl.Int64,
+        "leftPadLength": pl.Int64,
         "inputCol": pl.String,
         "2": pl.Float64,
         "1": pl.Float64,
@@ -236,7 +266,16 @@ def test_oversampling_strategy(mock_config, tmp_path):
     # File 1 has 15 rows, File 2 has 10 rows
     for i, num_rows in [(1, 15), (2, 10)]:
         rows = [
-            (s, 0, s * 2, "item", float(s), float(s + 1), float(s + 2))
+            (
+                s,
+                0,
+                s * 2,
+                0,
+                "item",
+                float(i * 100 + s),
+                float(i * 100 + s + 1),
+                float(i * 100 + s + 2),
+            )
             for s in range(num_rows)
         ]
         pl.DataFrame(rows, schema=schema, orient="row").write_parquet(
@@ -261,9 +300,19 @@ def test_oversampling_strategy(mock_config, tmp_path):
         )
         # Should match max(15, 10)
         assert dataset.target_samples == 15
+        assert len(dataset) == 3
+
+        batches = list(dataset)
+        assert len(batches) == 3
+        assert _input_markers(batches) == [
+            *[float(200 + i) for i in range(10)],
+            *[float(200 + i) for i in range(5)],
+        ]
+        assert _sample_valid_mask(batches) == [True] * 10 + [False] * 5
 
 
-def test_undersampling_strategy(mock_config, tmp_path):
+@patch("torch.distributed.get_rank", return_value=0)
+def test_undersampling_strategy(mock_rank, mock_config, tmp_path):
     """Undersampling truncates long ranks."""
     data_dir = tmp_path / "undersample_parquet_data"
     data_dir.mkdir()
@@ -272,6 +321,7 @@ def test_undersampling_strategy(mock_config, tmp_path):
         "sequenceId": pl.Int64,
         "subsequenceId": pl.Int64,
         "startItemPosition": pl.Int64,
+        "leftPadLength": pl.Int64,
         "inputCol": pl.String,
         "2": pl.Float64,
         "1": pl.Float64,
@@ -280,7 +330,16 @@ def test_undersampling_strategy(mock_config, tmp_path):
 
     for i, num_rows in [(1, 15), (2, 10)]:
         rows = [
-            (s, 0, s * 2, "item", float(s), float(s + 1), float(s + 2))
+            (
+                s,
+                0,
+                s * 2,
+                0,
+                "item",
+                float(i * 100 + s),
+                float(i * 100 + s + 1),
+                float(i * 100 + s + 2),
+            )
             for s in range(num_rows)
         ]
         pl.DataFrame(rows, schema=schema, orient="row").write_parquet(
@@ -305,3 +364,9 @@ def test_undersampling_strategy(mock_config, tmp_path):
         )
         # Should match min(15, 10)
         assert dataset.target_samples == 10
+        assert len(dataset) == 2
+
+        batches = list(dataset)
+        assert len(batches) == 2
+        assert _input_markers(batches) == [float(100 + i) for i in range(10)]
+        assert _sample_valid_mask(batches) == [True] * 10
