@@ -14,15 +14,7 @@ from sequifier.visualize_training import visualize_training
 
 @beartype
 def build_args_config(args: Any) -> dict[str, Any]:
-    """
-    Build configuration dictionary from command-line arguments.
-
-    Args:
-        args: Parsed command-line arguments.
-
-    Returns:
-        Dictionary containing configuration options.
-    """
+    """Build config overrides from parsed CLI args."""
 
     args_config = {
         k: v
@@ -55,12 +47,7 @@ def build_args_config(args: Any) -> dict[str, Any]:
 
 @beartype
 def setup_parser() -> ArgumentParser:
-    """
-    Set up the argument parser for the command-line interface.
-
-    Returns:
-        Configured ArgumentParser object.
-    """
+    """Build the sequifier CLI parser."""
     parser = ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 

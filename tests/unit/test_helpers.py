@@ -13,13 +13,9 @@ from sequifier.helpers import (
     resolve_window_view,
 )
 
-# ==========================================
-# 1. Test Index Map Construction
-# ==========================================
-
 
 def test_construct_index_maps_string():
-    """Tests reversing a string-to-int map, ensuring 0 maps to '[unknown]'."""
+    """Reverse string ID map."""
     id_maps: dict[str, dict[str | int, int]] = {"itemId": {"apple": 3, "banana": 4}}
     target_cols = ["itemId"]
 
@@ -36,7 +32,7 @@ def test_construct_index_maps_string():
 
 
 def test_construct_index_maps_integer():
-    """Tests reversing an int-to-int map with special IDs as sentinels."""
+    """Reverse int ID map with sentinels."""
     id_maps: dict[str, dict[str | int, int]] = {"storeId": {100: 3, 101: 4}}
     target_cols = ["storeId"]
 
@@ -51,29 +47,15 @@ def test_construct_index_maps_integer():
 
 
 def test_construct_index_maps_flag_false():
-    """Tests that nothing is returned if map_to_id is False."""
+    """Empty maps when map_to_id is false."""
     id_maps: dict[str, dict[str | int, int]] = {"itemId": {"a": 1}}
     result = construct_index_maps(id_maps, ["itemId"], map_to_id=False)
     assert result == {}
 
 
-# ==========================================
-# 2. Test Numpy to PyTorch Conversion
-# ==========================================
-
-
 def test_numpy_to_pytorch_shapes_and_shifting():
-    """
-    Tests that DataFrames are correctly converted to input and target Tensors.
+    """Check causal input and shifted target tensors."""
 
-    Logic to test:
-    If context_length = 3:
-    - Input cols:  ['3', '2', '1']
-    - Target cols: ['2', '1', '0']
-    """
-
-    # Setup: 2 sequences for feature "A"
-    # Seq 1: [10, 20, 30, 40] (where 40 is t=0, 30 is t=1, etc.)
     data = pl.DataFrame(
         {
             "sequenceId": [1, 2],
@@ -102,7 +84,6 @@ def test_numpy_to_pytorch_shapes_and_shifting():
         resolved_view,
     )
 
-    # 1. Check Keys
     assert "A" in tensors
     assert "A_target" in tensors
     assert torch.equal(
@@ -114,19 +95,15 @@ def test_numpy_to_pytorch_shapes_and_shifting():
         torch.tensor([[True, True, True], [True, True, True]]),
     )
 
-    # 2. Check Input Tensor (Cols 3, 2, 1)
-    # Row 0: [10, 20, 30]
     expected_input = torch.tensor([[10, 20, 30], [11, 21, 31]], dtype=torch.float32)
     assert torch.equal(tensors["A"], expected_input)
 
-    # 3. Check Target Tensor (Cols 2, 1, 0) -> Shifted by 1 step into future
-    # Row 0: [20, 30, 40]
     expected_target = torch.tensor([[20, 30, 40], [21, 31, 41]], dtype=torch.float32)
     assert torch.equal(tensors["A_target"], expected_target)
 
 
 def test_numpy_to_pytorch_dtypes():
-    """Tests that column_types dict is respected for tensor dtypes."""
+    """Check column_types controls tensor dtypes."""
 
     # Note: numpy_to_pytorch filters by inputCol, so we need to handle how
     # it selects rows. It assumes all rows matching "inputCol" have valid data

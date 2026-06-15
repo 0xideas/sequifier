@@ -85,7 +85,7 @@ def dataset_path(tmp_path):
 
 
 def test_initialization(mock_config, dataset_path):
-    """Tests that metadata is read correctly and __len__ calculates batches."""
+    """Metadata-backed batch length."""
     dataset = SequifierDatasetFromFolderParquetLazy(dataset_path, mock_config)
 
     # 40 total samples / batch size of 5 = 8 batches
@@ -95,7 +95,7 @@ def test_initialization(mock_config, dataset_path):
 
 
 def test_iteration_yields_correct_batches(mock_config, dataset_path):
-    """Tests that the dataset iterates over files and yields structured tensors."""
+    """Structured tensors from file iteration."""
     dataset = SequifierDatasetFromFolderParquetLazy(
         dataset_path, mock_config, shuffle=False
     )
@@ -180,7 +180,7 @@ def test_iteration_attaches_explicit_padding_masks(mock_config, tmp_path):
 @patch("torch.distributed.get_rank", return_value=0)
 @patch("torch.distributed.get_world_size", return_value=2)
 def test_distributed_sharding(mock_ws, mock_rank, mock_init, mock_config, dataset_path):
-    """Tests that the dataset correctly shards files across distributed GPU ranks."""
+    """Distributed file sharding."""
     dataset = SequifierDatasetFromFolderParquetLazy(
         dataset_path, mock_config, shuffle=False
     )
@@ -196,7 +196,7 @@ def test_distributed_sharding(mock_ws, mock_rank, mock_init, mock_config, datase
 
 
 def test_exact_strategy_uneven_files_exception(mock_config, tmp_path):
-    """Tests that FSDP validation raises an Exception when file distribution is uneven."""
+    """FSDP exact mode rejects uneven ranks."""
     data_dir = tmp_path / "uneven_parquet_data"
     data_dir.mkdir()
 
@@ -219,7 +219,7 @@ def test_exact_strategy_uneven_files_exception(mock_config, tmp_path):
 
 
 def test_oversampling_strategy(mock_config, tmp_path):
-    """Tests that shorter ranks oversample to equal the maximal rank count."""
+    """Oversampling pads short ranks."""
     data_dir = tmp_path / "oversample_parquet_data"
     data_dir.mkdir()
 
@@ -264,7 +264,7 @@ def test_oversampling_strategy(mock_config, tmp_path):
 
 
 def test_undersampling_strategy(mock_config, tmp_path):
-    """Tests that longer ranks truncate samples down to match the minimal rank count."""
+    """Undersampling truncates long ranks."""
     data_dir = tmp_path / "undersample_parquet_data"
     data_dir.mkdir()
 

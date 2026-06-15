@@ -133,13 +133,11 @@ def test_predictions_cat(predictions):
                 baseline_preds = predictions["model-categorical-1-best-3"]
                 n_baseline_rows = baseline_preds.height
 
-                # 3. Assert the number of rows is scaled by prediction_length
                 assert n_test_rows == n_baseline_rows * prediction_length, (
                     f"Expected {n_baseline_rows * prediction_length} rows for prediction_length={prediction_length}, "
                     f"but found {n_test_rows} rows."
                 )
 
-                # 4. Assert correct number of predictions per sequence
                 baseline_rows_per_seq = (
                     baseline_preds.group_by("sequenceId").len().height
                 )
@@ -291,12 +289,8 @@ def test_predictions_item_position(predictions):
 
 
 def test_embeddings_subsequence_id(embeddings):
-    """
-    Checks if subsequenceId increments correctly within each sequenceId
-    and starts at 0 for each new sequence.
-    """
+    """Check subsequenceId increments within each sequence."""
     for model_name, embeds_df in embeddings.items():
-        # Ensure correct sorting
         embeds_df_sorted = embeds_df.sort("sequenceId", "subsequenceId")
 
         shift_val = 0
@@ -315,17 +309,15 @@ def test_embeddings_subsequence_id(embeddings):
             ),
         )
 
-        # 1. Check if subsequenceId starts at 0 for each new sequence
         first_subsequences = embeds_with_diffs.filter(
             pl.col("same_seq") == False  # noqa: E712
-        )  # First row of each sequence
+        )
         incorrect_starts = first_subsequences.filter(pl.col("subsequenceId") != 0)
         assert incorrect_starts.height == 0, (
             f"Model '{model_name}': Found sequences where subsequenceId does not start at 0:\n"
             f"{incorrect_starts}"
         )
 
-        # 2. Check if subsequenceId increments by 1 within sequences
         within_sequence_diffs = embeds_with_diffs.filter(pl.col("same_seq"))
         incorrect_increments = within_sequence_diffs.filter(pl.col("subseq_diff") != 1)
         assert incorrect_increments.height == 0, (

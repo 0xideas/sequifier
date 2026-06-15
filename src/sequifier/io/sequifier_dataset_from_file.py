@@ -17,14 +17,7 @@ from sequifier.io.batch import SequifierBatch
 
 
 class SequifierDatasetFromFile(IterableDataset):
-    """
-    An iterable-style dataset that pre-loads all data into CPU RAM and yields
-    pre-collated batches.
-
-    This is the idiomatic PyTorch solution for implementing custom 'en block'
-    batching. The __iter__ method handles shuffling and batch slicing, ensuring
-    maximum performance.
-    """
+    """Eager single-file dataset yielding pre-collated batches."""
 
     def __init__(self, data_path: str, config: TrainModel, shuffle: bool = True):
         super().__init__()
@@ -33,7 +26,6 @@ class SequifierDatasetFromFile(IterableDataset):
         self.shuffle = shuffle
         self.epoch = 0
 
-        # Create a unified list of all columns the model might need
         all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
         logger.info(
@@ -46,7 +38,6 @@ class SequifierDatasetFromFile(IterableDataset):
             for col in config.column_types
         }
 
-        # self.all_tensors now holds both inputs and targets
         resolved_view = resolve_window_view(config.storage_layout, config.window_view)
         all_tensors, metadata_tensors = numpy_to_pytorch(
             data=data_df,
@@ -78,24 +69,15 @@ class SequifierDatasetFromFile(IterableDataset):
         logger.info(f"[INFO] Dataset loaded with {self.n_samples} samples.")
 
     def set_epoch(self, epoch: int):
-        """Allows the training loop to set the epoch for deterministic shuffling."""
+        """Set the shuffle epoch."""
         self.epoch = epoch
 
     def __len__(self) -> int:
-        """Returns the total number of samples in the dataset."""
         return math.ceil(self.n_samples / self.batch_size)
 
     def __iter__(
         self,
     ) -> Iterator[SequifierBatch]:
-        """Yields batches of data.
-
-        Handles shuffling (if enabled) and slicing data based on distributed
-        rank and worker ID.
-
-        Yields:
-            An iterator where each item is a SequifierBatch.
-        """
         worker_info = torch.utils.data.get_worker_info()
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_initialized() else 0

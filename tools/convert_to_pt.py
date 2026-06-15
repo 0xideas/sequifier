@@ -18,7 +18,6 @@ def main():
 
     assert os.path.exists(in_path), f"Input file not found: {in_path}"
 
-    # 1. Read Data
     if in_path.endswith(".csv"):
         df = pl.read_csv(in_path)
     elif in_path.endswith(".parquet"):
@@ -26,7 +25,6 @@ def main():
     else:
         raise ValueError("Input must be .csv or .parquet")
 
-    # 2. Validate Schema
     required_meta = {"sequenceId", "subsequenceId", "startItemPosition", "inputCol"}
     assert required_meta.issubset(
         df.columns
@@ -35,7 +33,6 @@ def main():
     seq_cols = sorted([c for c in df.columns if c.isdigit()], key=int)
     assert len(seq_cols) > 1, "No numbered sequence columns found"
 
-    # 3. Aggregate
     feature_names = df["inputCol"].unique().to_list()
     aggs = [
         pl.concat_list(seq_cols).filter(pl.col("inputCol") == f).flatten().alias(f)
@@ -48,7 +45,6 @@ def main():
     )
     grouped = grouped.sort(["sequenceId", "subsequenceId"])
 
-    # 4. Create Tensors
     seq_ids = torch.from_numpy(grouped["sequenceId"].to_numpy().astype(np.int64))
     sub_ids = torch.from_numpy(grouped["subsequenceId"].to_numpy().astype(np.int64))
     start_pos = torch.from_numpy(
@@ -70,7 +66,6 @@ def main():
 
     total_rows = len(seq_ids)
 
-    # 5. Save
     if chunk_size is not None and total_rows > chunk_size:
         assert not os.path.isfile(
             out_path
@@ -83,7 +78,6 @@ def main():
         for i in range(0, total_rows, chunk_size):
             end = i + chunk_size
 
-            # Slice everything
             s_ids_chunk = seq_ids[i:end]
             sub_ids_chunk = sub_ids[i:end]
             start_pos_chunk = start_pos[i:end]

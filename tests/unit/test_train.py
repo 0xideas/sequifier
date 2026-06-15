@@ -99,7 +99,7 @@ def test_poisson_span_masking_samples_at_least_one_token():
 
 @pytest.fixture
 def model_config(tmp_path):
-    """Creates a valid TrainModel configuration for testing."""
+    """Valid TrainModel config."""
     project_root = str(tmp_path)
 
     # Ensure necessary directories exist to avoid init errors (logging)
@@ -206,7 +206,7 @@ def _all_valid_metadata(batch_size, seq_len, device=None):
 
 
 def test_transformer_model_initialization(model, model_config):
-    """Tests that the model initializes with the correct layers."""
+    """Expected model layers."""
     # Check if encoder dicts were created
     assert "cat_col" in model.encoder
     assert model.pos_encoder is None or "cat_col" in model.pos_encoder
@@ -403,7 +403,7 @@ def test_load_train_config_validates_class_share_columns_after_metadata_load(
 
 
 def test_forward_train_shapes(model, model_config):
-    """Tests the output shapes of the forward_train method."""
+    """forward_train output shapes."""
     batch_size = model_config.training_spec.batch_size
     seq_len = model_config.window_view.context_length
 
@@ -434,7 +434,7 @@ def test_forward_train_shapes(model, model_config):
 
 
 def test_forward_inference_shapes(model, model_config):
-    """Tests the output shapes of the forward (inference) method."""
+    """Inference output shapes."""
     batch_size = model_config.training_spec.batch_size
     seq_len = model_config.window_view.context_length
     prediction_length = model_config.model_spec.prediction_length  # 1
@@ -467,7 +467,7 @@ def test_forward_inference_shapes(model, model_config):
 
 
 def test_calculate_loss(model, model_config):
-    """Tests that loss calculation returns a scalar tensor."""
+    """Scalar loss tensor."""
     batch_size = model_config.training_spec.batch_size
     seq_len = model_config.window_view.context_length
 

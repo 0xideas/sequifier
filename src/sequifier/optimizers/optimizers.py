@@ -7,14 +7,7 @@ CUSTOM_OPTIMIZERS = {"AdEMAMix": AdEMAMix}
 
 
 def get_optimizer_class(optimizer_name: str) -> torch.optim.Optimizer:
-    """Gets the optimizer class from a string.
-
-    Args:
-        optimizer_name: The name of the optimizer.
-
-    Returns:
-        The optimizer class.
-    """
+    """Resolve a custom, torch-optimizer, or torch optimizer class."""
     if optimizer_name in CUSTOM_OPTIMIZERS:
         return CUSTOM_OPTIMIZERS[optimizer_name]
     elif hasattr(torch_optimizer, optimizer_name):

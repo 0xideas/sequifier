@@ -2,30 +2,20 @@
 import sys
 from pathlib import Path
 
-# --- Configuration ---
 PYPROJECT_PATH = Path("./pyproject.toml")
 WORKFLOW_PATH = Path("./.github/workflows/docs.yml")
 
 
 def normalize_dep(dep_string):
-    """
-    Removes whitespace, quotes, and trailing commas for consistent comparison.
-    Example: ' "polars>= 1.0" ' -> 'polars>=1.0'
-    """
-    # Remove single and double quotes
+    """Normalize dependency strings for comparison."""
     s = dep_string.replace('"', "").replace("'", "")
-    # Remove all whitespace
     s = "".join(s.split())
-    # Remove trailing commas if present
     s = s.rstrip(",")
     return s
 
 
 def parse_pyproject_toml(file_path):
-    """
-    Extracts dependencies from the [project] dependencies list.
-    We use a simple state parser to avoid requiring 'tomli' on Python < 3.11.
-    """
+    """Parse project dependency strings without tomli."""
     deps = set()
     if not file_path.exists():
         print(f"Error: {file_path} not found.")
@@ -39,18 +29,15 @@ def parse_pyproject_toml(file_path):
     for line in lines:
         stripped = line.strip()
 
-        # Detect start of dependencies block
         if stripped.startswith("dependencies = ["):
             in_dependencies = True
             continue
 
-        # Detect end of block
         if in_dependencies and stripped.startswith("]"):
             in_dependencies = False
             break
 
         if in_dependencies:
-            # Ignore empty lines or comments inside the block
             if not stripped or stripped.startswith("#"):
                 continue
 
@@ -62,10 +49,7 @@ def parse_pyproject_toml(file_path):
 
 
 def parse_workflow_yml(file_path):
-    """
-    Extracts dependencies specifically from the 'pip install \' block
-    in the Install dependencies step.
-    """
+    """Parse docs workflow pip-install dependency strings."""
     deps = set()
     if not file_path.exists():
         print(f"Error: {file_path} not found.")
@@ -79,20 +63,16 @@ def parse_workflow_yml(file_path):
     for line in lines:
         stripped = line.strip()
 
-        # Logic to find the specific pip install block that uses line continuation
-        # We look for 'pip install \' but exclude 'pip install -r' lines
         if "pip install \\" in line and "-r " not in line:
             in_pip_block = True
             continue
 
         if in_pip_block:
-            # If the line contains a quoted string, it's a dependency
             if '"' in line or "'" in line:
                 normalized = normalize_dep(stripped.rstrip("\\"))
                 if normalized:
                     deps.add(normalized)
 
-            # If the line does not end with a backslash, the multiline command is over
             if not line.rstrip().endswith("\\"):
                 in_pip_block = False
 
@@ -105,10 +85,8 @@ def main():
     toml_deps = parse_pyproject_toml(PYPROJECT_PATH)
     yml_deps = parse_workflow_yml(WORKFLOW_PATH)
 
-    # 1. Check for items in TOML but missing in YAML
     missing_in_yml = toml_deps - yml_deps
 
-    # 2. Check for items in YAML but missing in TOML
     missing_in_toml = yml_deps - toml_deps
 
     if not missing_in_yml and not missing_in_toml:

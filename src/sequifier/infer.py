@@ -34,21 +34,7 @@ from sequifier.train import (
 
 @beartype
 def infer(args: Any, args_config: dict[str, Any]) -> None:
-    """Runs the main inference pipeline.
-
-    This function orchestrates the inference process. It loads the main
-    inference configuration, retrieves necessary metadata like ID maps and
-    column statistics from a `metadata_config` file (if required for mapping or
-    normalization), and then delegates the core work to the `infer_worker`
-    function.
-
-    Args:
-        args: Command-line arguments, typically from `argparse`. Expected
-            to have attributes like `config_path` and `skip_metadata`.
-        args_config: A dictionary of configuration overrides, often
-            passed from the command line, that will be merged into the
-            loaded configuration file.
-    """
+    """Load inference config and dispatch the worker."""
     logger.info("--- Starting Inference ---")
     config_path = (
         args.config_path if args.config_path is not None else "configs/infer.yaml"
@@ -86,33 +72,13 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
 
 @beartype
 def load_pt_dataset(data_path: str, start_pct: float, end_pct: float) -> Iterator[Any]:
-    """Lazily loads and yields data from .pt files in a directory.
-
-    This function scans a directory for `.pt` files, sorts them, and then
-    yields the contents of a specific slice of those files defined by a
-    start and end percentage. This allows for processing large datasets
-    in chunks without loading everything into memory.
-
-    Args:
-        data_path: The path to the folder containing the `.pt` files.
-        start_pct: The starting percentage (0.0 to 100.0) of the file list
-            to begin loading from.
-        end_pct: The ending percentage (0.0 to 100.0) of the file list
-            to stop loading at.
-
-    Yields:
-        Iterator: An iterator where each item is the data loaded from a
-        single `.pt` file (e.g., using `torch.load`).
-    """
-    # Get all .pt files in the directory (not nested)
+    """Yield a percentage slice of sorted top-level PT files."""
     pt_files = sorted(Path(data_path).glob("*.pt"))
 
-    # Calculate slice indices
     total = len(pt_files)
     start_idx = int(total * start_pct / 100)
     end_idx = int(total * end_pct / 100)
 
-    # Lazily load and yield data from files in range
     for pt_file in pt_files[start_idx:end_idx]:
         yield torch.load(pt_file, weights_only=False)
 
@@ -121,24 +87,7 @@ def load_pt_dataset(data_path: str, start_pct: float, end_pct: float) -> Iterato
 def load_parquet_folder_dataset(
     data_path: str, start_pct: float, end_pct: float
 ) -> Iterator[Any]:
-    """Lazily loads and yields data from long-format .parquet chunk files in a directory.
-
-    This function scans a directory for `.parquet` files, sorts them, and then
-    yields the contents of a specific slice of those files defined by a
-    start and end percentage. This allows for processing large datasets
-    in chunks without loading everything into memory.
-
-    Args:
-        data_path: The path to the folder containing the `.parquet` files.
-        start_pct: The starting percentage (0.0 to 100.0) of the file list
-            to begin loading from.
-        end_pct: The ending percentage (0.0 to 100.0) of the file list
-            to stop loading at.
-
-    Yields:
-        Iterator: An iterator where each item is a Polars DataFrame loaded from a
-        single `.parquet` file.
-    """
+    """Yield a percentage slice of sorted top-level Parquet files."""
     parquet_files = sorted(Path(data_path).glob("*.parquet"))
 
     total = len(parquet_files)
@@ -157,35 +106,12 @@ def infer_worker(
     selected_columns_statistics: dict[str, dict[str, float]],
     percentage_limits: Optional[tuple[float, float]],
 ):
-    """Core worker function that performs inference.
-
-    This function handles the main workflow:
-    1. Loads the dataset based on `config.read_format` (parquet, csv, or pt).
-    2. Iterates over one or more model paths specified in the config.
-    3. For each model, initializes an `Inferer` object with all necessary
-       configurations, mappings, and statistics.
-    4. Calls the appropriate inference function (`infer_generative` or
-       `infer_embedding`) based on the `config.model_type`.
-    5. Manages the data iterators and passes data chunks to the
-       inference functions.
-
-    Args:
-        config: The fully resolved `InfererModel` configuration object.
-        args_config: A dictionary of command-line arguments, passed to the
-            `Inferer` for potential model loading overrides.
-        id_maps: A nested dictionary mapping categorical column names to
-            their value-to-index maps. `None` if `map_to_id` is False.
-        selected_columns_statistics: A nested dictionary containing 'mean'
-            and 'std' for real-valued columns used for normalization.
-        percentage_limits: A tuple (start_pct, end_pct) used only when
-            `config.read_format == "pt"` to slice the dataset.
-    """
+    """Load data, instantiate models, and run the configured inference mode."""
     logger.info(f"[INFO] Reading data from '{config.data_path}'...")
 
     is_folder_input = os.path.isdir(
         normalize_path(config.data_path, config.project_root)
     )
-    # Step 1: Use Polars for data ingestion
     dataset = None
     if not is_folder_input:
         # Standalone Single-File Path Execution
@@ -275,18 +201,7 @@ def calculate_item_positions(
     prediction_length: int,
     training_objective: str,
 ) -> np.ndarray:
-    """
-    Calculates absolute item positions for inference outputs based on the training objective.
-
-    Args:
-        start_positions: 1D array of base start positions for each sequence in the batch.
-        context_length: The length of the input sequence window.
-        prediction_length: The total number of predicted tokens per sequence.
-        training_objective: Either "causal" or "bert".
-
-    Returns:
-        A 1D array of absolute item positions mapped to every flattened prediction row.
-    """
+    """Return flattened absolute item positions for inference outputs."""
     if training_objective == "bert":
         # Anchor positions to the start of the input sequence and tile forwards
         base_positions = start_positions
@@ -395,31 +310,11 @@ def infer_embedding(
     dataset: Union[list[Any], Iterator[Any]],
     column_types: dict[str, torch.dtype],
 ) -> None:
-    """Performs inference with an embedding model and saves the results.
-
-    This function iterates through the provided dataset (which can be a list
-    of DataFrames or an iterator of tensors). For each data chunk, it
-    calls the appropriate function (`get_embeddings` or `get_embeddings_pt`)
-    to generate embeddings. It then formats these embeddings into a
-    Polars DataFrame, associating them with their `sequenceId`, `subsequenceId`,
-    and absolute `itemPosition`, and writes the resulting DataFrame to the
-    configured output path.
-
-    Args:
-        config: The `InfererModel` configuration object.
-        inferer: The initialized `Inferer` instance.
-        model_id: A string identifier for the model, used for naming
-            output files.
-        dataset: A list containing a Polars DataFrame (for parquet/csv) or
-            an iterator of loaded PyTorch data (for .pt files).
-        column_types: A dictionary mapping column names to their
-            `torch.dtype`.
-    """
+    """Write embeddings for each dataset chunk."""
     for data_id, data in enumerate(dataset):
         prediction_length = inferer.prediction_length
         valid_prediction_mask = None
 
-        # Step 1: Get embeddings and base position/ID data
         is_folder_input = os.path.isdir(
             normalize_path(config.data_path, config.project_root)
         )
@@ -589,31 +484,8 @@ def infer_generative(
     dataset: Union[list[Any], Iterator[Any]],
     column_types: dict[str, torch.dtype],
 ):
-    """Executes the generative inference pipeline and exports results to disk.
-
-    This function processes the input dataset in chunks to accommodate large data
-    volumes. It handles various input formats (standalone CSV/Parquet, folder-based
-    Parquet, or PyTorch tensors) and routes the data to the appropriate inference
-    logic (standard sequence prediction or step-by-step autoregression). After
-    obtaining raw model outputs, it calculates aligned sequence IDs and absolute
-    item positions, applies necessary post-processing (such as reverse-mapping
-    categorical IDs and denormalizing real values), and writes the final
-    probabilities and predictions to the configured output directory.
-
-    Args:
-        config: The inference configuration object dictating I/O paths,
-            autoregression settings, and output formats.
-        inferer: The initialized `Inferer` instance responsible for executing
-            the underlying model logic.
-        model_id: A string identifier for the current model, used to construct
-            the names of the generated output files and directories.
-        dataset: A list or iterator yielding data chunks, typically containing
-            either Polars DataFrames or PyTorch tensor dictionaries.
-        column_types: A dictionary mapping input column names to their expected
-            `torch.dtype`.
-    """
+    """Write generative predictions/probabilities for each dataset chunk."""
     for data_id, data in enumerate(dataset):
-        # Step 1: Adapt Data Subsetting (now works on Polars DF)
         is_folder_input = os.path.isdir(
             normalize_path(config.data_path, config.project_root)
         )
@@ -924,24 +796,7 @@ def get_embeddings_pt(
     data: dict[str, torch.Tensor],
     metadata: dict[str, torch.Tensor],
 ) -> np.ndarray:
-    """Generates embeddings from a batch of PyTorch tensor data.
-
-    This function serves as a wrapper for `Inferer.infer_embedding` when
-    the input data is already in PyTorch tensor format (from loading `.pt`
-    files which contain sequences, targets, sequence_ids, subsequence_ids,
-    and start_positions). It converts the tensor dictionary to a NumPy array
-    dictionary before passing it to the inferer.
-
-    Args:
-        config: The `InfererModel` configuration object (unused, but
-            kept for consistent function signature).
-        inferer: The initialized `Inferer` instance.
-        data: A dictionary mapping column/feature names to `torch.Tensor`s
-              (the sequences part loaded from the .pt file).
-
-    Returns:
-        A NumPy array containing the computed embeddings for the batch.
-    """
+    """Infer embeddings from PT tensors."""
     resolved_view = resolve_window_view(config.storage_layout, config.window_view)
     for tensor in data.values():
         validate_stored_window_width(tensor, config.storage_layout.stored_context_width)
@@ -963,42 +818,10 @@ def get_probs_preds_from_dict(
     metadata: dict[str, torch.Tensor],
     total_steps: int = 1,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
-    """Generates predictions from PyTorch tensor data, supporting autoregression.
-
-    This function performs generative inference on a batch of PyTorch tensor
-    data loaded from `.pt` files (which contain sequences, targets,
-    sequence_ids, subsequence_ids, and start_positions). It implements an
-    autoregressive loop:
-    1. Runs inference on the initial data `X` (sequences).
-    2. For each subsequent step:
-       a. Creates the next input `X_next` by shifting the previous input
-          `X` and appending the prediction from the last step.
-       b. Runs inference on `X_next`.
-    3. Collects and reshapes all predictions and probabilities from all
-       steps into a single flat batch, ordered by original sample index, then by step.
-
-    Args:
-        config: The `InfererModel` configuration object, used to check
-            `output_probabilities` and `input_columns`.
-        inferer: The initialized `Inferer` instance.
-        data: A dictionary mapping column/feature names to `torch.Tensor`s
-              (the sequences part loaded from the .pt file).
-        total_steps: The number of total autoregressive steps to
-            perform. A value of 1 means simple, non-autoregressive
-            inference.
-
-    Returns:
-        A tuple `(probs, preds)`:
-            - `probs`: A dictionary mapping target columns to NumPy arrays
-              of probabilities, ordered by sample index then step,
-              or `None` if `config.output_probabilities` is False.
-            - `preds`: A dictionary mapping target columns to NumPy arrays
-              of final predictions, ordered by sample index then step.
-    """
+    """Infer PT predictions, flattened sample-major across autoregressive steps."""
 
     target_cols = inferer.target_columns
 
-    # 2. Initialize input and containers for storing results from all steps
     X = {
         key: tensor.numpy()
         for key, tensor in data.items()
@@ -1008,7 +831,6 @@ def get_probs_preds_from_dict(
     all_probs_list = {col: [] for col in target_cols}
     all_preds_list = {col: [] for col in target_cols}
 
-    # 3. Autoregressive loop
     metadata_for_step = metadata_np
     for i in range(total_steps):
         if config.output_probabilities:
@@ -1079,22 +901,7 @@ def get_embeddings(
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
 ) -> np.ndarray:
-    """Generates embeddings from a Polars DataFrame.
-
-    This function converts a Polars DataFrame into the NumPy array dictionary
-    format expected by the `Inferer`. It uses `numpy_to_pytorch` for the
-    main conversion, then transforms the tensors to NumPy arrays before
-    passing them to `inferer.infer_embedding`.
-
-    Args:
-        config: The `InfererModel` configuration object.
-        inferer: The initialized `Inferer` instance.
-        data: The input Polars DataFrame chunk.
-        column_types: A dictionary mapping column names to `torch.dtype`.
-
-    Returns:
-        A NumPy array containing the computed embeddings for the batch.
-    """
+    """Infer embeddings from a Polars chunk."""
     all_columns = sorted(list(set(config.input_columns + config.target_columns)))
     resolved_view = resolve_window_view(config.storage_layout, config.window_view)
     X, metadata = numpy_to_pytorch(
@@ -1119,28 +926,7 @@ def get_probs_preds_from_df(
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
-    """Generates predictions from a Polars DataFrame (non-autoregressive).
-
-    This function converts a Polars DataFrame into the NumPy array dictionary
-    format expected by the `Inferer`. It's used for standard,
-    non-autoregressive generative inference.
-    It calls `inferer.infer_generative` once and returns the
-    probabilities (if requested) and predictions.
-
-    Args:
-        config: The `InfererModel` configuration object.
-        inferer: The initialized `Inferer` instance.
-        data: The input Polars DataFrame chunk.
-        column_types: A dictionary mapping column names to `torch.dtype`.
-
-    Returns:
-        A tuple `(probs, preds)`:
-            - `probs`: A dictionary mapping target columns to NumPy arrays
-              of probabilities, or `None` if `config.output_probabilities`
-              is False.
-            - `preds`: A dictionary mapping target columns to NumPy arrays
-              of final predictions.
-    """
+    """Infer non-autoregressive predictions from a Polars chunk."""
     all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
     resolved_view = resolve_window_view(config.storage_layout, config.window_view)
@@ -1166,46 +952,20 @@ def get_probs_preds_from_df(
 
 @beartype
 def fill_number(number: Union[int, float], max_length: int) -> str:
-    """Pads a number with leading zeros to a specified string length.
-
-    Used for creating sortable string keys (e.g., "001-001", "001-002").
-
-    Args:
-        number: The integer or float to format.
-        max_length: The total desired length of the output string.
-
-    Returns:
-        A string representation of the number, padded with leading zeros.
-    """
+    """Left-pad a number for sortable string keys."""
     number_str = str(number)
     return f"{'0' * (max_length - len(number_str))}{number_str}"
 
 
 @beartype
 def verify_variable_order(data: pl.DataFrame) -> None:
-    """Verifies that the DataFrame is correctly sorted for autoregression.
-
-    Checks two conditions:
-    1. `sequenceId` is globally sorted in ascending order.
-    2. `subsequenceId` is sorted in ascending order *within* each
-       `sequenceId` group.
-
-    Args:
-        data: The Polars DataFrame to check.
-
-    Raises:
-        AssertionError: If `sequenceId` is not globally sorted or if
-            `subsequenceId` is not sorted within `sequenceId` groups.
-    """
-    # Check if the entire 'sequenceId' column is sorted. This is a global property.
+    """Require sequenceId order and in-sequence subsequenceId order."""
     is_globally_sorted = data.select(
         (pl.col("sequenceId").diff().fill_null(0) >= 0).all()
     ).item()
     if not is_globally_sorted:
         raise ValueError("sequenceId must be in ascending order for autoregression")
 
-    # Check if 'subsequenceId' is sorted within each 'sequenceId' group.
-    # This results in a boolean Series, on which we can call .all() directly.
     is_group_sorted = (
         data.select(
             (pl.col("subsequenceId").diff().fill_null(0) >= 0)
@@ -1235,25 +995,7 @@ def get_probs_preds_autoregression(
     np.ndarray,
     np.ndarray,
 ]:
-    """Generates autoregressive predictions and aligns them with sequence IDs and positions.
-
-    Extracts the initial sequence context from the sorted input DataFrame, maps it
-    to PyTorch tensors, and executes step-by-step autoregressive inference.
-
-    Args:
-        config: Inference configuration object.
-        inferer: Initialized `Inferer` instance.
-        data: Input DataFrame, sorted globally by `sequenceId` and locally by `subsequenceId`.
-        column_types: Mapping of input column names to their `torch.dtype`.
-        context_length: Length of the input sequence context.
-
-    Returns:
-        A tuple containing:
-            - probs: Dict of probability arrays per target column (None if disabled).
-            - preds: Dict of final prediction arrays per target column.
-            - sequence_ids_for_preds: 1D array of sequence IDs matching the output shape.
-            - item_positions_for_preds: 1D array of absolute item positions for each step.
-    """
+    """Infer autoregressive predictions with sequence IDs, positions, and mask."""
     verify_variable_order(data)
 
     distinct_cols = len(np.unique(data["inputCol"].to_numpy()))
@@ -1279,7 +1021,6 @@ def get_probs_preds_autoregression(
         resolved_view,
     )
 
-    # Run the autoregressive PyTorch inference
     probs, preds = get_probs_preds_from_dict(
         config,
         inferer,
@@ -1288,7 +1029,6 @@ def get_probs_preds_autoregression(
         config.autoregression_total_steps,
     )
 
-    # 4. Generate the final output arrays using the perfectly aligned bases
     item_positions_for_preds = np.concatenate(
         [
             np.arange(start_pos, start_pos + config.autoregression_total_steps)
@@ -1314,26 +1054,7 @@ def get_probs_preds_autoregression(
 
 
 class Inferer:
-    """A class for performing inference with a trained sequifier model.
-
-    This class encapsulates the model (either ONNX session or PyTorch model),
-    normalization statistics, ID mappings, and all configuration needed
-    to run inference. It provides methods to handle batching, model-specific
-    inference calls (PyTorch vs. ONNX), and post-processing
-    (like inverting normalization).
-
-    Attributes:
-        model_type: 'generative' or 'embedding'.
-        map_to_id: Whether to map integer predictions back to original IDs.
-        selected_columns_statistics: Dict of 'mean' and 'std' for real columns.
-        index_map: The inverse of `id_maps`, for mapping indices back to values.
-        device: The device ('cuda' or 'cpu') for inference.
-        target_columns: List of columns the model predicts.
-        target_column_types: Dict mapping target columns to 'categorical' or 'real'.
-        inference_model_type: 'onnx' or 'pt'.
-        ort_session: `onnxruntime.InferenceSession` if using ONNX.
-        inference_model: The loaded PyTorch model if using 'pt'.
-    """
+    """Inference runtime for PT/ONNX sequifier models."""
 
     @beartype
     def __init__(
@@ -1357,27 +1078,7 @@ class Inferer:
         args_config: dict[str, Any],
         training_config_path: str,
     ):
-        """Initializes the Inferer.
-
-        Args:
-            model_type: The type of model to use for inference.
-            model_path: The path to the trained model.
-            project_root: The path to the sequifier project directory.
-            id_maps: A dictionary of id maps for categorical columns.
-            selected_columns_statistics: A dictionary of statistics for numerical columns.
-            map_to_id: Whether to map the output to the original ids.
-            categorical_columns: A list of categorical columns.
-            real_columns: A list of real columns.
-            selected_columns: A list of selected columns.
-            target_columns: A list of target columns.
-            target_column_types: A dictionary of target column types.
-            sample_from_distribution_columns: A list of columns to sample from the distribution.
-            infer_with_dropout: Whether to use dropout during inference.
-            inference_batch_size: The batch size for inference.
-            device: The device to use for inference.
-            args_config: The command-line arguments.
-            training_config_path: The path to the training configuration file.
-        """
+        """Load a PT or ONNX backend and postprocessing state."""
         self.model_type = model_type
         self.map_to_id = map_to_id
         self.selected_columns_statistics = selected_columns_statistics
@@ -1434,19 +1135,7 @@ class Inferer:
     def invert_normalization(
         self, values: np.ndarray, target_column: str
     ) -> np.ndarray:
-        """Inverts Z-score normalization for a given target column.
-
-        Uses the 'mean' and 'std' stored in `self.selected_columns_statistics`
-        to transform normalized values back to their original scale.
-
-        Args:
-            values: A NumPy array of normalized values.
-            target_column: The name of the column whose statistics should be
-                used for the inverse transformation.
-
-        Returns:
-            A NumPy array of values in their original scale.
-        """
+        """Invert target-column Z-score normalization."""
         std = self.selected_columns_statistics[target_column]["std"]
         mean = self.selected_columns_statistics[target_column]["mean"]
         return (values * (std - 1e-9)) + mean
@@ -1457,19 +1146,7 @@ class Inferer:
         x: dict[str, np.ndarray],
         metadata: dict[str, np.ndarray],
     ) -> np.ndarray:
-        """Performs inference with an embedding model.
-
-        This is a high-level wrapper that calls
-        `adjust_and_infer_embedding` to handle batching and model-specific
-        logic.
-
-        Args:
-            x: A dictionary mapping feature names to NumPy arrays. All arrays
-               must have the same first dimension (batch size).
-
-        Returns:
-            A 2D NumPy array of the resulting embeddings.
-        """
+        """Return embeddings for a feature-array batch."""
         assert x is not None
         size = x[list(x.keys())[0]].shape[0]
         embedding = self.adjust_and_infer_embedding(x, size, metadata)
@@ -1484,36 +1161,7 @@ class Inferer:
         probs: Optional[dict[str, np.ndarray]] = None,
         return_probs: bool = False,
     ) -> dict[str, np.ndarray]:
-        """Performs generative inference, returning probabilities or predictions.
-
-        This function orchestrates the generative inference process.
-        1. If `probs` are not provided, it calls `adjust_and_infer_generative`
-           to get the raw model output (logits or real values) using `x`.
-        2. If `return_probs` is True:
-           - It normalizes the logits for categorical columns to get
-             probabilities (using `softmax`, implemented in `normalize`).
-           - It returns a dictionary of probabilities (for categorical) and
-             raw predicted values (for real).
-        3. If `return_probs` is False (default):
-           - It converts the model outputs (either from `x` or `probs`) into
-             final predictions.
-           - For categorical columns, it either takes the `argmax` or samples
-             from the distribution (`sample_with_cumsum`).
-           - For real columns, it returns the value as-is.
-
-        Args:
-            x: A dictionary mapping feature names to NumPy arrays. Required
-               if `probs` is not provided.
-            probs: An optional dictionary of probabilities/logits. If provided,
-                   this skips the model inference step.
-            return_probs: If True, returns normalized probabilities for
-                categorical targets. If False, returns final class
-                predictions (via argmax or sampling).
-
-        Returns:
-            A dictionary mapping target column names to NumPy arrays. The
-            content of the arrays depends on `return_probs`.
-        """
+        """Return target probabilities or decoded predictions."""
         if probs is None or (
             x is not None and len(set(x.keys()).difference(set(probs.keys()))) > 0
         ):  # type: ignore
@@ -1572,20 +1220,7 @@ class Inferer:
         size: int,
         metadata: dict[str, np.ndarray],
     ):
-        """Handles batching and backend-specific calls for embedding inference.
-
-        This function prepares the input data `x` into batches using
-        `prepare_inference_batches` and then calls the correct inference
-        backend based on `self.inference_model_type` (.pt or .onnx).
-
-        Args:
-            x: The complete dictionary of input features (NumPy arrays).
-            size: The total number of samples in `x`, used to truncate
-                any padding added for batching.
-
-        Returns:
-            A NumPy array of embeddings, concatenated from all batches.
-        """
+        """Batch embedding inference across the active backend."""
         if self.inference_model_type == "onnx":
             assert x is not None
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
@@ -1623,22 +1258,7 @@ class Inferer:
         size: int,
         metadata: dict[str, np.ndarray],
     ):
-        """Handles batching and backend-specific calls for generative inference.
-
-        This function prepares the input data `x` into batches using
-        `prepare_inference_batches` and then calls the correct inference
-        backend based on `self.inference_model_type` (.pt or .onnx).
-        It aggregates the results from all batches.
-
-        Args:
-            x: The complete dictionary of input features (NumPy arrays).
-            size: The total number of samples in `x`, used to truncate
-                any padding added for batching.
-
-        Returns:
-            A dictionary mapping target column names to NumPy arrays of raw
-            model outputs (logits or real values).
-        """
+        """Batch generative inference across the active backend."""
         if self.inference_model_type == "onnx":
             assert x is not None
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
@@ -1679,23 +1299,7 @@ class Inferer:
     def prepare_inference_batches(
         self, x: dict[str, np.ndarray], pad_to_batch_size: bool
     ) -> list[dict[str, np.ndarray]]:
-        """Splits input data into batches for inference.
-
-        This function takes a large dictionary of feature arrays and splits
-        them into a list of smaller dictionaries (batches) of size
-        `self.inference_batch_size`.
-
-        Args:
-            x: A dictionary of feature arrays.
-            pad_to_batch_size: If True (for ONNX), the last batch will be
-                padded up to `self.inference_batch_size` by repeating
-                samples. If False (for PyTorch), the last batch may be
-                smaller.
-
-        Returns:
-            A list of dictionaries, where each dictionary is a single batch
-            ready for inference.
-        """
+        """Split feature arrays into backend-sized batches."""
         size = x[list(x.keys())[0]].shape[0]
         if size == self.inference_batch_size:
             return [x]
@@ -1726,20 +1330,7 @@ class Inferer:
         x: dict[str, np.ndarray],
         metadata: dict[str, np.ndarray],
     ) -> list[np.ndarray]:
-        """Performs a single inference pass using the ONNX session.
-
-        This function assumes `x` is already a single, correctly-sized
-        batch. It formats the input dictionary to match the ONNX model's
-        input names and executes `self.ort_session.run()`.
-
-        Args:
-            x: A dictionary of feature arrays for a single batch. This
-               batch *must* be of size `self.inference_batch_size`.
-
-        Returns:
-            A list of NumPy arrays, representing the raw outputs from the
-            ONNX model.
-        """
+        """Run one ONNX batch and flatten sequence-major outputs."""
         metadata = metadata or {}
         ort_inputs = {}
         for session_input in self.ort_session.get_inputs():
@@ -1766,18 +1357,7 @@ class Inferer:
 
     @beartype
     def expand_to_batch_size(self, x: np.ndarray) -> np.ndarray:
-        """Pads a NumPy array to match `self.inference_batch_size`.
-
-        Repeats samples from `x` until the array's first dimension
-        is equal to `self.inference_batch_size`.
-
-        Args:
-            x: The input NumPy array to pad.
-
-        Returns:
-            A new NumPy array of size `self.inference_batch_size` in the
-            first dimension.
-        """
+        """Repeat leading samples until the ONNX batch size is met."""
         repetitions = self.inference_batch_size // x.shape[0]
         filler = self.inference_batch_size % x.shape[0]
         return np.concatenate(([x] * repetitions) + [x[0:filler, :]], axis=0)
@@ -1785,19 +1365,7 @@ class Inferer:
 
 @beartype
 def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-    """Applies the softmax function to a dictionary of logits.
-
-    Converts raw model logits for categorical columns into probabilities
-    that sum to 1.
-
-    Args:
-        outs: A dictionary mapping target column names to NumPy arrays
-              of logits.
-
-    Returns:
-        A dictionary mapping the same target column names to NumPy arrays
-        of probabilities.
-    """
+    """Softmax logits by target column."""
     normalizer = {
         target_column: np.repeat(
             np.sum(np.exp(target_values), axis=1), target_values.shape[1]
@@ -1813,21 +1381,7 @@ def normalize(outs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
 
 @beartype
 def sample_with_cumsum(probs: np.ndarray, is_log_probs: bool = True) -> np.ndarray:
-    """Samples from a probability distribution using the inverse CDF method.
-
-    Takes an array of logits, computes the cumulative probability
-    distribution, draws a random number `r` from [0, 1), and returns
-    the index of the first class `i` where `cumsum[i] > r`.
-
-    Args:
-        probs: A 2D NumPy array of logits or normalized probabilities.
-               Shape is (batch_size, num_classes).
-        is_log_probs: Boolean flag indicating if the passed array are logits or
-               probabilities
-    Returns:
-        A 1D NumPy array of shape (batch_size,) containing the sampled
-        class indices.
-    """
+    """Sample class indices from logits or probabilities."""
     if is_log_probs:
         cumulative_probs = np.cumsum(np.exp(probs), axis=1)
     else:

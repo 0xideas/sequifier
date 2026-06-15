@@ -21,7 +21,7 @@ from sequifier.infer import (
 
 
 def test_normalize():
-    """Tests the softmax normalization of raw logits."""
+    """Softmax-normalized logits."""
     # Create raw logits
     # Row 0: exp(0)=1, exp(0)=1 -> probs: 0.5, 0.5
     # Row 1: exp(1)=e, exp(2)=e^2 -> probs: e/(e+e^2), e^2/(e+e^2)
@@ -47,7 +47,7 @@ def test_normalize():
 
 @patch("numpy.random.rand")
 def test_sample_with_cumsum(mock_rand):
-    """Tests inverse CDF sampling with both raw logits and pure probabilities."""
+    """Inverse-CDF sampling for logits and probabilities."""
     # Mock the random thresholds to strictly control the sampling outcome.
     mock_rand.return_value = np.array([[0.05], [0.90]])
 
@@ -92,7 +92,7 @@ def mock_inferer():
 
 
 def test_inferer_invert_normalization(mock_inferer):
-    """Tests that normalized real outputs are scaled back correctly."""
+    """Real outputs denormalize correctly."""
     # Normalized values
     values = np.array([-1.0, 0.0, 1.0])
 
@@ -105,7 +105,7 @@ def test_inferer_invert_normalization(mock_inferer):
 
 
 def test_inferer_expand_to_batch_size(mock_inferer):
-    """Tests the array padding logic for strictly sized batches (e.g., ONNX)."""
+    """Strict-batch array padding."""
     mock_inferer.inference_batch_size = 5
 
     # Input has 2 samples, batch size needs to be 5
@@ -119,7 +119,7 @@ def test_inferer_expand_to_batch_size(mock_inferer):
 
 
 def test_inferer_prepare_inference_batches_pad(mock_inferer):
-    """Tests chunking data when padding is requested."""
+    """Chunking with padding."""
     mock_inferer.inference_batch_size = 4
     x = {"cat_col": np.array([[1], [2], [3]])}  # 3 total samples
 
@@ -132,7 +132,7 @@ def test_inferer_prepare_inference_batches_pad(mock_inferer):
 
 
 def test_inferer_prepare_inference_batches_no_pad(mock_inferer):
-    """Tests chunking data without padding."""
+    """Chunking without padding."""
     mock_inferer.inference_batch_size = 4
     x = {"cat_col": np.array([[1], [2], [3]])}  # 3 total samples
 
@@ -144,7 +144,7 @@ def test_inferer_prepare_inference_batches_no_pad(mock_inferer):
 
 
 def test_inferer_prepare_inference_batches_split(mock_inferer):
-    """Tests chunking data into multiple separated batches."""
+    """Chunking into multiple batches."""
     mock_inferer.inference_batch_size = 2
     x = {"cat_col": np.array([[1], [2], [3], [4], [5]])}  # 5 total samples
 
@@ -641,17 +641,11 @@ def ar_inferer(ar_config):
 
 
 def test_get_probs_preds_from_dict_shifting_and_looping(ar_config, ar_inferer):
-    """
-    Tests that the autoregressive loop calls the model the correct number of times
-    and accurately shifts the input tensor to append the latest prediction.
-    """
+    """Check autoregressive loop count and tensor shifting."""
     initial_data = {"target_col": torch.tensor([[1.0, 2.0, 3.0], [10.0, 20.0, 30.0]])}
     metadata = _dummy_attention_metadata(batch_size=2, context_length=3)
 
-    # Patch the method on the actual instance
     with patch.object(ar_inferer, "infer_generative") as mock_infer:
-        # Step 0: Predicts 4.0 for row 0, 40.0 for row 1
-        # Step 1: Predicts 5.0 for row 0, 50.0 for row 1
         mock_infer.side_effect = [
             {"target_col": np.array([[4.0], [40.0]])},
             {"target_col": np.array([[5.0], [50.0]])},
@@ -662,10 +656,8 @@ def test_get_probs_preds_from_dict_shifting_and_looping(ar_config, ar_inferer):
             ar_config, ar_inferer, initial_data, metadata, total_steps=total_steps
         )
 
-        # 1. Verify Loop Count
         assert mock_infer.call_count == 2
 
-        # 2. Verify Tensor Shifting
         expected_shifted_x = {
             "target_col": np.array([[2.0, 3.0, 4.0], [20.0, 30.0, 40.0]])
         }
@@ -675,7 +667,6 @@ def test_get_probs_preds_from_dict_shifting_and_looping(ar_config, ar_inferer):
             second_call_args["target_col"], expected_shifted_x["target_col"]
         )
 
-        # 3. Verify Output Reshaping
         assert "target_col" in preds
         np.testing.assert_array_equal(preds["target_col"], [4.0, 5.0, 40.0, 50.0])
 
@@ -684,31 +675,21 @@ def test_get_probs_preds_from_dict_shifting_and_looping(ar_config, ar_inferer):
 def test_get_probs_preds_from_dict_with_probabilities(
     mock_sample, ar_config, ar_inferer
 ):
-    """
-    Tests the probability branching logic. When output_probabilities=True,
-    `infer_generative` normalizes outputs, and passes them as probabilities
-    to the second call which triggers sampling with logits=False.
-    """
-    # 1. Override the config and inferer to treat the column as categorical
+    """Check probability output drives non-logit sampling."""
     ar_config.target_column_types["target_col"] = "categorical"
     ar_inferer.target_column_types["target_col"] = "categorical"
 
-    # 2. Force it to route to the sampling branch
     ar_config.output_probabilities = True
     ar_config.sample_from_distribution_columns = ["target_col"]
     ar_inferer.sample_from_distribution_columns = ["target_col"]
 
     initial_data = {"target_col": torch.tensor([[1.0, 2.0]])}
 
-    # Raw model output (Logits)
     dummy_logits = {"target_col": np.array([[np.log(0.2), np.log(0.8)]])}
-
-    # What we want our mock sample_with_cumsum to return
     mock_sample.return_value = np.array([1])
 
     metadata = _dummy_attention_metadata(batch_size=1, context_length=2)
 
-    # Mock the *inner* backend call, allowing infer_generative to execute its actual logic
     with patch.object(
         ar_inferer, "adjust_and_infer_generative", return_value=dummy_logits
     ) as mock_adjust:
@@ -718,27 +699,20 @@ def test_get_probs_preds_from_dict_with_probabilities(
 
         assert mock_adjust.call_count == 1
 
-        # Verify sample_with_cumsum was called correctly during the second pass
         mock_sample.assert_called_once()
         args, kwargs = mock_sample.call_args
 
-        # 1. Assert it was passed the normalized probabilities, NOT the raw logits
         np.testing.assert_allclose(args[0], [[0.2, 0.8]])
 
-        # 2. Assert the new flag was toggled correctly based on (probs is None)
         assert kwargs.get("is_log_probs") is False
 
-        # Verify final outputs
         assert probs is not None
         np.testing.assert_allclose(probs["target_col"], [[0.2, 0.8]])
         np.testing.assert_array_equal(preds["target_col"], [1])
 
 
 def test_get_probs_preds_from_dict_ignores_unselected_columns(ar_config, ar_inferer):
-    """
-    Tests that columns not explicitly defined in `config.input_columns`
-    are filtered out before inference.
-    """
+    """Check inference ignores columns outside config.input_columns."""
     initial_data = {
         "target_col": torch.tensor([[1.0, 2.0]]),
         "ignored_col": torch.tensor([[9.0, 9.0]]),

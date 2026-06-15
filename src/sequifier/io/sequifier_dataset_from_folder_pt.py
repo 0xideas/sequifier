@@ -19,13 +19,7 @@ from sequifier.io.batch import SequifierBatch
 
 
 class SequifierDatasetFromFolderPt(IterableDataset):
-    """
-    An efficient PyTorch IterableDataset that pre-loads all data into RAM.
-
-    This strategy pays a one-time I/O cost at initialization, after which
-    all data access during training is extremely fast. It yields full,
-    pre-collated batches natively.
-    """
+    """Eager PT-folder dataset yielding rank/worker-aligned batches."""
 
     def __init__(self, data_path: str, config: TrainModel, shuffle: bool = True):
         super().__init__()
@@ -60,7 +54,6 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         }
         all_left_pad_lengths: list[torch.Tensor] = []
 
-        # Load all data files into RAM
         for file_info in metadata["batch_files"]:
             file_path = os.path.join(self.data_dir, file_info["path"])
             (
@@ -107,11 +100,11 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         return total_batches
 
     def set_epoch(self, epoch: int):
-        """Allows the training loop to set the epoch for deterministic shuffling."""
+        """Set the shuffle epoch."""
         self.epoch = epoch
 
     def _get_target_samples(self) -> int:
-        """Calculates exact sample count per rank to ensure FSDP syncs properly."""
+        """Return per-rank sample count under the configured sampling strategy."""
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_initialized() else 0
 
@@ -140,18 +133,15 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         worker_id = worker_info.id if worker_info is not None else 0
         num_workers = worker_info.num_workers if worker_info is not None else 1
 
-        # 1. Global Shuffling
         indices = torch.arange(self.n_samples)
         if self.shuffle:
             g = torch.Generator()
             g.manual_seed(self.config.seed + self.epoch)
             indices = indices[torch.randperm(self.n_samples, generator=g)]
 
-        # 2. Distribute across GPU ranks
         indices_for_rank = indices[rank::world_size].tolist()
         sample_is_real = [True] * len(indices_for_rank)
 
-        # 3. Handle FSDP oversampling/undersampling sync requirements
         if self.sampling_strategy == "oversampling":
             real_count = len(indices_for_rank)
             if real_count == 0:
@@ -171,11 +161,9 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             indices_for_rank = indices_for_rank[: self.target_samples]
             sample_is_real = sample_is_real[: self.target_samples]
 
-        # 4. Distribute among CPU workers for this GPU
         indices_for_worker = indices_for_rank[worker_id::num_workers]
         sample_is_real_for_worker = sample_is_real[worker_id::num_workers]
 
-        # 5. Yield full batches
         for i in range(0, len(indices_for_worker), self.batch_size):
             batch_indices = indices_for_worker[i : i + self.batch_size]
             batch_sample_is_real = sample_is_real_for_worker[i : i + self.batch_size]

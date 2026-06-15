@@ -100,11 +100,7 @@ state/
 
 
 def make(args):
-    """Creates a new sequifier project.
-
-    Args:
-        args: The command-line arguments.
-    """
+    """Create a sequifier project scaffold."""
     project_name = args.project_name
 
     if not (project_name and len(project_name) > 0):

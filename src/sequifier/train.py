@@ -86,7 +86,7 @@ from sequifier.special_tokens import SPECIAL_TOKEN_IDS  # noqa: E402
 
 
 def cleanup():
-    """Cleans up the distributed training environment."""
+    """Destroy the active distributed process group."""
     dist.destroy_process_group()
 
 
@@ -122,16 +122,7 @@ def train_worker(
     global_rank: int,
     torch_compile: str,
 ):
-    """The worker function for distributed training.
-
-    Args:
-        rank: The rank of the current process.
-        world_size: The total number of processes.
-        config: The training configuration.
-        from_folder: Whether to load data from a folder (e.g., preprocessed .pt files)
-                     or a single file (e.g., .parquet).
-        global_rank: The global rank
-    """
+    """Run one local distributed-training worker."""
     logger = configure_logger(config.project_root, config.model_name, global_rank)
 
     if config.training_spec.distributed:
@@ -141,7 +132,6 @@ def train_worker(
             global_rank, local_rank, world_size, config.training_spec.backend
         )
 
-    # 1. Create Datasets and DataLoaders with DistributedSampler
     if from_folder:
         if config.read_format == "pt":
             if config.training_spec.load_full_data_to_ram:
@@ -425,12 +415,7 @@ def _mp_train_worker_wrapper(
 
 @beartype
 def train(args: Any, args_config: dict[str, Any]) -> None:
-    """The main training function.
-
-    Args:
-        args: The command-line arguments.
-        args_config: The configuration dictionary.
-    """
+    """Load train config and launch local or distributed training."""
     config_path = args.config_path or "configs/train.yaml"
     config = load_train_config(config_path, args_config, args.skip_metadata)
 
@@ -481,14 +466,7 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
 
 @beartype
 def format_number(number: Union[int, float, np.float32]) -> str:
-    """Format a number for display.
-
-    Args:
-        number: The number to format.
-
-    Returns:
-        A formatted string representation of the number.
-    """
+    """Format finite values, zero, and NaN for logs."""
     if np.isnan(number):
         return "NaN"
     elif number == 0:
@@ -565,29 +543,16 @@ def accumulate_class_counts(
 
 
 class TransformerEmbeddingModel(nn.Module):
-    """A wrapper around the TransformerModel to expose the embedding functionality."""
+    """Embedding-only wrapper for TransformerModel."""
 
     def __init__(self, transformer_model: "TransformerModel"):
-        """Initializes the TransformerEmbeddingModel.
-
-        Args:
-            transformer_model: The TransformerModel to wrap.
-        """
         super().__init__()
         self.transformer_model = transformer_model
         self.logger = self.transformer_model.logger
 
     @beartype
     def _copy_model(self):
-        """Copies the model.
-
-        This creates a deep copy of the model, typically for saving the
-        "best model". It temporarily removes the `log_file` attribute
-        before copying to avoid errors, then re-initializes it.
-
-        Returns:
-            A deep copy of the current TransformerModel instance.
-        """
+        """Deep-copy without copying the logger handle."""
         logger_ref = self.transformer_model.logger
         del self.transformer_model.logger
         del self.logger
@@ -599,14 +564,7 @@ class TransformerEmbeddingModel(nn.Module):
 
     @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]):
-        """Forward pass for the embedding model.
-
-        Args:
-            src: The input data.
-
-        Returns:
-            The embedded output.
-        """
+        """Return embedding output from the wrapped model."""
         return self.transformer_model.forward_embed(src, metadata=metadata)
 
 
@@ -627,30 +585,13 @@ class _OnnxExportWrapper(nn.Module):
 
 
 class TransformerModel(nn.Module):
-    """The main Transformer model for the sequifier.
-
-    This class implements the Transformer model, including the training and
-    evaluation loops, as well as the export functionality.
-    """
+    """Sequifier transformer plus train/eval/export routines."""
 
     @beartype
     def __init__(
         self, hparams: Any, rank: Optional[int] = None, local_rank: Optional[int] = None
     ):
-        """Initializes the TransformerModel.
-
-        Based on the hyperparameters, this initializes:
-        - Embeddings for categorical and real features (self.encoder)
-        - Positional encoders (self.pos_encoder)
-        - The main TransformerEncoder (self.transformer_encoder)
-        - Output decoders for each target column (self.decoder)
-        - Loss functions (self.criterion)
-        - Optimizer (self.optimizer) and scheduler (self.scheduler)
-
-        Args:
-            hparams: The hyperparameters for the model (e.g., from TrainModel config).
-            rank: The rank of the current process (for distributed training).
-        """
+        """Build model modules and training state from config."""
         super().__init__()
         self.project_root = hparams.project_root
         self.model_type = "Transformer"
@@ -852,7 +793,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def initialize_optimizer(self, params: Any = None) -> None:
-        """Initializes the optimizer and scheduler."""
+        """Create optimizer and scheduler from training config."""
         if params is None:
             params = self.parameters()
 
@@ -867,7 +808,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _apply_layer_dtypes(self) -> None:
-        """Casts specific layer types to configured dtypes (e.g., bfloat16, float8)."""
+        """Cast configured layer classes to requested dtypes."""
         layer_config = self.hparams.training_spec.layer_type_dtypes
 
         if not layer_config:
@@ -875,9 +816,7 @@ class TransformerModel(nn.Module):
 
         self.logger.info(f"[INFO] Applying custom layer dtypes: {layer_config}")
 
-        # Iterate over all sub-modules and cast based on type
         for name, module in self.named_modules():
-            # Linear Layers
             if isinstance(module, nn.Linear):
                 is_decoder = any(module is m for m in self.decoder.values())
                 if is_decoder and "decoder" in layer_config:
@@ -885,12 +824,10 @@ class TransformerModel(nn.Module):
                 elif "linear" in layer_config:
                     module.to(dtype=get_torch_dtype(layer_config["linear"]))
 
-            # Embeddings
             elif isinstance(module, nn.Embedding) and "embedding" in layer_config:
                 target_dtype = get_torch_dtype(layer_config["embedding"])
                 module.to(dtype=target_dtype)
 
-            # Normalization (RMSNorm, LayerNorm)
             elif isinstance(module, (nn.LayerNorm, RMSNorm)) and "norm" in layer_config:
                 target_dtype = get_torch_dtype(layer_config["norm"])
                 module.to(dtype=target_dtype)
@@ -903,15 +840,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _init_criterion(self, hparams: Any) -> ModuleDict:
-        """Initializes the criterion (loss function) for each target column.
-
-        Args:
-            hparams: The hyperparameters for the model, used to find criterion names
-                and class weights.
-
-        Returns:
-            A dictionary mapping target column names to their loss function instances.
-        """
+        """Build unreduced per-target loss modules."""
         criterion = ModuleDict()
         for target_column in self.target_columns:
             criterion_name = hparams.training_spec.criterion[target_column]
@@ -941,19 +870,7 @@ class TransformerModel(nn.Module):
         categorical_columns: list[str],
         real_columns: list[str],
     ) -> dict[str, int]:
-        """Calculates the embedding dimension for each column.
-
-        This attempts to distribute the total `embedding_size` across all
-        input columns.
-
-        Args:
-            embedding_size: The total embedding dimension (initial_embedding_dim).
-            categorical_columns: List of categorical column names.
-            real_columns: List of real-valued column names.
-
-        Returns:
-            A dictionary mapping column names to their calculated embedding dimension.
-        """
+        """Allocate embedding dimensions across homogeneous input columns."""
         if not (len(categorical_columns) + len(real_columns)) > 0:
             raise ValueError("No columns found")
 
@@ -1000,35 +917,17 @@ class TransformerModel(nn.Module):
 
     @staticmethod
     def _generate_square_subsequent_mask(sz: int) -> Tensor:
-        """Generates an upper-triangular matrix of -inf, with zeros on diag.
-
-        This is used as a mask to prevent attention to future tokens in the
-        transformer.
-
-        Args:
-            sz: The size of the square mask (sequence length).
-
-        Returns:
-            A square tensor of shape (sz, sz) with -inf in the upper triangle.
-        """
+        """Return a causal attention mask."""
         return torch.triu(torch.ones(sz, sz) * float("-inf"), diagonal=1)
 
     @staticmethod
     def _filter_key(dict_: dict[str, Any], key: str) -> dict[str, Any]:
-        """Filters a key from a dictionary.
-
-        Args:
-            dict_: The dictionary to filter.
-            key: The key to remove.
-
-        Returns:
-            A new dictionary without the specified key.
-        """
+        """Return a copy without key."""
         return {k: v for k, v in dict_.items() if k != key}
 
     @beartype
     def _init_weights(self) -> None:
-        """Initializes the weights of the model."""
+        """Initialize trainable weights with the model default."""
         init_std = 0.02
         for col in self.categorical_columns:
             self.encoder[col].weight.data.normal_(mean=0.0, std=init_std)
@@ -1048,18 +947,7 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def _recursive_concat(self, srcs: list[Tensor]):
-        """Recursively concatenates a list of tensors.
-
-        This is used to avoid device-specific limits on the number of tensors
-        that can be concatenated at once by breaking the operation into
-        smaller, recursive chunks.
-
-        Args:
-            srcs: A list of tensors to concatenate along dimension 2.
-
-        Returns:
-            A single tensor resulting from the recursive concatenation.
-        """
+        """Concatenate tensors in chunks to avoid device concat limits."""
         if len(srcs) <= self.device_max_concat_length:
             return torch.cat(srcs, 2)
         else:
@@ -1106,31 +994,14 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def _zero_padding_positions(self, x: Tensor, valid_mask: Tensor) -> Tensor:
-        """
-        x shape:
-            (batch_size, context_length, dim_model)
-
-        Zeroes padded query positions so padded rows do not keep evolving.
-        """
+        """Zero padded query positions after attention/FFN layers."""
         return x * valid_mask[:, :, None].to(dtype=x.dtype)
 
     @conditional_beartype
     def forward_inner(
         self, src: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> Tensor:
-        """The inner forward pass of the model.
-
-        This handles embedding lookup, positional encoding, and passing the
-        combined tensor through the transformer encoder.
-
-        Args:
-            src: A dictionary mapping column names to input tensors
-                 (batch_size, context_length).
-
-        Returns:
-            The raw output tensor from the TransformerEncoder
-            (context_length, batch_size, dim_model).
-        """
+        """Encode inputs into contextual hidden states."""
         srcs = []
         for col in self.categorical_columns:
             src_t = self.encoder[col](src[col].T) * math.sqrt(
@@ -1210,37 +1081,14 @@ class TransformerModel(nn.Module):
     def forward_embed(
         self, src: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> Tensor:
-        """Forward pass for the embedding model.
-
-        This returns only the embedding from the *last* token in the sequence.
-
-        Args:
-            src: A dictionary mapping column names to input tensors
-                 (batch_size, context_length).
-
-        Returns:
-            The embedding tensor for the last token
-            (batch_size, dim_model).
-        """
+        """Return final-step embeddings."""
         return self.forward_inner(src, metadata)[-self.prediction_length :, :, :]
 
     @conditional_beartype
     def forward_train(
         self, src: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> dict[str, Tensor]:
-        """Forward pass for training.
-
-        This runs the inner forward pass and then applies the appropriate
-        decoder for each target column.
-
-        Args:
-            src: A dictionary mapping column names to input tensors
-                 (batch_size, context_length).
-
-        Returns:
-            A dictionary mapping target column names to their raw output
-            (logit) tensors (context_length, batch_size, n_classes/1).
-        """
+        """Return raw decoded outputs for all target columns."""
         output = self.forward_inner(src, metadata)
         output = {
             target_column: self.decode(target_column, output)
@@ -1251,19 +1099,7 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def decode(self, target_column: str, output: Tensor) -> Tensor:
-        """Decodes the output of the transformer encoder.
-
-        Applies the appropriate final linear layer for a given target column.
-
-        Args:
-            target_column: The name of the target column to decode.
-            output: The raw output tensor from the TransformerEncoder
-                    (context_length, batch_size, dim_model).
-
-        Returns:
-            The decoded output (logits or real value) for the target column
-            (context_length, batch_size, n_classes/1).
-        """
+        """Project hidden states through one target decoder."""
 
         target_dtype = self.decoder[target_column].weight.dtype
         decoded = self.decoder[target_column](output.to(target_dtype)).to(torch.float32)
@@ -1272,18 +1108,7 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def apply_softmax(self, target_column: str, output: Tensor) -> Tensor:
-        """Applies softmax to the output of the decoder.
-
-        If the target is real, it returns the output unchanged.
-        If the target is categorical, it applies LogSoftmax.
-
-        Args:
-            target_column: The name of the target column.
-            output: The decoded output tensor (logits or real value).
-
-        Returns:
-            The output tensor, with LogSoftmax applied if categorical.
-        """
+        """Apply LogSoftmax only for categorical targets."""
         if target_column in self.real_columns:
             return output
         else:
@@ -1296,21 +1121,7 @@ class TransformerModel(nn.Module):
         metadata: dict[str, Tensor],
         return_logits: Union[bool, Tensor] = False,
     ) -> dict[str, Tensor]:
-        """The main forward pass of the model.
-
-        This is typically used for inference/evaluation, returning the
-        probabilities/values for the *last* token in the sequence.
-
-        Args:
-            src: A dictionary mapping column names to input tensors
-                 (batch_size, context_length).
-            return_logits: Return logits
-
-        Returns:
-            A dictionary mapping target column names to their final
-            output (LogSoftmax probabilities or real values) for the
-            last token (batch_size, n_classes/1).
-        """
+        """Return final-step logits or predictions for inference/eval."""
         output = self.forward_train(src, metadata)
         if return_logits:
             return output
@@ -1345,14 +1156,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _check_and_terminate(self):
-        """Checks for an external pruning signal and terminates the process if required.
-
-        This method looks for a specific `.prune` file generated by the Optuna orchestrator.
-        If running in a distributed setting, the rank 0 process checks for the file and
-        broadcasts a termination signal to all other ranks. If the signal is received,
-        the process cleans up its distributed process group, clears the GPU cache, and
-        gracefully exits with code 143 (SIGTERM) to allow Optuna to prune the trial.
-        """
+        """Exit 143 when rank 0 broadcasts an Optuna prune sentinel."""
         if os.getenv("SEQUIFIER_HYPERPARAMETER_SEARCH_RUN") is not None:
             should_prune = 0
             if self.rank == 0:
@@ -1388,16 +1192,7 @@ class TransformerModel(nn.Module):
         valid_loader: DataLoader,
         ddp_model: Optional[nn.Module] = None,
     ) -> None:
-        """Trains the model.
-
-        This method contains the main training loop, including epoch iteration,
-        validation, early stopping logic, and model saving/exporting.
-
-        Args:
-            train_loader: DataLoader for the training dataset.
-            valid_loader: DataLoader for the validation dataset.
-            ddp_model: ddp model
-        """
+        """Run epochs, validation, checkpointing, export, and interruption cleanup."""
         self.logger.info(f"--- Starting Training for model: {self.model_name} ---")
 
         best_val_loss = float("inf")
@@ -1485,10 +1280,8 @@ class TransformerModel(nn.Module):
             if self.hparams.training_spec.distributed:
                 dist.barrier()
 
-            # 1. Use a list to hold the answer so it can be broadcasted across ranks
             answer_list = ["n"]
 
-            # 2. Only Rank 0 prompts the user
             if self.rank == 0:
                 try:
                     answer = (
@@ -1503,11 +1296,9 @@ class TransformerModel(nn.Module):
                 except EOFError:  # Handle non-interactive environments
                     answer_list[0] = "n"
 
-            # 3. Broadcast the decision to all GPUs so they stay in sync
             if self.hparams.training_spec.distributed:
                 dist.broadcast_object_list(answer_list, src=0)
 
-            # 4. If the decision is 'y', ALL ranks must participate in state dict extraction
             if answer_list[0] == "y":
                 if self.rank == 0:
                     self.logger.info("[INFO] User opted to export models.")
@@ -1518,10 +1309,9 @@ class TransformerModel(nn.Module):
                             f"[INFO] Exporting 'last' model from epoch {last_epoch}..."
                         )
 
-                    # ALL RANKS MUST EXECUTE THIS to prevent FSDP all_gather deadlocks
+                    # FSDP state extraction is collective; only rank 0 writes the result.
                     last_model_state = self._get_full_state_dict(ddp_model)
 
-                    # ONLY Rank 0 executes the file I/O
                     if self.rank == 0:
                         self._export(last_model_state, "last", last_epoch)
 
@@ -1551,8 +1341,6 @@ class TransformerModel(nn.Module):
                 )
             best_model_state = last_model_state
 
-        # 2. Restrict the export saving to Rank 0 inside the _export method (which you already do)
-        # or guard the I/O specifically:
         if self.rank == 0:
             self._export(last_model_state, "last", last_epoch, clean=True)  # type: ignore
             self._export(best_model_state, "best", last_epoch, clean=True)  # type: ignore
@@ -1569,16 +1357,7 @@ class TransformerModel(nn.Module):
         epoch: int,
         ddp_model: Optional[nn.Module] = None,
     ) -> None:
-        """Trains the model for one epoch.
-
-        Iterates through the training DataLoader, computes loss, performs
-        backpropagation, and updates model parameters. The DataLoader is expected
-        to yield SequifierBatch objects. IDs are currently unused in this loop.
-
-        Args:
-            train_loader: DataLoader for the training dataset.
-            epoch: The current epoch number (used for logging).
-        """
+        """Run one train epoch with optional mid-epoch saves."""
         total_loss = 0.0
         batches_aggregated = 0
 
@@ -1772,24 +1551,7 @@ class TransformerModel(nn.Module):
         targets: dict[str, Tensor],
         metadata: dict[str, Tensor],
     ) -> tuple[Tensor, dict[str, Tensor]]:
-        """Calculates the loss for the given output and targets.
-
-        Compares the model's output (from `forward_train`) with the target
-        values, applying the appropriate criterion for each target column
-        and combining them using loss weights.
-
-        Args:
-            output: A dictionary of output tensors from the model
-                    (context_length, batch_size, n_classes/1).
-            targets: A dictionary of target tensors
-                     (batch_size, context_length).
-
-        Returns:
-            A tuple containing:
-            - The total combined (weighted) loss as a single Tensor.
-            - A dictionary of individual (unweighted) loss Tensors for each
-              target column.
-        """
+        """Return weighted mean loss and per-target components over valid tokens."""
         target_names = [k for k in targets.keys() if k in self.target_column_types]
         if not target_names:
             raise RuntimeError("Loss calculation failed; no target columns were found.")
@@ -1903,15 +1665,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _copy_model(self):
-        """Copies the model.
-
-        This creates a deep copy of the model, typically for saving the
-        "best model". It temporarily removes the `log_file` attribute
-        before copying to avoid errors, then re-initializes it.
-
-        Returns:
-            A deep copy of the current TransformerModel instance.
-        """
+        """Deep-copy without copying the logger handle."""
         logger_ref = self.logger
         del self.logger
         model_copy = copy.deepcopy(self)
@@ -1921,20 +1675,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _transform_val(self, col: str, val: Tensor) -> Tensor:
-        """ "Transforms input data to match the format of model output.
-
-        This is used *only* for calculating the baseline loss, where
-        the input (e.g., categorical indices) needs to be one-hot encoded
-        to be comparable to the model's (logit) output.
-
-        Args:
-            col: The name of the column being transformed.
-            val: The input tensor (categorical indices).
-
-        Returns:
-            A tensor transformed to be compatible with the loss function
-            (e.g., one-hot encoded).
-        """
+        """Transform targets into baseline-loss output shape."""
         if self.target_column_types[col] == "categorical":
             target_dtype = self.decoder[col].weight.dtype
             return (
@@ -1951,26 +1692,7 @@ class TransformerModel(nn.Module):
     def _evaluate(
         self, valid_loader: DataLoader, ddp_model: Optional[nn.Module] = None
     ) -> tuple[np.float32, dict[str, np.float32], ClassCounts]:
-        """Evaluates the model on the validation set.
-
-        Iterates through the validation data, calculates the total loss,
-        and aggregates results across all processes if in distributed mode.
-        Also calculates a one-time baseline loss on the first call. The
-        DataLoader is expected to yield SequifierBatch objects. IDs are
-        currently unused during evaluation. Class shares are counted over
-        the same valid token population as validation loss; for BERT this
-        means masked evaluation positions, not all sequence positions.
-
-        Args:
-            valid_loader: DataLoader for the validation dataset.
-            ddp_model: DDP model
-
-        Returns:
-            A tuple containing:
-            - The total aggregated validation loss (float).
-            - A dictionary of aggregated losses for each target column (dict[str, float]).
-            - A dictionary of globally aggregated class-count tensors.
-        """
+        """Evaluate validation loss and optional class-share counts."""
 
         model_to_call = ddp_model if ddp_model is not None else self
         target_names = list(self.target_columns)
@@ -2258,16 +1980,7 @@ class TransformerModel(nn.Module):
         epoch: int,
         clean: bool = False,
     ) -> None:
-        """Exports the model.
-
-        This is a wrapper function that handles exporting the model (and
-        optionally the embedding-only model) on rank 0 only.
-
-        Args:
-            state_dict: The state dict of the model instance to export (e.g., best model or last model).
-            suffix: A string suffix to append to the model filename (e.g., "best", "last").
-            epoch: The current epoch number, included in the filename.
-        """
+        """Export configured model variants from rank 0."""
         if self.rank != 0:
             return
 
@@ -2297,16 +2010,7 @@ class TransformerModel(nn.Module):
         suffix: str,
         epoch: int,
     ) -> None:
-        """Exports the model to ONNX and/or PyTorch format.
-
-        Saves the model weights as a .pt file and/or exports the model
-        graph and weights as an .onnx file based on the config.
-
-        Args:
-            model: The model instance (TransformerModel or TransformerEmbeddingModel).
-            suffix: A string suffix for the filename (e.g., "best", "last-embedding").
-            epoch: The current epoch number, included in the filename.
-        """
+        """Write one model as ONNX and/or PT."""
         os.makedirs(os.path.join(self.project_root, "models"), exist_ok=True)
 
         if self.export_onnx:
@@ -2388,7 +2092,6 @@ class TransformerModel(nn.Module):
                 logging.getLogger("torch.onnx").setLevel(logging.ERROR)
             except (ImportError, AttributeError):
                 torch.onnx.disable_log()  # Fallback for older PyTorch versions
-            # 2. Catch and ignore standard Python warnings temporarily
             with warnings.catch_warnings(), open(
                 os.devnull, "w"
             ) as fnull, contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(
@@ -2437,16 +2140,7 @@ class TransformerModel(nn.Module):
         ddp_model: Optional[nn.Module] = None,
         suffix: Optional[str] = None,
     ) -> None:
-        """Saves the model checkpoint.
-
-        Saves the model state, optimizer state, and epoch number to a .pt
-        file in the checkpoints directory. Only runs on rank 0.
-
-        Args:
-            val_loss: The validation loss at the current epoch.
-            ddp_model: DDP model
-            suffix: Checkpoint file suffix.
-        """
+        """Save rank-0 checkpoint state."""
         model_to_extract = ddp_model if ddp_model is not None else self
 
         if self.hparams.training_spec.data_parallelism == "FSDP":
@@ -2498,18 +2192,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _get_optimizer(self, params: Any, **kwargs):
-        """Gets the optimizer.
-
-        Initializes the optimizer specified in the hyperparameters.
-
-        Args:
-            params: params
-            **kwargs: Additional arguments to pass to the optimizer constructor
-                      (e.g., weight_decay).
-
-        Returns:
-            An initialized torch.optim.Optimizer instance.
-        """
+        """Instantiate the configured optimizer."""
         optimizer_class = get_optimizer_class(self.hparams.training_spec.optimizer.name)
         return optimizer_class(
             params, lr=self.hparams.training_spec.learning_rate, **kwargs
@@ -2517,17 +2200,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _get_scheduler(self, **kwargs):
-        """Gets the scheduler.
-
-        Initializes the learning rate scheduler specified in the hyperparameters.
-
-        Args:
-            **kwargs: Additional arguments to pass to the scheduler constructor
-                      (e.g., step_size).
-
-        Returns:
-            An initialized torch.optim.lr_scheduler._LRScheduler instance.
-        """
+        """Instantiate the configured LR scheduler."""
         scheduler_name = self.hparams.training_spec.scheduler.name
         if hasattr(torch.optim.lr_scheduler, scheduler_name):
             scheduler_class = getattr(torch.optim.lr_scheduler, scheduler_name)
@@ -2539,21 +2212,12 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _initialize_log_file(self):
-        """Initializes the log file."""
-        # Replaces old LogFile class instantiation
+        """Attach the configured logger."""
         self.logger = configure_logger(self.project_root, self.model_name, self.rank)
 
     @beartype
     def _get_latest_model_name(self) -> Optional[str]:
-        """Gets the name of the latest model checkpoint.
-
-        Scans the checkpoints directory for files matching the current
-        `model_name` and returns the path to the most recently modified one.
-
-        Returns:
-            The file path (str) to the latest checkpoint, or None if no
-            checkpoint is found.
-        """
+        """Return the newest checkpoint path for this model name."""
         checkpoint_path = os.path.join(self.project_root, "checkpoints", "*")
 
         files = glob.glob(checkpoint_path)
@@ -2576,21 +2240,7 @@ class TransformerModel(nn.Module):
         class_counts: ClassCounts,
         global_step: int,
     ) -> None:
-        """Logs the results of an epoch.
-
-        Writes validation loss, individual losses, learning rate, and
-        class share statistics (if configured) to the log file.
-        Only runs on rank 0.
-
-        Args:
-            epoch: Current epoch number.
-            elapsed: Time taken for the epoch (in seconds).
-            total_loss: The total aggregated validation loss.
-            total_losses: A dictionary of aggregated losses for each target.
-            class_counts: Globally aggregated class-count tensors used for
-                class share logging.
-            batch: Current batch number.
-        """
+        """Log validation metrics and class shares from rank 0."""
         if self.rank == 0:
             learning_rate = self.optimizer.state_dict()["param_groups"][0]["lr"]
 
@@ -2661,21 +2311,7 @@ def load_inference_model(
     device: str,
     infer_with_dropout: bool,
 ) -> torch.nn.Module:
-    """Loads a trained model for inference.
-
-    Args:
-        model_type: "generative" or "embedding".
-        model_path: Path to the saved .pt model file.
-        training_config_path: Path to the .yaml config file used for training.
-        args_config: A dictionary of override configurations.
-        device: The device to load the model onto (e.g., "cuda", "cpu").
-        infer_with_dropout: Whether to force dropout layers to be active
-                          during inference.
-
-    Returns:
-        The loaded and compiled torch.nn.Module (TransformerModel or
-        TransformerEmbeddingModel) in evaluation mode.
-    """
+    """Load a PT checkpoint as a generative or embedding inference module."""
     skip_metadata = args_config.get("skip_metadata", False)
     args_config_subset = {
         k: v for k, v in args_config.items() if k not in ["model_path", "data_path"]
@@ -2730,18 +2366,7 @@ def infer_with_embedding_model(
     target_columns: list[str],
     metadata: list[dict[str, np.ndarray]],
 ) -> np.ndarray:
-    """Performs inference with an embedding model.
-
-    Args:
-        model: The loaded TransformerEmbeddingModel.
-        x: A list of input data dictionaries (batched).
-        device: The device to run inference on.
-        size: The total number of samples (unused in this function).
-        target_columns: List of target column names (unused in this function).
-
-    Returns:
-        A NumPy array containing the concatenated embeddings from all batches.
-    """
+    """Run batched embedding inference and concatenate CPU outputs."""
     outs0 = []
 
     categorical_cols = set(model.transformer_model.categorical_columns)
@@ -2790,19 +2415,7 @@ def infer_with_generative_model(
     target_columns: list[str],
     metadata: list[dict[str, np.ndarray]],
 ) -> dict[str, np.ndarray]:
-    """Performs inference with a generative model.
-
-    Args:
-        model: The loaded TransformerModel.
-        x: A list of input data dictionaries (batched).
-        device: The device to run inference on.
-        size: The total number of samples to trim the final output to.
-        target_columns: List of target column names to extract from the output.
-
-    Returns:
-        A dictionary mapping target column names to their concatenated
-        output NumPy arrays, trimmed to `size`.
-    """
+    """Run batched generative inference and trim CPU outputs."""
     outs0 = []
 
     categorical_cols = set(model.categorical_columns)

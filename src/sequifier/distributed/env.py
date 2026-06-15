@@ -10,13 +10,7 @@ from beartype import beartype
 def setup_distributed_env(
     rank: int, local_rank: int, world_size: int, backend: str = "nccl"
 ):
-    """Sets up the distributed training environment.
-
-    Args:
-        rank: The rank of the current process.
-        world_size: The total number of processes.
-        backend: The distributed backend to use.
-    """
+    """Initialize torch.distributed with env defaults."""
     os.environ["MASTER_ADDR"] = os.getenv("MASTER_ADDR", "localhost")
     os.environ["MASTER_PORT"] = os.getenv("MASTER_PORT", "12355")
 

@@ -59,17 +59,7 @@ def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
 def load_train_config(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
 ) -> "TrainModel":
-    """
-    Load training configuration from a YAML file and update it with args_config.
-
-    Args:
-        config_path: Path to the YAML configuration file.
-        args_config: Dictionary containing additional configuration arguments.
-        skip_metadata: Flag indicating whether to process the configuration or not.
-
-    Returns:
-        TrainModel instance with loaded configuration.
-    """
+    """Load train YAML plus CLI overrides and optional metadata-derived fields."""
     with open(config_path, "r") as f:
         config_values = yaml.safe_load(f)
 
@@ -210,42 +200,7 @@ class BERTSpecModel(BaseModel):
 
 
 class TrainingSpecModel(BaseModel):
-    """Pydantic model for training specifications.
-
-    Attributes:
-        device: The torch.device to train the model on (e.g., 'cuda', 'cpu', 'mps').
-        device_max_concat_length: Maximum sequence length for concatenation on device.
-        epochs: The total number of epochs to train for.
-        log_interval: The interval in batches for logging.
-        class_share_log_columns: A list of column names for which to log the class share of predictions.
-        early_stopping_epochs: Number of epochs to wait for validation loss improvement before stopping.
-        save_interval_epochs: The interval in epochs for checkpointing the model.
-        save_latest_interval_minutes: the time interval in which a checkpoint is written to the "latest" checkpoint path
-        save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path
-        save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving
-        calculate_validation_loss_on_initialization: calculate val loss on weight initialization
-        batch_size: The training batch size.
-        learning_rate: The learning rate.
-        criterion: A dictionary mapping each target column to a loss function.
-        class_weights: A dictionary mapping categorical target columns to a list of class weights.
-        accumulation_steps: The number of gradient accumulation steps.
-        dropout: The dropout value for the transformer model.
-        loss_weights: A dictionary mapping columns to specific loss weights.
-        optimizer: The optimizer configuration.
-        scheduler: The learning rate scheduler configuration.
-        scheduler_step_on: The time of the .step() call on the scheduler, either 'epoch' or 'batch'
-        continue_training: If True, continue training from the latest checkpoint.
-        distributed: If True, enables distributed training.
-        load_full_data_to_ram: If True, loads the entire dataset into RAM.
-        world_size: The number of processes for distributed training.
-        num_workers: The number of worker threads for data loading.
-        backend: The distributed training backend (e.g., 'nccl').
-        layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
-        layer_autocast: Whether to use autocast
-        sampling_strategy: how to equalize data between GPUs
-        torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile, alternatively 'none'
-        float32_matmul_precision: precision level of float32 computations. One of 'highest', 'high' and 'medium'
-    """
+    """Training loop, optimization, precision, and distribution settings."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -437,16 +392,7 @@ class TrainingSpecModel(BaseModel):
 
 
 class ModelSpecModel(BaseModel):
-    """Pydantic model for model specifications.
-
-    Attributes:
-        initial_embedding_dim: The size of the input embedding. Must be equal to dim_model if joint_embedding_dim is None.
-        feature_embedding_dims: The embedding dimensions for each input column. Must sum to initial_embedding_dim.
-        joint_embedding_dim: Joint embedding layer after initial embedding. Must be equal to dim_model if specified.
-        n_head: The number of heads in the multi-head attention models.
-        dim_feedforward: The dimension of the feedforward network model.
-        num_layers: The number of layers in the transformer model.
-    """
+    """Transformer architecture settings."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -569,35 +515,7 @@ class ModelSpecModel(BaseModel):
 
 
 class TrainModel(BaseModel):
-    """Pydantic model for training configuration.
-
-    Attributes:
-        project_root: The path to the sequifier project directory.
-        metadata_config_path: The path to the data-driven configuration file.
-        model_name: The name of the model being trained.
-        training_data_path: The path to the training data.
-        validation_data_path: The path to the validation data.
-        read_format: The file format of the input data (e.g., 'csv', 'parquet').
-        input_columns: The list of input columns to be used for training.
-        column_types: A dictionary mapping each column to its numeric type ('int64' or 'float64').
-        categorical_columns: A list of columns that are categorical.
-        real_columns: A list of columns that are real-valued.
-        target_columns: The list of target columns for model training.
-        target_column_types: A dictionary mapping target columns to their types ('categorical' or 'real').
-        id_maps: For each categorical column, a map from distinct values to their indexed representation.
-        context_length: The sequence length of the model's input.
-        n_classes: The number of classes for each categorical column.
-        inference_batch_size: The batch size to be used for inference after model export.
-        seed: The random seed for numpy and PyTorch.
-        model_type: Causal or BERT model type
-        export_generative_model: If True, exports the generative model.
-        export_embedding_model: If True, exports the embedding model.
-        export_onnx: If True, exports the model in ONNX format.
-        export_pt: If True, exports the model using torch.save.
-        export_with_dropout: If True, exports the model with dropout enabled.
-        model_spec: The specification of the transformer model architecture.
-        training_spec: The specification of the training run configuration.
-    """
+    """Top-level training config."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 

@@ -29,13 +29,7 @@ from sequifier.special_tokens import validate_special_token_ids
 
 
 class FloatDistribution(BaseModel):
-    """Pydantic model representing a floating-point hyperparameter distribution for Optuna.
-
-    Attributes:
-        low (float): The lower bound of the distribution.
-        high (float): The upper bound of the distribution.
-        log (bool): If True, sample from the distribution in the log domain. Defaults to False.
-    """
+    """Optuna float range with optional step/log sampling."""
 
     low: float
     high: float
@@ -53,14 +47,7 @@ class FloatDistribution(BaseModel):
 
 
 class IntDistribution(BaseModel):
-    """Pydantic model representing an integer hyperparameter distribution for Optuna.
-
-    Attributes:
-        low (int): The lower bound of the distribution.
-        high (int): The upper bound of the distribution.
-        step (int): The spacing between valid integer values. Defaults to 1.
-        log (bool): If True, sample from the distribution in the log domain. Defaults to False.
-    """
+    """Optuna integer range with step/log sampling."""
 
     low: int
     high: int
@@ -100,12 +87,7 @@ def sample_param(
 
 
 class BERTSpecHyperparameterSampling(BaseModel):
-    """Pydantic model for BERT objective hyperparameter sampling.
-
-    Each BERT spec field is sampled independently so Optuna can track the
-    conditional search space without receiving nested objects as categorical
-    values.
-    """
+    """Search space for BERT objective masking parameters."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -145,22 +127,7 @@ class BERTSpecHyperparameterSampling(BaseModel):
 def load_hyperparameter_search_config(
     config_path: str, skip_metadata: bool
 ) -> "HyperparameterSearchConfig":
-    """Load a hyperparameter search configuration from a YAML file.
-
-    This function reads a YAML configuration file, processes it to include
-    data-driven configurations if needed, and returns a HyperparameterSearchConfig
-    object.
-
-    Args:
-        config_path: The path to the hyperparameter search configuration file.
-        skip_metadata: A boolean flag indicating whether the configuration is
-            for unprocessed data. If False, it will load and integrate
-            data-driven configurations.
-
-    Returns:
-        An instance of the HyperparameterSearchConfig class, populated with the
-        configuration from the file.
-    """
+    """Load hyperparameter-search YAML plus optional metadata-derived fields."""
     with open(config_path, "r") as f:
         config_values = yaml.safe_load(f)
 
@@ -238,40 +205,7 @@ def load_hyperparameter_search_config(
 
 
 class TrainingSpecHyperparameterSampling(BaseModel):
-    """Pydantic model for training specification hyperparameter sampling.
-
-    Attributes:
-        device: The device to train on (e.g., 'cuda', 'cpu').
-        epochs: A list of possible numbers of epochs to train for.
-        log_interval: The interval in batches for logging.
-        class_share_log_columns: Columns for which to log class share.
-        early_stopping_epochs: Number of epochs for early stopping.
-        save_interval_epochs: Interval in epochs for saving model checkpoints.
-        save_latest_interval_minutes: the time interval in which a checkpoint is written to the "latest" checkpoint path
-        save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path
-        save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving
-        calculate_validation_loss_on_initialization: calculate val loss on weight initialization
-        training_objective: Training objective choices, either 'causal' or 'bert'.
-        batch_size: A list of possible batch sizes.
-        learning_rate: A list of possible learning rates.
-        bert_spec: Optional BERT hyperparameter search space. Required if 'bert' can be sampled.
-        criterion: A dictionary mapping target columns to loss functions.
-        class_weights: Optional dictionary mapping columns to class weights.
-        accumulation_steps: A list of possible gradient accumulation steps.
-        dropout: A list of possible dropout rates.
-        loss_weights: Optional dictionary mapping columns to loss weights.
-        optimizer: A list of possible optimizer configurations.
-        scheduler: A list of possible scheduler configurations.
-        continue_training: Flag to continue training from a checkpoint.
-        layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
-        layer_autocast: Whether to use autocast
-        sampling_strategy: data sampling in distributed training: 'exact', 'oversampling' or 'undersampling'
-        data_parallelism: 'DDP' or 'FSDP'
-        fsdp_cpu_offload: fsdp cpu offload
-        torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile, alternatively 'none'
-        float32_matmul_precision: precision level of float32 computations. One of 'highest', 'high' and 'medium'
-
-    """
+    """Training-spec search space with paired LR/scheduler candidates."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -322,17 +256,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     float32_matmul_precision: str = "highest"
 
     def __init__(self, **kwargs):
-        """Initialize the TrainingSpecHyperparameterSampling instance.
-
-        This method initializes the Pydantic BaseModel and then processes the
-        optimizer and scheduler configurations from the provided keyword
-        arguments, converting them into DotDict objects.
-
-        Args:
-            **kwargs: Keyword arguments that correspond to the attributes of this
-                class. The 'optimizer' and 'scheduler' arguments are expected
-                to be lists of dictionaries.
-        """
+        """Normalize optimizer/scheduler dicts after Pydantic validation."""
         super().__init__(
             **{k: v for k, v in kwargs.items() if k not in ["optimizer", "scheduler"]}
         )
@@ -433,18 +357,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         return v
 
     def sample_trial(self, trial: Any) -> TrainingSpecModel:
-        """Samples training hyperparameters using an Optuna trial.
-
-        This method leverages the provided Optuna trial to suggest values for
-        hyperparameters like batch size, dropout, and learning rate based on the
-        defined search spaces (categorical lists or distributions).
-
-        Args:
-            trial (Any): The Optuna trial object used for suggesting hyperparameters.
-
-        Returns:
-            TrainingSpecModel: A populated training specification model with the sampled hyperparameters.
-        """
+        """Sample training hyperparameters for one Optuna trial."""
         lr_sched_index = trial.suggest_categorical(
             "lr_sched_index", list(range(len(self.learning_rate)))
         )
@@ -519,17 +432,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
 
 
 class ModelSpecHyperparameterSampling(BaseModel):
-    """Pydantic model for model specification hyperparameter sampling.
-
-    Attributes:
-        initial_embedding_dim: A list of possible sizes for the initial input embedding.
-        feature_embedding_dims: A list of possible dictionaries defining embedding dimensions for each input column.
-        joint_embedding_dim: A list of possible sizes for the joint embedding layer projection.
-        dim_model: A list of possible numbers of expected features in the input (d_model).
-        n_head: A list of possible numbers of heads in the multi-head attention models.
-        dim_feedforward: A list of possible dimensions of the feedforward network model.
-        num_layers: A list of possible numbers of layers in the transformer model.
-    """
+    """Model-architecture search space with paired width choices."""
 
     initial_embedding_dim: list[int]
     joint_embedding_dim: list[Optional[int]]
@@ -584,19 +487,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         return v
 
     def sample_trial(self, trial: Any) -> ModelSpecModel:
-        """Samples model architecture hyperparameters using an Optuna trial.
-
-        This method uses the Optuna trial to suggest structural parameters such as
-        the number of layers, feedforward dimensions, and attention heads. It ensures
-        that dependent dimensions (like `n_head` and `dim_model`) stay correctly paired
-        and that invalid key-value head combinations are filtered out.
-
-        Args:
-            trial (Any): The Optuna trial object used for suggesting hyperparameters.
-
-        Returns:
-            ModelSpecModel: A populated model specification model with the sampled architecture parameters.
-        """
+        """Sample architecture hyperparameters for one Optuna trial."""
         dim_model_idx = trial.suggest_categorical(
             "dim_model_idx", list(range(len(self.dim_model)))
         )
@@ -663,39 +554,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
 
 class HyperparameterSearchConfig(BaseModel):
-    """Pydantic model for hyperparameter search configuration.
-
-    Attributes:
-        project_root: The path to the sequifier project directory.
-        metadata_config_path: The path to the data-driven configuration file.
-        hp_search_name: The name for the hyperparameter search.
-        search_strategy: The search strategy, either "sample" or "grid".
-        seed: Optional random seed passed to the Optuna sampler.
-        n_samples: The number of samples to draw for the search.
-        model_config_write_path: The path to write the model configurations to.
-        training_data_path: The path to the training data.
-        validation_data_path: The path to the validation data.
-        read_format: The file format of the input data.
-        input_columns: A list of lists of columns to be used for training.
-        column_types: A list of dictionaries mapping columns to their types.
-        categorical_columns: A list of lists of categorical columns.
-        real_columns: A list of lists of real-valued columns.
-        target_columns: The list of target columns for model training.
-        target_column_types: A dictionary mapping target columns to their types.
-        id_maps: A dictionary mapping categorical values to their indexed representation.
-        context_length: A list of possible sequence lengths.
-        n_classes: The number of classes for each categorical column.
-        inference_batch_size: The batch size for inference.
-        export_onnx: If True, exports the model in ONNX format.
-        export_pt: If True, exports the model using torch.save.
-        export_with_dropout: If True, exports the model with dropout enabled.
-        model_hyperparameter_sampling: The sampling configuration for model hyperparameters.
-        training_hyperparameter_sampling: The sampling configuration for training hyperparameters.
-        evaluation_inference_config: The inference config to infer on for hyperparameter search optimization
-        evaluation_script: The script that outputs the evaluation metrics, typically from the inference output
-        evaluation_metrics: The evaluation metrics to optimize during hyperparameter search
-        evaluation_metric_directions: The direction to optimize evaluation_metrics in. Only 'minimize' and 'maximize' are allowed
-    """
+    """Top-level Optuna search config."""
 
     project_root: str
     metadata_config_path: str
@@ -843,19 +702,7 @@ class HyperparameterSearchConfig(BaseModel):
         return v
 
     def sample_trial(self, trial: Any, run_index: int) -> TrainModel:
-        """Generates a complete training configuration using an Optuna trial.
-
-        This method orchestrates the sampling of both model and training specifications,
-        as well as data sequence parameters, combining them into a final configuration
-        ready for model execution.
-
-        Args:
-            trial (Any): The Optuna trial object used for suggesting hyperparameters.
-            run_index (int): The current run/trial index, used to assign a unique name to the model.
-
-        Returns:
-            TrainModel: A fully populated configuration instance for the current trial.
-        """
+        """Sample a concrete TrainModel for one trial/run index."""
         model_spec = self.model_hyperparameter_sampling.sample_trial(trial)
 
         input_columns_index = trial.suggest_categorical(

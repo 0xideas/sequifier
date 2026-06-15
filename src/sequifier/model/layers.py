@@ -10,17 +10,10 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
-        # 1. Cast input to float32 once for stability
         x_fp32 = x.to(torch.float32)
-
-        # 2. Calculate variance
         var = torch.mean(x_fp32.pow(2), dim=-1, keepdim=True)
-
-        # 3. Normalize
         x_normed = x_fp32 * torch.rsqrt(var + self.eps)
 
-        # 4. Cast back to the *input tensor's* dtype (traceable),
-        #    rather than self.weight.dtype (not traceable in Cast ops)
         return (self.weight.to(x_normed.dtype) * x_normed).to(x.dtype)
 
 

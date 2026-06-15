@@ -75,7 +75,7 @@ def test_metadata_config(metadata_configs):
 
 
 def load_parquet_folder_outputs(path):
-    """Reads a directory of Parquet chunks into a single sorted Polars DataFrame."""
+    """Sorted frame from Parquet chunks."""
     # Polars natively supports reading all matching files via glob patterns
     data = pl.read_parquet(os.path.join(path, "*.parquet"))
 
@@ -433,10 +433,7 @@ def test_preprocessing_from_precomputed_stats(
     preprocessing_config_path_cat_precomputed_stats,
     preprocessing_config_path_cat_precomputed_stats_negative,
 ):
-    """
-    Tests that providing a preexisting metadata config produces identical
-    outputs to the standard run, bypassing metadata computation.
-    """
+    """Compare precomputed-stat and standard preprocessing outputs."""
 
     run_and_log(
         f"sequifier preprocess --config-path {preprocessing_config_path_cat_precomputed_stats}"

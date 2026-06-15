@@ -24,14 +24,11 @@ from sequifier.preprocess import (
     process_and_write_data_pt,
 )
 
-# ==========================================
-# 1. Test Sequence Extraction (Sliding Window)
-# ==========================================
 RESERVED_MASK_COLUMN = "[mask]"
 
 
 def test_extract_subsequences_basic():
-    """Tests basic sliding window extraction with sufficient length."""
+    """Basic sliding-window extraction."""
     input_data = {"col1": [10, 11, 12, 13, 14, 15]}
     context_length = 3
     stride = 1
@@ -73,7 +70,7 @@ def test_extract_subsequences_bert_width():
 
 
 def test_extract_subsequences_padding():
-    """Tests that sequences shorter than context_length are padded with 0s."""
+    """Short sequences receive zero padding."""
     input_data = {"col1": [1, 2]}  # Length 2
     stored_context_width = 5
     stride = 1
@@ -568,7 +565,7 @@ def test_preprocessor_config_requires_metadata_config_for_mask_column(
 
 @pytest.mark.parametrize("mode", ["distribute", "exact"])
 def test_extract_subsequences_modes(mode):
-    """Tests logic for 'distribute' vs 'exact' modes."""
+    """Distribute vs exact stride modes."""
     # Length 10. Seq_len 2 (window 3).
     # distribute: adjusts stride to cover data evenly.
     # exact: strictly adheres to stride, throws error if misalignment.
@@ -602,13 +599,8 @@ def test_extract_subsequences_modes(mode):
         assert len(result["col1"]) > 0
 
 
-# ==========================================
-# 2. Test Batch Limits (Index Math)
-# ==========================================
-
-
 def test_get_batch_limits_perfect_split():
-    """Tests splitting where batch boundaries align perfectly with sequences."""
+    """Batch boundaries align with sequence boundaries."""
     # 3 sequences, each length 10. Total 30 rows.
     # If we want 3 batches, we should get 3 chunks of 10.
     data = pl.DataFrame({"sequenceId": np.repeat([1, 2, 3], 10), "val": np.arange(30)})
@@ -620,7 +612,7 @@ def test_get_batch_limits_perfect_split():
 
 
 def test_get_batch_limits_uneven_split():
-    """Tests that a batch never splits a sequenceId in half."""
+    """Batches never split a sequenceId."""
     # Seq 1: 5 rows
     # Seq 2: 15 rows
     # Seq 3: 5 rows
@@ -642,13 +634,8 @@ def test_get_batch_limits_uneven_split():
             assert prev_id != curr_id, f"Batch split at {start} broke a sequence"
 
 
-# ==========================================
-# 3. Test Statistics (Mathematical Logic)
-# ==========================================
-
-
 def test_get_combined_statistics_logic():
-    """Tests Welford's algorithm logic for merging stats."""
+    """Merged Welford stats."""
     # Create two chunks of data
     chunk1 = np.random.normal(loc=10, scale=2, size=100)
     chunk2 = np.random.normal(loc=20, scale=5, size=50)
@@ -672,7 +659,7 @@ def test_get_combined_statistics_logic():
 
 
 def test_get_column_statistics_state_accumulation():
-    """Tests that processing data in chunks yields same stats as processing at once."""
+    """Chunked and full-pass stats match."""
     data_full = pl.DataFrame(
         {
             "cat_col": ["a", "b", "a", "c", "b", "d"],
@@ -699,8 +686,6 @@ def test_get_column_statistics_state_accumulation():
         chunk2, ["cat_col", "num_col"], id_maps, stats, running_count, {}
     )
 
-    # Validations
-    # 1. Categorical: Should contain all unique keys a,b,c,d
     assert len(id_maps["cat_col"]) == 6
     assert set(id_maps["cat_col"].keys()) == {
         "[unknown]",
@@ -711,7 +696,6 @@ def test_get_column_statistics_state_accumulation():
         "d",
     }
 
-    # 2. Numerical: Should match full dataset calculation
     expected_mean = data_full["num_col"].mean()
     expected_std = data_full["num_col"].std()
 
@@ -750,7 +734,7 @@ def test_apply_column_statistics_errors_when_all_rows_masked():
 
 
 def test_create_id_map():
-    """Tests basic ID mapping creation."""
+    """Basic ID map creation."""
     df = pl.DataFrame({"A": ["z", "x", "y", "x"]})
     mapping = create_id_map(df, "A")
 

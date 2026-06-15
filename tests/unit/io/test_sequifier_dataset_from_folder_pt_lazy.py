@@ -27,7 +27,7 @@ def _folder_metadata(total_samples, batch_files):
 # --- Fixtures ---
 @pytest.fixture
 def mock_config(tmp_path):
-    """Creates a mock configuration object."""
+    """Mock dataset config."""
     config = MagicMock()
     config.project_root = str(tmp_path)
     config.training_spec.batch_size = 5
@@ -95,7 +95,7 @@ def mock_torch_load():
 
 
 def test_initialization(mock_config, dataset_path):
-    """Tests that metadata is read correctly and __len__ calculates batches."""
+    """Metadata-backed batch length."""
     dataset = SequifierDatasetFromFolderPtLazy(dataset_path, mock_config)
 
     # 40 total samples / batch size of 5 = 8 batches
@@ -105,7 +105,7 @@ def test_initialization(mock_config, dataset_path):
 
 
 def test_iteration_yields_correct_batches(mock_config, dataset_path, mock_torch_load):
-    """Tests that the dataset iterates over files and yields correct tensor slices."""
+    """Tensor slices from file iteration."""
     dataset = SequifierDatasetFromFolderPtLazy(dataset_path, mock_config, shuffle=False)
 
     # Consume the generator
@@ -186,7 +186,7 @@ def test_iteration_attaches_explicit_padding_masks(mock_config, dataset_path):
 def test_distributed_sharding(
     mock_rank, mock_ws, mock_init, mock_config, dataset_path, mock_torch_load
 ):
-    """Tests that the dataset correctly shards files across distributed GPUs."""
+    """Distributed file sharding."""
     dataset = SequifierDatasetFromFolderPtLazy(dataset_path, mock_config, shuffle=False)
 
     # World size = 2, Total files = 4
@@ -210,7 +210,7 @@ def test_distributed_sharding(
 def test_dataloader_worker_sharding_continuous_boundaries(
     mock_worker_info, mock_config, dataset_path, mock_torch_load
 ):
-    """Tests that continuous sample streaming assigns correct file boundaries to workers."""
+    """Worker file boundaries for continuous streaming."""
 
     # Simulate being DataLoader worker ID 1 out of 2 total workers
     mock_info = MagicMock()
@@ -244,7 +244,7 @@ def test_dataloader_worker_sharding_continuous_boundaries(
 def test_exact_strategy_uneven_files_exception(
     mock_rank, mock_ws, mock_init, mock_config, tmp_path
 ):
-    """Tests that 'exact' strategy raises the detailed exception on uneven rank samples."""
+    """Exact mode rejects uneven rank samples."""
 
     data_dir = tmp_path / "data_uneven"
     data_dir.mkdir()
@@ -281,7 +281,7 @@ def test_exact_strategy_uneven_files_exception(
 def test_oversampling_strategy(
     mock_rank, mock_ws, mock_init, mock_config, tmp_path, mock_torch_load
 ):
-    """Tests that 'oversampling' pads a rank with fewer samples by looping its files."""
+    """Oversampling loops short ranks."""
     data_dir = tmp_path / "data_oversample"
     data_dir.mkdir()
 
@@ -327,7 +327,7 @@ def test_oversampling_strategy(
 def test_undersampling_strategy(
     mock_rank, mock_ws, mock_init, mock_config, tmp_path, mock_torch_load
 ):
-    """Tests that 'undersampling' truncates a rank with more samples to match the lightest rank."""
+    """Undersampling truncates heavy ranks."""
     data_dir = tmp_path / "data_undersample"
     data_dir.mkdir()
 
