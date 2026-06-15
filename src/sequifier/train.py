@@ -14,7 +14,6 @@ import warnings  # noqa: E402
 from typing import Any, Optional, Union  # noqa: E402
 
 import numpy as np  # noqa: E402
-import polars as pl  # noqa: E402
 import torch  # noqa: E402
 import torch._dynamo  # noqa: E402
 import torch.distributed as dist  # noqa: E402
@@ -51,6 +50,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP  # noqa: E402
 from torch.utils.data import DataLoader  # noqa: E402
 
 torch._dynamo.config.suppress_errors = True
+
+ClassCounts = dict[str, Tensor]
 
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
@@ -518,6 +519,49 @@ def _get_evaluation_loss_mask(metadata: dict[str, Tensor]) -> Tensor:
         valid_mask = valid_mask & sample_valid_mask.unsqueeze(1)
 
     return valid_mask
+
+
+@beartype
+def accumulate_class_counts(
+    counts: ClassCounts,
+    output: dict[str, Tensor],
+    valid_mask: Tensor,
+    n_classes: dict[str, int],
+) -> None:
+    """Accumulates predicted class counts over valid evaluation tokens."""
+    flattened_mask = valid_mask.bool().T.contiguous().reshape(-1)
+
+    for col, running_counts in counts.items():
+        if col not in output:
+            raise RuntimeError(f"Output is missing class-share column {col!r}.")
+
+        predicted_ids = output[col].argmax(dim=-1).contiguous().reshape(-1)
+
+        if predicted_ids.numel() != flattened_mask.numel():
+            raise RuntimeError(
+                f"Prediction/mask size mismatch for {col!r}: "
+                f"{predicted_ids.numel()} predictions versus "
+                f"{flattened_mask.numel()} mask entries."
+            )
+
+        valid_predictions = predicted_ids[flattened_mask]
+
+        if valid_predictions.numel() == 0:
+            continue
+
+        batch_counts = torch.bincount(
+            valid_predictions.to(torch.int64),
+            minlength=n_classes[col],
+        )
+
+        if batch_counts.numel() != running_counts.numel():
+            raise RuntimeError(
+                f"Class-count size mismatch for {col!r}: "
+                f"{batch_counts.numel()} counts versus "
+                f"{running_counts.numel()} expected classes."
+            )
+
+        running_counts.add_(batch_counts)
 
 
 class TransformerEmbeddingModel(nn.Module):
@@ -1369,13 +1413,13 @@ class TransformerModel(nn.Module):
                 self.start_epoch == 1
                 and self.hparams.training_spec.calculate_validation_loss_on_initialization
             ):
-                total_loss, total_losses, output = self._evaluate(
+                total_loss, total_losses, class_counts = self._evaluate(
                     valid_loader, ddp_model
                 )
                 elapsed = 0.0
 
                 self._log_epoch_results(
-                    0, 0, elapsed, total_loss, total_losses, output, 0
+                    0, 0, elapsed, total_loss, total_losses, class_counts, 0
                 )
             for epoch in range(self.start_epoch, self.hparams.training_spec.epochs + 1):
                 if (
@@ -1393,7 +1437,7 @@ class TransformerModel(nn.Module):
 
                     self._train_epoch(train_loader, valid_loader, epoch, ddp_model)
 
-                    total_loss, total_losses, output = self._evaluate(
+                    total_loss, total_losses, class_counts = self._evaluate(
                         valid_loader, ddp_model
                     )
                     elapsed = time.time() - epoch_start_time
@@ -1405,7 +1449,7 @@ class TransformerModel(nn.Module):
                         elapsed,
                         total_loss,
                         total_losses,
-                        output,
+                        class_counts,
                         total_expected_batches,
                     )
 
@@ -1673,7 +1717,7 @@ class TransformerModel(nn.Module):
 
                 if should_save_batch.item() == 1:
                     if self.save_batch_interval_minutes_val_loss:
-                        val_loss, val_losses, output = self._evaluate(
+                        val_loss, val_losses, class_counts = self._evaluate(
                             valid_loader, ddp_model
                         )
 
@@ -1687,7 +1731,7 @@ class TransformerModel(nn.Module):
                                 (current_time - self.last_batch_save_time),
                                 val_loss,
                                 val_losses,
-                                output,
+                                class_counts,
                                 current_global_step,
                             )
                             val_loss_batch[0] = float(val_loss)
@@ -1906,14 +1950,16 @@ class TransformerModel(nn.Module):
     @beartype
     def _evaluate(
         self, valid_loader: DataLoader, ddp_model: Optional[nn.Module] = None
-    ) -> tuple[np.float32, dict[str, np.float32], dict[str, Tensor]]:
+    ) -> tuple[np.float32, dict[str, np.float32], ClassCounts]:
         """Evaluates the model on the validation set.
 
         Iterates through the validation data, calculates the total loss,
         and aggregates results across all processes if in distributed mode.
         Also calculates a one-time baseline loss on the first call. The
         DataLoader is expected to yield SequifierBatch objects. IDs are
-        currently unused during evaluation.
+        currently unused during evaluation. Class shares are counted over
+        the same valid token population as validation loss; for BERT this
+        means masked evaluation positions, not all sequence positions.
 
         Args:
             valid_loader: DataLoader for the validation dataset.
@@ -1923,12 +1969,33 @@ class TransformerModel(nn.Module):
             A tuple containing:
             - The total aggregated validation loss (float).
             - A dictionary of aggregated losses for each target column (dict[str, float]).
-            - The output tensor dictionary from the last batch (used for class share logging).
+            - A dictionary of globally aggregated class-count tensors.
         """
 
         model_to_call = ddp_model if ddp_model is not None else self
         target_names = list(self.target_columns)
-        output = {}  # for type checking
+        class_count_columns = list(dict.fromkeys(self.class_share_log_columns))
+
+        for col in class_count_columns:
+            missing_class_ids = [
+                class_id
+                for class_id in range(self.n_classes[col])
+                if class_id not in self.index_maps[col]
+            ]
+            if missing_class_ids:
+                raise ValueError(
+                    f"Class-share column {col!r} is missing index-map entries "
+                    f"for class IDs {missing_class_ids}."
+                )
+
+        local_class_counts: ClassCounts = {
+            col: torch.zeros(
+                self.n_classes[col],
+                dtype=torch.int64,
+                device=self.device,
+            )
+            for col in class_count_columns
+        }
 
         def new_accumulators() -> tuple[dict[str, Tensor], dict[str, Tensor]]:
             return (
@@ -2056,10 +2123,23 @@ class TransformerModel(nn.Module):
                         loss_sums,
                         token_counts,
                     )
+                    accumulate_class_counts(
+                        local_class_counts,
+                        output,
+                        valid_mask,
+                        self.n_classes,
+                    )
 
             total_loss_global, total_losses_global = finalize_components(
                 total_loss_sums, total_loss_counts, "validation"
             )
+
+            if self.hparams.training_spec.distributed:
+                for col in class_count_columns:
+                    dist.all_reduce(
+                        local_class_counts[col],
+                        op=dist.ReduceOp.SUM,
+                    )
 
             # Handle one-time baseline loss calculation with the same aggregation semantics.
             if not hasattr(self, "baseline_loss"):
@@ -2161,7 +2241,10 @@ class TransformerModel(nn.Module):
                     k: np.float32(v.detach().cpu().item())
                     for k, v in total_losses_global.items()
                 },
-                output,
+                {
+                    col: counts.detach().cpu()
+                    for col, counts in local_class_counts.items()
+                },
             )
         finally:
             model_to_call.train(was_training)
@@ -2490,7 +2573,7 @@ class TransformerModel(nn.Module):
         elapsed: float,
         total_loss: np.float32,
         total_losses: dict[str, np.float32],
-        output: dict[str, Tensor],
+        class_counts: ClassCounts,
         global_step: int,
     ) -> None:
         """Logs the results of an epoch.
@@ -2504,8 +2587,8 @@ class TransformerModel(nn.Module):
             elapsed: Time taken for the epoch (in seconds).
             total_loss: The total aggregated validation loss.
             total_losses: A dictionary of aggregated losses for each target.
-            output: The output tensor dictionary from the last validation batch,
-                    used for class share logging.
+            class_counts: Globally aggregated class-count tensors used for
+                class share logging.
             batch: Current batch number.
         """
         if self.rank == 0:
@@ -2543,31 +2626,28 @@ class TransformerModel(nn.Module):
                 self.logger.info("[INFO]  - " + ", ".join(loss_strs))
 
             for categorical_column in self.class_share_log_columns:
-                output_values = (
-                    output[categorical_column]
-                    .argmax(dim=-1)  # class dimension
-                    .reshape(-1)  # scalar category ID per token
-                    .detach()
-                    .cpu()
-                    .numpy()
-                )
+                counts = class_counts[categorical_column].to(torch.int64)
+                total = counts.sum()
 
-                output_counts_df = (
-                    pl.Series("values", output_values)
-                    .value_counts()
-                    .with_columns(
-                        (pl.col("count") / pl.col("count").sum()).alias("share")
+                if total.item() == 0:
+                    self.logger.warning(
+                        "[WARNING] No valid predictions available for "
+                        f"class-share column {categorical_column!r}."
                     )
-                    .sort("values")
-                )
+                    continue
+
+                shares = counts.to(torch.float64) / total
 
                 value_shares = " | ".join(
-                    f"{self.index_maps[categorical_column][int(row['values'])]}: "
-                    f"{row['share']:5.5f}"
-                    for row in output_counts_df.iter_rows(named=True)
+                    f"{self.index_maps[categorical_column][class_id]}: "
+                    f"{shares[class_id].item():5.5f}"
+                    for class_id in range(counts.numel())
+                    if counts[class_id].item() > 0
                 )
 
-                self.logger.info(f"[INFO] {categorical_column}: {value_shares}")
+                self.logger.info(
+                    f"[INFO] {categorical_column} (n={total.item()}): {value_shares}"
+                )
 
             self.logger.info("-" * 89)
 

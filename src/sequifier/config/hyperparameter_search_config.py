@@ -670,6 +670,7 @@ class HyperparameterSearchConfig(BaseModel):
         metadata_config_path: The path to the data-driven configuration file.
         hp_search_name: The name for the hyperparameter search.
         search_strategy: The search strategy, either "sample" or "grid".
+        seed: Optional random seed passed to the Optuna sampler.
         n_samples: The number of samples to draw for the search.
         model_config_write_path: The path to write the model configurations to.
         training_data_path: The path to the training data.
@@ -700,6 +701,7 @@ class HyperparameterSearchConfig(BaseModel):
     metadata_config_path: str
     hp_search_name: str
     search_strategy: str = "bayesian"
+    seed: Optional[int] = None
     n_trials: Optional[int] = Field(None, alias="n_samples")
     prune_trials: Optional[bool] = True
     model_config_write_path: str

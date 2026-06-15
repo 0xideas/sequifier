@@ -35,6 +35,26 @@ from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_i
 AnyType = str | int | float
 
 
+def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
+    training_spec = config_values.get("training_spec", {})
+
+    for col in training_spec.get("class_share_log_columns", []):
+        if col not in config_values["target_columns"]:
+            raise ValueError(f"Class-share column {col!r} must be a target column.")
+        if config_values["target_column_types"].get(col) != "categorical":
+            raise ValueError(
+                f"Class-share column {col!r} must be a categorical target column."
+            )
+        if col not in config_values["n_classes"]:
+            raise ValueError(
+                f"Class-share column {col!r} has no configured class count."
+            )
+        if col not in config_values["id_maps"]:
+            raise ValueError(
+                f"Class-share column {col!r} has no index map for logging."
+            )
+
+
 @beartype
 def load_train_config(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
@@ -145,6 +165,8 @@ def load_train_config(
             metadata_config["special_token_ids"],
             source=f"metadata config '{metadata_config_path}'",
         )
+
+        _validate_class_share_log_columns(config_values)
 
     return try_catch_excess_keys(config_path, TrainModel, config_values)
 

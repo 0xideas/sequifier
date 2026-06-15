@@ -1291,7 +1291,7 @@ def load_precomputed_id_maps(
                     min_val = min(user_values)
                     if min_val == 2:
                         raise ValueError(
-                            f"Precomputed map {file} uses legacy user IDs starting at 2; shifting user IDs by 1 to reserve the BERT mask ID."
+                            f"Precomputed map {file} uses legacy user IDs starting at 2"
                         )
                     if min_val != SPECIAL_TOKEN_IDS.user_start:
                         raise ValueError(

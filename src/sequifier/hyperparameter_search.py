@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 import warnings
-from typing import Union
+from typing import Any, Union
 
 import optuna
 import torch._dynamo
@@ -22,6 +22,18 @@ from sequifier.helpers import (  # noqa: E402
     get_last_training_batch_timedelta,
 )
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
+
+
+def create_sampler(config: Any) -> optuna.samplers.BaseSampler:
+    strategy = getattr(config, "search_strategy", "bayesian")
+    seed = getattr(config, "seed", None)
+    if strategy in ["sample"]:
+        return optuna.samplers.RandomSampler(seed=seed)
+    if strategy == "grid":
+        if hasattr(optuna.samplers, "BruteForceSampler"):
+            return optuna.samplers.BruteForceSampler(seed=seed)
+        raise RuntimeError("Grid search requires Optuna >= 3.1 for BruteForceSampler.")
+    return optuna.samplers.TPESampler(seed=seed)
 
 
 def set_pdeathsig():
@@ -216,7 +228,8 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
                 raise KeyError(
                     f"Metric '{metric}' missing in {eval_json_path}. Found keys: {list(eval_results.keys())}"
                 )
-            metrics.append(float(eval_results[metric]))
+            value = eval_results[metric]
+            metrics.append(float("nan") if value is None else float(value))
 
         if len(metrics) == 1:
             return metrics[0]
@@ -244,18 +257,7 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     config = load_hyperparameter_search_config(config_path, skip_metadata)
 
     os.makedirs(os.path.join(config.project_root, "state", "optuna"), exist_ok=True)
-    strategy = getattr(config, "search_strategy", "bayesian")
-    if strategy in ["sample"]:
-        sampler = optuna.samplers.RandomSampler()
-    elif strategy == "grid":
-        if hasattr(optuna.samplers, "BruteForceSampler"):
-            sampler = optuna.samplers.BruteForceSampler()
-        else:
-            raise RuntimeError(
-                "Grid search requires Optuna >= 3.1 for BruteForceSampler."
-            )
-    else:  # "bayesian"
-        sampler = optuna.samplers.TPESampler()
+    sampler = create_sampler(config)
 
     storage_path = os.path.join(
         config.project_root, "state", "optuna", f"{config.hp_search_name}.db"

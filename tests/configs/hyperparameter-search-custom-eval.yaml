@@ -21,6 +21,7 @@ inference_batch_size: 10
 
 # Search Strategy
 search_strategy: bayesian
+seed: 101
 n_samples: 4
 
 # Configuration Loading Overrides (set to null to use values from metadata)

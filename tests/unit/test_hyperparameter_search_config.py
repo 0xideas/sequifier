@@ -1,3 +1,4 @@
+import optuna
 import pytest
 import yaml
 from pydantic import ValidationError
@@ -5,6 +6,7 @@ from pydantic import ValidationError
 from sequifier.config.hyperparameter_search_config import (
     TrainingSpecHyperparameterSampling,
 )
+from sequifier.hyperparameter_search import create_sampler
 from sequifier.io.yaml import TrainModelDumper
 
 
@@ -152,3 +154,25 @@ def test_bert_training_spec_dumps_to_plain_yaml():
         "type": "GeometricDistribution",
         "p": 1.0,
     }
+
+
+@pytest.mark.parametrize(
+    ("strategy", "sampler_name"),
+    [
+        ("sample", "RandomSampler"),
+        ("grid", "BruteForceSampler"),
+        ("bayesian", "TPESampler"),
+    ],
+)
+def test_create_sampler_passes_config_seed(monkeypatch, strategy, sampler_name):
+    recorded = {}
+
+    def fake_sampler(*, seed=None):
+        recorded["seed"] = seed
+        return object()
+
+    monkeypatch.setattr(optuna.samplers, sampler_name, fake_sampler)
+
+    create_sampler(type("Config", (), {"search_strategy": strategy, "seed": 123})())
+
+    assert recorded["seed"] == 123

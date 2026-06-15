@@ -1,10 +1,13 @@
 import copy
 import json
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 import yaml
 from pydantic import ValidationError
+from torch.utils.data import DataLoader
 
 from sequifier.config.probabilities import PoissonDistributionFloor
 from sequifier.config.train_config import (
@@ -16,8 +19,13 @@ from sequifier.config.train_config import (
     load_train_config,
 )
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
+from sequifier.io.batch import SequifierBatch
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
-from sequifier.train import TransformerModel, _get_evaluation_loss_mask
+from sequifier.train import (
+    TransformerModel,
+    _get_evaluation_loss_mask,
+    accumulate_class_counts,
+)
 
 
 def _training_spec_kwargs(**overrides):
@@ -324,6 +332,76 @@ def test_load_train_config_defaults_missing_metadata_special_token_ids(
     assert config.special_token_ids == SPECIAL_TOKEN_IDS.ids_by_label
 
 
+@pytest.mark.parametrize(
+    ("class_share_column", "metadata_overrides", "config_overrides", "match"),
+    [
+        (
+            "missing_col",
+            {},
+            {},
+            "Class-share column 'missing_col' must be a target column",
+        ),
+        (
+            "real_col",
+            {},
+            {},
+            "Class-share column 'real_col' must be a categorical target column",
+        ),
+        (
+            "cat_col",
+            {"n_classes": {}},
+            {"drop_n_classes": True},
+            "Class-share column 'cat_col' has no configured class count",
+        ),
+        (
+            "cat_col",
+            {"id_maps": {}},
+            {},
+            "Class-share column 'cat_col' has no index map for logging",
+        ),
+    ],
+)
+def test_load_train_config_validates_class_share_columns_after_metadata_load(
+    tmp_path,
+    model_config,
+    class_share_column,
+    metadata_overrides,
+    config_overrides,
+    match,
+):
+    config_path = tmp_path / "train.yaml"
+    metadata_path = tmp_path / "metadata.json"
+    config_values = model_config.model_dump()
+    config_values["project_root"] = str(tmp_path)
+    config_values["metadata_config_path"] = metadata_path.name
+    config_values["training_spec"]["class_share_log_columns"] = [class_share_column]
+
+    storage_layout = config_values.pop("storage_layout")
+    config_values.pop("window_view")
+    config_values["context_length"] = model_config.window_view.context_length
+
+    if config_overrides.get("drop_n_classes"):
+        config_values.pop("n_classes")
+
+    metadata = {
+        "split_paths": ["data/train.pt", "data/val.pt"],
+        "stored_context_width": storage_layout["stored_context_width"],
+        "max_target_offset": storage_layout["max_target_offset"],
+        "stored_window_layout_version": storage_layout["version"],
+        "column_types": config_values["column_types"],
+        "n_classes": model_config.n_classes,
+        "id_maps": model_config.id_maps,
+        "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
+    }
+    metadata.update(metadata_overrides)
+
+    config_path.write_text(yaml.safe_dump(config_values))
+    metadata_path.write_text(json.dumps(metadata))
+
+    with pytest.raises(ValueError, match=match):
+        load_train_config(str(config_path), {}, skip_metadata=False)
+
+
 def test_forward_train_shapes(model, model_config):
     """Tests the output shapes of the forward_train method."""
     batch_size = model_config.training_spec.batch_size
@@ -509,6 +587,165 @@ def test_evaluation_loss_mask_intersects_target_bert_and_sample_masks():
     )
 
 
+def _categorical_logits_from_batch_predictions(batch_predictions, n_classes):
+    prediction_ids = torch.tensor(batch_predictions, dtype=torch.long).T.contiguous()
+    return torch.nn.functional.one_hot(prediction_ids, num_classes=n_classes).float()
+
+
+def test_accumulate_class_counts_all_samples_valid():
+    counts = {"cat_col": torch.zeros(3, dtype=torch.int64)}
+    output = {
+        "cat_col": _categorical_logits_from_batch_predictions(
+            [[0, 1], [1, 2]],
+            n_classes=3,
+        )
+    }
+    valid_mask = torch.ones(2, 2, dtype=torch.bool)
+
+    accumulate_class_counts(counts, output, valid_mask, {"cat_col": 3})
+
+    assert torch.equal(counts["cat_col"], torch.tensor([1, 2, 1]))
+
+
+def test_accumulate_class_counts_excludes_synthetic_samples():
+    counts = {"cat_col": torch.zeros(3, dtype=torch.int64)}
+    output = {
+        "cat_col": _categorical_logits_from_batch_predictions(
+            [
+                [0, 1],
+                [2, 2],
+            ],
+            n_classes=3,
+        )
+    }
+    valid_mask = _get_evaluation_loss_mask(
+        {
+            "target_valid_mask": torch.ones(2, 2, dtype=torch.bool),
+            "sample_valid_mask": torch.tensor([True, False]),
+        }
+    )
+
+    accumulate_class_counts(counts, output, valid_mask, {"cat_col": 3})
+
+    assert torch.equal(counts["cat_col"], torch.tensor([1, 1, 0]))
+
+
+def test_accumulate_class_counts_excludes_target_padding():
+    counts = {"cat_col": torch.zeros(3, dtype=torch.int64)}
+    output = {
+        "cat_col": _categorical_logits_from_batch_predictions(
+            [[0, 2]],
+            n_classes=3,
+        )
+    }
+    valid_mask = torch.tensor([[True, False]])
+
+    accumulate_class_counts(counts, output, valid_mask, {"cat_col": 3})
+
+    assert torch.equal(counts["cat_col"], torch.tensor([1, 0, 0]))
+
+
+def test_accumulate_class_counts_combines_sample_and_token_masks():
+    counts = {"cat_col": torch.zeros(3, dtype=torch.int64)}
+    output = {
+        "cat_col": _categorical_logits_from_batch_predictions(
+            [
+                [0, 1],
+                [2, 2],
+            ],
+            n_classes=3,
+        )
+    }
+    valid_mask = _get_evaluation_loss_mask(
+        {
+            "target_valid_mask": torch.tensor(
+                [
+                    [True, False],
+                    [True, True],
+                ]
+            ),
+            "sample_valid_mask": torch.tensor([True, False]),
+        }
+    )
+
+    accumulate_class_counts(counts, output, valid_mask, {"cat_col": 3})
+
+    assert torch.equal(counts["cat_col"], torch.tensor([1, 0, 0]))
+
+
+def test_accumulate_class_counts_respects_bert_mask():
+    counts = {"cat_col": torch.zeros(3, dtype=torch.int64)}
+    output = {
+        "cat_col": _categorical_logits_from_batch_predictions(
+            [
+                [0, 1],
+                [2, 2],
+            ],
+            n_classes=3,
+        )
+    }
+    valid_mask = _get_evaluation_loss_mask(
+        {
+            "target_valid_mask": torch.ones(2, 2, dtype=torch.bool),
+            "bert_mask": torch.tensor(
+                [
+                    [False, True],
+                    [True, True],
+                ]
+            ),
+            "sample_valid_mask": torch.tensor([True, False]),
+        }
+    )
+
+    accumulate_class_counts(counts, output, valid_mask, {"cat_col": 3})
+
+    assert torch.equal(counts["cat_col"], torch.tensor([0, 1, 0]))
+
+
+def test_accumulate_class_counts_retains_missing_class_slots():
+    counts = {"cat_col": torch.zeros(5, dtype=torch.int64)}
+    output = {
+        "cat_col": _categorical_logits_from_batch_predictions(
+            [[3, 3]],
+            n_classes=5,
+        )
+    }
+    valid_mask = torch.ones(1, 2, dtype=torch.bool)
+
+    accumulate_class_counts(counts, output, valid_mask, {"cat_col": 5})
+
+    assert torch.equal(counts["cat_col"], torch.tensor([0, 0, 0, 2, 0]))
+
+
+def test_accumulate_class_counts_all_zero_when_no_positions_are_valid():
+    counts = {"cat_col": torch.zeros(3, dtype=torch.int64)}
+    output = {
+        "cat_col": _categorical_logits_from_batch_predictions(
+            [[0, 1]],
+            n_classes=3,
+        )
+    }
+    valid_mask = torch.zeros(1, 2, dtype=torch.bool)
+
+    accumulate_class_counts(counts, output, valid_mask, {"cat_col": 3})
+
+    assert torch.equal(counts["cat_col"], torch.tensor([0, 0, 0]))
+
+
+def test_accumulate_class_counts_raises_on_shape_mismatch():
+    counts = {"cat_col": torch.zeros(3, dtype=torch.int64)}
+    output = {
+        "cat_col": _categorical_logits_from_batch_predictions(
+            [[0, 1, 2]],
+            n_classes=3,
+        )
+    }
+    valid_mask = torch.ones(1, 2, dtype=torch.bool)
+
+    with pytest.raises(RuntimeError, match="Prediction/mask size mismatch"):
+        accumulate_class_counts(counts, output, valid_mask, {"cat_col": 3})
+
+
 def test_calculate_loss_components_aggregate_by_token_count():
     model = TransformerModel.__new__(TransformerModel)
     model.target_column_types = {"real_col": "real"}
@@ -533,6 +770,114 @@ def test_calculate_loss_components_aggregate_by_token_count():
     )
 
     assert torch.isclose(aggregate, torch.tensor(200.0 / 101.0, dtype=torch.float64))
+
+
+class _QueuedEvalModel(torch.nn.Module):
+    def __init__(self, outputs):
+        super().__init__()
+        self.outputs = iter(outputs)
+
+    def forward(self, data, metadata=None, return_logits=False):
+        return next(self.outputs)
+
+
+def _evaluation_shell_model():
+    model = TransformerModel.__new__(TransformerModel)
+    model.input_columns = ["cat_col"]
+    model.target_columns = ["cat_col"]
+    model.target_column_types = {"cat_col": "categorical"}
+    model.n_classes = {"cat_col": 3}
+    model.loss_weights = None
+    model.criterion = {"cat_col": torch.nn.CrossEntropyLoss(reduction="none")}
+    model.device = "cpu"
+    model.class_share_log_columns = ["cat_col"]
+    model.index_maps = {  # type: ignore
+        "cat_col": {
+            0: "[unknown]",
+            1: "a",
+            2: "b",
+        }
+    }  # type: ignore
+    model.decoder = {"cat_col": torch.nn.Linear(1, 1)}
+    model.hparams = SimpleNamespace(
+        seed=42,
+        training_spec=SimpleNamespace(
+            distributed=False,
+            layer_autocast=False,
+            data_parallelism="none",
+            training_objective="causal",
+        ),
+    )
+    return model
+
+
+def _validation_batch(predictions, sample_valid_mask=None):
+    batch_size = len(predictions)
+    seq_len = len(predictions[0])
+    inputs = {
+        "cat_col": torch.zeros(batch_size, seq_len, dtype=torch.long),
+    }
+    targets = {
+        "cat_col": torch.tensor(predictions, dtype=torch.long),
+    }
+    valid_mask = torch.ones(batch_size, seq_len, dtype=torch.bool)
+    metadata = {
+        "attention_valid_mask": valid_mask.clone(),
+        "target_valid_mask": valid_mask,
+    }
+    if sample_valid_mask is not None:
+        metadata["sample_valid_mask"] = torch.tensor(
+            sample_valid_mask,
+            dtype=torch.bool,
+        )
+    return SequifierBatch(inputs=inputs, targets=targets, metadata=metadata)
+
+
+def test_evaluate_returns_class_counts_across_all_validation_batches():
+    model = _evaluation_shell_model()
+    batches = [
+        _validation_batch([[0, 0, 1]]),
+        _validation_batch([[2, 2]]),
+    ]
+    outputs = [
+        {"cat_col": _categorical_logits_from_batch_predictions([[0, 0, 1]], 3)},
+        {"cat_col": _categorical_logits_from_batch_predictions([[2, 2]], 3)},
+    ]
+    eval_model = _QueuedEvalModel(outputs)
+    valid_loader = DataLoader(batches, batch_size=None)
+
+    total_loss, total_losses, class_counts = TransformerModel._evaluate(
+        model,
+        valid_loader,
+        eval_model,
+    )
+
+    assert np.isfinite(total_loss)
+    assert np.isfinite(total_losses["cat_col"])
+    assert torch.equal(class_counts["cat_col"], torch.tensor([2, 1, 2]))
+    assert eval_model.training
+    assert model.baseline_loss >= 0
+
+
+def test_evaluate_excludes_synthetic_final_batch_from_class_counts():
+    model = _evaluation_shell_model()
+    batches = [
+        _validation_batch([[0, 1]]),
+        _validation_batch([[2, 2]], sample_valid_mask=[False]),
+    ]
+    outputs = [
+        {"cat_col": _categorical_logits_from_batch_predictions([[0, 1]], 3)},
+        {"cat_col": _categorical_logits_from_batch_predictions([[2, 2]], 3)},
+    ]
+    valid_loader = DataLoader(batches, batch_size=None)
+
+    _, _, class_counts = TransformerModel._evaluate(
+        model,
+        valid_loader,
+        _QueuedEvalModel(outputs),
+    )
+
+    assert torch.equal(class_counts["cat_col"], torch.tensor([1, 1, 0]))
 
 
 def test_calculate_loss_zero_token_training_batch_is_differentiable():
