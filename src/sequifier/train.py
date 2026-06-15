@@ -240,6 +240,7 @@ def train_worker(
         mesh = init_device_mesh(
             "cuda", (world_size,)
         )  # 1D mesh for standard ZeRO-3 full sharding
+        model._data_parallel_group = mesh.get_group()
 
         mp_policy = None
         if config.training_spec.layer_autocast:
@@ -1358,7 +1359,12 @@ class TransformerModel(nn.Module):
         ddp_model: Optional[nn.Module] = None,
     ) -> None:
         """Run one train epoch with optional mid-epoch saves."""
-        total_loss = 0.0
+        target_names = self._loss_target_names()
+        train_loss_sums, train_token_count = self._new_loss_accumulators(target_names)
+        empty_global_batches = 0
+        accumulated_global_token_count = torch.zeros(
+            (), device=self.device, dtype=torch.int64
+        )
         batches_aggregated = 0
 
         start_time = time.time()
@@ -1416,17 +1422,43 @@ class TransformerModel(nn.Module):
                         output = model_to_call(
                             data, metadata=metadata, return_logits=True
                         )
-                        loss, losses = self._calculate_loss(output, targets, metadata)
+                        (
+                            loss,
+                            backward_components,
+                            local_loss_sums,
+                            local_token_count,
+                            global_token_count,
+                        ) = self._calculate_training_loss(output, targets, metadata)
                 else:
                     output = model_to_call(data, metadata=metadata, return_logits=True)
-                    loss, losses = self._calculate_loss(output, targets, metadata)
+                    (
+                        loss,
+                        backward_components,
+                        local_loss_sums,
+                        local_token_count,
+                        global_token_count,
+                    ) = self._calculate_training_loss(output, targets, metadata)
 
                 self.scaler.scale(loss).backward()
+                self._accumulate_loss_components(
+                    train_loss_sums,
+                    train_token_count,
+                    local_loss_sums,
+                    local_token_count,
+                )
+                accumulated_global_token_count += global_token_count.detach()
+                if global_token_count.detach().cpu().item() == 0:
+                    empty_global_batches += 1
 
-                if (
+                optimizer_step_due = (
                     self.accumulation_steps is None
                     or (batch_count + 1) % self.accumulation_steps == 0
                     or (batch_count + 1) == num_batches
+                )
+                optimizer_step_performed = False
+                if (
+                    optimizer_step_due
+                    and accumulated_global_token_count.detach().cpu().item() > 0
                 ):
                     self.scaler.unscale_(self.optimizer)
 
@@ -1435,28 +1467,49 @@ class TransformerModel(nn.Module):
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                     self.optimizer.zero_grad()
+                    optimizer_step_performed = True
 
-                total_loss += loss.item()
+                if optimizer_step_due:
+                    if not optimizer_step_performed:
+                        self.optimizer.zero_grad()
+                    accumulated_global_token_count.zero_()
+
                 batches_aggregated += 1
                 if (batch_count + 1) % self.log_interval == 0:
+                    avg_train_loss, _ = self._finalize_loss_components(
+                        train_loss_sums,
+                        train_token_count,
+                        target_names,
+                        "training",
+                        raise_on_empty=False,
+                    )
                     if self.rank == 0:
                         learning_rate = self.scheduler.get_last_lr()[0]
                         s_per_batch = (time.time() - start_time) / max(
                             1, batches_aggregated
                         )
-                        avg_train_loss = total_loss / max(1, batches_aggregated)
                         self.logger.info(
-                            f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
+                            f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss.detach().cpu().item())} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
                         )
-                        total_loss = 0.0
+                        if empty_global_batches > 0:
+                            self.logger.warning(
+                                "[WARNING] "
+                                f"{empty_global_batches} training microbatch(es) "
+                                "in this logging window contained no selected tokens."
+                            )
+                    train_loss_sums, train_token_count = self._new_loss_accumulators(
+                        target_names
+                    )
+                    empty_global_batches = 0
+                    if self.rank == 0:
                         batches_aggregated = 0
                         self.start_batch = 0
                         start_time = time.time()
                     self._check_and_terminate()
 
-                del data, targets, output, loss, losses
+                del data, targets, output, loss, backward_components
 
-                if self.scheduler_step_on == "batch":
+                if self.scheduler_step_on == "batch" and optimizer_step_performed:
                     if (
                         not hasattr(self.scheduler, "total_steps")
                         or self.scheduler.last_epoch < self.scheduler.total_steps
@@ -1551,8 +1604,21 @@ class TransformerModel(nn.Module):
         targets: dict[str, Tensor],
         metadata: dict[str, Tensor],
     ) -> tuple[Tensor, dict[str, Tensor]]:
-        """Return weighted mean loss and per-target components over valid tokens."""
-        target_names = [k for k in targets.keys() if k in self.target_column_types]
+        """Return backward-scaled loss and components for the current rank."""
+        loss, backward_components, _, _, _ = self._calculate_training_loss(
+            output, targets, metadata
+        )
+        return loss, backward_components
+
+    @beartype
+    def _calculate_training_loss(
+        self,
+        output: dict[str, Tensor],
+        targets: dict[str, Tensor],
+        metadata: dict[str, Tensor],
+    ) -> tuple[Tensor, dict[str, Tensor], dict[str, Tensor], Tensor, Tensor]:
+        """Return the normalized backward loss plus local metric primitives."""
+        target_names = self._loss_target_names(targets)
         if not target_names:
             raise RuntimeError("Loss calculation failed; no target columns were found.")
 
@@ -1560,66 +1626,51 @@ class TransformerModel(nn.Module):
         if "bert_mask" in metadata:
             valid_mask = valid_mask & metadata["bert_mask"].bool()
 
-        mask = valid_mask.T.contiguous().reshape(-1)
-        token_count = mask.sum(dtype=torch.int64)
+        local_sums, local_count = self._calculate_local_loss_components(
+            output, targets, valid_mask
+        )
+        global_count = local_count.detach().clone()
+        gradient_average_factor = self._gradient_reduction_factor()
 
-        losses = {}
-        for target_column in target_names:
-            target_column_type = self.target_column_types[target_column]
-            if target_column_type == "categorical":
-                output_tensor = (
-                    output[target_column]
-                    .float()
-                    .reshape(-1, self.n_classes[target_column])
-                )
-            elif target_column_type == "real":
-                output_tensor = (
-                    output[target_column].to(dtype=torch.float32).reshape(-1)
-                )
-            else:
-                raise ValueError(
-                    f"Target column type {target_column_type} not in ['categorical', 'real']"
-                )
-
-            target_tensor = targets[target_column].T.contiguous().reshape(-1)
-
-            if self.target_column_types[target_column] == "real":
-                target_tensor = target_tensor.to(dtype=output_tensor.dtype)
-
-            raw_loss = self.criterion[target_column](output_tensor, target_tensor)
-
-            current_mask = mask.to(dtype=raw_loss.dtype)
-            denominator = token_count.clamp_min(1).to(dtype=raw_loss.dtype)
-
-            losses[target_column] = (raw_loss * current_mask).sum() / denominator
+        if gradient_average_factor > 1:
+            dist.all_reduce(
+                global_count,
+                op=dist.ReduceOp.SUM,
+                group=self._data_parallel_process_group(),
+            )
 
         loss = None
+        backward_components = {}
+        denominator = global_count.clamp_min(1)
         for target_column in target_names:
-            losses[target_column] = losses[target_column] * (
-                self.loss_weights[target_column]
-                if self.loss_weights is not None
-                else 1.0
+            denominator_for_sum = denominator.to(dtype=local_sums[target_column].dtype)
+            backward_components[target_column] = (
+                local_sums[target_column]
+                * self._loss_weight(target_column)
+                * gradient_average_factor
+                / denominator_for_sum
             )
             if loss is None:
-                loss = losses[target_column].clone()
+                loss = backward_components[target_column].clone()
             else:
-                loss += losses[target_column]
+                loss += backward_components[target_column]
 
         if loss is None:
             raise RuntimeError(
                 "Loss calculation failed; no loss tensors were generated."
             )
 
-        return loss, losses
+        return loss, backward_components, local_sums, local_count, global_count
 
     @beartype
-    def _calculate_loss_components(
+    def _calculate_local_loss_components(
         self,
         output: dict[str, Tensor],
         targets: dict[str, Tensor],
         valid_mask: Tensor,
-    ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
-        target_names = [k for k in targets.keys() if k in self.target_column_types]
+    ) -> tuple[dict[str, Tensor], Tensor]:
+        """Return unweighted, unnormalized local loss sums and one token count."""
+        target_names = self._loss_target_names(targets)
         if not target_names:
             raise RuntimeError("Loss calculation failed; no target columns were found.")
 
@@ -1627,7 +1678,6 @@ class TransformerModel(nn.Module):
         token_count = mask.sum(dtype=torch.int64)
 
         loss_sums = {}
-        token_counts = {}
         for target_column in target_names:
             target_column_type = self.target_column_types[target_column]
             if target_column_type == "categorical":
@@ -1651,17 +1701,148 @@ class TransformerModel(nn.Module):
                 target_tensor = target_tensor.to(dtype=output_tensor.dtype)
 
             raw_loss = self.criterion[target_column](output_tensor, target_tensor)
+            if raw_loss.numel() != mask.numel():
+                raise RuntimeError(
+                    "Loss/mask size mismatch for target column "
+                    f"{target_column!r}: loss has {raw_loss.numel()} elements "
+                    f"but mask has {mask.numel()}."
+                )
             current_mask = mask.to(dtype=raw_loss.dtype)
 
-            loss_sum = (raw_loss * current_mask).sum(dtype=torch.float64)
-            loss_sums[target_column] = loss_sum * (
-                self.loss_weights[target_column]
-                if self.loss_weights is not None
-                else 1.0
-            )
-            token_counts[target_column] = token_count
+            loss_sums[target_column] = (raw_loss * current_mask).sum()
 
-        return loss_sums, token_counts
+        return loss_sums, token_count
+
+    @beartype
+    def _calculate_loss_components(
+        self,
+        output: dict[str, Tensor],
+        targets: dict[str, Tensor],
+        valid_mask: Tensor,
+    ) -> tuple[dict[str, Tensor], Tensor]:
+        """Return detached local loss sums and one shared token count for metrics."""
+        loss_sums, token_count = self._calculate_local_loss_components(
+            output, targets, valid_mask
+        )
+        return (
+            {col: loss_sum.detach().double() for col, loss_sum in loss_sums.items()},
+            token_count.detach(),
+        )
+
+    @beartype
+    def _loss_target_names(
+        self, targets: Optional[dict[str, Tensor]] = None
+    ) -> list[str]:
+        """Return configured target columns in stable training-config order."""
+        configured_targets = getattr(
+            self, "target_columns", list(self.target_column_types.keys())
+        )
+        if targets is not None:
+            missing_targets = [
+                col
+                for col in configured_targets
+                if col in self.target_column_types and col not in targets
+            ]
+            if missing_targets:
+                raise RuntimeError(f"Missing target columns: {sorted(missing_targets)}")
+
+        return [col for col in configured_targets if col in self.target_column_types]
+
+    @beartype
+    def _loss_weight(self, target_column: str) -> float:
+        """Return the configured scalar loss weight for a target column."""
+        if self.loss_weights is None:
+            return 1.0
+        return float(self.loss_weights[target_column])
+
+    @beartype
+    def _distributed_is_initialized(self) -> bool:
+        """Return whether torch.distributed collectives are currently usable."""
+        return dist.is_available() and dist.is_initialized()
+
+    @beartype
+    def _data_parallel_process_group(self) -> Optional[dist.ProcessGroup]:
+        """Return the process group used by the data-parallel reducer."""
+        return getattr(self, "_data_parallel_group", None)
+
+    @beartype
+    def _gradient_reduction_factor(self) -> int:
+        """Return the gradient multiplier needed before averaged reducers run."""
+        if not self._distributed_is_initialized():
+            return 1
+
+        training_spec = getattr(getattr(self, "hparams", None), "training_spec", None)
+        data_parallelism = getattr(training_spec, "data_parallelism", None)
+        if data_parallelism in {"DDP", "FSDP"}:
+            return dist.get_world_size(group=self._data_parallel_process_group())
+
+        return 1
+
+    @beartype
+    def _new_loss_accumulators(
+        self, target_names: list[str]
+    ) -> tuple[dict[str, Tensor], Tensor]:
+        """Create detached sum/count accumulators for logging or validation."""
+        return (
+            {
+                col: torch.zeros((), device=self.device, dtype=torch.float64)
+                for col in target_names
+            },
+            torch.zeros((), device=self.device, dtype=torch.float64),
+        )
+
+    @beartype
+    def _accumulate_loss_components(
+        self,
+        sums: dict[str, Tensor],
+        count: Tensor,
+        batch_sums: dict[str, Tensor],
+        batch_count: Tensor,
+    ) -> None:
+        """Accumulate detached local unweighted loss sums and token counts."""
+        for col in batch_sums:
+            sums[col] = sums[col] + batch_sums[col].detach().double()
+        count += batch_count.detach().double()
+
+    @beartype
+    def _finalize_loss_components(
+        self,
+        sums: dict[str, Tensor],
+        count: Tensor,
+        target_names: list[str],
+        label: str,
+        raise_on_empty: bool = True,
+    ) -> tuple[Tensor, dict[str, Tensor]]:
+        """Reduce local loss sums/counts and return weighted token means."""
+        packed = torch.stack([sums[col] for col in target_names] + [count])
+
+        if self._distributed_is_initialized():
+            dist.all_reduce(
+                packed,
+                op=dist.ReduceOp.SUM,
+                group=self._data_parallel_process_group(),
+            )
+
+        n_targets = len(target_names)
+        reduced_sums = dict(zip(target_names, packed[:n_targets]))
+        reduced_count = packed[n_targets]
+
+        if reduced_count.detach().cpu().item() == 0:
+            if raise_on_empty:
+                raise RuntimeError(f"No valid {label} tokens found.")
+
+            losses = {
+                col: torch.zeros((), device=self.device, dtype=torch.float64)
+                for col in target_names
+            }
+            return torch.zeros((), device=self.device, dtype=torch.float64), losses
+
+        losses = {}
+        total = torch.zeros((), device=self.device, dtype=torch.float64)
+        for col in target_names:
+            losses[col] = reduced_sums[col] / reduced_count * self._loss_weight(col)
+            total = total + losses[col]
+        return total, losses
 
     @beartype
     def _copy_model(self):
@@ -1695,7 +1876,7 @@ class TransformerModel(nn.Module):
         """Evaluate validation loss and optional class-share counts."""
 
         model_to_call = ddp_model if ddp_model is not None else self
-        target_names = list(self.target_columns)
+        target_names = self._loss_target_names()
         class_count_columns = list(dict.fromkeys(self.class_share_log_columns))
 
         for col in class_count_columns:
@@ -1719,61 +1900,13 @@ class TransformerModel(nn.Module):
             for col in class_count_columns
         }
 
-        def new_accumulators() -> tuple[dict[str, Tensor], dict[str, Tensor]]:
-            return (
-                {
-                    col: torch.zeros((), device=self.device, dtype=torch.float64)
-                    for col in target_names
-                },
-                {
-                    col: torch.zeros((), device=self.device, dtype=torch.float64)
-                    for col in target_names
-                },
-            )
-
-        def accumulate_components(
-            sums: dict[str, Tensor],
-            counts: dict[str, Tensor],
-            batch_sums: dict[str, Tensor],
-            batch_counts: dict[str, Tensor],
-        ) -> None:
-            for col in batch_sums:
-                sums[col] = sums[col] + batch_sums[col].detach().double()
-                counts[col] = counts[col] + batch_counts[col].detach().double()
-
-        def finalize_components(
-            sums: dict[str, Tensor],
-            counts: dict[str, Tensor],
-            label: str,
-        ) -> tuple[Tensor, dict[str, Tensor]]:
-            packed = torch.stack(
-                [sums[col] for col in target_names]
-                + [counts[col] for col in target_names]
-            )
-
-            if self.hparams.training_spec.distributed:
-                dist.all_reduce(packed, op=dist.ReduceOp.SUM)
-
-            n_targets = len(target_names)
-            reduced_sums = dict(zip(target_names, packed[:n_targets]))
-            reduced_counts = dict(zip(target_names, packed[n_targets:]))
-
-            losses = {}
-            total = torch.zeros((), device=self.device, dtype=torch.float64)
-            for col in target_names:
-                if reduced_counts[col].detach().cpu().item() == 0:
-                    raise RuntimeError(
-                        f"No valid {label} tokens found for target column {col!r}."
-                    )
-                losses[col] = reduced_sums[col] / reduced_counts[col]
-                total = total + losses[col]
-            return total, losses
-
         was_training = model_to_call.training
         model_to_call.eval()
 
         try:
-            total_loss_sums, total_loss_counts = new_accumulators()
+            total_loss_sums, total_loss_count = self._new_loss_accumulators(
+                target_names
+            )
 
             with torch.no_grad():
                 for batch_idx, batch in enumerate(valid_loader):
@@ -1839,9 +1972,9 @@ class TransformerModel(nn.Module):
                             output, targets, valid_mask
                         )
 
-                    accumulate_components(
+                    self._accumulate_loss_components(
                         total_loss_sums,
-                        total_loss_counts,
+                        total_loss_count,
                         loss_sums,
                         token_counts,
                     )
@@ -1852,20 +1985,23 @@ class TransformerModel(nn.Module):
                         self.n_classes,
                     )
 
-            total_loss_global, total_losses_global = finalize_components(
-                total_loss_sums, total_loss_counts, "validation"
+            total_loss_global, total_losses_global = self._finalize_loss_components(
+                total_loss_sums, total_loss_count, target_names, "validation"
             )
 
-            if self.hparams.training_spec.distributed:
+            if self._distributed_is_initialized():
                 for col in class_count_columns:
                     dist.all_reduce(
                         local_class_counts[col],
                         op=dist.ReduceOp.SUM,
+                        group=self._data_parallel_process_group(),
                     )
 
             # Handle one-time baseline loss calculation with the same aggregation semantics.
             if not hasattr(self, "baseline_loss"):
-                baseline_loss_sums, baseline_loss_counts = new_accumulators()
+                baseline_loss_sums, baseline_loss_count = self._new_loss_accumulators(
+                    target_names
+                )
 
                 with torch.no_grad():
                     for batch_idx, batch in enumerate(valid_loader):
@@ -1941,15 +2077,18 @@ class TransformerModel(nn.Module):
                                 targets_for_baseline,
                                 valid_mask,
                             )
-                            accumulate_components(
+                            self._accumulate_loss_components(
                                 baseline_loss_sums,
-                                baseline_loss_counts,
+                                baseline_loss_count,
                                 loss_sums,
                                 token_counts,
                             )
 
-                baseline_loss, baseline_losses = finalize_components(
-                    baseline_loss_sums, baseline_loss_counts, "baseline validation"
+                baseline_loss, baseline_losses = self._finalize_loss_components(
+                    baseline_loss_sums,
+                    baseline_loss_count,
+                    target_names,
+                    "baseline validation",
                 )
                 self.baseline_loss = baseline_loss.detach().cpu().item()
                 self.baseline_losses = {

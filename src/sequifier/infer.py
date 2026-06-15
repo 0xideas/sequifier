@@ -1232,7 +1232,9 @@ class Inferer:
                 self.infer_pure(x_sub, metadata_sub)[0]
                 for x_sub, metadata_sub in zip(x_adjusted, metadata_adjusted)
             ]
-            embeddings = np.concatenate(inference_batch_embeddings, axis=0)[:size]
+            embeddings = np.concatenate(inference_batch_embeddings, axis=0)[
+                : size * self.prediction_length
+            ]
         elif self.inference_model_type == "pt":
             x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
             metadata_adjusted = self.prepare_inference_batches(

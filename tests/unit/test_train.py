@@ -205,6 +205,41 @@ def _all_valid_metadata(batch_size, seq_len, device=None):
     }
 
 
+def _loss_shell_model(
+    target_column_types,
+    *,
+    loss_weights=None,
+    class_weights=None,
+):
+    model = TransformerModel.__new__(TransformerModel)
+    model.target_columns = list(target_column_types)
+    model.target_column_types = dict(target_column_types)
+    model.loss_weights = loss_weights
+    model.device = "cpu"
+    model.criterion = {}
+    model.n_classes = {}
+
+    for col, col_type in target_column_types.items():
+        if col_type == "categorical":
+            weight = None
+            n_classes = 3
+            if class_weights is not None and col in class_weights:
+                col_class_weights = class_weights[col]
+                weight = torch.tensor(col_class_weights, dtype=torch.float32)
+                n_classes = len(col_class_weights)
+            model.criterion[col] = torch.nn.CrossEntropyLoss(
+                reduction="none",
+                weight=weight,
+            )
+            model.n_classes[col] = n_classes
+        elif col_type == "real":
+            model.criterion[col] = torch.nn.MSELoss(reduction="none")
+        else:
+            raise ValueError(col_type)
+
+    return model
+
+
 def test_transformer_model_initialization(model, model_config):
     """Expected model layers."""
     # Check if encoder dicts were created
@@ -557,6 +592,290 @@ def test_calculate_loss_uses_target_columns_for_fallback_mask_inference():
     assert torch.isclose(component_losses["real_target"], torch.tensor(1.0))
 
 
+def test_calculate_local_loss_components_categorical_target_with_padding():
+    model = _loss_shell_model({"cat_col": "categorical"})
+    model.n_classes["cat_col"] = 3
+    logits = torch.tensor(
+        [
+            [[2.0, 0.0, 0.0]],
+            [[0.0, 2.0, 0.0]],
+            [[0.0, 0.0, 2.0]],
+        ]
+    )
+    targets = {"cat_col": torch.tensor([[0, 1, 2]])}
+    valid_mask = torch.tensor([[True, False, True]])
+
+    loss_sums, token_count = TransformerModel._calculate_local_loss_components(
+        model,
+        {"cat_col": logits},
+        targets,
+        valid_mask,
+    )
+    raw_loss = torch.nn.functional.cross_entropy(
+        logits.reshape(-1, 3),
+        targets["cat_col"].T.reshape(-1),
+        reduction="none",
+    )
+
+    assert torch.isclose(loss_sums["cat_col"], raw_loss[[0, 2]].sum())
+    assert torch.equal(token_count, torch.tensor(2))
+
+
+def test_calculate_local_loss_components_real_target_with_padding():
+    model = _loss_shell_model({"real_col": "real"})
+    output = {"real_col": torch.tensor([[[1.0]], [[2.0]], [[4.0]]])}
+    targets = {"real_col": torch.tensor([[0.0, 10.0, 1.0]])}
+    valid_mask = torch.tensor([[True, False, True]])
+
+    loss_sums, token_count = TransformerModel._calculate_local_loss_components(
+        model, output, targets, valid_mask
+    )
+
+    assert torch.isclose(loss_sums["real_col"], torch.tensor(10.0))
+    assert torch.equal(token_count, torch.tensor(2))
+
+
+def test_calculate_training_loss_intersects_target_and_bert_masks():
+    model = _loss_shell_model({"real_col": "real"})
+    output = {"real_col": torch.tensor([[[1.0]], [[2.0]], [[4.0]]])}
+    targets = {"real_col": torch.tensor([[0.0, 10.0, 1.0]])}
+    metadata = {
+        "target_valid_mask": torch.tensor([[True, True, True]]),
+        "bert_mask": torch.tensor([[True, False, True]]),
+    }
+
+    total_loss, component_losses = TransformerModel._calculate_loss(
+        model, output, targets, metadata
+    )
+
+    assert torch.isclose(total_loss, torch.tensor(5.0))
+    assert torch.isclose(component_losses["real_col"], torch.tensor(5.0))
+
+
+def test_calculate_training_loss_applies_unequal_target_loss_weights():
+    model = _loss_shell_model(
+        {"cat_col": "categorical", "real_col": "real"},
+        loss_weights={"cat_col": 0.25, "real_col": 2.0},
+    )
+    model.n_classes["cat_col"] = 3
+    output = {
+        "cat_col": torch.tensor(
+            [
+                [[2.0, 0.0, 0.0]],
+                [[0.0, 2.0, 0.0]],
+            ]
+        ),
+        "real_col": torch.tensor([[[1.0]], [[3.0]]]),
+    }
+    targets = {
+        "cat_col": torch.tensor([[0, 1]]),
+        "real_col": torch.tensor([[0.0, 1.0]]),
+    }
+    metadata = {"target_valid_mask": torch.ones(1, 2, dtype=torch.bool)}
+
+    total_loss, component_losses = TransformerModel._calculate_loss(
+        model, output, targets, metadata
+    )
+    cat_mean = torch.nn.functional.cross_entropy(
+        output["cat_col"].reshape(-1, 3),
+        targets["cat_col"].T.reshape(-1),
+        reduction="mean",
+    )
+    real_mean = torch.nn.functional.mse_loss(
+        output["real_col"].reshape(-1),
+        targets["real_col"].T.reshape(-1),
+        reduction="mean",
+    )
+
+    assert torch.isclose(component_losses["cat_col"], cat_mean * 0.25)
+    assert torch.isclose(component_losses["real_col"], real_mean * 2.0)
+    assert torch.isclose(total_loss, cat_mean * 0.25 + real_mean * 2.0)
+
+
+def test_calculate_local_loss_components_keeps_class_weights_inside_criterion():
+    class_weights = {"cat_col": [1.0, 4.0, 1.0]}
+    model = _loss_shell_model({"cat_col": "categorical"}, class_weights=class_weights)
+    logits = torch.tensor(
+        [
+            [[2.0, 0.0, 0.0]],
+            [[2.0, 0.0, 0.0]],
+        ]
+    )
+    targets = {"cat_col": torch.tensor([[0, 1]])}
+    valid_mask = torch.ones(1, 2, dtype=torch.bool)
+
+    loss_sums, token_count = TransformerModel._calculate_local_loss_components(
+        model,
+        {"cat_col": logits},
+        targets,
+        valid_mask,
+    )
+    expected = torch.nn.functional.cross_entropy(
+        logits.reshape(-1, 3),
+        targets["cat_col"].T.reshape(-1),
+        reduction="none",
+        weight=torch.tensor(class_weights["cat_col"]),
+    ).sum()
+
+    assert torch.isclose(loss_sums["cat_col"], expected)
+    assert torch.equal(token_count, torch.tensor(2))
+
+
+def test_calculate_local_loss_components_zero_selected_tokens_stays_connected():
+    model = _loss_shell_model({"real_col": "real"})
+    output = {"real_col": torch.ones(3, 1, 1, requires_grad=True)}
+    targets = {"real_col": torch.zeros(1, 3)}
+    valid_mask = torch.zeros(1, 3, dtype=torch.bool)
+
+    loss_sums, token_count = TransformerModel._calculate_local_loss_components(
+        model,
+        output,
+        targets,
+        valid_mask,
+    )
+    loss_sums["real_col"].backward()
+
+    assert torch.equal(token_count, torch.tensor(0))
+    assert torch.equal(loss_sums["real_col"].detach(), torch.tensor(0.0))
+    assert torch.equal(output["real_col"].grad, torch.zeros_like(output["real_col"]))
+
+
+def test_calculate_local_loss_components_raises_on_output_mask_mismatch():
+    model = _loss_shell_model({"real_col": "real"})
+    output = {"real_col": torch.zeros(3, 1, 1)}
+    targets = {"real_col": torch.zeros(1, 3)}
+    valid_mask = torch.ones(1, 2, dtype=torch.bool)
+
+    with pytest.raises(RuntimeError, match="Loss/mask size mismatch"):
+        TransformerModel._calculate_local_loss_components(
+            model,
+            output,
+            targets,
+            valid_mask,
+        )
+
+
+def test_training_and_validation_loss_finalization_share_weighted_sum_count_semantics():
+    model = _loss_shell_model(
+        {"cat_col": "categorical", "real_col": "real"},
+        loss_weights={"cat_col": 0.5, "real_col": 3.0},
+    )
+    model.n_classes["cat_col"] = 3
+    output = {
+        "cat_col": torch.tensor(
+            [
+                [[1.0, 0.0, 0.0]],
+                [[0.0, 1.0, 0.0]],
+                [[0.0, 0.0, 1.0]],
+            ]
+        ),
+        "real_col": torch.tensor([[[1.0]], [[2.0]], [[3.0]]]),
+    }
+    targets = {
+        "cat_col": torch.tensor([[0, 1, 2]]),
+        "real_col": torch.tensor([[0.0, 0.0, 0.0]]),
+    }
+    valid_mask = torch.tensor([[True, False, True]])
+    metadata = {"target_valid_mask": valid_mask}
+
+    training_loss, training_components = TransformerModel._calculate_loss(
+        model, output, targets, metadata
+    )
+    sums, count = TransformerModel._calculate_loss_components(
+        model, output, targets, valid_mask
+    )
+    finalized_loss, finalized_components = TransformerModel._finalize_loss_components(
+        model,
+        sums,
+        count.double(),
+        ["cat_col", "real_col"],
+        "test",
+    )
+
+    assert torch.isclose(training_loss.double(), finalized_loss)
+    assert torch.isclose(
+        training_components["cat_col"].double(), finalized_components["cat_col"]
+    )
+    assert torch.isclose(
+        training_components["real_col"].double(), finalized_components["real_col"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("data_parallelism", "expected"),
+    [
+        ("DDP", 7),
+        ("FSDP", 7),
+    ],
+)
+def test_gradient_reduction_factor_uses_active_world_size(
+    data_parallelism,
+    expected,
+    monkeypatch,
+):
+    model = _loss_shell_model({"real_col": "real"})
+    model.hparams = SimpleNamespace(
+        training_spec=SimpleNamespace(data_parallelism=data_parallelism)
+    )
+    group = object()
+    model._data_parallel_process_group = lambda: group
+
+    monkeypatch.setattr("sequifier.train.dist.is_available", lambda: True)
+    monkeypatch.setattr("sequifier.train.dist.is_initialized", lambda: True)
+
+    def fake_get_world_size(group=None):
+        assert group is model._data_parallel_process_group()
+        return 7
+
+    monkeypatch.setattr("sequifier.train.dist.get_world_size", fake_get_world_size)
+
+    assert TransformerModel._gradient_reduction_factor(model) == expected
+
+
+def test_calculate_loss_requires_all_configured_targets():
+    model = _loss_shell_model(
+        {"cat_col": "categorical", "real_col": "real"},
+        loss_weights={"cat_col": 1.0, "real_col": 1.0},
+    )
+    output = {
+        "cat_col": torch.zeros(1, 1, 3),
+        "real_col": torch.zeros(1, 1, 1),
+    }
+    targets = {"cat_col": torch.zeros(1, 1, dtype=torch.long)}
+    metadata = {"target_valid_mask": torch.ones(1, 1, dtype=torch.bool)}
+
+    with pytest.raises(RuntimeError, match="Missing target columns: \\['real_col'\\]"):
+        TransformerModel._calculate_loss(model, output, targets, metadata)
+
+
+def test_training_loss_enables_fsdp_token_weighting(
+    monkeypatch,
+):
+    model = _loss_shell_model({"real_col": "real"})
+    model.hparams = SimpleNamespace(
+        training_spec=SimpleNamespace(data_parallelism="FSDP")
+    )
+    output = {"real_col": torch.zeros(1, 1, 1)}
+    targets = {"real_col": torch.ones(1, 1)}
+    metadata = {"target_valid_mask": torch.ones(1, 1, dtype=torch.bool)}
+
+    monkeypatch.setattr("sequifier.train.dist.is_available", lambda: True)
+    monkeypatch.setattr("sequifier.train.dist.is_initialized", lambda: True)
+    monkeypatch.setattr(
+        "sequifier.train.dist.get_world_size",
+        lambda group=None: 2,
+    )
+
+    def fake_all_reduce(tensor, op=None, group=None):
+        tensor.fill_(2)
+
+    monkeypatch.setattr("sequifier.train.dist.all_reduce", fake_all_reduce)
+
+    loss, _ = TransformerModel._calculate_loss(model, output, targets, metadata)
+
+    assert torch.isclose(loss, torch.tensor(1.0))
+
+
 def test_evaluation_loss_mask_intersects_target_bert_and_sample_masks():
     metadata = {
         "target_valid_mask": torch.tensor(
@@ -752,13 +1071,13 @@ def test_calculate_loss_components_aggregate_by_token_count():
     model.criterion = {"real_col": torch.nn.MSELoss(reduction="none")}
     model.loss_weights = {"real_col": 1.0}
 
-    first_sums, first_counts = TransformerModel._calculate_loss_components(
+    first_sums, first_count = TransformerModel._calculate_loss_components(
         model,
         {"real_col": torch.zeros(1, 1, 1)},
         {"real_col": torch.tensor([[10.0]])},
         torch.ones(1, 1, dtype=torch.bool),
     )
-    second_sums, second_counts = TransformerModel._calculate_loss_components(
+    second_sums, second_count = TransformerModel._calculate_loss_components(
         model,
         {"real_col": torch.zeros(100, 1, 1)},
         {"real_col": torch.ones(1, 100)},
@@ -766,7 +1085,7 @@ def test_calculate_loss_components_aggregate_by_token_count():
     )
 
     aggregate = (first_sums["real_col"] + second_sums["real_col"]) / (
-        first_counts["real_col"] + second_counts["real_col"]
+        first_count + second_count
     )
 
     assert torch.isclose(aggregate, torch.tensor(200.0 / 101.0, dtype=torch.float64))
@@ -901,6 +1220,106 @@ def test_calculate_loss_zero_token_training_batch_is_differentiable():
     assert torch.equal(total_loss.detach(), torch.tensor(0.0))
     assert torch.equal(component_losses["real_col"].detach(), torch.tensor(0.0))
     assert torch.equal(output["real_col"].grad, torch.zeros_like(output["real_col"]))
+
+
+def _train_epoch_test_batch(model, target_valid_mask):
+    seq_len = model.window_view.context_length
+    return SequifierBatch(
+        inputs={
+            "cat_col": torch.ones(1, seq_len, dtype=torch.long),
+            "real_col": torch.ones(1, seq_len, dtype=torch.float32),
+        },
+        targets={
+            "cat_col": torch.ones(1, seq_len, dtype=torch.long),
+            "real_col": torch.ones(1, seq_len, dtype=torch.float32),
+        },
+        metadata={
+            "attention_valid_mask": torch.ones(1, seq_len, dtype=torch.bool),
+            "target_valid_mask": target_valid_mask,
+        },
+    )
+
+
+def test_train_epoch_skips_optimizer_and_batch_scheduler_for_empty_accumulation_window(
+    model,
+):
+    model.rank = 0
+    model.log_interval = 2
+    model.accumulation_steps = 2
+    model.scheduler_step_on = "batch"
+    model.start_batch = 0
+    model.optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=0.01,
+        weight_decay=0.1,
+    )
+    model.scheduler = torch.optim.lr_scheduler.StepLR(
+        model.optimizer,
+        step_size=1,
+        gamma=0.1,
+    )
+    seq_len = model.window_view.context_length
+    empty_batch = _train_epoch_test_batch(
+        model,
+        torch.zeros(1, seq_len, dtype=torch.bool),
+    )
+    before = {name: param.detach().clone() for name, param in model.named_parameters()}
+    lr_before = model.scheduler.get_last_lr()[0]
+
+    TransformerModel._train_epoch(
+        model,
+        DataLoader([empty_batch, empty_batch], batch_size=None),
+        DataLoader([], batch_size=None),
+        epoch=1,
+    )
+
+    after = dict(model.named_parameters())
+    assert all(torch.equal(before[name], after[name]) for name in before)
+    assert len(model.optimizer.state) == 0
+    assert model.scheduler.get_last_lr()[0] == lr_before
+
+
+def test_train_epoch_steps_once_for_mixed_empty_and_nonempty_accumulation_window(
+    model,
+):
+    model.rank = 0
+    model.log_interval = 2
+    model.accumulation_steps = 2
+    model.scheduler_step_on = "batch"
+    model.start_batch = 0
+    model.optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=0.01,
+        weight_decay=0.1,
+    )
+    model.scheduler = torch.optim.lr_scheduler.StepLR(
+        model.optimizer,
+        step_size=1,
+        gamma=0.1,
+    )
+    seq_len = model.window_view.context_length
+    empty_batch = _train_epoch_test_batch(
+        model,
+        torch.zeros(1, seq_len, dtype=torch.bool),
+    )
+    nonempty_batch = _train_epoch_test_batch(
+        model,
+        torch.ones(1, seq_len, dtype=torch.bool),
+    )
+    before = {name: param.detach().clone() for name, param in model.named_parameters()}
+
+    TransformerModel._train_epoch(
+        model,
+        DataLoader([empty_batch, nonempty_batch], batch_size=None),
+        DataLoader([], batch_size=None),
+        epoch=1,
+    )
+
+    after = dict(model.named_parameters())
+    assert any(not torch.equal(before[name], after[name]) for name in before)
+    assert len(model.optimizer.state) > 0
+    assert model.scheduler.last_epoch == 1
+    assert model.scheduler.get_last_lr()[0] == pytest.approx(0.001)
 
 
 def test_padding_keys_are_masked(bert_model):

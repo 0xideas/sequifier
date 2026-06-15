@@ -1,5 +1,5 @@
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import polars as pl
@@ -730,3 +730,53 @@ def test_get_probs_preds_from_dict_ignores_unselected_columns(ar_config, ar_infe
 
         assert "target_col" in first_call_args
         assert "ignored_col" not in first_call_args
+
+
+def test_adjust_and_infer_embedding_onnx_truncation():
+    """
+    Catches the truncation bug where ONNX embeddings are sliced by `[:size]`
+    instead of `[:size * self.prediction_length]`.
+    """
+    # 1. Mock the Inferer instance to isolate the target method
+    #    We avoid actual __init__ to bypass ONNX runtime initialization.
+    inferer_mock = MagicMock(spec=Inferer)
+    inferer_mock.inference_model_type = "onnx"
+    inferer_mock.inference_batch_size = 2
+
+    # Set prediction_length > 1 to expose the bug (e.g., BERT objective)
+    inferer_mock.prediction_length = 5
+    embedding_dim = 16
+
+    # 2. Mock `prepare_inference_batches` to pass our dummy inputs straight through
+    inferer_mock.prepare_inference_batches.side_effect = (
+        lambda data, pad_to_batch_size: [data]
+    )
+
+    # 3. Mock `infer_pure` to return the shape an ONNX model would actually return.
+    #    `infer_pure` flattens the output to (batch_size * prediction_length, dim).
+    #    For a batch size of 2 and prediction length of 5, it returns (10, 16).
+    flattened_sequence_length = (
+        inferer_mock.inference_batch_size * inferer_mock.prediction_length
+    )
+    dummy_onnx_output = np.ones((flattened_sequence_length, embedding_dim))
+    inferer_mock.infer_pure.return_value = [dummy_onnx_output]
+
+    # 4. Construct dummy inputs
+    size = 2
+    x = {"feature_col": np.zeros((size, 10))}  # 2 sequences, context_length = 10
+    metadata = {"attention_valid_mask": np.ones((size, 10))}
+
+    # 5. Execute the method under test
+    # Passing inferer_mock as `self` to the unbound class method.
+    embeddings = Inferer.adjust_and_infer_embedding(inferer_mock, x, size, metadata)
+
+    # 6. Assert the bug is fixed
+    expected_rows = size * inferer_mock.prediction_length
+
+    assert embeddings.shape[0] == expected_rows, (
+        f"ONNX Embedding truncation bug detected! "
+        f"Expected {expected_rows} rows (size * prediction_length), "
+        f"but got {embeddings.shape[0]} rows. "
+        f"Check the slice at the end of np.concatenate in adjust_and_infer_embedding."
+    )
+    assert embeddings.shape[1] == embedding_dim
