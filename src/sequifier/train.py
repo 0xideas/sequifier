@@ -21,7 +21,7 @@ import torch.multiprocessing as mp  # noqa: E402
 from beartype import beartype  # noqa: E402
 from packaging import version  # noqa: E402
 from torch import Tensor, nn  # noqa: E402
-from torch.amp import GradScaler  # noqa: E402
+from torch.amp.grad_scaler import GradScaler  # noqa: E402
 from torch.distributed.checkpoint.state_dict import (  # noqa: E402
     StateDictOptions,
     get_model_state_dict,
@@ -38,9 +38,9 @@ if version.parse(torch.__version__) >= version.parse("2.6.0"):
     )
 else:
     from torch.distributed._composable.fsdp import (  # noqa: E402
-        MixedPrecisionPolicy,
-        OffloadPolicy,
-        fully_shard,
+        MixedPrecisionPolicy,  # type: ignore
+        OffloadPolicy,  # type: ignore
+        fully_shard,  # type: ignore
     )
 
 from torch.distributed.device_mesh import init_device_mesh  # noqa: E402
