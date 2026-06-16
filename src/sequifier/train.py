@@ -1439,7 +1439,19 @@ class TransformerModel(nn.Module):
                         global_token_count,
                     ) = self._calculate_training_loss(output, targets, metadata)
 
-                self.scaler.scale(loss).backward()
+                if self.accumulation_steps is None:
+                    accumulation_divisor = 1
+                else:
+                    window_start = (
+                        batch_count // self.accumulation_steps
+                    ) * self.accumulation_steps
+                    accumulation_divisor = min(
+                        self.accumulation_steps,
+                        num_batches - window_start,
+                    )
+
+                backward_loss = loss / accumulation_divisor
+                self.scaler.scale(backward_loss).backward()
                 self._accumulate_loss_components(
                     train_loss_sums,
                     train_token_count,
@@ -1507,7 +1519,7 @@ class TransformerModel(nn.Module):
                         start_time = time.time()
                     self._check_and_terminate()
 
-                del data, targets, output, loss, backward_components
+                del data, targets, output, loss, backward_loss, backward_components
 
                 if self.scheduler_step_on == "batch" and optimizer_step_performed:
                     if (

@@ -224,7 +224,7 @@ def test_distributed_sharding(mock_ws, mock_rank, mock_init, mock_config, datase
 
 
 def test_exact_strategy_uneven_files_exception(mock_config, tmp_path):
-    """FSDP exact mode rejects uneven ranks."""
+    """Exact distributed mode rejects uneven ranks."""
     data_dir = tmp_path / "uneven_parquet_data"
     data_dir.mkdir()
 

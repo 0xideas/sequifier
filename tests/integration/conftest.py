@@ -2,6 +2,7 @@ import copy
 import os
 import shutil
 import subprocess
+import sys
 import time
 
 import polars as pl
@@ -326,8 +327,6 @@ def format_configs_locally(
     inference_config_path_lazy,
     hp_search_configs,
 ):
-    from sys import platform
-
     config_paths = [
         preprocessing_config_path_cat,
         preprocessing_config_path_cat_multitarget,
@@ -371,7 +370,7 @@ def format_configs_locally(
     cuda_available = torch.cuda.is_available()
 
     for config_path in config_paths:
-        if str(platform).startswith("win") or cuda_available:
+        if sys.platform.startswith("win") or cuda_available:
             with open(config_path, "r") as f:
                 config = yaml.safe_load(f)
 
@@ -380,7 +379,7 @@ def format_configs_locally(
 
             assert config is not None, config_path
 
-            if platform == "windows":
+            if sys.platform.startswith("win"):
                 config = {
                     attr: reformat_parameter(attr, param, "linux->local")
                     for attr, param in config.items()
@@ -397,7 +396,7 @@ def format_configs_locally(
 
     yield
 
-    if str(platform).startswith("win") or cuda_available:
+    if sys.platform.startswith("win") or cuda_available:
         for config_path in config_paths:
             with open(config_path, "w") as f:
                 yaml.dump(

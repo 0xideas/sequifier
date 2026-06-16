@@ -152,7 +152,10 @@ def load_train_config(
 
         config_values["id_maps"] = metadata_config["id_maps"]
         config_values["special_token_ids"] = validate_special_token_ids(
-            metadata_config["special_token_ids"],
+            metadata_config.get(
+                "special_token_ids",
+                SPECIAL_TOKEN_IDS.ids_by_label,
+            ),
             source=f"metadata config '{metadata_config_path}'",
         )
 

@@ -1,5 +1,6 @@
 import os
 import shutil
+import sys
 import time
 
 import pytest
@@ -125,9 +126,7 @@ def adapt_configs(config_strings):
     with open(infer_config_path, "w") as f:
         f.write(infer_config_string)
 
-    from sys import platform
-
-    if platform == "windows":
+    if sys.platform.startswith("win"):
         for config_path in [
             preprocess_config_path,
             train_config_path,
@@ -165,7 +164,7 @@ def test_make(adapt_configs):
         else:
             assert False, f"Training for 'sequifier train --config-path {test_project_name}/configs/train.yaml' was unsuccessful"
     else:
-        assert False, f"Preprocessing for 'sequifier preprocess --config-path {test_project_name}/configs/train.yaml' was unsuccessful"
+        assert False, f"Preprocessing for 'sequifier preprocess --config-path {test_project_name}/configs/preprocess.yaml' was unsuccessful"
 
     # clean up, only if tests didn't fail
     shutil.rmtree(test_project_name)

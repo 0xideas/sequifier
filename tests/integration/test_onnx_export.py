@@ -2,6 +2,7 @@ import os
 
 import numpy as np
 import onnxruntime
+import torch
 
 from sequifier.config.train_config import ModelSpecModel, TrainingSpecModel, TrainModel
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
@@ -84,6 +85,7 @@ def test_bert_onnx_export_accepts_attention_valid_mask(tmp_path):
         ),
     )
     model = TransformerModel(config)
+    model.eval()
 
     model._export_model(model, "best", 1)
     export_path = os.path.join(
@@ -195,15 +197,51 @@ def test_onnx_export_preserves_feature_name_order(tmp_path):
 
     assert input_names == ["cat2_in", "cat10_in", "attention_valid_mask"]
 
-    outputs = session.run(
-        None,
-        {
-            "cat2_in": np.array([[3, 4, 5, 6], [6, 5, 4, 3]], dtype=np.int64),
-            "cat10_in": np.array([[3, 4, 5, 3], [5, 4, 3, 5]], dtype=np.int64),
-            "attention_valid_mask": np.ones(
-                (inference_batch_size, context_length), dtype=np.bool_
-            ),
-        },
-    )
+    ort_inputs = {
+        "cat2_in": np.array([[3, 4, 5, 6], [6, 5, 4, 3]], dtype=np.int64),
+        "cat10_in": np.array([[3, 4, 5, 3], [5, 4, 3, 5]], dtype=np.int64),
+        "attention_valid_mask": np.ones(
+            (inference_batch_size, context_length), dtype=np.bool_
+        ),
+    }
+    outputs = session.run(None, ort_inputs)
 
     assert outputs[0].shape == (1, inference_batch_size, config.n_classes["cat2"])
+
+    def assert_onnx_matches_torch(onnx_inputs):
+        torch_inputs_for_case = {
+            "cat2": torch.tensor(onnx_inputs["cat2_in"], dtype=torch.long),
+            "cat10": torch.tensor(onnx_inputs["cat10_in"], dtype=torch.long),
+        }
+        torch_metadata_for_case = {
+            "attention_valid_mask": torch.tensor(
+                onnx_inputs["attention_valid_mask"], dtype=torch.bool
+            )
+        }
+        with torch.no_grad():
+            torch_outputs = model(torch_inputs_for_case, torch_metadata_for_case)
+
+        onnx_outputs = session.run(None, onnx_inputs)
+        np.testing.assert_allclose(
+            onnx_outputs[0],
+            torch_outputs["cat2"].detach().numpy(),
+            rtol=1e-4,
+            atol=1e-5,
+        )
+        return onnx_outputs[0]
+
+    base_outputs = assert_onnx_matches_torch(ort_inputs)
+
+    cat2_changed_inputs = {
+        **ort_inputs,
+        "cat2_in": np.array([[6, 6, 5, 4], [3, 3, 4, 5]], dtype=np.int64),
+    }
+    cat2_changed_outputs = assert_onnx_matches_torch(cat2_changed_inputs)
+    assert not np.allclose(base_outputs, cat2_changed_outputs, rtol=1e-5, atol=1e-6)
+
+    cat10_changed_inputs = {
+        **ort_inputs,
+        "cat10_in": np.array([[5, 5, 4, 3], [3, 3, 5, 4]], dtype=np.int64),
+    }
+    cat10_changed_outputs = assert_onnx_matches_torch(cat10_changed_inputs)
+    assert not np.allclose(base_outputs, cat10_changed_outputs, rtol=1e-5, atol=1e-6)

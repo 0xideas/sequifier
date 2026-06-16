@@ -74,7 +74,7 @@ def test_sample_with_cumsum(mock_rand):
     sampled_from_log_probs = sample_with_cumsum(log_probs, is_log_probs=True)
     np.testing.assert_array_equal(sampled_from_log_probs, [0, 1])
 
-    # Path 2: Test with logits=False (pre-normalized probabilities)
+    # Path 2: Test with is_log_probs=False (pre-normalized probabilities)
     pure_probs = np.array([[0.1, 0.9], [0.8, 0.2]])
     sampled_from_probs = sample_with_cumsum(pure_probs, is_log_probs=False)
     np.testing.assert_array_equal(sampled_from_probs, [0, 1])
@@ -433,9 +433,10 @@ def test_calculate_item_positions_causal_uses_future_window_tail():
     np.testing.assert_array_equal(positions, [13, 14, 23, 24])
 
 
-def _bert_inference_config(tmp_path, model_type="generative"):
+def _bert_inference_config(tmp_path, model_type="generative", input_columns=None):
     data_path = tmp_path / "data.parquet"
     data_path.touch()
+    input_columns = input_columns or ["target_col"]
 
     return InfererModel(
         project_root=str(tmp_path),
@@ -444,11 +445,11 @@ def _bert_inference_config(tmp_path, model_type="generative"):
         model_type=model_type,
         training_objective="bert",
         data_path=str(data_path),
-        input_columns=["target_col"],
-        categorical_columns=["target_col"],
+        input_columns=input_columns,
+        categorical_columns=input_columns,
         real_columns=[],
         target_columns=["target_col"],
-        column_types={"target_col": "int64"},
+        column_types={col: "int64" for col in input_columns},
         target_column_types={"target_col": "categorical"},
         seed=42,
         device="cpu",
@@ -485,15 +486,15 @@ def _bert_preprocessed_frame():
 def _bert_preprocessed_frame_out_of_order():
     return pl.DataFrame(
         {
-            "sequenceId": [2, 1],
-            "subsequenceId": [0, 0],
-            "startItemPosition": [200, 100],
-            "leftPadLength": [1, 2],
-            "inputCol": ["target_col", "target_col"],
-            "3": [0, 0],
-            "2": [3, 0],
-            "1": [4, 3],
-            "0": [3, 4],
+            "sequenceId": [2, 2, 1, 1],
+            "subsequenceId": [0, 0, 0, 0],
+            "startItemPosition": [200, 200, 100, 100],
+            "leftPadLength": [1, 1, 2, 2],
+            "inputCol": ["aux_col", "target_col", "aux_col", "target_col"],
+            "3": [9, 0, 8, 0],
+            "2": [9, 3, 8, 0],
+            "1": [9, 4, 8, 3],
+            "0": [9, 3, 8, 4],
         }
     )
 
@@ -563,7 +564,7 @@ def test_bert_generative_inference_filters_left_padded_positions(tmp_path):
 
 
 def test_bert_generative_inference_uses_dataframe_order_for_padding_masks(tmp_path):
-    config = _bert_inference_config(tmp_path)
+    config = _bert_inference_config(tmp_path, input_columns=["aux_col", "target_col"])
     data = _bert_preprocessed_frame_out_of_order()
     written = []
 
@@ -580,7 +581,11 @@ def test_bert_generative_inference_uses_dataframe_order_for_padding_masks(tmp_pa
         "sequifier.infer.get_probs_preds_from_df", return_value=(None, preds)
     ), patch("sequifier.infer.write_data", side_effect=capture_write):
         infer_generative(
-            config, inferer, "bert-model", [data], {"target_col": torch.int64}
+            config,
+            inferer,
+            "bert-model",
+            [data],
+            {"target_col": torch.int64, "aux_col": torch.int64},
         )
 
     predictions = next(frame for path, frame, _ in written if "predictions" in path)

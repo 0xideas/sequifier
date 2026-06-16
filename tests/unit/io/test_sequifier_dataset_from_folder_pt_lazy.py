@@ -208,11 +208,24 @@ def test_distributed_sharding(
 
 @patch("sequifier.io.sequifier_dataset_from_folder_pt_lazy.get_worker_info")
 def test_dataloader_worker_sharding_continuous_boundaries(
-    mock_worker_info, mock_config, dataset_path, mock_torch_load
+    mock_worker_info, mock_config, tmp_path
 ):
-    """Worker file boundaries for continuous streaming."""
+    """Worker boundaries can start and stop inside PT files."""
+    data_dir = tmp_path / "data_uneven_worker"
+    data_dir.mkdir()
+    file_specs = [
+        ("file1.pt", 7, 0),
+        ("file2.pt", 11, 100),
+        ("file3.pt", 13, 200),
+        ("file4.pt", 9, 300),
+    ]
+    metadata = _folder_metadata(
+        sum(samples for _, samples, _ in file_specs),
+        [{"path": path, "samples": samples} for path, samples, _ in file_specs],
+    )
+    with open(data_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f)
 
-    # Simulate being DataLoader worker ID 1 out of 2 total workers
     mock_info = MagicMock()
     mock_info.id = 1
     mock_info.num_workers = 2
@@ -220,22 +233,63 @@ def test_dataloader_worker_sharding_continuous_boundaries(
 
     mock_config.training_spec.num_workers = 2
 
-    dataset = SequifierDatasetFromFolderPtLazy(dataset_path, mock_config, shuffle=False)
+    file_offsets = {path: (samples, offset) for path, samples, offset in file_specs}
 
-    # Consume the generator for THIS specific worker
-    batches = list(dataset)
+    def load_uneven_file(path, map_location, weights_only):
+        file_name = path.split("/")[-1]
+        samples, offset = file_offsets[file_name]
+        values = torch.arange(offset, offset + samples * STORED_WIDTH).reshape(
+            samples, STORED_WIDTH
+        )
+        return (
+            {"col1": values, "tgt1": values.clone()},
+            None,
+            None,
+            None,
+            torch.zeros(samples, dtype=torch.int64),
+        )
 
-    # NEW LOGIC: Total samples = 40.
-    # Worker 0 boundary: samples 0 to 20 (overlaps file1.pt, file2.pt)
-    # Worker 1 boundary: samples 20 to 40 (overlaps file3.pt, file4.pt)
-    # Since we are testing Worker 1, it should yield 20 samples -> 4 batches
+    with patch("torch.load", side_effect=load_uneven_file) as mock_load:
+        dataset = SequifierDatasetFromFolderPtLazy(
+            str(data_dir), mock_config, shuffle=False
+        )
+        batches = list(dataset)
+
     assert len(batches) == 4
-    assert mock_torch_load.call_count == 2
+    assert mock_load.call_count == 2
 
-    loaded_files = [call.args[0] for call in mock_torch_load.call_args_list]
+    loaded_files = [call.args[0] for call in mock_load.call_args_list]
     assert any("file3.pt" in f for f in loaded_files)
     assert any("file4.pt" in f for f in loaded_files)
     assert not any("file1.pt" in f for f in loaded_files)
+    assert not any("file2.pt" in f for f in loaded_files)
+
+    sample_ids = []
+    for batch in batches:
+        sample_ids.extend(batch.inputs["col1"][:, 0].tolist())
+
+    assert sample_ids == [
+        200 + 2 * STORED_WIDTH,
+        200 + 3 * STORED_WIDTH,
+        200 + 4 * STORED_WIDTH,
+        200 + 5 * STORED_WIDTH,
+        200 + 6 * STORED_WIDTH,
+        200 + 7 * STORED_WIDTH,
+        200 + 8 * STORED_WIDTH,
+        200 + 9 * STORED_WIDTH,
+        200 + 10 * STORED_WIDTH,
+        200 + 11 * STORED_WIDTH,
+        200 + 12 * STORED_WIDTH,
+        300,
+        300 + STORED_WIDTH,
+        300 + 2 * STORED_WIDTH,
+        300 + 3 * STORED_WIDTH,
+        300 + 4 * STORED_WIDTH,
+        300 + 5 * STORED_WIDTH,
+        300 + 6 * STORED_WIDTH,
+        300 + 7 * STORED_WIDTH,
+        300 + 8 * STORED_WIDTH,
+    ]
 
 
 @patch("torch.distributed.is_initialized", return_value=True)

@@ -240,6 +240,28 @@ def _loss_shell_model(
     return model
 
 
+class _IdentityScaler:
+    def scale(self, loss):
+        return loss
+
+    def unscale_(self, optimizer):
+        return None
+
+    def step(self, optimizer):
+        optimizer.step()
+
+    def update(self):
+        return None
+
+
+class _NoopLogger:
+    def info(self, *args, **kwargs):
+        return None
+
+    def warning(self, *args, **kwargs):
+        return None
+
+
 def test_transformer_model_initialization(model, model_config):
     """Expected model layers."""
     # Check if encoder dicts were created
@@ -357,7 +379,6 @@ def test_load_train_config_defaults_missing_metadata_special_token_ids(
                 "column_types": config_values["column_types"],
                 "n_classes": config_values["n_classes"],
                 "id_maps": config_values["id_maps"],
-                "special_token_ids": {"[unknown]": 0, "[other]": 1, "[mask]": 2},
             }
         )
     )
@@ -855,25 +876,36 @@ def test_training_loss_enables_fsdp_token_weighting(
     model.hparams = SimpleNamespace(
         training_spec=SimpleNamespace(data_parallelism="FSDP")
     )
-    output = {"real_col": torch.zeros(1, 1, 1)}
+    output = {"real_col": torch.zeros(1, 1, 1, requires_grad=True)}
     targets = {"real_col": torch.ones(1, 1)}
     metadata = {"target_valid_mask": torch.ones(1, 1, dtype=torch.bool)}
+    process_group = object()
+    model._data_parallel_process_group = lambda: process_group
 
     monkeypatch.setattr("sequifier.train.dist.is_available", lambda: True)
     monkeypatch.setattr("sequifier.train.dist.is_initialized", lambda: True)
-    monkeypatch.setattr(
-        "sequifier.train.dist.get_world_size",
-        lambda group=None: 2,
-    )
+
+    def fake_get_world_size(group=None):
+        assert group is process_group
+        return 2
+
+    monkeypatch.setattr("sequifier.train.dist.get_world_size", fake_get_world_size)
+
+    reduce_calls = []
 
     def fake_all_reduce(tensor, op=None, group=None):
-        tensor.fill_(2)
+        reduce_calls.append((tensor.detach().clone(), op, group))
+        tensor.fill_(4)
 
     monkeypatch.setattr("sequifier.train.dist.all_reduce", fake_all_reduce)
 
     loss, _ = TransformerModel._calculate_loss(model, output, targets, metadata)
+    loss.backward()
 
-    assert torch.isclose(loss, torch.tensor(1.0))
+    assert reduce_calls
+    assert reduce_calls[0][2] is process_group
+    assert torch.isclose(loss, torch.tensor(0.5))
+    assert torch.allclose(output["real_col"].grad, torch.tensor([[[-1.0]]]))
 
 
 def test_evaluation_loss_mask_intersects_target_bert_and_sample_masks():
@@ -1320,6 +1352,71 @@ def test_train_epoch_steps_once_for_mixed_empty_and_nonempty_accumulation_window
     assert len(model.optimizer.state) > 0
     assert model.scheduler.last_epoch == 1
     assert model.scheduler.get_last_lr()[0] == pytest.approx(0.001)
+
+
+def test_train_epoch_divides_backward_loss_by_accumulation_steps(model, monkeypatch):
+    model.rank = 0
+    model.log_interval = 100
+    model.accumulation_steps = 2
+    model.scheduler_step_on = "batch"
+    model.start_batch = 0
+    model.scaler = _IdentityScaler()
+    model.logger = _NoopLogger()
+    model.save_latest_interval_minutes = None
+    model.save_batch_interval_minutes = None
+    model.save_batch_interval_minutes_val_loss = False
+    model.last_latest_save_time = 0.0
+    model.last_batch_save_time = 0.0
+    tracked_param = next(model.parameters())
+    tracked_value_before = tracked_param.detach().reshape(-1)[0].clone()
+    model.optimizer = torch.optim.SGD([tracked_param], lr=0.1)
+    model.scheduler = torch.optim.lr_scheduler.StepLR(
+        model.optimizer,
+        step_size=1,
+        gamma=0.1,
+    )
+    coefficients = iter([0.2, 0.4])
+
+    def fake_forward(data, metadata=None, return_logits=True):
+        return {}
+
+    def fake_calculate_training_loss(output, targets, metadata):
+        coefficient = next(coefficients)
+        loss = tracked_param.reshape(-1)[0] * coefficient
+        loss_sums = {
+            target_name: loss.detach()
+            for target_name in model._loss_target_names(targets)
+        }
+        count = torch.tensor(1, dtype=torch.int64)
+        return loss, {}, loss_sums, count, count
+
+    monkeypatch.setattr(model, "forward", fake_forward)
+    monkeypatch.setattr(
+        model,
+        "_calculate_training_loss",
+        fake_calculate_training_loss,
+    )
+
+    seq_len = model.window_view.context_length
+    batch = _train_epoch_test_batch(
+        model,
+        torch.ones(1, seq_len, dtype=torch.bool),
+    )
+
+    TransformerModel._train_epoch(
+        model,
+        DataLoader([batch, batch], batch_size=None),
+        DataLoader([], batch_size=None),
+        epoch=1,
+    )
+
+    tracked_value_after = tracked_param.detach().reshape(-1)[0]
+
+    assert torch.allclose(
+        tracked_value_after,
+        tracked_value_before - torch.tensor(0.03),
+        atol=1e-6,
+    )
 
 
 def test_padding_keys_are_masked(bert_model):

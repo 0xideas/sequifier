@@ -174,7 +174,7 @@ def _single_process_real_update(seq_lens, selected_counts, target_values, lr):
     return model.param.detach().clone()
 
 
-def _single_process_accumulated_real_update(microbatches, lr):
+def _single_process_accumulated_real_update(microbatches, lr, accumulation_steps):
     model = _TinyRealModel()
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     shell = _loss_shell({"real_col": "real"}, device="cpu")
@@ -190,12 +190,29 @@ def _single_process_accumulated_real_update(microbatches, lr):
             targets,
             metadata,
         )
-        loss.backward()
+        (loss / accumulation_steps).backward()
     optimizer.step()
     return model.param.detach().clone()
 
 
-def _analytical_accumulated_real_update(microbatches, lr):
+def _analytical_accumulated_real_update(microbatches, lr, accumulation_steps):
+    accumulated_grad = 0.0
+    for microbatch in microbatches:
+        selected_counts = torch.tensor(microbatch["selected_counts"], dtype=torch.float)
+        target_values = torch.tensor(microbatch["target_values"], dtype=torch.float)
+        token_count = selected_counts.sum().item()
+        if token_count == 0:
+            continue
+
+        weighted_target_mean = (
+            selected_counts * target_values
+        ).sum().item() / token_count
+        accumulated_grad += -2.0 * weighted_target_mean / accumulation_steps
+
+    return torch.tensor([-lr * accumulated_grad, 0.0])
+
+
+def _analytical_unnormalized_accumulated_real_update(microbatches, lr):
     accumulated_grad = 0.0
     for microbatch in microbatches:
         selected_counts = torch.tensor(microbatch["selected_counts"], dtype=torch.float)
@@ -403,7 +420,7 @@ def _fsdp_case_worker(rank, world_size, init_method, case, queue):
                             metadata,
                         )
                     )
-                    loss.backward()
+                    (loss / case["accumulation_steps"]).backward()
                     accumulated_global_token_count += global_count.detach()
                     optimizer_step_due = (batch_idx + 1) % case[
                         "accumulation_steps"
@@ -455,7 +472,7 @@ def _fsdp_case_worker(rank, world_size, init_method, case, queue):
                         targets,
                         metadata,
                     )
-                    loss.backward()
+                    (loss / case["accumulation_steps"]).backward()
             else:
                 seq_len = case["seq_lens"][rank]
                 targets, metadata = _real_batch(
@@ -647,7 +664,7 @@ def test_fsdp_world_size_two_optimizer_update_matches_single_process_reference()
     assert torch.allclose(fsdp_param, reference_param, atol=1e-5)
 
 
-def test_fsdp_gradient_accumulation_preserves_per_microbatch_weighting():
+def test_fsdp_gradient_accumulation_averages_per_microbatch_weighting():
     microbatches = [
         {
             "seq_lens": [1, 1],
@@ -663,14 +680,21 @@ def test_fsdp_gradient_accumulation_preserves_per_microbatch_weighting():
     case = {
         "kind": "accumulation_update",
         "microbatches": microbatches,
+        "accumulation_steps": 2,
         "lr": 0.05,
     }
 
     fsdp_param = _run_fsdp_case(case)
-    reference_param = _analytical_accumulated_real_update(microbatches, case["lr"])
+    reference_param = _analytical_accumulated_real_update(
+        microbatches, case["lr"], case["accumulation_steps"]
+    )
+    unnormalized_param = _analytical_unnormalized_accumulated_real_update(
+        microbatches, case["lr"]
+    )
     combined_batch_param = _analytical_combined_real_update(microbatches, case["lr"])
 
     assert torch.allclose(fsdp_param, reference_param, atol=1e-5)
+    assert not torch.allclose(fsdp_param, unnormalized_param, atol=1e-3)
     assert not torch.allclose(fsdp_param, combined_batch_param, atol=1e-3)
 
 

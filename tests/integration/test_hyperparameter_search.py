@@ -40,9 +40,6 @@ def test_hp_search_bert_outputs(run_hp_search, project_root):
     assert generated_config["metadata_config_path"].endswith(
         "test-data-categorical-1-lookahead-0.json"
     )
-    assert generated_config["metadata_config_path"].endswith(
-        "test-data-categorical-1-lookahead-0.json"
-    )
     assert "storage_layout" not in generated_config
     assert "window_view" not in generated_config
     assert generated_config["target_offset"] == 0
