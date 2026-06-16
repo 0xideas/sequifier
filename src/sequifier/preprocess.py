@@ -1262,6 +1262,31 @@ def _check_file_has_been_processed(
 
 
 @beartype
+def _get_processed_prefixes(
+    project_root: str,
+    target_dir: str,
+    write_format: str,
+) -> set[str]:
+    temp_dir = Path(project_root) / "data" / target_dir
+
+    if not temp_dir.is_dir():
+        return set()
+
+    suffix = f".{write_format}"
+    processed = set()
+
+    with os.scandir(temp_dir) as entries:
+        for entry in entries:
+            if not entry.is_file() or not entry.name.endswith(suffix):
+                continue
+
+            if "-split" in entry.name:
+                processed.add(entry.name.rsplit("-split", 1)[0])
+
+    return processed
+
+
+@beartype
 def _process_batches_multiple_files_inner(
     project_root: str,
     data_name_root: str,
@@ -1290,6 +1315,12 @@ def _process_batches_multiple_files_inner(
     mask_column: Optional[str],
 ):
     """Process this worker's file shard."""
+
+    processed_prefixes = (
+        _get_processed_prefixes(project_root, target_dir, write_format)
+        if continue_preprocessing and not merge_output
+        else set()
+    )
     n_files = len(file_paths)
     if n_files <= 0:
         raise ValueError("No files found to process.")
@@ -1307,17 +1338,21 @@ def _process_batches_multiple_files_inner(
                 for path in split_paths
             ]
             if continue_preprocessing:
-                file_has_been_processed = _check_file_has_been_processed(
-                    project_root,
-                    data_name_root,
-                    process_id,
-                    split_ratios,
-                    write_format,
-                    target_dir,
-                    merge_output,
-                    file_index_str,
-                )
+                file_prefix_str = f"{data_name_root}-{process_id}-{file_index_str}"
 
+                if not merge_output:
+                    file_has_been_processed = file_prefix_str in processed_prefixes
+                else:
+                    file_has_been_processed = _check_file_has_been_processed(
+                        project_root,
+                        data_name_root,
+                        process_id,
+                        split_ratios,
+                        write_format,
+                        target_dir,
+                        merge_output,
+                        file_index_str,
+                    )
                 if file_has_been_processed:
                     logger.info(f"Skipping already processed file: {path}")
                     if max_rows is not None:
