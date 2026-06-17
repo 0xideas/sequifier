@@ -1,17 +1,20 @@
 import contextlib
 import copy
 import glob
+import hashlib
 import json
 import logging
 import math
 import os
+import random
+import re
 import sys
 
 os.environ["TORCH_NCCL_ASYNC_ERROR_HANDLING"] = "1"
 import time  # noqa: E402
 import uuid  # noqa: E402
 import warnings  # noqa: E402
-from typing import Any, Optional, Union  # noqa: E402
+from typing import Any, Optional, Union, cast  # noqa: E402
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -52,6 +55,7 @@ from torch.utils.data import DataLoader  # noqa: E402
 torch._dynamo.config.suppress_errors = True
 
 ClassCounts = dict[str, Tensor]
+CHECKPOINT_FORMAT_VERSION = 2
 
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
@@ -212,15 +216,20 @@ def train_worker(
             checkpoint = torch.load(
                 latest_model_path, map_location="cpu", weights_only=False
             )
+            model._validate_checkpoint_compatibility(checkpoint, len(train_loader))
             model.load_state_dict(checkpoint["model_state_dict"])
             model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-            if checkpoint["batch"] + 1 >= len(train_loader):
-                base_model.start_epoch = checkpoint["epoch"] + 1
-                base_model.start_batch = 0
-            else:
-                base_model.start_epoch = checkpoint["epoch"]
-                base_model.start_batch = checkpoint["batch"] + 1
+            base_model.start_epoch, base_model.start_batch = _checkpoint_start_position(
+                checkpoint, len(train_loader)
+            )
+            model._apply_checkpoint_training_state(
+                checkpoint.get("scaler_state_dict"),
+                checkpoint.get("best_val_loss", float("inf")),
+                checkpoint.get("n_epochs_no_improvement", 0),
+                checkpoint.get("best_model_state_dict"),
+                checkpoint.get("rng_state"),
+            )
         else:
             model.start_epoch = 1
             model.start_batch = 0
@@ -234,6 +243,9 @@ def train_worker(
             elif torch_compile == "inner":
                 for i in range(len(model.layers)):
                     model.layers[i] = torch.compile(model.layers[i])
+
+        if checkpoint is not None:
+            base_model._restore_rng_state()
 
         model.train_model(train_loader, valid_loader, ddp_model=None)
     elif config.training_spec.data_parallelism == "FSDP":
@@ -277,13 +289,20 @@ def train_worker(
                 )
                 full_msd = checkpoint["model_state_dict"]
                 full_osd = checkpoint["optimizer_state_dict"]
-
-                if checkpoint["batch"] + 1 >= len(train_loader):
-                    start_epoch = checkpoint["epoch"] + 1
-                    start_batch = 0
-                else:
-                    start_epoch = checkpoint["epoch"]
-                    start_batch = checkpoint["batch"] + 1
+                start_epoch, start_batch = _checkpoint_start_position(
+                    checkpoint, len(train_loader)
+                )
+                resume_state = {
+                    "scaler_state_dict": checkpoint.get("scaler_state_dict"),
+                    "best_val_loss": checkpoint.get("best_val_loss", float("inf")),
+                    "n_epochs_no_improvement": checkpoint.get(
+                        "n_epochs_no_improvement", 0
+                    ),
+                    "has_best_model_state_dict": checkpoint.get("best_model_state_dict")
+                    is not None,
+                    "rng_state": checkpoint.get("rng_state"),
+                    "checkpoint_metadata": checkpoint.get("checkpoint_metadata"),
+                }
 
                 meta = [
                     start_epoch,
@@ -291,15 +310,33 @@ def train_worker(
                     checkpoint["scheduler_state_dict"],
                     full_msd,
                     full_osd,
+                    resume_state,
                 ]
             else:
-                meta = [None, None, None, None, None]
+                meta = [None, None, None, None, None, None]
 
             # Broadcast the checkpoint data to all ranks simultaneously
             dist.broadcast_object_list(meta, src=0)
 
-            # Unpack on all ranks
-            model.start_epoch, model.start_batch, sched_state, full_msd, full_osd = meta  # type: ignore
+            # Unpack on all ranks. The placeholder Nones are replaced by broadcast.
+            (
+                start_epoch_obj,
+                start_batch_obj,
+                sched_state_obj,
+                full_msd_obj,
+                full_osd_obj,
+                resume_state_obj,
+            ) = meta
+            model.start_epoch = cast(int, start_epoch_obj)
+            model.start_batch = cast(int, start_batch_obj)
+            sched_state = cast(Optional[dict[str, Any]], sched_state_obj)
+            full_msd = cast(dict[str, Tensor], full_msd_obj)
+            full_osd = cast(dict[str, Any], full_osd_obj)
+            resume_state = cast(dict[str, Any], resume_state_obj)
+            model._validate_checkpoint_compatibility(
+                {"checkpoint_metadata": resume_state.get("checkpoint_metadata")},
+                len(train_loader),
+            )
 
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
 
@@ -318,6 +355,19 @@ def train_worker(
 
             if sched_state is not None:
                 base_model.scheduler.load_state_dict(sched_state)
+            best_model_state_dict = None
+            if resume_state.get("has_best_model_state_dict"):
+                if global_rank == 0 and checkpoint is not None:
+                    best_model_state_dict = checkpoint.get("best_model_state_dict")
+                else:
+                    best_model_state_dict = {}
+            model._apply_checkpoint_training_state(
+                resume_state.get("scaler_state_dict"),
+                resume_state.get("best_val_loss", float("inf")),
+                resume_state.get("n_epochs_no_improvement", 0),
+                best_model_state_dict,
+                resume_state.get("rng_state"),
+            )
 
         else:
             model.start_epoch = 1
@@ -340,31 +390,39 @@ def train_worker(
 
             dist.barrier()
 
+        if checkpoint is not None:
+            base_model._restore_rng_state()
+
         model.train_model(train_loader, valid_loader, ddp_model=base_model)
         cleanup()
     elif config.training_spec.data_parallelism == "DDP":  # DDP
+        params_to_optimize = model.parameters()
+        model.initialize_optimizer(params=params_to_optimize)
+
         if config.training_spec.continue_training and latest_model_path:
             checkpoint = torch.load(
                 latest_model_path, map_location="cpu", weights_only=False
             )
+            base_model._validate_checkpoint_compatibility(checkpoint, len(train_loader))
             base_model.load_state_dict(checkpoint["model_state_dict"])
             base_model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             base_model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-            if checkpoint["batch"] + 1 >= len(train_loader):
-                base_model.start_epoch = checkpoint["epoch"] + 1
-                base_model.start_batch = 0
-            else:
-                base_model.start_epoch = checkpoint["epoch"]
-                base_model.start_batch = checkpoint["batch"] + 1
+            base_model.start_epoch, base_model.start_batch = _checkpoint_start_position(
+                checkpoint, len(train_loader)
+            )
+            base_model._apply_checkpoint_training_state(
+                checkpoint.get("scaler_state_dict"),
+                checkpoint.get("best_val_loss", float("inf")),
+                checkpoint.get("n_epochs_no_improvement", 0),
+                checkpoint.get("best_model_state_dict"),
+                checkpoint.get("rng_state"),
+            )
         else:
             model.start_epoch = 1
             model.start_batch = 0
             logger.info(
                 f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
             )
-
-        params_to_optimize = model.parameters()
-        model.initialize_optimizer(params=params_to_optimize)
 
         if config.training_spec.device.startswith("cuda"):
             if torch_compile == "outer":
@@ -390,6 +448,8 @@ def train_worker(
                     _ = ddp_model(dummy_data, dummy_metadata, False)
 
             dist.barrier()
+        if checkpoint is not None:
+            base_model._restore_rng_state()
         model.train_model(train_loader, valid_loader, ddp_model=ddp_model)
         cleanup()
     else:
@@ -466,17 +526,13 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
 
 
 @beartype
-def format_number(number: Union[int, float, np.float32]) -> str:
-    """Format finite values, zero, and NaN for logs."""
-    if np.isnan(number):
+def format_number(number: int | float | np.float32) -> str:
+    value = float(number)
+    if math.isnan(value):
         return "NaN"
-    elif number == 0:
-        order_of_magnitude = 0
-    else:
-        order_of_magnitude = math.floor(math.log(np.abs(number), 10))
-
-    number_adjusted = number * (10 ** (-order_of_magnitude))
-    return f"{number_adjusted:5.2f}e{order_of_magnitude}"
+    if math.isinf(value):
+        return "Inf" if value > 0 else "-Inf"
+    return f"{value: .2e}"
 
 
 def _get_evaluation_loss_mask(metadata: dict[str, Tensor]) -> Tensor:
@@ -498,6 +554,16 @@ def _get_evaluation_loss_mask(metadata: dict[str, Tensor]) -> Tensor:
         valid_mask = valid_mask & sample_valid_mask.unsqueeze(1)
 
     return valid_mask
+
+
+@beartype
+def _checkpoint_start_position(
+    checkpoint: dict[str, Any], num_batches: int
+) -> tuple[int, int]:
+    """Return the next epoch/batch position after a saved checkpoint."""
+    if checkpoint["batch"] + 1 >= num_batches:
+        return checkpoint["epoch"] + 1, 0
+    return checkpoint["epoch"], checkpoint["batch"] + 1
 
 
 @beartype
@@ -787,6 +853,10 @@ class TransformerModel(nn.Module):
                 use_scaler = True
 
         self.scaler = GradScaler(device=self.device.split(":")[0], enabled=use_scaler)
+        self._resume_best_val_loss = float("inf")
+        self._resume_n_epochs_no_improvement = 0
+        self._resume_best_model_state_dict = None
+        self._resume_rng_state = None
 
         self._apply_layer_dtypes()
 
@@ -1187,6 +1257,182 @@ class TransformerModel(nn.Module):
                 sys.exit(143)
 
     @beartype
+    def _checkpoint_compatibility_metadata(
+        self, num_batches: Optional[int]
+    ) -> dict[str, Any]:
+        """Return resume-critical settings stored with each new checkpoint."""
+        training_spec = self.hparams.training_spec
+        resume_settings = {
+            "model_name": self.model_name,
+            "num_batches": num_batches,
+            "batch_size": self.batch_size,
+            "accumulation_steps": self.accumulation_steps,
+            "learning_rate": training_spec.learning_rate,
+            "scheduler_step_on": self.scheduler_step_on,
+            "scheduler": dict(training_spec.scheduler),
+            "optimizer": dict(training_spec.optimizer),
+            "distributed": training_spec.distributed,
+            "data_parallelism": training_spec.data_parallelism,
+            "world_size": (
+                dist.get_world_size(group=self._data_parallel_process_group())
+                if self._distributed_is_initialized()
+                else training_spec.world_size
+            ),
+            "training_objective": training_spec.training_objective,
+            "input_columns": self.input_columns,
+            "target_columns": self.target_columns,
+            "target_column_types": self.target_column_types,
+            "model_spec": self.hparams.model_spec.model_dump(mode="json"),
+        }
+        fingerprint_input = json.dumps(
+            resume_settings, sort_keys=True, default=str
+        ).encode("utf-8")
+        return {
+            "format_version": CHECKPOINT_FORMAT_VERSION,
+            "config_fingerprint": hashlib.sha256(fingerprint_input).hexdigest(),
+            "resume_settings": resume_settings,
+        }
+
+    @beartype
+    def _validate_checkpoint_compatibility(
+        self, checkpoint: dict[str, Any], num_batches: int
+    ) -> None:
+        """Reject checkpoints whose resume-critical settings no longer match."""
+        checkpoint_metadata = checkpoint.get("checkpoint_metadata")
+        if checkpoint_metadata is None:
+            self.logger.warning(
+                "[WARNING] Checkpoint has no compatibility metadata; "
+                "continuing with legacy resume behavior."
+            )
+            return
+
+        format_version = checkpoint_metadata.get("format_version")
+        if format_version != CHECKPOINT_FORMAT_VERSION:
+            self.logger.warning(
+                "[WARNING] Checkpoint format version "
+                f"{format_version!r} differs from expected "
+                f"{CHECKPOINT_FORMAT_VERSION!r}."
+            )
+
+        saved_settings = checkpoint_metadata.get("resume_settings")
+        if saved_settings is None:
+            self.logger.warning(
+                "[WARNING] Checkpoint has no resume-settings fingerprint payload; "
+                "continuing without compatibility checks."
+            )
+            return
+
+        current_settings = self._checkpoint_compatibility_metadata(num_batches)[
+            "resume_settings"
+        ]
+        mismatches = []
+        for key, current_value in current_settings.items():
+            saved_value = saved_settings.get(key)
+            if saved_value != current_value:
+                mismatches.append(
+                    f"{key}: checkpoint={saved_value!r}, current={current_value!r}"
+                )
+
+        if mismatches:
+            mismatch_text = "; ".join(mismatches)
+            raise ValueError(
+                "Checkpoint is incompatible with the current training configuration: "
+                f"{mismatch_text}"
+            )
+
+    @beartype
+    def _get_rng_state(self) -> dict[str, Any]:
+        """Capture Python, NumPy, Torch CPU, and CUDA RNG state for this rank."""
+        return {
+            "python": random.getstate(),
+            "numpy": np.random.get_state(),
+            "torch": torch.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state_all()
+            if torch.cuda.is_available()
+            else None,
+        }
+
+    @beartype
+    def _collect_rng_states_for_checkpoint(self) -> Optional[list[Any]]:
+        """Gather per-rank RNG states on rank 0 for checkpointing."""
+        rng_state = self._get_rng_state()
+        if not self.hparams.training_spec.distributed:
+            return [rng_state]
+
+        rng_states = (
+            [None] * dist.get_world_size(group=self._data_parallel_process_group())
+            if self.rank == 0
+            else None
+        )
+        dist.gather_object(
+            rng_state,
+            object_gather_list=rng_states,
+            dst=0,
+            group=self._data_parallel_process_group(),
+        )
+        return rng_states
+
+    @beartype
+    def _select_rng_state_for_rank(self, rng_states: Any) -> Optional[dict[str, Any]]:
+        """Return this rank's saved RNG state from a checkpoint payload."""
+        if rng_states is None:
+            return None
+        if isinstance(rng_states, dict):
+            return rng_states
+        if not isinstance(rng_states, list) or len(rng_states) == 0:
+            return None
+
+        rank = self.rank or 0
+        if rank < len(rng_states):
+            return rng_states[rank]
+        self.logger.warning(
+            "[WARNING] Checkpoint has no RNG state for this rank; "
+            "using rank 0 RNG state as a fallback."
+        )
+        return rng_states[0]
+
+    @beartype
+    def _apply_checkpoint_training_state(
+        self,
+        scaler_state_dict: Optional[dict[str, Any]],
+        best_val_loss: Any,
+        n_epochs_no_improvement: Any,
+        best_model_state_dict: Any,
+        rng_states: Any,
+    ) -> None:
+        """Restore non-model training state from a checkpoint payload."""
+        if scaler_state_dict is not None:
+            self.scaler.load_state_dict(scaler_state_dict)
+        elif self.scaler.is_enabled():
+            self.logger.warning(
+                "[WARNING] Checkpoint has no GradScaler state; "
+                "resuming with a freshly initialized scaler."
+            )
+
+        self._resume_best_val_loss = float(best_val_loss)
+        self._resume_n_epochs_no_improvement = int(n_epochs_no_improvement)
+        self._resume_best_model_state_dict = best_model_state_dict
+        self._resume_rng_state = self._select_rng_state_for_rank(rng_states)
+
+    @beartype
+    def _restore_rng_state(self) -> None:
+        """Apply the checkpoint RNG state after compile/warm-up work is finished."""
+        rng_state = self._resume_rng_state
+        if rng_state is None:
+            self.logger.warning(
+                "[WARNING] Checkpoint has no RNG state; stochastic training will "
+                "continue from the current process RNG state."
+            )
+            return
+
+        random.setstate(rng_state["python"])
+        np.random.set_state(rng_state["numpy"])
+        torch.set_rng_state(rng_state["torch"])
+        cuda_state = rng_state.get("cuda")
+        if cuda_state is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(cuda_state)
+
+    @beartype
     def train_model(
         self,
         train_loader: DataLoader,
@@ -1196,10 +1442,10 @@ class TransformerModel(nn.Module):
         """Run epochs, validation, checkpointing, export, and interruption cleanup."""
         self.logger.info(f"--- Starting Training for model: {self.model_name} ---")
 
-        best_val_loss = float("inf")
-        n_epochs_no_improvement = 0
+        best_val_loss: float = float(self._resume_best_val_loss)
+        n_epochs_no_improvement = self._resume_n_epochs_no_improvement
         last_epoch = self.start_epoch - 1
-        best_model_state = None
+        best_model_state = self._resume_best_model_state_dict
 
         try:
             self.last_latest_save_time = time.time()
@@ -1231,7 +1477,15 @@ class TransformerModel(nn.Module):
                     train_loader.dataset.set_epoch(epoch)
                     valid_loader.dataset.set_epoch(epoch)
 
-                    self._train_epoch(train_loader, valid_loader, epoch, ddp_model)
+                    self._train_epoch(
+                        train_loader,
+                        valid_loader,
+                        epoch,
+                        ddp_model,
+                        best_val_loss,
+                        n_epochs_no_improvement,
+                        best_model_state,
+                    )
 
                     total_loss, total_losses, class_counts = self._evaluate(
                         valid_loader, ddp_model
@@ -1250,7 +1504,7 @@ class TransformerModel(nn.Module):
                     )
 
                     if total_loss < best_val_loss:
-                        best_val_loss = total_loss
+                        best_val_loss = float(total_loss)
                         best_model_state = self._get_full_state_dict(ddp_model)
                         n_epochs_no_improvement = 0
                     else:
@@ -1270,6 +1524,10 @@ class TransformerModel(nn.Module):
                             total_loss,
                             ddp_model=ddp_model,
                             suffix=f"epoch-{epoch}",
+                            best_val_loss=best_val_loss,
+                            n_epochs_no_improvement=n_epochs_no_improvement,
+                            best_model_state_dict=best_model_state,
+                            num_batches=len(train_loader),
                         )
 
                     last_epoch = epoch
@@ -1357,6 +1615,9 @@ class TransformerModel(nn.Module):
         valid_loader: DataLoader,
         epoch: int,
         ddp_model: Optional[nn.Module] = None,
+        best_val_loss: float = float("inf"),
+        n_epochs_no_improvement: int = 0,
+        best_model_state: Optional[dict[str, Tensor]] = None,
     ) -> None:
         """Run one train epoch with optional mid-epoch saves."""
         target_names = self._loss_target_names()
@@ -1528,85 +1789,93 @@ class TransformerModel(nn.Module):
                     ):
                         self.scheduler.step()
 
-                should_save_latest = torch.tensor(
-                    [0], dtype=torch.int32, device=self.device
-                )
-                should_save_batch = torch.tensor(
-                    [0], dtype=torch.int32, device=self.device
-                )
-                val_loss_batch = torch.tensor(
-                    [np.float32(np.nan)], dtype=torch.float32, device=self.device
-                )
-
-                current_time = time.time()
-
-                if not self.hparams.training_spec.distributed or self.rank == 0:
-                    if self.save_latest_interval_minutes is not None and (
-                        current_time - self.last_latest_save_time
-                    ) >= (self.save_latest_interval_minutes * 60):
-                        current_time = time.time()
-                        should_save_latest[0] = 1
-                        self.last_latest_save_time = current_time
-
-                    if self.save_batch_interval_minutes is not None and (
-                        current_time - self.last_batch_save_time
-                    ) >= (self.save_batch_interval_minutes * 60):
-                        should_save_batch[0] = 1
-                        self.last_batch_save_time = current_time
-
-                if self.hparams.training_spec.distributed:
-                    dist.broadcast(should_save_latest, src=0)
-                    dist.broadcast(should_save_batch, src=0)
-                    dist.barrier()
-
-                if should_save_batch.item() == 1:
-                    if self.save_batch_interval_minutes_val_loss:
-                        val_loss, val_losses, class_counts = self._evaluate(
-                            valid_loader, ddp_model
-                        )
-
-                        if not self.hparams.training_spec.distributed or self.rank == 0:
-                            current_global_step = (epoch - 1) * num_batches + (
-                                batch_count + 1
-                            )
-                            self._log_epoch_results(
-                                0,
-                                batch_count + 1,
-                                (current_time - self.last_batch_save_time),
-                                val_loss,
-                                val_losses,
-                                class_counts,
-                                current_global_step,
-                            )
-                            val_loss_batch[0] = float(val_loss)
-                        self._check_and_terminate()
-                    else:
-                        val_loss_batch[0] = np.float32(np.nan)
-
-                if self.hparams.training_spec.distributed:
-                    dist.broadcast(val_loss_batch, src=0)
-
-                if should_save_latest.item() == 1:
-                    self._save(
-                        epoch,
-                        batch_count,
-                        np.float32(np.nan),
-                        ddp_model,
-                        suffix="latest",
+                if optimizer_step_due:
+                    should_save_latest = torch.tensor(
+                        [0], dtype=torch.int32, device=self.device
                     )
-                    if self.rank != 0:
+                    should_save_batch = torch.tensor(
+                        [0], dtype=torch.int32, device=self.device
+                    )
+                    val_loss_batch = torch.tensor(
+                        [np.float32(np.nan)], dtype=torch.float32, device=self.device
+                    )
+
+                    current_time = time.time()
+                    elapsed_since_batch_save = current_time - self.last_batch_save_time
+
+                    if not self.hparams.training_spec.distributed or self.rank == 0:
+                        if self.save_latest_interval_minutes is not None and (
+                            current_time - self.last_latest_save_time
+                        ) >= (self.save_latest_interval_minutes * 60):
+                            should_save_latest[0] = 1
+
+                        if self.save_batch_interval_minutes is not None and (
+                            elapsed_since_batch_save
+                        ) >= (self.save_batch_interval_minutes * 60):
+                            should_save_batch[0] = 1
+
+                    if self.hparams.training_spec.distributed:
+                        dist.broadcast(should_save_latest, src=0)
+                        dist.broadcast(should_save_batch, src=0)
+                        dist.barrier()
+
+                    if should_save_batch.item() == 1:
+                        if self.save_batch_interval_minutes_val_loss:
+                            val_loss, val_losses, class_counts = self._evaluate(
+                                valid_loader, ddp_model
+                            )
+
+                            if (
+                                not self.hparams.training_spec.distributed
+                                or self.rank == 0
+                            ):
+                                current_global_step = (epoch - 1) * num_batches + (
+                                    batch_count + 1
+                                )
+                                self._log_epoch_results(
+                                    0,
+                                    batch_count + 1,
+                                    elapsed_since_batch_save,
+                                    val_loss,
+                                    val_losses,
+                                    class_counts,
+                                    current_global_step,
+                                )
+                                val_loss_batch[0] = float(val_loss)
+                            self._check_and_terminate()
+                        else:
+                            val_loss_batch.fill_(torch.nan)
+
+                    if self.hparams.training_spec.distributed:
+                        dist.broadcast(val_loss_batch, src=0)
+
+                    if should_save_latest.item() == 1:
+                        self._save(
+                            epoch,
+                            batch_count,
+                            np.float32(np.nan),
+                            ddp_model,
+                            suffix="latest",
+                            best_val_loss=best_val_loss,
+                            n_epochs_no_improvement=n_epochs_no_improvement,
+                            best_model_state_dict=best_model_state,
+                            num_batches=num_batches,
+                        )
                         self.last_latest_save_time = time.time()
 
-                val_loss = np.float32(val_loss_batch.item())
-                if should_save_batch.item() != 0:
-                    self._save(
-                        epoch,
-                        batch_count,
-                        val_loss,  # type: ignore
-                        ddp_model,
-                        suffix=f"epoch-{epoch}-batch-{batch_count + 1}",
-                    )
-                    if self.rank != 0:
+                    val_loss = np.float32(val_loss_batch.item())
+                    if should_save_batch.item() != 0:
+                        self._save(
+                            epoch,
+                            batch_count,
+                            val_loss,  # type: ignore
+                            ddp_model,
+                            suffix=f"epoch-{epoch}-batch-{batch_count + 1}",
+                            best_val_loss=best_val_loss,
+                            n_epochs_no_improvement=n_epochs_no_improvement,
+                            best_model_state_dict=best_model_state,
+                            num_batches=num_batches,
+                        )
                         self.last_batch_save_time = time.time()
 
     @beartype
@@ -2305,6 +2574,10 @@ class TransformerModel(nn.Module):
         val_loss: np.float32,
         ddp_model: Optional[nn.Module] = None,
         suffix: Optional[str] = None,
+        best_val_loss: float = float("inf"),
+        n_epochs_no_improvement: int = 0,
+        best_model_state_dict: Optional[dict[str, Tensor]] = None,
+        num_batches: Optional[int] = None,
     ) -> None:
         """Save rank-0 checkpoint state."""
         model_to_extract = ddp_model if ddp_model is not None else self
@@ -2330,6 +2603,8 @@ class TransformerModel(nn.Module):
             }
             optim_state_dict = self.optimizer.state_dict()
 
+        rng_state = self._collect_rng_states_for_checkpoint()
+
         if self.rank != 0:
             return
 
@@ -2343,17 +2618,33 @@ class TransformerModel(nn.Module):
             file_name,
         )
 
-        torch.save(
-            {
-                "epoch": epoch,
-                "batch": batch,
-                "model_state_dict": model_state_dict,
-                "optimizer_state_dict": optim_state_dict,
-                "scheduler_state_dict": self.scheduler.state_dict(),
-                "loss": val_loss,
-            },
-            output_path,
+        checkpoint = {
+            "checkpoint_metadata": self._checkpoint_compatibility_metadata(num_batches),
+            "epoch": epoch,
+            "batch": batch,
+            "model_state_dict": model_state_dict,
+            "optimizer_state_dict": optim_state_dict,
+            "scheduler_state_dict": self.scheduler.state_dict(),
+            "scaler_state_dict": self.scaler.state_dict(),
+            "rng_state": rng_state,
+            "best_val_loss": float(best_val_loss),
+            "n_epochs_no_improvement": int(n_epochs_no_improvement),
+            "best_model_state_dict": best_model_state_dict,
+            "loss": val_loss,
+        }
+
+        temp_path = os.path.join(
+            self.project_root,
+            "checkpoints",
+            f".{file_name}.{uuid.uuid4().hex}.tmp",
         )
+        try:
+            torch.save(checkpoint, temp_path)
+            os.replace(temp_path, output_path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.remove(temp_path)
+            raise
         self.logger.info(f"[INFO] Saved checkpoint to {output_path}")
 
     @beartype
@@ -2384,14 +2675,21 @@ class TransformerModel(nn.Module):
     @beartype
     def _get_latest_model_name(self) -> Optional[str]:
         """Return the newest checkpoint path for this model name."""
-        checkpoint_path = os.path.join(self.project_root, "checkpoints", "*")
+        checkpoint_path = os.path.join(
+            self.project_root, "checkpoints", f"{self.model_name}-*.pt"
+        )
+        checkpoint_name_re = re.compile(
+            rf"^{re.escape(self.model_name)}-(?:latest|epoch-\d+(?:-batch-\d+)?)\.pt$"
+        )
 
         files = glob.glob(checkpoint_path)
         files = [
-            file for file in files if os.path.split(file)[1].startswith(self.model_name)
+            file
+            for file in files
+            if checkpoint_name_re.fullmatch(os.path.split(file)[1])
         ]
         if files:
-            return max(files, key=os.path.getctime)
+            return max(files, key=os.path.getmtime)
         else:
             return None
 
