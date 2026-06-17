@@ -42,6 +42,7 @@ class PreprocessorModel(BaseModel):
     read_format: str = "csv"
     write_format: str = "parquet"
     merge_output: bool = True
+    allow_sequence_splitting: bool = False
     selected_columns: Optional[list[str]] = None
 
     split_ratios: list[float]

@@ -1737,9 +1737,19 @@ class TransformerModel(nn.Module):
             output, targets, valid_mask
         )
         return (
-            {col: loss_sum.detach().double() for col, loss_sum in loss_sums.items()},
+            {
+                col: loss_sum.detach().to(dtype=self._metric_float_dtype())
+                for col, loss_sum in loss_sums.items()
+            },
             token_count.detach(),
         )
+
+    @beartype
+    def _metric_float_dtype(self) -> torch.dtype:
+        """Return the highest precision floating dtype supported by this device."""
+        if torch.device(self.device).type == "mps":
+            return torch.float32
+        return torch.float64
 
     @beartype
     def _loss_target_names(
@@ -1795,12 +1805,13 @@ class TransformerModel(nn.Module):
         self, target_names: list[str]
     ) -> tuple[dict[str, Tensor], Tensor]:
         """Create detached sum/count accumulators for logging or validation."""
+        dtype = self._metric_float_dtype()
         return (
             {
-                col: torch.zeros((), device=self.device, dtype=torch.float64)
+                col: torch.zeros((), device=self.device, dtype=dtype)
                 for col in target_names
             },
-            torch.zeros((), device=self.device, dtype=torch.float64),
+            torch.zeros((), device=self.device, dtype=dtype),
         )
 
     @beartype
@@ -1813,8 +1824,11 @@ class TransformerModel(nn.Module):
     ) -> None:
         """Accumulate detached local unweighted loss sums and token counts."""
         for col in batch_sums:
-            sums[col] = sums[col] + batch_sums[col].detach().double()
-        count += batch_count.detach().double()
+            sums[col] = sums[col] + batch_sums[col].detach().to(
+                device=sums[col].device,
+                dtype=sums[col].dtype,
+            )
+        count += batch_count.detach().to(device=count.device, dtype=count.dtype)
 
     @beartype
     def _finalize_loss_components(
@@ -1843,14 +1857,15 @@ class TransformerModel(nn.Module):
             if raise_on_empty:
                 raise RuntimeError(f"No valid {label} tokens found.")
 
+            dtype = self._metric_float_dtype()
             losses = {
-                col: torch.zeros((), device=self.device, dtype=torch.float64)
+                col: torch.zeros((), device=self.device, dtype=dtype)
                 for col in target_names
             }
-            return torch.zeros((), device=self.device, dtype=torch.float64), losses
+            return torch.zeros((), device=self.device, dtype=dtype), losses
 
         losses = {}
-        total = torch.zeros((), device=self.device, dtype=torch.float64)
+        total = torch.zeros((), device=self.device, dtype=self._metric_float_dtype())
         for col in target_names:
             losses[col] = reduced_sums[col] / reduced_count * self._loss_weight(col)
             total = total + losses[col]
@@ -2437,7 +2452,10 @@ class TransformerModel(nn.Module):
                     )
                     continue
 
-                shares = counts.to(torch.float64) / total
+                share_dtype = (
+                    torch.float32 if counts.device.type == "mps" else torch.float64
+                )
+                shares = counts.to(share_dtype) / total
 
                 value_shares = " | ".join(
                     f"{self.index_maps[categorical_column][class_id]}: "

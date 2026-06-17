@@ -81,6 +81,7 @@ class Preprocessor:
         read_format: str,
         write_format: str,
         merge_output: bool,
+        allow_sequence_splitting: bool,
         selected_columns: Optional[list[str]],
         split_ratios: list[float],
         stored_context_width: int,
@@ -113,6 +114,8 @@ class Preprocessor:
                     f"write_format must be 'pt' or 'parquet' when merge_output is False, got '{write_format}'"
                 )
             self.target_dir = f"{self.data_name_root}-temp"
+
+        self.allow_sequence_splitting = allow_sequence_splitting
 
         self.use_precomputed_maps = use_precomputed_maps
         self.metadata_config_path = metadata_config_path
@@ -257,6 +260,7 @@ class Preprocessor:
                 self.batches_per_file,
                 subsequence_start_mode,
                 self.merge_output,
+                self.allow_sequence_splitting,
             )
 
             if self.merge_output:
@@ -590,6 +594,7 @@ class Preprocessor:
                 target_dir=self.target_dir,
                 batches_per_file=self.batches_per_file,
                 merge_output=self.merge_output,
+                allow_sequence_splitting=self.allow_sequence_splitting,
                 continue_preprocessing=self.continue_preprocessing,
                 subsequence_start_mode=subsequence_start_mode,
                 mask_column=mask_column,
@@ -635,6 +640,7 @@ class Preprocessor:
                 "target_dir": self.target_dir,
                 "batches_per_file": self.batches_per_file,
                 "merge_output": self.merge_output,
+                "allow_sequence_splitting": self.allow_sequence_splitting,
                 "continue_preprocessing": self.continue_preprocessing,
                 "subsequence_start_mode": subsequence_start_mode,
                 "mask_column": mask_column,
@@ -1310,6 +1316,7 @@ def _process_batches_multiple_files_inner(
     target_dir: str,
     batches_per_file: int,
     merge_output: bool,
+    allow_sequence_splitting: bool,
     continue_preprocessing: bool,
     subsequence_start_mode: str,
     mask_column: Optional[str],
@@ -1402,6 +1409,7 @@ def _process_batches_multiple_files_inner(
                 batches_per_file,
                 subsequence_start_mode,
                 merge_output,
+                allow_sequence_splitting,
             )
 
             if merge_output:
@@ -1449,10 +1457,11 @@ def _process_batches_single_file(
     batches_per_file: int,
     subsequence_start_mode: str,
     merge_output: bool,
+    allow_sequence_splitting: bool,
 ) -> int:
     """Split one file into worker batches and preprocess them."""
     n_cores = n_cores or multiprocessing.cpu_count()
-    batch_limits = get_batch_limits(data, n_cores)
+    batch_limits = get_batch_limits(data, n_cores, allow_sequence_splitting)
     valid_batch_limits = [(s, e) for s, e in batch_limits if (e - s) > 0]
     batches = [
         (
@@ -1551,8 +1560,10 @@ def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]
 
 
 @beartype
-def get_batch_limits(data: pl.DataFrame, n_batches: int) -> list[tuple[int, int]]:
-    """Split rows into batches without crossing sequenceId boundaries."""
+def get_batch_limits(
+    data: pl.DataFrame, n_batches: int, allow_sequence_splitting: bool
+) -> list[tuple[int, int]]:
+    """Split rows into batches without crossing sequenceId boundaries unless allowed."""
     if n_batches <= 0:
         raise ValueError("n_batches must be positive.")
     if data.is_empty():
@@ -1566,10 +1577,42 @@ def get_batch_limits(data: pl.DataFrame, n_batches: int) -> list[tuple[int, int]
     sequence_count = len(sequence_start_indices)
 
     if n_batches > sequence_count:
-        raise ValueError(
-            "Cannot create more non-empty batches than there are sequences without "
-            "splitting a sequence."
-        )
+        if not allow_sequence_splitting:
+            raise ValueError(
+                "Cannot create more non-empty batches than there are sequences without "
+                "splitting a sequence."
+            )
+
+        original_lengths = np.diff(sequence_boundaries)
+        pieces = np.ones(len(original_lengths), dtype=int)
+
+        for _ in range(n_batches - sequence_count):
+            largest_piece_idx = int(np.argmax(original_lengths / pieces))
+            pieces[largest_piece_idx] += 1
+
+        if np.any(pieces > original_lengths):
+            raise ValueError(
+                "Cannot split further: sequences are too short to reach the "
+                "requested number of non-empty batches."
+            )
+
+        new_boundaries = []
+        for start, length, num_pieces in zip(
+            sequence_boundaries[:-1], original_lengths, pieces
+        ):
+            # Calculate evenly spaced boundaries within this sequence
+            splits = start + np.round(np.linspace(0, length, num_pieces + 1)).astype(
+                int
+            )
+
+            if not new_boundaries:
+                new_boundaries.extend(splits)
+            else:
+                new_boundaries.extend(
+                    splits[1:]
+                )  # Avoid duplicating the shared boundary
+
+        sequence_boundaries = np.array(new_boundaries)
 
     interior_boundaries = sequence_boundaries[1:-1]
     ideal_limits = np.linspace(0, data.shape[0], n_batches + 1)[1:-1]
