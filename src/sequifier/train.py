@@ -210,6 +210,10 @@ def train_worker(
     )
 
     model = TransformerModel(config, rank=global_rank, local_rank=local_rank)
+    model._data_loader_generators = {
+        "train": train_loader_generator,
+        "valid": valid_loader_generator,
+    }
     base_model = model
 
     latest_model_path = model._get_latest_model_name()
@@ -238,6 +242,7 @@ def train_worker(
                 checkpoint.get("n_epochs_no_improvement", 0),
                 checkpoint.get("best_model_state_dict"),
                 checkpoint.get("rng_state"),
+                checkpoint.get("data_loader_generator_states"),
             )
         else:
             model.start_epoch = 1
@@ -255,6 +260,7 @@ def train_worker(
 
         if checkpoint is not None:
             base_model._restore_rng_state()
+            base_model._restore_data_loader_generator_states()
 
         model.train_model(train_loader, valid_loader, ddp_model=None)
     elif config.training_spec.data_parallelism == "FSDP":
@@ -320,6 +326,9 @@ def train_worker(
                     "has_best_model_state_dict": checkpoint.get("best_model_state_dict")
                     is not None,
                     "rng_state": checkpoint.get("rng_state"),
+                    "data_loader_generator_states": checkpoint.get(
+                        "data_loader_generator_states"
+                    ),
                     "checkpoint_metadata": checkpoint.get("checkpoint_metadata"),
                 }
 
@@ -386,6 +395,7 @@ def train_worker(
                 resume_state.get("n_epochs_no_improvement", 0),
                 best_model_state_dict,
                 resume_state.get("rng_state"),
+                resume_state.get("data_loader_generator_states"),
             )
 
         else:
@@ -411,6 +421,7 @@ def train_worker(
 
         if did_resume:
             base_model._restore_rng_state()
+            base_model._restore_data_loader_generator_states()
 
         model.train_model(train_loader, valid_loader, ddp_model=base_model)
         cleanup()
@@ -435,6 +446,7 @@ def train_worker(
                 checkpoint.get("n_epochs_no_improvement", 0),
                 checkpoint.get("best_model_state_dict"),
                 checkpoint.get("rng_state"),
+                checkpoint.get("data_loader_generator_states"),
             )
         else:
             model.start_epoch = 1
@@ -469,6 +481,7 @@ def train_worker(
             dist.barrier()
         if checkpoint is not None:
             base_model._restore_rng_state()
+            base_model._restore_data_loader_generator_states()
         model.train_model(train_loader, valid_loader, ddp_model=ddp_model)
         cleanup()
     else:
@@ -876,7 +889,8 @@ class TransformerModel(nn.Module):
         self._resume_n_epochs_no_improvement = 0
         self._resume_best_model_state_dict = None
         self._resume_rng_state = None
-        self._checkpoint_path_identity_cache: dict[str, dict[str, Any]] = {}
+        self._resume_data_loader_generator_states = None
+        self._data_loader_generators: dict[str, torch.Generator] = {}
 
         self._apply_layer_dtypes()
 
@@ -1277,53 +1291,6 @@ class TransformerModel(nn.Module):
                 sys.exit(143)
 
     @beartype
-    def _path_identity(self, path: str) -> dict[str, Any]:
-        """Return a cached, JSON-safe identity summary for a file or folder."""
-        normalized_path = normalize_path(path, self.project_root)
-        if normalized_path in self._checkpoint_path_identity_cache:
-            return self._checkpoint_path_identity_cache[normalized_path]
-
-        identity: dict[str, Any]
-        if not os.path.exists(normalized_path):
-            identity = {"path": normalized_path, "exists": False}
-        elif os.path.isfile(normalized_path):
-            stat = os.stat(normalized_path)
-            identity = {
-                "path": normalized_path,
-                "exists": True,
-                "type": "file",
-                "size": stat.st_size,
-                "mtime_ns": stat.st_mtime_ns,
-            }
-        else:
-            entries: list[dict[str, Any]] = []
-            for root, dirs, files in os.walk(normalized_path):
-                dirs.sort()
-                files.sort()
-                for file_name in files:
-                    file_path = os.path.join(root, file_name)
-                    with contextlib.suppress(OSError):
-                        stat = os.stat(file_path)
-                        entries.append(
-                            {
-                                "path": os.path.relpath(file_path, normalized_path),
-                                "size": stat.st_size,
-                                "mtime_ns": stat.st_mtime_ns,
-                            }
-                        )
-            manifest = json.dumps(entries, sort_keys=True).encode("utf-8")
-            identity = {
-                "path": normalized_path,
-                "exists": True,
-                "type": "directory",
-                "file_count": len(entries),
-                "manifest_hash": hashlib.sha256(manifest).hexdigest(),
-            }
-
-        self._checkpoint_path_identity_cache[normalized_path] = identity
-        return identity
-
-    @beartype
     def _checkpoint_compatibility_metadata(
         self, num_batches: Optional[int]
     ) -> dict[str, Any]:
@@ -1334,27 +1301,9 @@ class TransformerModel(nn.Module):
             if training_spec.bert_spec is not None
             else None
         )
-        resume_settings = {
+        compatibility_settings = {
             "model_name": self.model_name,
             "read_format": self.hparams.read_format,
-            "training_data_path": normalize_path(
-                self.hparams.training_data_path, self.project_root
-            ),
-            "validation_data_path": normalize_path(
-                self.hparams.validation_data_path, self.project_root
-            ),
-            "metadata_config_path": normalize_path(
-                self.hparams.metadata_config_path, self.project_root
-            ),
-            "training_data_identity": self._path_identity(
-                self.hparams.training_data_path
-            ),
-            "validation_data_identity": self._path_identity(
-                self.hparams.validation_data_path
-            ),
-            "metadata_config_identity": self._path_identity(
-                self.hparams.metadata_config_path
-            ),
             "num_batches": num_batches,
             "batch_size": self.batch_size,
             "accumulation_steps": self.accumulation_steps,
@@ -1395,13 +1344,25 @@ class TransformerModel(nn.Module):
             "special_token_ids": self.hparams.special_token_ids,
             "model_spec": self.hparams.model_spec.model_dump(mode="json"),
         }
+        provenance = {
+            "training_data_path": normalize_path(
+                self.hparams.training_data_path, self.project_root
+            ),
+            "validation_data_path": normalize_path(
+                self.hparams.validation_data_path, self.project_root
+            ),
+            "metadata_config_path": normalize_path(
+                self.hparams.metadata_config_path, self.project_root
+            ),
+        }
         fingerprint_input = json.dumps(
-            resume_settings, sort_keys=True, default=str
+            compatibility_settings, sort_keys=True, default=str
         ).encode("utf-8")
         return {
             "format_version": CHECKPOINT_FORMAT_VERSION,
             "config_fingerprint": hashlib.sha256(fingerprint_input).hexdigest(),
-            "resume_settings": resume_settings,
+            "resume_settings": compatibility_settings,
+            "provenance": provenance,
         }
 
     @beartype
@@ -1510,6 +1471,32 @@ class TransformerModel(nn.Module):
         return rng_states[0]
 
     @beartype
+    def _get_data_loader_generator_states(self) -> dict[str, Tensor]:
+        """Capture dedicated DataLoader generator states."""
+        return {
+            name: generator.get_state()
+            for name, generator in self._data_loader_generators.items()
+        }
+
+    @beartype
+    def _restore_data_loader_generator_states(self) -> None:
+        """Restore dedicated DataLoader generator states when present."""
+        states = self._resume_data_loader_generator_states
+        if states is None:
+            return
+        if not isinstance(states, dict):
+            self.logger.warning(
+                "[WARNING] Checkpoint DataLoader generator state is not a dictionary; "
+                "using freshly seeded DataLoader generators."
+            )
+            return
+
+        for name, generator in self._data_loader_generators.items():
+            state = states.get(name)
+            if isinstance(state, Tensor):
+                generator.set_state(state)
+
+    @beartype
     def _apply_checkpoint_training_state(
         self,
         scaler_state_dict: Optional[dict[str, Any]],
@@ -1517,6 +1504,7 @@ class TransformerModel(nn.Module):
         n_epochs_no_improvement: Any,
         best_model_state_dict: Any,
         rng_states: Any,
+        data_loader_generator_states: Any,
     ) -> None:
         """Restore non-model training state from a checkpoint payload."""
         if scaler_state_dict is not None:
@@ -1531,6 +1519,7 @@ class TransformerModel(nn.Module):
         self._resume_n_epochs_no_improvement = int(n_epochs_no_improvement)
         self._resume_best_model_state_dict = best_model_state_dict
         self._resume_rng_state = self._select_rng_state_for_rank(rng_states)
+        self._resume_data_loader_generator_states = data_loader_generator_states
 
     @beartype
     def _restore_rng_state(self) -> None:
@@ -2722,6 +2711,7 @@ class TransformerModel(nn.Module):
             optim_state_dict = self.optimizer.state_dict()
 
         rng_state = self._collect_rng_states_for_checkpoint()
+        data_loader_generator_states = self._get_data_loader_generator_states()
 
         if self.rank != 0:
             return
@@ -2745,6 +2735,7 @@ class TransformerModel(nn.Module):
             "scheduler_state_dict": self.scheduler.state_dict(),
             "scaler_state_dict": self.scaler.state_dict(),
             "rng_state": rng_state,
+            "data_loader_generator_states": data_loader_generator_states,
             "best_val_loss": float(best_val_loss),
             "n_epochs_no_improvement": int(n_epochs_no_improvement),
             "best_model_state_dict": best_model_state_dict,
