@@ -9,6 +9,7 @@ import os
 import random
 import re
 import sys
+from dataclasses import asdict
 
 os.environ["TORCH_NCCL_ASYNC_ERROR_HANDLING"] = "1"
 import time  # noqa: E402
@@ -56,6 +57,7 @@ torch._dynamo.config.suppress_errors = True
 
 ClassCounts = dict[str, Tensor]
 CHECKPOINT_FORMAT_VERSION = 2
+SUPPORTED_CHECKPOINT_FORMAT_VERSIONS = {2}
 
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
@@ -178,6 +180,13 @@ def train_worker(
         train_dataset = SequifierDatasetFromFile(config.training_data_path, config)
         valid_dataset = SequifierDatasetFromFile(config.validation_data_path, config)
 
+    configure_determinism(config.seed, config.training_spec.enforce_determinism)
+
+    train_loader_generator = torch.Generator()
+    train_loader_generator.manual_seed(config.seed + 10_001)
+    valid_loader_generator = torch.Generator()
+    valid_loader_generator.manual_seed(config.seed + 10_002)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=None,  # Batching is handled natively by the IterableDataset
@@ -186,6 +195,7 @@ def train_worker(
         pin_memory=config.training_spec.device not in ["mps", "cpu"],
         prefetch_factor=4 if config.training_spec.num_workers > 0 else None,
         persistent_workers=(config.training_spec.num_workers > 0),
+        generator=train_loader_generator,
     )
 
     valid_loader = DataLoader(
@@ -196,9 +206,8 @@ def train_worker(
         pin_memory=config.training_spec.device not in ["mps", "cpu"],
         prefetch_factor=4 if config.training_spec.num_workers > 0 else None,
         persistent_workers=(config.training_spec.num_workers > 0),
+        generator=valid_loader_generator,
     )
-
-    configure_determinism(config.seed, config.training_spec.enforce_determinism)
 
     model = TransformerModel(config, rank=global_rank, local_rank=local_rank)
     base_model = model
@@ -282,8 +291,18 @@ def train_worker(
         params_to_optimize = model.parameters()
         model.initialize_optimizer(params=params_to_optimize)
 
-        if config.training_spec.continue_training and latest_model_path:
+        resume_signal = [
+            config.training_spec.continue_training and latest_model_path is not None
+            if global_rank == 0
+            else None
+        ]
+        dist.broadcast_object_list(resume_signal, src=0)
+        did_resume = cast(bool, resume_signal[0])
+
+        if did_resume:
             if global_rank == 0:
+                if latest_model_path is None:
+                    raise RuntimeError("Rank 0 selected resume without a checkpoint.")
                 checkpoint = torch.load(
                     latest_model_path, map_location="cpu", weights_only=False
                 )
@@ -390,7 +409,7 @@ def train_worker(
 
             dist.barrier()
 
-        if checkpoint is not None:
+        if did_resume:
             base_model._restore_rng_state()
 
         model.train_model(train_loader, valid_loader, ddp_model=base_model)
@@ -857,6 +876,7 @@ class TransformerModel(nn.Module):
         self._resume_n_epochs_no_improvement = 0
         self._resume_best_model_state_dict = None
         self._resume_rng_state = None
+        self._checkpoint_path_identity_cache: dict[str, dict[str, Any]] = {}
 
         self._apply_layer_dtypes()
 
@@ -1257,13 +1277,84 @@ class TransformerModel(nn.Module):
                 sys.exit(143)
 
     @beartype
+    def _path_identity(self, path: str) -> dict[str, Any]:
+        """Return a cached, JSON-safe identity summary for a file or folder."""
+        normalized_path = normalize_path(path, self.project_root)
+        if normalized_path in self._checkpoint_path_identity_cache:
+            return self._checkpoint_path_identity_cache[normalized_path]
+
+        identity: dict[str, Any]
+        if not os.path.exists(normalized_path):
+            identity = {"path": normalized_path, "exists": False}
+        elif os.path.isfile(normalized_path):
+            stat = os.stat(normalized_path)
+            identity = {
+                "path": normalized_path,
+                "exists": True,
+                "type": "file",
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        else:
+            entries: list[dict[str, Any]] = []
+            for root, dirs, files in os.walk(normalized_path):
+                dirs.sort()
+                files.sort()
+                for file_name in files:
+                    file_path = os.path.join(root, file_name)
+                    with contextlib.suppress(OSError):
+                        stat = os.stat(file_path)
+                        entries.append(
+                            {
+                                "path": os.path.relpath(file_path, normalized_path),
+                                "size": stat.st_size,
+                                "mtime_ns": stat.st_mtime_ns,
+                            }
+                        )
+            manifest = json.dumps(entries, sort_keys=True).encode("utf-8")
+            identity = {
+                "path": normalized_path,
+                "exists": True,
+                "type": "directory",
+                "file_count": len(entries),
+                "manifest_hash": hashlib.sha256(manifest).hexdigest(),
+            }
+
+        self._checkpoint_path_identity_cache[normalized_path] = identity
+        return identity
+
+    @beartype
     def _checkpoint_compatibility_metadata(
         self, num_batches: Optional[int]
     ) -> dict[str, Any]:
         """Return resume-critical settings stored with each new checkpoint."""
         training_spec = self.hparams.training_spec
+        bert_spec = (
+            training_spec.bert_spec.model_dump(mode="json")
+            if training_spec.bert_spec is not None
+            else None
+        )
         resume_settings = {
             "model_name": self.model_name,
+            "read_format": self.hparams.read_format,
+            "training_data_path": normalize_path(
+                self.hparams.training_data_path, self.project_root
+            ),
+            "validation_data_path": normalize_path(
+                self.hparams.validation_data_path, self.project_root
+            ),
+            "metadata_config_path": normalize_path(
+                self.hparams.metadata_config_path, self.project_root
+            ),
+            "training_data_identity": self._path_identity(
+                self.hparams.training_data_path
+            ),
+            "validation_data_identity": self._path_identity(
+                self.hparams.validation_data_path
+            ),
+            "metadata_config_identity": self._path_identity(
+                self.hparams.metadata_config_path
+            ),
             "num_batches": num_batches,
             "batch_size": self.batch_size,
             "accumulation_steps": self.accumulation_steps,
@@ -1279,9 +1370,29 @@ class TransformerModel(nn.Module):
                 else training_spec.world_size
             ),
             "training_objective": training_spec.training_objective,
+            "seed": self.hparams.seed,
+            "dropout": training_spec.dropout,
+            "bert_spec": bert_spec,
+            "sampling_strategy": training_spec.sampling_strategy,
+            "criterion": training_spec.criterion,
+            "class_weights": training_spec.class_weights,
+            "loss_weights": training_spec.loss_weights,
+            "layer_type_dtypes": training_spec.layer_type_dtypes,
+            "layer_autocast": training_spec.layer_autocast,
+            "num_workers": training_spec.num_workers,
+            "load_full_data_to_ram": training_spec.load_full_data_to_ram,
+            "fsdp_cpu_offload": training_spec.fsdp_cpu_offload,
+            "storage_layout": asdict(self.storage_layout),
+            "window_view": asdict(self.window_view),
+            "column_types": self.hparams.column_types,
+            "categorical_columns": self.categorical_columns,
+            "real_columns": self.real_columns,
             "input_columns": self.input_columns,
             "target_columns": self.target_columns,
             "target_column_types": self.target_column_types,
+            "n_classes": self.n_classes,
+            "id_maps": self.hparams.id_maps,
+            "special_token_ids": self.hparams.special_token_ids,
             "model_spec": self.hparams.model_spec.model_dump(mode="json"),
         }
         fingerprint_input = json.dumps(
@@ -1305,26 +1416,25 @@ class TransformerModel(nn.Module):
                 "continuing with legacy resume behavior."
             )
             return
+        if not isinstance(checkpoint_metadata, dict):
+            raise ValueError("Checkpoint compatibility metadata must be a dictionary.")
 
         format_version = checkpoint_metadata.get("format_version")
-        if format_version != CHECKPOINT_FORMAT_VERSION:
-            self.logger.warning(
-                "[WARNING] Checkpoint format version "
-                f"{format_version!r} differs from expected "
-                f"{CHECKPOINT_FORMAT_VERSION!r}."
+        if format_version not in SUPPORTED_CHECKPOINT_FORMAT_VERSIONS:
+            raise ValueError(
+                "Unsupported checkpoint format version "
+                f"{format_version!r}; supported versions are "
+                f"{sorted(SUPPORTED_CHECKPOINT_FORMAT_VERSIONS)!r}."
             )
 
         saved_settings = checkpoint_metadata.get("resume_settings")
-        if saved_settings is None:
-            self.logger.warning(
-                "[WARNING] Checkpoint has no resume-settings fingerprint payload; "
-                "continuing without compatibility checks."
+        if not isinstance(saved_settings, dict):
+            raise ValueError(
+                "Checkpoint compatibility metadata is missing resume_settings."
             )
-            return
 
-        current_settings = self._checkpoint_compatibility_metadata(num_batches)[
-            "resume_settings"
-        ]
+        current_metadata = self._checkpoint_compatibility_metadata(num_batches)
+        current_settings = current_metadata["resume_settings"]
         mismatches = []
         for key, current_value in current_settings.items():
             saved_value = saved_settings.get(key)
@@ -1338,6 +1448,14 @@ class TransformerModel(nn.Module):
             raise ValueError(
                 "Checkpoint is incompatible with the current training configuration: "
                 f"{mismatch_text}"
+            )
+
+        saved_fingerprint = checkpoint_metadata.get("config_fingerprint")
+        current_fingerprint = current_metadata["config_fingerprint"]
+        if saved_fingerprint != current_fingerprint:
+            raise ValueError(
+                "Checkpoint configuration fingerprint mismatch: "
+                f"checkpoint={saved_fingerprint!r}, current={current_fingerprint!r}"
             )
 
     @beartype
@@ -2676,7 +2794,7 @@ class TransformerModel(nn.Module):
     def _get_latest_model_name(self) -> Optional[str]:
         """Return the newest checkpoint path for this model name."""
         checkpoint_path = os.path.join(
-            self.project_root, "checkpoints", f"{self.model_name}-*.pt"
+            self.project_root, "checkpoints", f"{glob.escape(self.model_name)}-*.pt"
         )
         checkpoint_name_re = re.compile(
             rf"^{re.escape(self.model_name)}-(?:latest|epoch-\d+(?:-batch-\d+)?)\.pt$"
