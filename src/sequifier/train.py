@@ -269,18 +269,19 @@ def train_worker(
         )  # 1D mesh for standard ZeRO-3 full sharding
         model._data_parallel_group = mesh.get_group()
 
-        mp_policy = None
         if config.training_spec.layer_autocast:
             amp_dtype = get_torch_dtype(
                 config.training_spec.layer_type_dtypes.get("linear", "bfloat16")
                 if config.training_spec.layer_type_dtypes
                 else "bfloat16"
             )
-            mp_policy = MixedPrecisionPolicy(
-                param_dtype=amp_dtype,
-                reduce_dtype=amp_dtype,
-                output_dtype=amp_dtype,
-            )
+        else:
+            amp_dtype = torch.float32
+        mp_policy = MixedPrecisionPolicy(
+            param_dtype=amp_dtype,
+            reduce_dtype=amp_dtype,
+            output_dtype=amp_dtype,
+        )
 
         offload_policy = (
             OffloadPolicy() if config.training_spec.fsdp_cpu_offload else None
@@ -1429,12 +1430,13 @@ class TransformerModel(nn.Module):
     @beartype
     def _get_rng_state(self) -> dict[str, Any]:
         """Capture Python, NumPy, Torch CPU, and CUDA RNG state for this rank."""
+        device = torch.device(self.device)
         return {
             "python": random.getstate(),
             "numpy": np.random.get_state(),
             "torch": torch.get_rng_state(),
-            "cuda": torch.cuda.get_rng_state_all()
-            if torch.cuda.is_available()
+            "cuda": torch.cuda.get_rng_state(device=device)
+            if device.type == "cuda" and torch.cuda.is_available()
             else None,
         }
 
@@ -1543,8 +1545,13 @@ class TransformerModel(nn.Module):
         np.random.set_state(rng_state["numpy"])
         torch.set_rng_state(rng_state["torch"])
         cuda_state = rng_state.get("cuda")
-        if cuda_state is not None and torch.cuda.is_available():
-            torch.cuda.set_rng_state_all(cuda_state)
+        device = torch.device(self.device)
+        if (
+            cuda_state is not None
+            and device.type == "cuda"
+            and torch.cuda.is_available()
+        ):
+            torch.cuda.set_rng_state(cuda_state, device=device)
 
     @beartype
     def train_model(

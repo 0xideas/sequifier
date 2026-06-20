@@ -654,6 +654,18 @@ class TrainModel(BaseModel):
                 f'torch_compile {v.torch_compile} invalid, must be one of ["outer", "inner", "none"]'
             )
 
+        if v.data_parallelism == "FSDP":
+            if v.layer_type_dtypes is not None:
+                raise ValueError(
+                    "FSDP does not support manual layer pre-casting. Please set "
+                    "'layer_type_dtypes' to null when using FSDP, and rely on "
+                    "'layer_autocast' (MixedPrecisionPolicy) instead."
+                )
+            if v.fsdp_cpu_offload is None:
+                raise ValueError(
+                    "If data_parallelism == 'FSDP', fsdp_cpu_offload cannot be None"
+                )
+
         if v.data_parallelism == "FSDP" and v.torch_compile == "outer":
             raise ValueError(
                 "If data_parallelism is set to 'FSDP' then torch_compile must be one of 'none' and 'inner'"
