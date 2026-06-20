@@ -881,6 +881,7 @@ class TransformerModel(nn.Module):
             hparams.training_spec.save_latest_interval_minutes
         )
         self.save_interval_minutes = hparams.training_spec.save_interval_minutes
+        self.save_interval_batches = hparams.training_spec.save_interval_batches
         self.save_interval_val_loss = hparams.training_spec.save_interval_val_loss
         self.continue_training = hparams.training_spec.continue_training
 
