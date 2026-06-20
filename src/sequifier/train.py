@@ -230,9 +230,13 @@ def train_worker(
                 latest_model_path, map_location="cpu", weights_only=False
             )
             model._validate_checkpoint_compatibility(checkpoint, len(train_loader))
-            model.load_state_dict(checkpoint["model_state_dict"])
-            model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-            model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            model.load_state_dict(copy.deepcopy(checkpoint["model_state_dict"]))
+            model.optimizer.load_state_dict(
+                copy.deepcopy(checkpoint["optimizer_state_dict"])
+            )
+            model.scheduler.load_state_dict(
+                copy.deepcopy(checkpoint["scheduler_state_dict"])
+            )
             base_model.start_epoch, base_model.start_batch = _checkpoint_start_position(
                 checkpoint, len(train_loader)
             )
@@ -377,7 +381,7 @@ def train_worker(
             set_optimizer_state_dict(
                 base_model,
                 base_model.optimizer,
-                optim_state_dict=full_osd,
+                optim_state_dict=copy.deepcopy(full_osd),
                 options=options,
             )
 
@@ -596,6 +600,46 @@ def _checkpoint_start_position(
     if checkpoint["batch"] + 1 >= num_batches:
         return checkpoint["epoch"] + 1, 0
     return checkpoint["epoch"], checkpoint["batch"] + 1
+
+
+def _update_file_metadata_hash(hasher: Any, file_path: str) -> None:
+    """Hash file identity metadata without reading the file contents."""
+    normalized_path = os.path.abspath(file_path)
+    file_stat = os.stat(normalized_path)
+    hasher.update(normalized_path.encode("utf-8"))
+    hasher.update(str(file_stat.st_size).encode("utf-8"))
+    hasher.update(str(file_stat.st_mtime_ns).encode("utf-8"))
+
+
+def _update_folder_dataset_metadata_hash(hasher: Any, data_dir: str) -> None:
+    """Hash folder dataset metadata and chunk file metadata."""
+    metadata_path = os.path.join(data_dir, "metadata.json")
+    _update_file_metadata_hash(hasher, metadata_path)
+
+    with open(metadata_path, "r") as f:
+        metadata = json.load(f)
+
+    batch_files_info = metadata.get("batch_files")
+    if not isinstance(batch_files_info, list):
+        raise ValueError(f"metadata.json in {data_dir!r} is missing batch_files.")
+
+    for file_info in batch_files_info:
+        relative_path = file_info["path"]
+        file_path = os.path.join(data_dir, relative_path)
+        hasher.update(str(relative_path).encode("utf-8"))
+        hasher.update(str(file_info.get("samples", "")).encode("utf-8"))
+        _update_file_metadata_hash(hasher, file_path)
+
+
+def _dataset_metadata_fingerprint(data_path: str, config: TrainModel) -> str:
+    """Return a fast provenance fingerprint from filesystem metadata."""
+    normalized_path = normalize_path(data_path, config.project_root)
+    hasher = hashlib.sha256()
+    if os.path.isdir(normalized_path):
+        _update_folder_dataset_metadata_hash(hasher, normalized_path)
+    else:
+        _update_file_metadata_hash(hasher, normalized_path)
+    return hasher.hexdigest()
 
 
 @beartype
@@ -1342,6 +1386,12 @@ class TransformerModel(nn.Module):
             "n_classes": self.n_classes,
             "id_maps": self.hparams.id_maps,
             "special_token_ids": self.hparams.special_token_ids,
+            "training_data_fingerprint": _dataset_metadata_fingerprint(
+                self.hparams.training_data_path, self.hparams
+            ),
+            "validation_data_fingerprint": _dataset_metadata_fingerprint(
+                self.hparams.validation_data_path, self.hparams
+            ),
             "model_spec": self.hparams.model_spec.model_dump(mode="json"),
         }
         provenance = {
@@ -1406,15 +1456,16 @@ class TransformerModel(nn.Module):
 
         if mismatches:
             mismatch_text = "; ".join(mismatches)
-            raise ValueError(
-                "Checkpoint is incompatible with the current training configuration: "
+            warnings.warn(
+                "Checkpoint is not identical with the current training configuration. "
+                "Ensure that this is the intended configuration. "
                 f"{mismatch_text}"
             )
 
         saved_fingerprint = checkpoint_metadata.get("config_fingerprint")
         current_fingerprint = current_metadata["config_fingerprint"]
         if saved_fingerprint != current_fingerprint:
-            raise ValueError(
+            warnings.warn(
                 "Checkpoint configuration fingerprint mismatch: "
                 f"checkpoint={saved_fingerprint!r}, current={current_fingerprint!r}"
             )
@@ -1739,17 +1790,26 @@ class TransformerModel(nn.Module):
         num_batches = len(train_loader)
         start_batch = self.start_batch
         self.start_batch = 0
+        set_dataset_start_batch = getattr(train_loader.dataset, "set_start_batch", None)
+        dataset_handles_start_batch = callable(set_dataset_start_batch)
+        if dataset_handles_start_batch:
+            set_dataset_start_batch(start_batch)
 
         model_to_call = ddp_model if ddp_model is not None else self
 
         model_to_call.train()
 
-        for batch_count, batch in enumerate(train_loader):
+        for batch_offset, batch in enumerate(train_loader):
             if not isinstance(batch, SequifierBatch):
                 raise TypeError(
                     "Training DataLoader must yield SequifierBatch objects, "
                     f"got {type(batch).__name__}."
                 )
+            batch_count = (
+                start_batch + batch_offset
+                if dataset_handles_start_batch
+                else batch_offset
+            )
             if batch_count >= start_batch:
                 data = batch.inputs
                 targets = batch.targets
@@ -1984,6 +2044,9 @@ class TransformerModel(nn.Module):
                             num_batches=num_batches,
                         )
                         self.last_batch_save_time = time.time()
+
+        if dataset_handles_start_batch:
+            set_dataset_start_batch(0)
 
     @beartype
     def _calculate_loss(
@@ -2708,7 +2771,7 @@ class TransformerModel(nn.Module):
             model_state_dict = {
                 k.replace("_orig_mod.", ""): v for k, v in self.state_dict().items()
             }
-            optim_state_dict = self.optimizer.state_dict()
+            optim_state_dict = copy.deepcopy(self.optimizer.state_dict())
 
         rng_state = self._collect_rng_states_for_checkpoint()
         data_loader_generator_states = self._get_data_loader_generator_states()

@@ -14,6 +14,13 @@ from sequifier.helpers import (
     resolve_window_view,
 )
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.iteration_state import (
+    read_shared_int,
+    resolve_resume_worker,
+    shared_int,
+    skip_samples_for_batches,
+    write_shared_int,
+)
 
 
 class SequifierDatasetFromFile(IterableDataset):
@@ -24,7 +31,8 @@ class SequifierDatasetFromFile(IterableDataset):
         self.config = config
         self.batch_size = config.training_spec.batch_size
         self.shuffle = shuffle
-        self.epoch = 0
+        self._epoch_state = shared_int(0)
+        self._start_batch_state = shared_int(0)
 
         all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
@@ -70,7 +78,11 @@ class SequifierDatasetFromFile(IterableDataset):
 
     def set_epoch(self, epoch: int):
         """Set the shuffle epoch."""
-        self.epoch = epoch
+        write_shared_int(self._epoch_state, epoch)
+
+    def set_start_batch(self, start_batch: int):
+        """Set the first global batch to yield on the next iteration."""
+        write_shared_int(self._start_batch_state, start_batch)
 
     def __len__(self) -> int:
         return math.ceil(self.n_samples / self.batch_size)
@@ -84,22 +96,39 @@ class SequifierDatasetFromFile(IterableDataset):
 
         if worker_info is None:
             # Single-process data loading
-            worker_id = 0
+            physical_worker_id = 0
             num_workers = 1
         else:
             # Multi-process data loading
-            worker_id = worker_info.id
+            physical_worker_id = worker_info.id
             num_workers = worker_info.num_workers
+        epoch = read_shared_int(self._epoch_state)
+        start_batch = read_shared_int(self._start_batch_state)
 
         indices = torch.arange(self.n_samples)
         if self.shuffle:
             g = torch.Generator()
             # Use epoch and seed for a different but deterministic shuffle each epoch
-            g.manual_seed(self.config.seed + self.epoch)
+            g.manual_seed(self.config.seed + epoch)
             indices = indices[torch.randperm(self.n_samples, generator=g)]
 
         indices_for_rank = indices[rank::world_size]
+        worker_batch_counts = [
+            len(indices_for_rank[i::num_workers]) // self.batch_size
+            for i in range(num_workers)
+        ]
+        worker_id, skip_batches = resolve_resume_worker(
+            start_batch,
+            physical_worker_id,
+            num_workers,
+            worker_batch_counts,
+        )
+
         indices_for_worker = indices_for_rank[worker_id::num_workers]
+        skipped_samples = skip_samples_for_batches(
+            skip_batches, self.batch_size, len(indices_for_worker)
+        )
+        indices_for_worker = indices_for_worker[skipped_samples:]
 
         for i in range(0, len(indices_for_worker), self.batch_size):
             batch_end = i + self.batch_size

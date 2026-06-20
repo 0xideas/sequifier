@@ -19,6 +19,13 @@ from sequifier.helpers import (
     stored_window_layout_from_metadata,
 )
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.iteration_state import (
+    read_shared_int,
+    resolve_resume_worker,
+    shared_int,
+    skip_samples_for_batches,
+    write_shared_int,
+)
 
 
 class SequifierDatasetFromFolderParquet(IterableDataset):
@@ -30,7 +37,8 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         self.config = config
         self.batch_size = config.training_spec.batch_size
         self.shuffle = shuffle
-        self.epoch = 0
+        self._epoch_state = shared_int(0)
+        self._start_batch_state = shared_int(0)
         self.sampling_strategy = config.training_spec.sampling_strategy
 
         metadata_path = os.path.join(self.data_dir, "metadata.json")
@@ -142,7 +150,11 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
 
     def set_epoch(self, epoch: int):
         """Set the shuffle epoch."""
-        self.epoch = epoch
+        write_shared_int(self._epoch_state, epoch)
+
+    def set_start_batch(self, start_batch: int):
+        """Set the first global batch to yield on the next iteration."""
+        write_shared_int(self._start_batch_state, start_batch)
 
     def _get_target_samples(self) -> int:
         """Return per-rank sample count under the configured sampling strategy."""
@@ -171,13 +183,15 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         rank = dist.get_rank() if dist.is_initialized() else 0
 
         worker_info = get_worker_info()
-        worker_id = worker_info.id if worker_info is not None else 0
+        physical_worker_id = worker_info.id if worker_info is not None else 0
         num_workers = worker_info.num_workers if worker_info is not None else 1
+        epoch = read_shared_int(self._epoch_state)
+        start_batch = read_shared_int(self._start_batch_state)
 
         indices = torch.arange(self.n_samples)
         if self.shuffle:
             g = torch.Generator()
-            g.manual_seed(self.config.seed + self.epoch)
+            g.manual_seed(self.config.seed + epoch)
             indices = indices[torch.randperm(self.n_samples, generator=g)]
 
         indices_for_rank = indices[rank::world_size].tolist()
@@ -202,8 +216,24 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
             indices_for_rank = indices_for_rank[: self.target_samples]
             sample_is_real = sample_is_real[: self.target_samples]
 
+        worker_batch_counts = [
+            math.ceil(len(indices_for_rank[i::num_workers]) / self.batch_size)
+            for i in range(num_workers)
+        ]
+        worker_id, skip_batches = resolve_resume_worker(
+            start_batch,
+            physical_worker_id,
+            num_workers,
+            worker_batch_counts,
+        )
+
         indices_for_worker = indices_for_rank[worker_id::num_workers]
         sample_is_real_for_worker = sample_is_real[worker_id::num_workers]
+        skipped_samples = skip_samples_for_batches(
+            skip_batches, self.batch_size, len(indices_for_worker)
+        )
+        indices_for_worker = indices_for_worker[skipped_samples:]
+        sample_is_real_for_worker = sample_is_real_for_worker[skipped_samples:]
 
         for i in range(0, len(indices_for_worker), self.batch_size):
             batch_indices = indices_for_worker[i : i + self.batch_size]

@@ -20,6 +20,13 @@ from sequifier.helpers import (
     stored_window_layout_from_metadata,
 )
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.iteration_state import (
+    read_shared_int,
+    resolve_resume_worker,
+    shared_int,
+    skip_samples_for_batches,
+    write_shared_int,
+)
 
 
 class SequifierDatasetFromFolderParquetLazy(IterableDataset):
@@ -31,7 +38,8 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         self.config = config
         self.batch_size = config.training_spec.batch_size
         self.shuffle = shuffle
-        self.epoch = 0
+        self._epoch_state = shared_int(0)
+        self._start_batch_state = shared_int(0)
 
         metadata_path = os.path.join(self.data_dir, "metadata.json")
         if not os.path.exists(metadata_path):
@@ -75,7 +83,11 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
 
     def set_epoch(self, epoch: int):
         """Set the shuffle epoch."""
-        self.epoch = epoch
+        write_shared_int(self._epoch_state, epoch)
+
+    def set_start_batch(self, start_batch: int):
+        """Set the first global batch to yield on the next iteration."""
+        write_shared_int(self._start_batch_state, start_batch)
 
     def _get_target_samples(self) -> int:
         """Return per-rank sample count under the configured sampling strategy."""
@@ -144,8 +156,10 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         rank = dist.get_rank() if dist.is_initialized() else 0
 
         worker_info = get_worker_info()
-        worker_id = worker_info.id if worker_info is not None else 0
+        physical_worker_id = worker_info.id if worker_info is not None else 0
         num_workers = worker_info.num_workers if worker_info is not None else 1
+        epoch = read_shared_int(self._epoch_state)
+        start_batch = read_shared_int(self._start_batch_state)
 
         num_files = len(self.batch_files_info)
         original_files_for_this_rank = list(range(rank, num_files, world_size))
@@ -162,18 +176,37 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
 
         base_samples_per_worker = self.target_samples // num_workers
         remainder = self.target_samples % num_workers
+        worker_sample_counts = [
+            base_samples_per_worker + (1 if i < remainder else 0)
+            for i in range(num_workers)
+        ]
+        worker_batch_counts = [
+            math.ceil(sample_count / self.batch_size)
+            for sample_count in worker_sample_counts
+        ]
+        worker_id, skip_batches = resolve_resume_worker(
+            start_batch,
+            physical_worker_id,
+            num_workers,
+            worker_batch_counts,
+        )
 
         worker_start_sample = 0
         for i in range(worker_id):
-            worker_start_sample += base_samples_per_worker + (1 if i < remainder else 0)
+            worker_start_sample += worker_sample_counts[i]
 
-        worker_target_samples = base_samples_per_worker + (
-            1 if worker_id < remainder else 0
-        )
+        worker_target_samples = worker_sample_counts[worker_id]
         worker_end_sample = worker_start_sample + worker_target_samples
+        skipped_samples = skip_samples_for_batches(
+            skip_batches, self.batch_size, worker_target_samples
+        )
+        worker_start_sample += skipped_samples
+        worker_target_samples -= skipped_samples
+        if worker_target_samples <= 0:
+            return
 
         g = torch.Generator()
-        g.manual_seed(self.config.seed + self.epoch)
+        g.manual_seed(self.config.seed + epoch)
 
         if self.shuffle:
             file_order = torch.randperm(len(files_for_this_rank), generator=g).tolist()
@@ -224,7 +257,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             indices = torch.arange(file_samples)
             if self.shuffle:
                 g_file = torch.Generator()
-                g_file.manual_seed(self.config.seed + self.epoch + f_id + rank)
+                g_file.manual_seed(self.config.seed + epoch + f_id + rank)
                 indices = indices[torch.randperm(file_samples, generator=g_file)]
 
             worker_file_start_idx = max(0, worker_start_sample - file_start)
