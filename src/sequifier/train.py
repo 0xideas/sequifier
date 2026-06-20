@@ -880,11 +880,9 @@ class TransformerModel(nn.Module):
         self.save_latest_interval_minutes = (
             hparams.training_spec.save_latest_interval_minutes
         )
-        self.save_batch_interval_minutes = (
-            hparams.training_spec.save_batch_interval_minutes
-        )
-        self.save_batch_interval_minutes_val_loss = (
-            hparams.training_spec.save_batch_interval_minutes_val_loss
+        self.save_interval_minutes = hparams.training_spec.save_interval_minutes
+        self.save_interval_minutes_val_loss = (
+            hparams.training_spec.save_interval_minutes_val_loss
         )
         self.continue_training = hparams.training_spec.continue_training
 
@@ -1936,9 +1934,9 @@ class TransformerModel(nn.Module):
                         ) >= (self.save_latest_interval_minutes * 60):
                             should_save_latest[0] = 1
 
-                        if self.save_batch_interval_minutes is not None and (
+                        if self.save_interval_minutes is not None and (
                             elapsed_since_batch_save
-                        ) >= (self.save_batch_interval_minutes * 60):
+                        ) >= (self.save_interval_minutes * 60):
                             should_save_batch[0] = 1
 
                     if self.hparams.training_spec.distributed:
@@ -1947,7 +1945,7 @@ class TransformerModel(nn.Module):
                         dist.barrier()
 
                     if should_save_batch.item() == 1:
-                        if self.save_batch_interval_minutes_val_loss:
+                        if self.save_interval_minutes_val_loss:
                             val_loss, val_losses, class_counts = self._evaluate(
                                 valid_loader, ddp_model
                             )

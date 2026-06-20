@@ -216,8 +216,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     early_stopping_epochs: Optional[int] = None
     save_interval_epochs: int
     save_latest_interval_minutes: Optional[float] = None
-    save_batch_interval_minutes: Optional[float] = None
-    save_batch_interval_minutes_val_loss: bool = True
+    save_interval_minutes: Optional[float] = None
+    save_interval_minutes_val_loss: bool = True
     calculate_validation_loss_on_initialization: bool = False
 
     training_objective: list[str] = Field(default_factory=lambda: ["causal"])
@@ -398,8 +398,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             early_stopping_epochs=self.early_stopping_epochs,
             save_interval_epochs=self.save_interval_epochs,
             save_latest_interval_minutes=self.save_latest_interval_minutes,
-            save_batch_interval_minutes=self.save_batch_interval_minutes,
-            save_batch_interval_minutes_val_loss=self.save_batch_interval_minutes_val_loss,
+            save_interval_minutes=self.save_interval_minutes,
+            save_interval_minutes_val_loss=self.save_interval_minutes_val_loss,
             calculate_validation_loss_on_initialization=self.calculate_validation_loss_on_initialization,
             batch_size=batch_size,
             learning_rate=learning_rate,

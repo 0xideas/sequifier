@@ -72,8 +72,8 @@ These fields determine the size and complexity of the Transformer.
 | `class_weights` | `dict` | No | `null` | Weights for specific classes (useful for imbalanced datasets). |
 | `save_interval_epochs` | `int` | **Yes** | - | Save a checkpoint every N epochs. |
 | `save_latest_interval_minutes`| `float`| No | Time interval to overwrite a "latest" checkpoint. |
-| `save_batch_interval_minutes` | `float` | No | Time interval to save a unique, batch-specific checkpoint. |
-| `save_batch_interval_minutes_val_loss` | `bool` | No | Whether to calculate validation loss at the moment of the batch interval save. Defaults to true. |
+| `save_interval_minutes` | `float` | No | Time interval to save a unique, batch-specific checkpoint. |
+| `save_interval_minutes_val_loss` | `bool` | No | Whether to calculate validation loss at the moment of the batch interval save. Defaults to true. |
 | `calculate_validation_loss_on_initialization` | `bool` | No | Determines if a validation pass runs before epoch 1 begins. Defaults to true. |
 | `early_stopping_epochs`| `int` | No | `null` | Stop training if validation loss doesn't improve for N epochs. |
 | `log_interval` | `int` | No | `10` | Print training logs every N batches. |

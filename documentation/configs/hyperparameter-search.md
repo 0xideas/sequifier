@@ -134,8 +134,8 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `scheduler` | `list[dict]` | No | `[{'name': 'StepLR'...}]`| List of scheduler configs. `scheduler.step()` is only called if \< total\_steps, so correct configuration is essential. |
 | `scheduler_step_on` | `str` | No | `epoch` | When to step the scheduler: `epoch` or `batch`. |
 | `save_latest_interval_minutes`| `float`| No | `null` | Time interval to overwrite a "latest" checkpoint. |
-| `save_batch_interval_minutes` | `float` | No | `null` | Time interval to save a unique, batch-specific checkpoint. |
-| `save_batch_interval_minutes_val_loss` | `bool` | No | `true` | Whether to calculate validation loss at the moment of the batch interval save. |
+| `save_interval_minutes` | `float` | No | `null` | Time interval to save a unique, batch-specific checkpoint. |
+| `save_interval_minutes_val_loss` | `bool` | No | `true` | Whether to calculate validation loss at the moment of the batch interval save. |
 | `calculate_validation_loss_on_initialization` | `bool` | No | `false` | Determines if a validation pass runs before epoch 1 begins. |
 | `log_interval` | `int` | No | `10` | Logging frequency (batches). |
 | `class_share_log_columns`| `list[str]`| No | `[]` | Columns for which to log the predicted class distribution in validation. |
