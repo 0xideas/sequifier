@@ -1739,10 +1739,7 @@ class TransformerModel(nn.Module):
         """Run one train epoch with optional mid-epoch saves."""
         target_names = self._loss_target_names()
         train_loss_sums, train_token_count = self._new_loss_accumulators(target_names)
-        empty_global_batches = 0
-        accumulated_global_token_count = torch.zeros(
-            (), device=self.device, dtype=torch.int64
-        )
+
         batches_aggregated = 0
 
         start_time = time.time()
@@ -1814,7 +1811,6 @@ class TransformerModel(nn.Module):
                             backward_components,
                             local_loss_sums,
                             local_token_count,
-                            global_token_count,
                         ) = self._calculate_training_loss(output, targets, metadata)
                 else:
                     output = model_to_call(data, metadata=metadata, return_logits=True)
@@ -1823,7 +1819,6 @@ class TransformerModel(nn.Module):
                         backward_components,
                         local_loss_sums,
                         local_token_count,
-                        global_token_count,
                     ) = self._calculate_training_loss(output, targets, metadata)
 
                 if self.accumulation_steps is None:
@@ -1845,9 +1840,6 @@ class TransformerModel(nn.Module):
                     local_loss_sums,
                     local_token_count,
                 )
-                accumulated_global_token_count += global_token_count.detach()
-                if global_token_count.detach().cpu().item() == 0:
-                    empty_global_batches += 1
 
                 optimizer_step_due = (
                     self.accumulation_steps is None
@@ -1856,10 +1848,7 @@ class TransformerModel(nn.Module):
                 )
                 optimizer_step_performed = False
 
-                if (
-                    optimizer_step_due
-                    and accumulated_global_token_count.detach().cpu().item() > 0
-                ):
+                if optimizer_step_due:
                     self.scaler.unscale_(self.optimizer)
 
                     torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
@@ -1872,7 +1861,6 @@ class TransformerModel(nn.Module):
                 if optimizer_step_due:
                     if not optimizer_step_performed:
                         self.optimizer.zero_grad()
-                    accumulated_global_token_count.zero_()
 
                 batches_aggregated += 1
                 if (batch_count + 1) % self.log_interval == 0:
@@ -1891,16 +1879,10 @@ class TransformerModel(nn.Module):
                         self.logger.info(
                             f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss.detach().cpu().item())} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
                         )
-                        if empty_global_batches > 0:
-                            self.logger.warning(
-                                "[WARNING] "
-                                f"{empty_global_batches} training microbatch(es) "
-                                "in this logging window contained no selected tokens."
-                            )
+
                     train_loss_sums, train_token_count = self._new_loss_accumulators(
                         target_names
                     )
-                    empty_global_batches = 0
                     if self.rank == 0:
                         batches_aggregated = 0
                         self.start_batch = 0
@@ -2024,7 +2006,7 @@ class TransformerModel(nn.Module):
         metadata: dict[str, Tensor],
     ) -> tuple[Tensor, dict[str, Tensor]]:
         """Return backward-scaled loss and components for the current rank."""
-        loss, backward_components, _, _, _ = self._calculate_training_loss(
+        loss, backward_components, _, _ = self._calculate_training_loss(
             output, targets, metadata
         )
         return loss, backward_components
@@ -2035,7 +2017,7 @@ class TransformerModel(nn.Module):
         output: dict[str, Tensor],
         targets: dict[str, Tensor],
         metadata: dict[str, Tensor],
-    ) -> tuple[Tensor, dict[str, Tensor], dict[str, Tensor], Tensor, Tensor]:
+    ) -> tuple[Tensor, dict[str, Tensor], dict[str, Tensor], Tensor]:
         """Return the normalized backward loss plus local metric primitives."""
         target_names = self._loss_target_names(targets)
         if not target_names:
@@ -2079,7 +2061,7 @@ class TransformerModel(nn.Module):
                 "Loss calculation failed; no loss tensors were generated."
             )
 
-        return loss, backward_components, local_sums, local_count, global_count
+        return loss, backward_components, local_sums, local_count
 
     @beartype
     def _calculate_local_loss_components(
