@@ -230,13 +230,9 @@ def train_worker(
                 latest_model_path, map_location="cpu", weights_only=False
             )
             model._validate_checkpoint_compatibility(checkpoint, len(train_loader))
-            model.load_state_dict(copy.deepcopy(checkpoint["model_state_dict"]))
-            model.optimizer.load_state_dict(
-                copy.deepcopy(checkpoint["optimizer_state_dict"])
-            )
-            model.scheduler.load_state_dict(
-                copy.deepcopy(checkpoint["scheduler_state_dict"])
-            )
+            model.load_state_dict(checkpoint["model_state_dict"])
+            model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
             base_model.start_epoch, base_model.start_batch = _checkpoint_start_position(
                 checkpoint, len(train_loader)
             )
@@ -381,7 +377,7 @@ def train_worker(
             set_optimizer_state_dict(
                 base_model,
                 base_model.optimizer,
-                optim_state_dict=copy.deepcopy(full_osd),
+                optim_state_dict=full_osd,
                 options=options,
             )
 
@@ -609,37 +605,6 @@ def _update_file_metadata_hash(hasher: Any, file_path: str) -> None:
     hasher.update(normalized_path.encode("utf-8"))
     hasher.update(str(file_stat.st_size).encode("utf-8"))
     hasher.update(str(file_stat.st_mtime_ns).encode("utf-8"))
-
-
-def _update_folder_dataset_metadata_hash(hasher: Any, data_dir: str) -> None:
-    """Hash folder dataset metadata and chunk file metadata."""
-    metadata_path = os.path.join(data_dir, "metadata.json")
-    _update_file_metadata_hash(hasher, metadata_path)
-
-    with open(metadata_path, "r") as f:
-        metadata = json.load(f)
-
-    batch_files_info = metadata.get("batch_files")
-    if not isinstance(batch_files_info, list):
-        raise ValueError(f"metadata.json in {data_dir!r} is missing batch_files.")
-
-    for file_info in batch_files_info:
-        relative_path = file_info["path"]
-        file_path = os.path.join(data_dir, relative_path)
-        hasher.update(str(relative_path).encode("utf-8"))
-        hasher.update(str(file_info.get("samples", "")).encode("utf-8"))
-        _update_file_metadata_hash(hasher, file_path)
-
-
-def _dataset_metadata_fingerprint(data_path: str, config: TrainModel) -> str:
-    """Return a fast provenance fingerprint from filesystem metadata."""
-    normalized_path = normalize_path(data_path, config.project_root)
-    hasher = hashlib.sha256()
-    if os.path.isdir(normalized_path):
-        _update_folder_dataset_metadata_hash(hasher, normalized_path)
-    else:
-        _update_file_metadata_hash(hasher, normalized_path)
-    return hasher.hexdigest()
 
 
 @beartype
@@ -1386,12 +1351,6 @@ class TransformerModel(nn.Module):
             "n_classes": self.n_classes,
             "id_maps": self.hparams.id_maps,
             "special_token_ids": self.hparams.special_token_ids,
-            "training_data_fingerprint": _dataset_metadata_fingerprint(
-                self.hparams.training_data_path, self.hparams
-            ),
-            "validation_data_fingerprint": _dataset_metadata_fingerprint(
-                self.hparams.validation_data_path, self.hparams
-            ),
             "model_spec": self.hparams.model_spec.model_dump(mode="json"),
         }
         provenance = {
@@ -1896,6 +1855,7 @@ class TransformerModel(nn.Module):
                     or (batch_count + 1) == num_batches
                 )
                 optimizer_step_performed = False
+
                 if (
                     optimizer_step_due
                     and accumulated_global_token_count.detach().cpu().item() > 0
