@@ -217,7 +217,8 @@ class TrainingSpecModel(BaseModel):
     save_interval_epochs: int
     save_latest_interval_minutes: Optional[float] = None
     save_interval_minutes: Optional[float] = None
-    save_interval_minutes_val_loss: bool = True
+    save_interval_batches: Optional[int] = None
+    save_interval_val_loss: bool = True
     calculate_validation_loss_on_initialization: bool = True
     batch_size: int
     learning_rate: float
@@ -640,6 +641,13 @@ class TrainModel(BaseModel):
             and v.save_interval_minutes == 0
         ):
             raise ValueError("save_interval_minutes must be larger than 0")
+
+        if (
+            v.save_interval_batches is not None
+            and not os.getenv("SEQUIFIER_TESTING", "0") == "1"
+            and v.save_interval_batches == 0
+        ):
+            raise ValueError("save_interval_batches must be larger than 0")
 
         if v.torch_compile not in ["outer", "inner", "none"]:
             raise ValueError(

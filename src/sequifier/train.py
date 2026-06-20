@@ -881,9 +881,7 @@ class TransformerModel(nn.Module):
             hparams.training_spec.save_latest_interval_minutes
         )
         self.save_interval_minutes = hparams.training_spec.save_interval_minutes
-        self.save_interval_minutes_val_loss = (
-            hparams.training_spec.save_interval_minutes_val_loss
-        )
+        self.save_interval_val_loss = hparams.training_spec.save_interval_val_loss
         self.continue_training = hparams.training_spec.continue_training
 
         use_scaler = False
@@ -1565,6 +1563,9 @@ class TransformerModel(nn.Module):
         try:
             self.last_latest_save_time = time.time()
             self.last_batch_save_time = time.time()
+            self.last_batch_save_global_step = (self.start_epoch - 1) * len(
+                train_loader
+            ) + self.start_batch
 
             if (
                 self.start_epoch == 1
@@ -1927,6 +1928,10 @@ class TransformerModel(nn.Module):
 
                     current_time = time.time()
                     elapsed_since_batch_save = current_time - self.last_batch_save_time
+                    current_global_step = (epoch - 1) * num_batches + (batch_count + 1)
+                    batches_since_batch_save = (
+                        current_global_step - self.last_batch_save_global_step
+                    )
 
                     if not self.hparams.training_spec.distributed or self.rank == 0:
                         if self.save_latest_interval_minutes is not None and (
@@ -1939,13 +1944,19 @@ class TransformerModel(nn.Module):
                         ) >= (self.save_interval_minutes * 60):
                             should_save_batch[0] = 1
 
+                        if (
+                            self.save_interval_batches is not None
+                            and batches_since_batch_save >= self.save_interval_batches
+                        ):
+                            should_save_batch[0] = 1
+
                     if self.hparams.training_spec.distributed:
                         dist.broadcast(should_save_latest, src=0)
                         dist.broadcast(should_save_batch, src=0)
                         dist.barrier()
 
                     if should_save_batch.item() == 1:
-                        if self.save_interval_minutes_val_loss:
+                        if self.save_interval_val_loss:
                             val_loss, val_losses, class_counts = self._evaluate(
                                 valid_loader, ddp_model
                             )
@@ -1954,9 +1965,6 @@ class TransformerModel(nn.Module):
                                 not self.hparams.training_spec.distributed
                                 or self.rank == 0
                             ):
-                                current_global_step = (epoch - 1) * num_batches + (
-                                    batch_count + 1
-                                )
                                 self._log_epoch_results(
                                     0,
                                     batch_count + 1,
@@ -2002,6 +2010,7 @@ class TransformerModel(nn.Module):
                             num_batches=num_batches,
                         )
                         self.last_batch_save_time = time.time()
+                        self.last_batch_save_global_step = current_global_step
 
         if dataset_handles_start_batch:
             set_dataset_start_batch(0)

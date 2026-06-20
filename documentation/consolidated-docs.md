@@ -199,7 +199,7 @@ Please cite with:
   title = {sequifier - causal transformer models for multivariate sequence modelling},
   year = {2025},
   publisher = {GitHub},
-  version = {v2.0.0.0},
+  version = {v1.9.9.9},
   url = {[https://github.com/0xideas/sequifier](https://github.com/0xideas/sequifier)}
 }
 
@@ -422,7 +422,8 @@ These fields determine the size and complexity of the Transformer.
 | `save_interval_epochs` | `int` | **Yes** | - | Save a checkpoint every N epochs. |
 | `save_latest_interval_minutes`| `float`| No | Time interval to overwrite a "latest" checkpoint. |
 | `save_interval_minutes` | `float` | No | Time interval to save a unique, batch-specific checkpoint. |
-| `save_interval_minutes_val_loss` | `bool` | No | Whether to calculate validation loss at the moment of the batch interval save. Defaults to true. |
+| `save_interval_batches` | `int` | No | Batch interval to save a unique, batch-specific checkpoint. |
+| `save_interval_val_loss` | `bool` | No | Whether to calculate validation loss at the moment of the batch interval save. Defaults to true. |
 | `calculate_validation_loss_on_initialization` | `bool` | No | Determines if a validation pass runs before epoch 1 begins. Defaults to true. |
 | `early_stopping_epochs`| `int` | No | `null` | Stop training if validation loss doesn't improve for N epochs. |
 | `log_interval` | `int` | No | `10` | Print training logs every N batches. |
@@ -864,7 +865,8 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `scheduler_step_on` | `str` | No | `epoch` | When to step the scheduler: `epoch` or `batch`. |
 | `save_latest_interval_minutes`| `float`| No | `null` | Time interval to overwrite a "latest" checkpoint. |
 | `save_interval_minutes` | `float` | No | `null` | Time interval to save a unique, batch-specific checkpoint. |
-| `save_interval_minutes_val_loss` | `bool` | No | `true` | Whether to calculate validation loss at the moment of the batch interval save. |
+| `save_interval_batches` | `int` | No | `null` | Batch interval to save a unique, batch-specific checkpoint. |
+| `save_interval_val_loss` | `bool` | No | `true` | Whether to calculate validation loss at the moment of the batch interval save. |
 | `calculate_validation_loss_on_initialization` | `bool` | No | `false` | Determines if a validation pass runs before epoch 1 begins. |
 | `log_interval` | `int` | No | `10` | Logging frequency (batches). |
 | `class_share_log_columns`| `list[str]`| No | `[]` | Columns for which to log the predicted class distribution in validation. |
