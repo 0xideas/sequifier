@@ -269,30 +269,28 @@ def train_worker(
         )  # 1D mesh for standard ZeRO-3 full sharding
         model._data_parallel_group = mesh.get_group()
 
+        fsdp_kwargs = {"mesh": mesh}
         if config.training_spec.layer_autocast:
             amp_dtype = get_torch_dtype(
                 config.training_spec.layer_type_dtypes.get("linear", "bfloat16")
                 if config.training_spec.layer_type_dtypes
                 else "bfloat16"
             )
-        else:
-            amp_dtype = torch.float32
-        mp_policy = MixedPrecisionPolicy(
-            param_dtype=amp_dtype,
-            reduce_dtype=amp_dtype,
-            output_dtype=amp_dtype,
-        )
 
-        offload_policy = (
-            OffloadPolicy() if config.training_spec.fsdp_cpu_offload else None
-        )
-        for layer in model.layers:
-            fully_shard(
-                layer, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
+            fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy(
+                param_dtype=amp_dtype,
+                reduce_dtype=amp_dtype,
+                output_dtype=amp_dtype,
             )
-        fully_shard(
-            model, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
-        )
+        else:
+            fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy()
+
+        if config.training_spec.fsdp_cpu_offload:
+            fsdp_kwargs["offload_policy"] = OffloadPolicy()
+        for layer in model.layers:
+            fully_shard(layer, **fsdp_kwargs)
+
+        fully_shard(model, **fsdp_kwargs)
         dist.barrier()
 
         params_to_optimize = model.parameters()
