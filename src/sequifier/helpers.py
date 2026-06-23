@@ -19,8 +19,8 @@ from torch import Tensor
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
 PANDAS_TO_TORCH_TYPES = {
-    "Float64": torch.float32,
-    "float64": torch.float32,
+    "Float64": torch.float64,
+    "float64": torch.float64,
     "Float32": torch.float32,
     "float32": torch.float32,
     "Float16": torch.float16,
@@ -33,15 +33,62 @@ PANDAS_TO_TORCH_TYPES = {
     "int16": torch.int16,
     "Int8": torch.int8,
     "int8": torch.int8,
-    "UInt64": torch.int64,
-    "uint64": torch.int64,
-    "UInt32": torch.int64,
-    "uint32": torch.int64,
-    "UInt16": torch.int32,
-    "uint16": torch.int32,
-    "UInt8": torch.int16,
-    "uint8": torch.int16,
+    "UInt64": torch.uint64,
+    "uint64": torch.uint64,
+    "UInt32": torch.uint32,
+    "uint32": torch.uint32,
+    "UInt16": torch.uint16,
+    "uint16": torch.uint16,
+    "UInt8": torch.uint8,
+    "uint8": torch.uint8,
 }
+
+POLARS_NUMERIC_DTYPES = {
+    "Float64": pl.Float64,
+    "Float32": pl.Float32,
+    "Float16": pl.Float16,
+    "Int64": pl.Int64,
+    "Int32": pl.Int32,
+    "Int16": pl.Int16,
+    "Int8": pl.Int8,
+    "UInt64": pl.UInt64,
+    "UInt32": pl.UInt32,
+    "UInt16": pl.UInt16,
+    "UInt8": pl.UInt8,
+}
+
+POLARS_NUMERIC_DTYPE_ALIASES = {
+    alias: canonical
+    for canonical in POLARS_NUMERIC_DTYPES
+    for alias in (canonical, canonical.lower())
+}
+
+
+@beartype
+def canonicalize_polars_dtype_name(dtype_name: str) -> str:
+    dtype_name = dtype_name.strip()
+    if dtype_name not in POLARS_NUMERIC_DTYPE_ALIASES:
+        raise ValueError(
+            f"Unsupported column type '{dtype_name}'. "
+            f"Supported types are: {sorted(POLARS_NUMERIC_DTYPES)}"
+        )
+    return POLARS_NUMERIC_DTYPE_ALIASES[dtype_name]
+
+
+@beartype
+def polars_dtype_from_name(dtype_name: str) -> Any:
+    return POLARS_NUMERIC_DTYPES[canonicalize_polars_dtype_name(dtype_name)]
+
+
+@beartype
+def is_float_dtype_name(dtype_name: str) -> bool:
+    return canonicalize_polars_dtype_name(dtype_name).startswith("Float")
+
+
+@beartype
+def is_integer_dtype_name(dtype_name: str) -> bool:
+    canonical = canonicalize_polars_dtype_name(dtype_name)
+    return canonical.startswith("Int") or canonical.startswith("UInt")
 
 
 @dataclass(frozen=True)

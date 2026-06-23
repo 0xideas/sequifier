@@ -20,6 +20,10 @@ from sequifier.config.preprocess_config import load_preprocessor_config
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     StoredWindowLayout,
+    canonicalize_polars_dtype_name,
+    is_float_dtype_name,
+    is_integer_dtype_name,
+    polars_dtype_from_name,
     read_data,
     write_data,
 )
@@ -33,6 +37,38 @@ from sequifier.special_tokens import (
 INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
 REAL_MASK_VALUE = 0.0
 CURRENT_STORED_WINDOW_LAYOUT_VERSION = 2
+
+FLOAT_TYPE_ORDER = ("Float16", "Float32", "Float64")
+INTEGER_TYPE_ORDER = (
+    "Int8",
+    "UInt8",
+    "Int16",
+    "UInt16",
+    "Int32",
+    "UInt32",
+    "Int64",
+    "UInt64",
+)
+INTEGER_TYPE_INFO = {
+    "Int8": np.iinfo(np.int8),
+    "Int16": np.iinfo(np.int16),
+    "Int32": np.iinfo(np.int32),
+    "Int64": np.iinfo(np.int64),
+    "UInt8": np.iinfo(np.uint8),
+    "UInt16": np.iinfo(np.uint16),
+    "UInt32": np.iinfo(np.uint32),
+    "UInt64": np.iinfo(np.uint64),
+}
+FLOAT_TYPE_INFO = {
+    "Float16": np.finfo(np.float16),
+    "Float32": np.finfo(np.float32),
+    "Float64": np.finfo(np.float64),
+}
+FLOAT_EXACT_INTEGER_LIMITS = {
+    "Float16": 2**11,
+    "Float32": 2**24,
+    "Float64": 2**53,
+}
 
 
 def _stable_json_value(value: Any) -> Any:
@@ -57,6 +93,182 @@ def _stable_json_digest(value: Any) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+@beartype
+def _normalize_column_types(
+    column_types: Optional[dict[str, str]],
+) -> Optional[dict[str, str]]:
+    if column_types is None:
+        return None
+    return {
+        column: canonicalize_polars_dtype_name(dtype)
+        for column, dtype in column_types.items()
+    }
+
+
+@beartype
+def _configured_column_types_for_data_columns(
+    column_types: Optional[dict[str, str]],
+    data_columns: list[str],
+) -> Optional[dict[str, str]]:
+    if column_types is None:
+        return None
+
+    missing_columns = [column for column in data_columns if column not in column_types]
+    if missing_columns:
+        raise ValueError(
+            "column_types must include every to-be-processed column. "
+            f"Missing: {missing_columns}"
+        )
+
+    return {column: column_types[column] for column in data_columns}
+
+
+@beartype
+def _dtype_is_numeric(dtype: Any) -> bool:
+    return dtype.is_numeric() if hasattr(dtype, "is_numeric") else False
+
+
+@beartype
+def _apply_configured_input_casting(
+    data: pl.DataFrame,
+    data_columns: list[str],
+    column_types: Optional[dict[str, str]],
+) -> pl.DataFrame:
+    """Cast input columns early when the requested type defines processing semantics."""
+    configured = _configured_column_types_for_data_columns(column_types, data_columns)
+    if configured is None:
+        return data
+
+    casts = []
+    for column in data_columns:
+        target_type = configured[column]
+        source_dtype = data.schema[column]
+
+        if is_float_dtype_name(target_type):
+            casts.append(pl.col(column).cast(polars_dtype_from_name(target_type)))
+        elif is_integer_dtype_name(target_type) and _dtype_is_numeric(source_dtype):
+            casts.append(pl.col(column).cast(polars_dtype_from_name(target_type)))
+
+    if not casts:
+        return data
+
+    return data.with_columns(casts)
+
+
+@beartype
+def _apply_output_type_casting(
+    data: pl.DataFrame,
+    data_columns: list[str],
+    col_types: dict[str, str],
+) -> pl.DataFrame:
+    casts = [
+        pl.col(column).cast(polars_dtype_from_name(col_types[column]))
+        for column in data_columns
+    ]
+    if not casts:
+        return data
+    return data.with_columns(casts)
+
+
+@beartype
+def _highest_ranked_type(types: list[str], order: tuple[str, ...]) -> str:
+    return max(types, key=lambda type_: order.index(type_))
+
+
+@beartype
+def _smallest_float_covering_integer_range(integer_type: str) -> str:
+    integer_info = INTEGER_TYPE_INFO[integer_type]
+    largest_magnitude = max(abs(int(integer_info.min)), int(integer_info.max))
+    for float_type in FLOAT_TYPE_ORDER:
+        if (
+            largest_magnitude <= float(FLOAT_TYPE_INFO[float_type].max)
+            and largest_magnitude <= FLOAT_EXACT_INTEGER_LIMITS[float_type]
+        ):
+            return float_type
+    return "Float64"
+
+
+@beartype
+def _resolve_integer_sequence_type(integer_types: list[str]) -> Any:
+    if not integer_types:
+        raise ValueError("Cannot resolve an integer sequence type without integers")
+
+    min_value = min(int(INTEGER_TYPE_INFO[type_].min) for type_ in integer_types)
+    max_value = max(int(INTEGER_TYPE_INFO[type_].max) for type_ in integer_types)
+
+    if min_value >= 0 and all(type_.startswith("UInt") for type_ in integer_types):
+        for dtype_name in ("UInt8", "UInt16", "UInt32", "UInt64"):
+            info = INTEGER_TYPE_INFO[dtype_name]
+            if max_value <= int(info.max):
+                return polars_dtype_from_name(dtype_name)
+
+    for dtype_name in ("Int8", "Int16", "Int32", "Int64"):
+        info = INTEGER_TYPE_INFO[dtype_name]
+        if min_value >= int(info.min) and max_value <= int(info.max):
+            return polars_dtype_from_name(dtype_name)
+
+    raise ValueError(f"Cannot resolve a safe integer dtype for {integer_types}")
+
+
+@beartype
+def _resolve_unified_parquet_type(column_types: dict[str, str]) -> Any:
+    if not column_types:
+        raise ValueError("column_types cannot be empty")
+
+    normalized_types = [
+        canonicalize_polars_dtype_name(type_) for type_ in column_types.values()
+    ]
+    float_types = [type_ for type_ in normalized_types if is_float_dtype_name(type_)]
+    integer_types = [
+        type_ for type_ in normalized_types if is_integer_dtype_name(type_)
+    ]
+
+    if not float_types:
+        if len(set(integer_types)) > 1:
+            logger.warning(
+                "Multiple integer column_types were specified for Parquet output; "
+                "using a unified integer schema."
+            )
+        return _resolve_integer_sequence_type(integer_types)
+
+    resolved_float = _highest_ranked_type(float_types, FLOAT_TYPE_ORDER)
+    if len(set(normalized_types)) > 1:
+        logger.warning(
+            "Multiple column_types were specified for Parquet output; "
+            f"using unified sequence dtype {resolved_float}."
+        )
+
+    if integer_types:
+        required_float = _highest_ranked_type(
+            [
+                _smallest_float_covering_integer_range(integer_type)
+                for integer_type in integer_types
+            ],
+            FLOAT_TYPE_ORDER,
+        )
+        if FLOAT_TYPE_ORDER.index(required_float) > FLOAT_TYPE_ORDER.index(
+            resolved_float
+        ):
+            logger.warning(
+                "An integer column_type has a range exceeding "
+                f"{resolved_float}; upgrading unified Parquet sequence dtype "
+                f"to {required_float}."
+            )
+            resolved_float = required_float
+
+    return polars_dtype_from_name(resolved_float)
+
+
+@beartype
+def _resolve_pt_extraction_type(column_types: dict[str, str]) -> Any:
+    normalized_types = [
+        canonicalize_polars_dtype_name(type_) for type_ in column_types.values()
+    ]
+    if any(is_float_dtype_name(type_) for type_ in normalized_types):
+        return pl.Float64
+    return _resolve_integer_sequence_type(normalized_types)
 
 
 @beartype
@@ -96,6 +308,7 @@ class Preprocessor:
         metadata_config_path: Optional[str],
         max_target_offset: int = 1,
         mask_column: Optional[str] = None,
+        column_types: Optional[dict[str, str]] = None,
     ):
         """Initialize and run preprocessing from validated config fields."""
         self.project_root = project_root
@@ -125,6 +338,7 @@ class Preprocessor:
         self.max_rows = max_rows
         self.process_by_file = process_by_file
         self.subsequence_start_mode = subsequence_start_mode
+        self.column_types = _normalize_column_types(column_types)
         if self.mask_column is not None and self.metadata_config_path is None:
             raise ValueError("metadata_config_path must be set when mask_column is set")
 
@@ -176,6 +390,12 @@ class Preprocessor:
                 self.mask_column,
             )
             data_columns = _get_data_columns(data, self.mask_column)
+            configured_col_types = _configured_column_types_for_data_columns(
+                self.column_types, data_columns
+            )
+            data = _apply_configured_input_casting(
+                data, data_columns, configured_col_types
+            )
             if self.metadata_config_path:
                 metadata_path = os.path.join(
                     self.project_root, self.metadata_config_path
@@ -221,9 +441,12 @@ class Preprocessor:
                 id_maps,
                 selected_columns_statistics,
                 n_classes=n_classes,
-                col_types=col_types,
+                col_types=configured_col_types or col_types,
             )
+            if configured_col_types is not None:
+                col_types = configured_col_types
             data = _apply_mask_column(data, data_columns, col_types, self.mask_column)
+            data = _apply_output_type_casting(data, data_columns, col_types)
 
             self._write_or_validate_resume_manifest(
                 selected_columns,
@@ -308,6 +531,11 @@ class Preprocessor:
                     for col in col_types.keys()
                     if col not in _reserved_input_columns(self.mask_column)
                 ]
+                configured_col_types = _configured_column_types_for_data_columns(
+                    self.column_types, data_columns
+                )
+                if configured_col_types is not None:
+                    col_types = configured_col_types
 
                 # We still need to find the files to process
                 files_to_process = []
@@ -324,10 +552,15 @@ class Preprocessor:
                     col_types,
                     data_columns,
                 ) = self._get_column_metadata_across_files(
-                    data_path, read_format, max_rows, selected_columns
+                    data_path,
+                    read_format,
+                    max_rows,
+                    selected_columns,
+                    self.column_types,
                 )
                 for col in id_maps:
-                    col_types[col] = "Int64"
+                    if self.column_types is None:
+                        col_types[col] = "Int64"
 
             self._write_or_validate_resume_manifest(
                 selected_columns,
@@ -380,19 +613,10 @@ class Preprocessor:
             "inputCol": pl.String,
         }
 
-        if (np.unique(list(col_types.values())) == np.array(["Int64"]))[0]:
-            sequence_position_type = pl.Int64
+        if self.write_format == "parquet":
+            sequence_position_type = _resolve_unified_parquet_type(col_types)
         else:
-            if not np.all(
-                [
-                    type_.lower().startswith("int")
-                    or type_.lower().startswith("uint")
-                    or type_.lower().startswith("float")
-                    for type_ in col_types.values()
-                ]
-            ):
-                raise ValueError("All column types must start with int or float")
-            sequence_position_type = pl.Float64
+            sequence_position_type = _resolve_pt_extraction_type(col_types)
 
         schema.update(
             {
@@ -410,6 +634,7 @@ class Preprocessor:
         read_format: str,
         max_rows: Optional[int],
         selected_columns: Optional[list[str]],
+        column_types: Optional[dict[str, str]],
     ) -> tuple[
         list[str],
         dict[str, int],
@@ -453,10 +678,20 @@ class Preprocessor:
                     )
 
                     current_file_cols = _get_data_columns(data, self.mask_column)
+                    current_configured_col_types = (
+                        _configured_column_types_for_data_columns(
+                            column_types, current_file_cols
+                        )
+                    )
+                    data = _apply_configured_input_casting(
+                        data, current_file_cols, current_configured_col_types
+                    )
 
                     if col_types is None:
                         data_columns = current_file_cols
-                        col_types = {col: str(data.schema[col]) for col in data_columns}
+                        col_types = current_configured_col_types or {
+                            col: str(data.schema[col]) for col in data_columns
+                        }
 
                         for col in precomputed_id_maps.keys():
                             if col not in data_columns:
@@ -475,12 +710,13 @@ class Preprocessor:
                                 f"Extra: {extra}"
                             )
 
-                        for col in current_file_cols:
-                            if str(data.schema[col]) != col_types[col]:
-                                raise ValueError(
-                                    f"Type mismatch for column '{col}' in file '{file}'. "
-                                    f"Expected {col_types[col]}, got {str(data.schema[col])}"
-                                )
+                        if column_types is None:
+                            for col in current_file_cols:
+                                if str(data.schema[col]) != col_types[col]:
+                                    raise ValueError(
+                                        f"Type mismatch for column '{col}' in file '{file}'. "
+                                        f"Expected {col_types[col]}, got {str(data.schema[col])}"
+                                    )
 
                     if data_columns is None:
                         raise ValueError("data_columns is None")
@@ -967,7 +1203,9 @@ def _apply_mask_column(
     updates = []
     for col in data_columns:
         mask_value = (
-            SPECIAL_TOKEN_IDS.mask if col_types[col] == "Int64" else REAL_MASK_VALUE
+            SPECIAL_TOKEN_IDS.mask
+            if is_integer_dtype_name(col_types[col])
+            else REAL_MASK_VALUE
         )
         updates.append(
             pl.when(mask_expr)
@@ -993,6 +1231,8 @@ def _apply_column_statistics(
     col_types: Optional[dict[str, str]] = None,
 ) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
     """Apply categorical maps and numeric standardization."""
+    col_types_was_provided = col_types is not None
+
     if n_classes is None:
         n_classes = {col: max(id_maps[col].values()) + 1 for col in id_maps}
 
@@ -1013,7 +1253,8 @@ def _apply_column_statistics(
     for col in data_columns:
         if col in id_maps:
             data = data.with_columns(pl.col(col).replace(id_maps[col], default=1))
-            col_types[col] = "Int64"
+            if not col_types_was_provided:
+                col_types[col] = "Int64"
         elif col in selected_columns_statistics:
             data = data.with_columns(
                 (
@@ -1145,7 +1386,7 @@ def _get_column_statistics(
                 id_maps[data_col] = combine_maps(new_id_map, id_maps.get(data_col, {}))
             else:
                 logger.info(f"Applying precomputed map for {data_col}")
-        elif isinstance(dtype, (pl.Float32, pl.Float64)):
+        elif isinstance(dtype, (pl.Float16, pl.Float32, pl.Float64)):
             if data_col in precomputed_id_maps:
                 raise ValueError(
                     f"Column {data_col} is not categorical, precomputed map is invalid."
@@ -1380,6 +1621,7 @@ def _process_batches_multiple_files_inner(
                 max_rows_inner,
                 mask_column,
             )
+            data = _apply_configured_input_casting(data, data_columns, col_types)
             data, _, _ = _apply_column_statistics(
                 data,
                 data_columns,
@@ -1389,6 +1631,7 @@ def _process_batches_multiple_files_inner(
                 col_types,
             )
             data = _apply_mask_column(data, data_columns, col_types, mask_column)
+            data = _apply_output_type_casting(data, data_columns, col_types)
 
             data_name_root_inner = f"{data_name_root}-{process_id}-{file_index_str}"
 

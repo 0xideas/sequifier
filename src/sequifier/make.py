@@ -5,6 +5,7 @@ data_path: PLEASE FILL
 read_format: csv
 write_format: parquet
 selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
+column_types: null # optional map of selected columns to output dtypes, e.g. {EXAMPLE_INPUT_COLUMN_NAME: Float32}
 mask_column: null
 
 split_ratios:

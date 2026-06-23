@@ -14,7 +14,7 @@ from pydantic import (
     model_validator,
 )
 
-from sequifier.helpers import try_catch_excess_keys
+from sequifier.helpers import canonicalize_polars_dtype_name, try_catch_excess_keys
 
 
 @beartype
@@ -44,6 +44,7 @@ class PreprocessorModel(BaseModel):
     merge_output: bool = True
     allow_sequence_splitting: bool = False
     selected_columns: Optional[list[str]] = None
+    column_types: Optional[dict[str, str]] = None
 
     split_ratios: list[float]
     stored_context_width: int = Field(gt=0)
@@ -137,6 +138,30 @@ class PreprocessorModel(BaseModel):
         if v < 1:
             raise ValueError("batches_per_file must be a positive integer")
         return v
+
+    @field_validator("column_types")
+    @classmethod
+    def validate_column_types(
+        cls, v: Optional[dict[str, str]], info: ValidationInfo
+    ) -> Optional[dict[str, str]]:
+        if v is None:
+            return None
+
+        normalized = {
+            column: canonicalize_polars_dtype_name(dtype) for column, dtype in v.items()
+        }
+        selected_columns = info.data.get("selected_columns")
+        if selected_columns is not None:
+            missing_columns = [
+                column for column in selected_columns if column not in normalized
+            ]
+            if missing_columns:
+                raise ValueError(
+                    "column_types must include every selected column. "
+                    f"Missing: {missing_columns}"
+                )
+
+        return normalized
 
     @field_validator("continue_preprocessing")
     @classmethod
