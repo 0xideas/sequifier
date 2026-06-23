@@ -47,6 +47,7 @@ class PreprocessorModel(BaseModel):
     column_types: Optional[dict[str, str]] = None
 
     split_ratios: list[float]
+    split_method: str = Field(default="within_sequence")
     stored_context_width: int = Field(gt=0)
     max_target_offset: int = Field(default=1, ge=0)
     stride_by_split: Optional[list[int]] = None
@@ -109,6 +110,15 @@ class PreprocessorModel(BaseModel):
             raise ValueError(f"split_ratios must sum to 1.0, but sums to {np.sum(v)}")
         if not all(p > 0 for p in v):
             raise ValueError(f"All split_ratios must be positive: {v}")
+        return v
+
+    @field_validator("split_method")
+    @classmethod
+    def validate_split_method(cls, v: str) -> str:
+        if v not in ["within_sequence", "between_sequence"]:
+            raise ValueError(
+                "split_method must be one of 'within_sequence', 'between_sequence'"
+            )
         return v
 
     @field_validator("stride_by_split")

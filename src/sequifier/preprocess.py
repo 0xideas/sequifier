@@ -20,6 +20,7 @@ from sequifier.config.preprocess_config import load_preprocessor_config
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     StoredWindowLayout,
+    assign_sequence_to_split,
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
     is_integer_dtype_name,
@@ -309,6 +310,7 @@ class Preprocessor:
         max_target_offset: int = 1,
         mask_column: Optional[str] = None,
         column_types: Optional[dict[str, str]] = None,
+        split_method: str = "within_sequence",
     ):
         """Initialize and run preprocessing from validated config fields."""
         self.project_root = project_root
@@ -333,6 +335,11 @@ class Preprocessor:
         self.use_precomputed_maps = use_precomputed_maps
         self.metadata_config_path = metadata_config_path
         self.mask_column = mask_column
+        if split_method not in ["within_sequence", "between_sequence"]:
+            raise ValueError(
+                "split_method must be one of 'within_sequence', 'between_sequence'"
+            )
+        self.split_method = split_method
         self.split_ratios = split_ratios
         self.stride_by_split = stride_by_split
         self.max_rows = max_rows
@@ -484,6 +491,8 @@ class Preprocessor:
                 subsequence_start_mode,
                 self.merge_output,
                 self.allow_sequence_splitting,
+                self.split_method,
+                self.seed,
             )
 
             if self.merge_output:
@@ -834,6 +843,8 @@ class Preprocessor:
                 continue_preprocessing=self.continue_preprocessing,
                 subsequence_start_mode=subsequence_start_mode,
                 mask_column=mask_column,
+                split_method=self.split_method,
+                seed=self.seed,
             )
             input_files = create_file_paths_for_multiple_files2(
                 self.project_root,
@@ -880,6 +891,8 @@ class Preprocessor:
                 "continue_preprocessing": self.continue_preprocessing,
                 "subsequence_start_mode": subsequence_start_mode,
                 "mask_column": mask_column,
+                "split_method": self.split_method,
+                "seed": self.seed,
             }
 
             job_params = [
@@ -988,6 +1001,8 @@ class Preprocessor:
                 "selected_columns": selected_columns,
                 "data_columns": data_columns,
                 "split_ratios": self.split_ratios,
+                "split_method": self.split_method,
+                "seed": self.seed,
                 "stride_by_split": self.stride_by_split,
                 "max_rows": self.max_rows,
                 "process_by_file": self.process_by_file,
@@ -1561,6 +1576,8 @@ def _process_batches_multiple_files_inner(
     continue_preprocessing: bool,
     subsequence_start_mode: str,
     mask_column: Optional[str],
+    split_method: str,
+    seed: int,
 ):
     """Process this worker's file shard."""
 
@@ -1653,6 +1670,8 @@ def _process_batches_multiple_files_inner(
                 subsequence_start_mode,
                 merge_output,
                 allow_sequence_splitting,
+                split_method,
+                seed,
             )
 
             if merge_output:
@@ -1701,6 +1720,8 @@ def _process_batches_single_file(
     subsequence_start_mode: str,
     merge_output: bool,
     allow_sequence_splitting: bool,
+    split_method: str = "within_sequence",
+    seed: int = 1010,
 ) -> int:
     """Split one file into worker batches and preprocess them."""
     n_cores = n_cores or multiprocessing.cpu_count()
@@ -1724,6 +1745,8 @@ def _process_batches_single_file(
             batches_per_file,
             subsequence_start_mode,
             merge_output,
+            split_method,
+            seed,
         )
         for process_id, (start, end) in enumerate(valid_batch_limits)
     ]
@@ -2023,6 +2046,56 @@ def _write_accumulated_sequences(
 
 
 @beartype
+def _extract_sequences_for_splits(
+    data_subset: pl.DataFrame,
+    sequence_id: int,
+    schema: Any,
+    layout: StoredWindowLayout,
+    stride_by_split: list[int],
+    data_columns: list[str],
+    split_ratios: list[float],
+    subsequence_start_mode: str,
+    split_method: str,
+    seed: int,
+) -> dict[int, pl.DataFrame]:
+    """Return extracted windows for one sequence across configured splits."""
+    if split_method == "within_sequence":
+        group_bounds = get_group_bounds(data_subset, split_ratios)
+        return {
+            i: cast_columns_to_string(
+                extract_sequences(
+                    data_subset.slice(lb, ub - lb),
+                    schema,
+                    layout,
+                    stride_by_split[i],
+                    data_columns,
+                    subsequence_start_mode,
+                )
+            )
+            for i, (lb, ub) in enumerate(group_bounds)
+        }
+
+    if split_method == "between_sequence":
+        assigned_group = assign_sequence_to_split(sequence_id, split_ratios, seed)
+        sequences = {i: pl.DataFrame(schema=schema) for i in range(len(split_ratios))}
+        sequences[assigned_group] = cast_columns_to_string(
+            extract_sequences(
+                data_subset,
+                schema,
+                layout,
+                stride_by_split[assigned_group],
+                data_columns,
+                subsequence_start_mode,
+            )
+        )
+        return sequences
+
+    raise ValueError(
+        "split_method must be one of 'within_sequence', 'between_sequence'"
+    )
+
+
+@beartype
 def preprocess_batch(
     project_root: str,
     data_name_root: str,
@@ -2040,6 +2113,8 @@ def preprocess_batch(
     batches_per_file: int,
     subsequence_start_mode: str,
     merge_output: bool,
+    split_method: str = "within_sequence",
+    seed: int = 1010,
 ) -> None:
     """Extract and write all split windows for one batch."""
     sequence_ids = sorted(batch.get_column("sequenceId").unique().to_list())
@@ -2051,20 +2126,18 @@ def preprocess_batch(
         pad_width = len(str(math.ceil(len(sequence_ids) / batches_per_file) + 1))
         for i, sequence_id in enumerate(sequence_ids):
             data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
-            group_bounds = get_group_bounds(data_subset, split_ratios)
-            sequences = {
-                i: cast_columns_to_string(
-                    extract_sequences(
-                        data_subset.slice(lb, ub - lb),
-                        schema,
-                        layout,
-                        stride_by_split[i],
-                        data_columns,
-                        subsequence_start_mode,
-                    )
-                )
-                for i, (lb, ub) in enumerate(group_bounds)
-            }
+            sequences = _extract_sequences_for_splits(
+                data_subset,
+                sequence_id,
+                schema,
+                layout,
+                stride_by_split,
+                data_columns,
+                split_ratios,
+                subsequence_start_mode,
+                split_method,
+                seed,
+            )
 
             for group, split_df in sequences.items():
                 if not split_df.is_empty():
@@ -2103,23 +2176,22 @@ def preprocess_batch(
         written_files: dict[int, list[str]] = {i: [] for i in range(len(split_paths))}
         for i, sequence_id in enumerate(sequence_ids):
             data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
-            group_bounds = get_group_bounds(data_subset, split_ratios)
-            sequences = {
-                j: cast_columns_to_string(
-                    extract_sequences(
-                        data_subset.slice(lb, ub - lb),
-                        schema,
-                        layout,
-                        stride_by_split[j],
-                        data_columns,
-                        subsequence_start_mode,
-                    )
-                )
-                for j, (lb, ub) in enumerate(group_bounds)
-            }
+            sequences = _extract_sequences_for_splits(
+                data_subset,
+                sequence_id,
+                schema,
+                layout,
+                stride_by_split,
+                data_columns,
+                split_ratios,
+                subsequence_start_mode,
+                split_method,
+                seed,
+            )
             post_split_str = f"{process_id}-{i}"
 
-            for split_path, (group, split) in zip(split_paths, sequences.items()):
+            for group, split in sequences.items():
+                split_path = split_paths[group]
                 split_path_batch_seq = split_path.replace(
                     f".{write_format}", f"-{post_split_str}.{write_format}"
                 )

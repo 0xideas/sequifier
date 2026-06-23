@@ -1,4 +1,5 @@
 import glob
+import hashlib
 import math
 import os
 import random
@@ -78,6 +79,19 @@ def canonicalize_polars_dtype_name(dtype_name: str) -> str:
 @beartype
 def polars_dtype_from_name(dtype_name: str) -> Any:
     return POLARS_NUMERIC_DTYPES[canonicalize_polars_dtype_name(dtype_name)]
+
+
+@beartype
+def assign_sequence_to_split(
+    sequence_id: int, split_ratios: list[float], seed: int
+) -> int:
+    """Deterministically assign one sequenceId to a split index."""
+    digest = hashlib.sha256(f"{seed}:{sequence_id}".encode("utf-8")).digest()
+    hash_value = int.from_bytes(digest[:8], byteorder="big", signed=False) / 2**64
+    split_index = int(
+        np.searchsorted(np.cumsum(split_ratios), hash_value, side="right")
+    )
+    return min(split_index, len(split_ratios) - 1)
 
 
 @beartype

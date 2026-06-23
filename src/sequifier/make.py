@@ -12,6 +12,7 @@ split_ratios:
 - 0.8
 - 0.1
 - 0.1
+split_method: within_sequence # one of within_sequence, between_sequence
 stored_context_width: 49
 max_target_offset: 1
 max_rows: null
