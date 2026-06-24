@@ -360,8 +360,10 @@ class TrainingSpecModel(BaseModel):
     @field_validator("training_objective")
     @classmethod
     def validate_training_objective(cls, v):
-        if v not in ["causal", "bert"]:
-            raise ValueError(f"Only 'causal' and 'bert' are allowed, found {v}")
+        if v not in ["causal", "bert", "final_value"]:
+            raise ValueError(
+                f"Only 'causal', 'bert', and 'final_value' are allowed, found {v}"
+            )
         return v
 
     @model_validator(mode="after")

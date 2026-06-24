@@ -856,7 +856,7 @@ class TransformerModel(nn.Module):
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
 
-        if hparams.training_spec.training_objective == "causal":
+        if hparams.training_spec.training_objective in ["causal", "final_value"]:
             self.register_buffer(
                 "src_mask",
                 self._generate_square_subsequent_mask(self.context_length),
@@ -2101,7 +2101,7 @@ class TransformerModel(nn.Module):
                     f"Target column type {target_column_type} not in ['categorical', 'real']"
                 )
 
-            target_tensor = targets[target_column].T.contiguous().reshape(-1)
+            target_tensor = self._loss_target_tensor(target_column, targets)
 
             if self.target_column_types[target_column] == "real":
                 target_tensor = target_tensor.to(dtype=output_tensor.dtype)
@@ -2118,6 +2118,16 @@ class TransformerModel(nn.Module):
             loss_sums[target_column] = (raw_loss * current_mask).sum()
 
         return loss_sums, token_count
+
+    @beartype
+    def _loss_target_tensor(
+        self, target_column: str, targets: dict[str, Tensor]
+    ) -> Tensor:
+        """Return flattened targets for the configured training objective."""
+        target_values = targets[target_column]
+        if self.hparams.training_spec.training_objective == "final_value":
+            target_values = target_values[:, -1:].expand_as(target_values)
+        return target_values.T.contiguous().reshape(-1)
 
     @beartype
     def _calculate_loss_components(
@@ -2464,10 +2474,10 @@ class TransformerModel(nn.Module):
                         targets_for_baseline = {}
                         for col in self.target_columns:
                             if col in targets:
-                                if (
-                                    self.hparams.training_spec.training_objective
-                                    == "causal"
-                                ):
+                                if self.hparams.training_spec.training_objective in [
+                                    "causal",
+                                    "final_value",
+                                ]:
                                     pseudo_output[col] = self._transform_val(
                                         col, data[col].transpose(0, 1)
                                     )
@@ -2490,7 +2500,16 @@ class TransformerModel(nn.Module):
                                     )
                                 else:
                                     raise ValueError("Impossible")
-                                targets_for_baseline[col] = targets[col]
+
+                                target_val = targets[col]
+                                if (
+                                    self.hparams.training_spec.training_objective
+                                    == "final_value"
+                                ):
+                                    target_val = target_val[:, -1:].expand_as(
+                                        target_val
+                                    )
+                                targets_for_baseline[col] = target_val
 
                         if len(pseudo_output) > 0:
                             loss_sums, token_counts = self._calculate_loss_components(

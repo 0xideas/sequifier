@@ -284,10 +284,13 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     @field_validator("training_objective")
     @classmethod
     def validate_training_objective(cls, v):
-        allowed = {"causal", "bert"}
+        allowed = {"causal", "bert", "final_value"}
         invalid = set(v).difference(allowed)
         if invalid:
-            raise ValueError(f"Only 'causal' and 'bert' are allowed, found {invalid}")
+            raise ValueError(
+                "Only 'causal', 'bert', and 'final_value' are allowed, "
+                f"found {invalid}"
+            )
         return v
 
     @model_validator(mode="after")
@@ -611,12 +614,17 @@ class HyperparameterSearchConfig(BaseModel):
                     f"({self.storage_layout.max_target_offset}) > stored_context_width ({self.storage_layout.stored_context_width}). "
                     "Model inputs cannot exceed the preprocessed sequence length."
                 )
-        if self.training_hyperparameter_sampling.training_objective == "causal":
+        forward_objectives = {"causal", "final_value"}
+        if (
+            set(self.training_hyperparameter_sampling.training_objective)
+            & forward_objectives
+        ):
             if self.storage_layout.max_target_offset < 1:
                 raise ValueError(
-                    "The hyperparameter search space includes the 'causal' objective, "
+                    "The hyperparameter search space includes a forward-looking "
+                    "objective ('causal' or 'final_value'), "
                     "but the preprocessed dataset has max_target_offset=0. "
-                    "Causal modeling requires max_target_offset >= 1."
+                    "Causal and final_value modeling require max_target_offset >= 1."
                 )
         return self
 
