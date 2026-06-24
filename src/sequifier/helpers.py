@@ -64,6 +64,38 @@ POLARS_NUMERIC_DTYPE_ALIASES = {
     for alias in (canonical, canonical.lower())
 }
 
+FLOAT_TYPE_ORDER = ("Float16", "Float32", "Float64")
+INTEGER_TYPE_ORDER = (
+    "Int8",
+    "UInt8",
+    "Int16",
+    "UInt16",
+    "Int32",
+    "UInt32",
+    "Int64",
+    "UInt64",
+)
+INTEGER_TYPE_INFO = {
+    "Int8": np.iinfo(np.int8),
+    "Int16": np.iinfo(np.int16),
+    "Int32": np.iinfo(np.int32),
+    "Int64": np.iinfo(np.int64),
+    "UInt8": np.iinfo(np.uint8),
+    "UInt16": np.iinfo(np.uint16),
+    "UInt32": np.iinfo(np.uint32),
+    "UInt64": np.iinfo(np.uint64),
+}
+FLOAT_TYPE_INFO = {
+    "Float16": np.finfo(np.float16),
+    "Float32": np.finfo(np.float32),
+    "Float64": np.finfo(np.float64),
+}
+FLOAT_EXACT_INTEGER_LIMITS = {
+    "Float16": 2**11,
+    "Float32": 2**24,
+    "Float64": 2**53,
+}
+
 
 @beartype
 def canonicalize_polars_dtype_name(dtype_name: str) -> str:
@@ -103,6 +135,80 @@ def is_float_dtype_name(dtype_name: str) -> bool:
 def is_integer_dtype_name(dtype_name: str) -> bool:
     canonical = canonicalize_polars_dtype_name(dtype_name)
     return canonical.startswith("Int") or canonical.startswith("UInt")
+
+
+@beartype
+def _highest_ranked_type(types: list[str], order: tuple[str, ...]) -> str:
+    return max(types, key=lambda type_: order.index(type_))
+
+
+@beartype
+def _smallest_float_covering_integer_range(integer_type: str) -> str:
+    integer_info = INTEGER_TYPE_INFO[integer_type]
+    largest_magnitude = max(abs(int(integer_info.min)), int(integer_info.max))
+    for float_type in FLOAT_TYPE_ORDER:
+        if (
+            largest_magnitude <= float(FLOAT_TYPE_INFO[float_type].max)
+            and largest_magnitude <= FLOAT_EXACT_INTEGER_LIMITS[float_type]
+        ):
+            return float_type
+    return "Float64"
+
+
+@beartype
+def _resolve_integer_sequence_type(integer_types: list[str]) -> Any:
+    if not integer_types:
+        raise ValueError("Cannot resolve an integer sequence type without integers")
+
+    min_value = min(int(INTEGER_TYPE_INFO[type_].min) for type_ in integer_types)
+    max_value = max(int(INTEGER_TYPE_INFO[type_].max) for type_ in integer_types)
+
+    if min_value >= 0 and all(type_.startswith("UInt") for type_ in integer_types):
+        for dtype_name in ("UInt8", "UInt16", "UInt32", "UInt64"):
+            info = INTEGER_TYPE_INFO[dtype_name]
+            if max_value <= int(info.max):
+                return polars_dtype_from_name(dtype_name)
+
+    for dtype_name in ("Int8", "Int16", "Int32", "Int64"):
+        info = INTEGER_TYPE_INFO[dtype_name]
+        if min_value >= int(info.min) and max_value <= int(info.max):
+            return polars_dtype_from_name(dtype_name)
+
+    raise ValueError(f"Cannot resolve a safe integer dtype for {integer_types}")
+
+
+@beartype
+def resolve_unified_polars_numeric_dtype(column_types: dict[str, str]) -> Any:
+    """Resolve one Polars dtype for long-format numeric sequence columns."""
+    if not column_types:
+        raise ValueError("column_types cannot be empty")
+
+    normalized_types = [
+        canonicalize_polars_dtype_name(type_) for type_ in column_types.values()
+    ]
+    float_types = [type_ for type_ in normalized_types if is_float_dtype_name(type_)]
+    integer_types = [
+        type_ for type_ in normalized_types if is_integer_dtype_name(type_)
+    ]
+
+    if not float_types:
+        return _resolve_integer_sequence_type(integer_types)
+
+    resolved_float = _highest_ranked_type(float_types, FLOAT_TYPE_ORDER)
+    if integer_types:
+        required_float = _highest_ranked_type(
+            [
+                _smallest_float_covering_integer_range(integer_type)
+                for integer_type in integer_types
+            ],
+            FLOAT_TYPE_ORDER,
+        )
+        if FLOAT_TYPE_ORDER.index(required_float) > FLOAT_TYPE_ORDER.index(
+            resolved_float
+        ):
+            resolved_float = required_float
+
+    return polars_dtype_from_name(resolved_float)
 
 
 @dataclass(frozen=True)

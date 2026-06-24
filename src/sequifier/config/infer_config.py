@@ -17,6 +17,7 @@ from pydantic import (
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
+    canonicalize_polars_dtype_name,
     normalize_path,
     resolve_window_view,
     stored_window_layout_from_metadata,
@@ -83,14 +84,16 @@ def load_inferer_config(
         if config_values["input_columns"] is None:
             config_values["input_columns"] = list(config_values["column_types"].keys())
 
+        configured_column_types = config_values["column_types"]
+
         config_values["categorical_columns"] = [
             col
-            for col, type_ in metadata_config["column_types"].items()
+            for col, type_ in configured_column_types.items()
             if "int" in type_.lower() and col in config_values["input_columns"]
         ]
         config_values["real_columns"] = [
             col
-            for col, type_ in metadata_config["column_types"].items()
+            for col, type_ in configured_column_types.items()
             if "float" in type_.lower() and col in config_values["input_columns"]
         ]
 
@@ -299,6 +302,23 @@ class InfererModel(BaseModel):
                 "target_columns and target_column_types must contain the same keys in the same order"
             )
         return v
+
+    @field_validator("column_types")
+    @classmethod
+    def validate_column_types(cls, v: dict, info: ValidationInfo) -> dict:
+        normalized = {
+            column: canonicalize_polars_dtype_name(dtype) for column, dtype in v.items()
+        }
+        input_columns = info.data.get("input_columns", [])
+        missing_input_columns = [
+            column for column in input_columns if column not in normalized
+        ]
+        if missing_input_columns:
+            raise ValueError(
+                "column_types must include every input column. "
+                f"Missing: {missing_input_columns}"
+            )
+        return normalized
 
     @field_validator("map_to_id")
     @classmethod

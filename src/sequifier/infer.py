@@ -19,6 +19,7 @@ from sequifier.helpers import (
     construct_index_maps,
     normalize_path,
     numpy_to_pytorch,
+    resolve_unified_polars_numeric_dtype,
     resolve_window_view,
     subset_to_input_columns,
     validate_stored_window_width,
@@ -30,6 +31,21 @@ from sequifier.train import (
     infer_with_generative_model,
     load_inference_model,
 )
+
+ONNX_NUMPY_DTYPES = {
+    "tensor(float16)": np.float16,
+    "tensor(float)": np.float32,
+    "tensor(double)": np.float64,
+    "tensor(int8)": np.int8,
+    "tensor(int16)": np.int16,
+    "tensor(int32)": np.int32,
+    "tensor(int64)": np.int64,
+    "tensor(uint8)": np.uint8,
+    "tensor(uint16)": np.uint16,
+    "tensor(uint32)": np.uint32,
+    "tensor(uint64)": np.uint64,
+    "tensor(bool)": np.bool_,
+}
 
 
 @beartype
@@ -96,6 +112,80 @@ def load_parquet_folder_dataset(
 
     for parquet_file in parquet_files[start_idx:end_idx]:
         yield pl.read_parquet(parquet_file)
+
+
+@beartype
+def _torch_column_types(config: InfererModel) -> dict[str, torch.dtype]:
+    return {
+        col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
+        for col in config.column_types
+    }
+
+
+@beartype
+def _sequence_position_columns(config: InfererModel, data: pl.DataFrame) -> list[str]:
+    return [
+        str(i)
+        for i in range(config.storage_layout.stored_context_width - 1, -1, -1)
+        if str(i) in data.columns
+    ]
+
+
+@beartype
+def _configured_types_for_loaded_rows(
+    config: InfererModel, data: pl.DataFrame
+) -> dict[str, str]:
+    if "inputCol" not in data.columns:
+        return {
+            column: config.column_types[column]
+            for column in config.input_columns
+            if column in config.column_types
+        }
+
+    loaded_columns = [
+        column
+        for column in data.get_column("inputCol").unique().to_list()
+        if column in config.column_types
+    ]
+    return {column: config.column_types[column] for column in loaded_columns}
+
+
+@beartype
+def apply_inference_column_types(
+    data: pl.DataFrame, config: InfererModel
+) -> pl.DataFrame:
+    """Cast loaded long-format sequence values to the configured unified dtype."""
+    sequence_columns = _sequence_position_columns(config, data)
+    if not sequence_columns:
+        return data
+
+    configured_types = _configured_types_for_loaded_rows(config, data)
+    if not configured_types:
+        return data
+
+    unified_dtype = resolve_unified_polars_numeric_dtype(configured_types)
+    casts = [
+        pl.col(column).cast(unified_dtype)
+        for column in sequence_columns
+        if data.schema[column] != unified_dtype
+    ]
+    if not casts:
+        return data
+    return data.with_columns(casts)
+
+
+@beartype
+def apply_inference_tensor_types(
+    sequences_dict: dict[str, torch.Tensor],
+    column_types: dict[str, torch.dtype],
+) -> dict[str, torch.Tensor]:
+    """Cast loaded PT feature tensors to the configured per-column dtype."""
+    return {
+        column: tensor.to(dtype=column_types[column])
+        if column in column_types and tensor.dtype != column_types[column]
+        else tensor
+        for column, tensor in sequences_dict.items()
+    }
 
 
 @beartype
@@ -177,10 +267,7 @@ def infer_worker(
             training_config_path=config.training_config_path,
         )
 
-        column_types = {
-            col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
-            for col in config.column_types
-        }
+        column_types = _torch_column_types(config)
 
         model_id = os.path.split(model_path)[1].replace(
             f".{inferer.inference_model_type}", ""
@@ -322,6 +409,7 @@ def infer_embedding(
         if config.read_format in ["parquet", "csv"] and not is_folder_input:
             if config.input_columns is not None:
                 data = subset_to_input_columns(data, config.input_columns)
+            data = apply_inference_column_types(data, config)
 
             # Determine the number of input features
             n_input_cols = data.get_column("inputCol").n_unique()
@@ -343,6 +431,7 @@ def infer_embedding(
             # Folder-based Parquet chunk logic
             if config.input_columns is not None:
                 data = subset_to_input_columns(data, config.input_columns)
+            data = apply_inference_column_types(data, config)
 
             n_input_cols = data.get_column("inputCol").n_unique()
             mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
@@ -370,6 +459,7 @@ def infer_embedding(
                 start_positions_tensor,
                 left_pad_lengths_tensor,
             ) = data
+            sequences_dict = apply_inference_tensor_types(sequences_dict, column_types)
             for tensor in sequences_dict.values():
                 validate_stored_window_width(
                     tensor, config.storage_layout.stored_context_width
@@ -380,7 +470,11 @@ def infer_embedding(
             )
             metadata = resolved_view.build_masks(left_pad_lengths_tensor)
             embeddings = get_embeddings_pt(
-                config, inferer, sequences_dict, metadata=metadata
+                config,
+                inferer,
+                sequences_dict,
+                metadata=metadata,
+                column_types=column_types,
             )
             valid_prediction_mask = _flatten_valid_mask(
                 config, metadata, prediction_length, mask_key="attention_valid_mask"
@@ -493,6 +587,7 @@ def infer_generative(
         if config.read_format in ["parquet", "csv"] and not is_folder_input:
             if config.input_columns is not None:
                 data = subset_to_input_columns(data, config.input_columns)
+            data = apply_inference_column_types(data, config)
             n_input_cols = data.get_column("inputCol").n_unique()
             if not config.autoregression:
                 # For the non-autoregressive case, apply inference size logic
@@ -548,6 +643,7 @@ def infer_generative(
             # Folder-based Parquet chunk logic
             if config.input_columns is not None:
                 data = subset_to_input_columns(data, config.input_columns)
+            data = apply_inference_column_types(data, config)
             n_input_cols = data.get_column("inputCol").n_unique()
 
             total_steps = (
@@ -610,6 +706,7 @@ def infer_generative(
                 start_positions_tensor,
                 left_pad_lengths_tensor,
             ) = data
+            sequences_dict = apply_inference_tensor_types(sequences_dict, column_types)
             for tensor in sequences_dict.values():
                 validate_stored_window_width(
                     tensor, config.storage_layout.stored_context_width
@@ -632,7 +729,12 @@ def infer_generative(
             metadata = resolved_view.build_masks(left_pad_lengths_tensor)
 
             probs, preds = get_probs_preds_from_dict(
-                config, inferer, sequences_dict, metadata, total_steps
+                config,
+                inferer,
+                sequences_dict,
+                metadata,
+                column_types,
+                total_steps,
             )
 
             prediction_length = inferer.prediction_length  # Get prediction_length
@@ -795,6 +897,7 @@ def get_embeddings_pt(
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
     metadata: dict[str, torch.Tensor],
+    column_types: dict[str, torch.dtype],
 ) -> np.ndarray:
     """Infer embeddings from PT tensors."""
     resolved_view = resolve_window_view(config.storage_layout, config.window_view)
@@ -806,7 +909,9 @@ def get_embeddings_pt(
         if key in config.input_columns
     }
     metadata_np = {key: val.numpy() for key, val in metadata.items()}
-    embeddings = inferer.infer_embedding(X, metadata=metadata_np)
+    embeddings = inferer.infer_embedding(
+        X, metadata=metadata_np, column_types=column_types
+    )
     return embeddings
 
 
@@ -816,6 +921,7 @@ def get_probs_preds_from_dict(
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
     metadata: dict[str, torch.Tensor],
+    column_types: dict[str, torch.dtype],
     total_steps: int = 1,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """Infer PT predictions, flattened sample-major across autoregressive steps."""
@@ -837,6 +943,7 @@ def get_probs_preds_from_dict(
             probs_for_step = inferer.infer_generative(
                 X,
                 metadata_for_step,
+                column_types=column_types,
                 return_probs=True,
             )
             preds_for_step = inferer.infer_generative(
@@ -846,7 +953,10 @@ def get_probs_preds_from_dict(
                 all_probs_list[col].append(probs_for_step[col])
         else:
             preds_for_step = inferer.infer_generative(
-                X, metadata_for_step, return_probs=False
+                X,
+                metadata_for_step,
+                column_types=column_types,
+                return_probs=False,
             )
 
         for col in target_cols:
@@ -914,7 +1024,9 @@ def get_embeddings(
     metadata_np = {col: metadata_col.numpy() for col, metadata_col in metadata.items()}
     del data
 
-    embeddings = inferer.infer_embedding(X, metadata=metadata_np)
+    embeddings = inferer.infer_embedding(
+        X, metadata=metadata_np, column_types=column_types
+    )
 
     return embeddings
 
@@ -941,11 +1053,13 @@ def get_probs_preds_from_df(
     del data
 
     if config.output_probabilities:
-        probs = inferer.infer_generative(X, metadata_np, return_probs=True)
+        probs = inferer.infer_generative(
+            X, metadata_np, column_types=column_types, return_probs=True
+        )
         preds = inferer.infer_generative(None, metadata_np, probs)
     else:
         probs = None
-        preds = inferer.infer_generative(X, metadata_np)
+        preds = inferer.infer_generative(X, metadata_np, column_types=column_types)
 
     return (probs, preds)
 
@@ -1026,6 +1140,7 @@ def get_probs_preds_autoregression(
         inferer,
         head_data,
         metadata,
+        column_types,
         config.autoregression_total_steps,
     )
 
@@ -1145,11 +1260,12 @@ class Inferer:
         self,
         x: dict[str, np.ndarray],
         metadata: dict[str, np.ndarray],
+        column_types: dict[str, torch.dtype],
     ) -> np.ndarray:
         """Return embeddings for a feature-array batch."""
         assert x is not None
         size = x[list(x.keys())[0]].shape[0]
-        embedding = self.adjust_and_infer_embedding(x, size, metadata)
+        embedding = self.adjust_and_infer_embedding(x, size, metadata, column_types)
 
         return embedding
 
@@ -1160,6 +1276,7 @@ class Inferer:
         metadata: dict[str, np.ndarray],
         probs: Optional[dict[str, np.ndarray]] = None,
         return_probs: bool = False,
+        column_types: Optional[dict[str, torch.dtype]] = None,
     ) -> dict[str, np.ndarray]:
         """Return target probabilities or decoded predictions."""
         if probs is None or (
@@ -1176,7 +1293,9 @@ class Inferer:
                     f"Not all keys in x are in probs - {x.keys() = } != {probs.keys() = }. Full inference is executed."
                 )
 
-            outs = self.adjust_and_infer_generative(x, size, metadata)
+            outs = self.adjust_and_infer_generative(
+                x, size, metadata, column_types or {}
+            )
 
             for target_column, target_outs in outs.items():
                 if np.any(target_outs == np.inf):
@@ -1219,6 +1338,7 @@ class Inferer:
         x: dict[str, np.ndarray],
         size: int,
         metadata: dict[str, np.ndarray],
+        column_types: dict[str, torch.dtype],
     ):
         """Batch embedding inference across the active backend."""
         if self.inference_model_type == "onnx":
@@ -1248,6 +1368,7 @@ class Inferer:
                 size,
                 self.target_columns,
                 metadata=metadata_adjusted,
+                column_types=column_types,
             )
         else:
             assert False, "not possible"
@@ -1259,6 +1380,7 @@ class Inferer:
         x: dict[str, np.ndarray],
         size: int,
         metadata: dict[str, np.ndarray],
+        column_types: dict[str, torch.dtype],
     ):
         """Batch generative inference across the active backend."""
         if self.inference_model_type == "onnx":
@@ -1290,6 +1412,7 @@ class Inferer:
                 size * self.prediction_length,
                 self.target_columns,
                 metadata=metadata_adjusted,
+                column_types=column_types,
             )
         else:
             assert False
@@ -1349,6 +1472,9 @@ class Inferer:
                     f"Could not map ONNX input '{input_name}' to a feature or metadata array."
                 )
 
+            expected_dtype = ONNX_NUMPY_DTYPES.get(session_input.type)
+            if expected_dtype is not None and value.dtype != expected_dtype:
+                value = value.astype(expected_dtype, copy=False)
             ort_inputs[input_name] = self.expand_to_batch_size(value)
 
         ort_outs = self.ort_session.run(None, ort_inputs)

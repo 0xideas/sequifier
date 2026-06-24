@@ -2959,6 +2959,7 @@ def infer_with_embedding_model(
     size: int,
     target_columns: list[str],
     metadata: list[dict[str, np.ndarray]],
+    column_types: dict[str, torch.dtype],
 ) -> np.ndarray:
     """Run batched embedding inference and concatenate CPU outputs."""
     outs0 = []
@@ -2977,7 +2978,9 @@ def infer_with_embedding_model(
                 if col in categorical_cols:
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
                 else:
-                    data_gpu[col] = torch.from_numpy(x_).to(device, dtype=ref_dtype)
+                    data_gpu[col] = torch.from_numpy(x_).to(
+                        device, dtype=column_types.get(col, ref_dtype)
+                    )
             metadata_gpu = (
                 {
                     col: torch.from_numpy(x_).to(device)
@@ -3008,6 +3011,7 @@ def infer_with_generative_model(
     size: int,
     target_columns: list[str],
     metadata: list[dict[str, np.ndarray]],
+    column_types: dict[str, torch.dtype],
 ) -> dict[str, np.ndarray]:
     """Run batched generative inference and trim CPU outputs."""
     outs0 = []
@@ -3024,7 +3028,9 @@ def infer_with_generative_model(
                 if col in categorical_cols:
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
                 else:
-                    data_gpu[col] = torch.from_numpy(x_).to(device, dtype=ref_dtype)
+                    data_gpu[col] = torch.from_numpy(x_).to(
+                        device, dtype=column_types.get(col, ref_dtype)
+                    )
             metadata_gpu = (
                 {
                     col: torch.from_numpy(x_).to(device)
