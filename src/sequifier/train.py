@@ -58,6 +58,14 @@ torch._dynamo.config.suppress_errors = True
 ClassCounts = dict[str, Tensor]
 CHECKPOINT_FORMAT_VERSION = 2
 SUPPORTED_CHECKPOINT_FORMAT_VERSIONS = {2}
+EMBEDDING_INDEX_DTYPES = (torch.int32, torch.int64)
+NARROW_EMBEDDING_INDEX_DTYPES = (
+    torch.int8,
+    torch.uint8,
+    torch.int16,
+    torch.uint16,
+)
+WIDE_UNSIGNED_EMBEDDING_INDEX_DTYPES = (torch.uint32, torch.uint64)
 
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
@@ -94,6 +102,34 @@ from sequifier.special_tokens import SPECIAL_TOKEN_IDS  # noqa: E402
 def cleanup():
     """Destroy the active distributed process group."""
     dist.destroy_process_group()
+
+
+def _smallest_embedding_safe_dtype(dtype: torch.dtype) -> torch.dtype:
+    """Return the narrowest dtype accepted by torch embedding for this integer dtype."""
+    if dtype in EMBEDDING_INDEX_DTYPES:
+        return dtype
+    if dtype in NARROW_EMBEDDING_INDEX_DTYPES:
+        return torch.int32
+    if dtype in WIDE_UNSIGNED_EMBEDDING_INDEX_DTYPES:
+        return torch.int64
+    raise TypeError(f"Embedding indices must use an integer dtype, got {dtype}.")
+
+
+@beartype
+def _embedding_safe_indices(indices: Tensor) -> Tensor:
+    target_dtype = _smallest_embedding_safe_dtype(indices.dtype)
+    if indices.dtype == target_dtype:
+        return indices
+    return indices.to(dtype=target_dtype)
+
+
+@beartype
+def _class_index_tensor(indices: Tensor) -> Tensor:
+    """Return integer class indices in the dtype required by PyTorch losses."""
+    _smallest_embedding_safe_dtype(indices.dtype)
+    if indices.dtype == torch.int64:
+        return indices
+    return indices.to(dtype=torch.int64)
 
 
 @beartype
@@ -1114,7 +1150,7 @@ class TransformerModel(nn.Module):
         """Encode inputs into contextual hidden states."""
         srcs = []
         for col in self.categorical_columns:
-            src_t = self.encoder[col](src[col].T) * math.sqrt(
+            src_t = self.encoder[col](_embedding_safe_indices(src[col]).T) * math.sqrt(
                 self.initial_embedding_dim
             )
 
@@ -2127,7 +2163,10 @@ class TransformerModel(nn.Module):
         target_values = targets[target_column]
         if self.hparams.training_spec.training_objective == "final_value":
             target_values = target_values[:, -1:].expand_as(target_values)
-        return target_values.T.contiguous().reshape(-1)
+        target_tensor = target_values.T.contiguous().reshape(-1)
+        if self.target_column_types[target_column] == "categorical":
+            target_tensor = _class_index_tensor(target_tensor)
+        return target_tensor
 
     @beartype
     def _calculate_loss_components(
@@ -2291,7 +2330,7 @@ class TransformerModel(nn.Module):
         if self.target_column_types[col] == "categorical":
             target_dtype = self.decoder[col].weight.dtype
             return (
-                one_hot(val, self.n_classes[col])
+                one_hot(_class_index_tensor(val), self.n_classes[col])
                 .reshape(-1, self.n_classes[col])
                 .to(dtype=target_dtype)
             )
