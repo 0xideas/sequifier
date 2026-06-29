@@ -15,6 +15,8 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictInt,
+    StrictStr,
     field_serializer,
     field_validator,
     model_validator,
@@ -33,6 +35,7 @@ from sequifier.helpers import (
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 
 AnyType = str | int | float
+NextOccurrenceTargetValue = StrictInt | StrictStr
 
 
 def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
@@ -202,6 +205,11 @@ class BERTSpecModel(BaseModel):
     span_masking: ProbabilityDistribution
 
 
+class NextOccurrenceConfigModel(BaseModel):
+    column_name: str
+    target_values: list[NextOccurrenceTargetValue] = Field(..., min_length=1)
+
+
 class TrainingSpecModel(BaseModel):
     """Training loop, optimization, precision, and distribution settings."""
 
@@ -235,6 +243,7 @@ class TrainingSpecModel(BaseModel):
     )
     scheduler_step_on: str = "epoch"
     bert_spec: Optional[BERTSpecModel] = None
+    next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
 
     continue_training: bool = True
     enforce_determinism: bool = False
@@ -360,14 +369,15 @@ class TrainingSpecModel(BaseModel):
     @field_validator("training_objective")
     @classmethod
     def validate_training_objective(cls, v):
-        if v not in ["causal", "bert", "final_value"]:
+        if v not in ["causal", "bert", "final_value", "next_occurrence"]:
             raise ValueError(
-                f"Only 'causal', 'bert', and 'final_value' are allowed, found {v}"
+                "Only 'causal', 'bert', 'final_value', and 'next_occurrence' "
+                f"are allowed, found {v}"
             )
         return v
 
     @model_validator(mode="after")
-    def validate_bert_spec_matches_objective(self):
+    def validate_objective_specific_config(self):
         if self.bert_spec is not None and self.training_objective != "bert":
             raise ValueError(
                 "The BERT hyperparameters should only be configured if the training objective is 'bert'"
@@ -375,6 +385,20 @@ class TrainingSpecModel(BaseModel):
         if self.bert_spec is None and self.training_objective == "bert":
             raise ValueError(
                 "If the training_objective is 'bert', the BERT hyperparameters must be set"
+            )
+        if (
+            self.next_occurrence_config is not None
+            and self.training_objective != "next_occurrence"
+        ):
+            raise ValueError(
+                "next_occurrence_config should only be configured if the training objective is 'next_occurrence'"
+            )
+        if (
+            self.next_occurrence_config is None
+            and self.training_objective == "next_occurrence"
+        ):
+            raise ValueError(
+                "If the training_objective is 'next_occurrence', next_occurrence_config must be set"
             )
         return self
 
@@ -579,6 +603,44 @@ class TrainModel(BaseModel):
                 "For BERT training, model_spec.prediction_length must be equal to context_length "
                 f"(got prediction_length={self.model_spec.prediction_length}, context_length={self.window_view.context_length})."
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_next_occurrence_config_matches_targets(self):
+        if self.training_spec.training_objective == "next_occurrence":
+            next_occurrence_config = self.training_spec.next_occurrence_config
+            if next_occurrence_config is None:
+                raise ValueError(
+                    "next_occurrence_config must be set for next_occurrence training."
+                )
+
+            column_name = next_occurrence_config.column_name
+            if column_name not in self.target_columns:
+                raise ValueError(
+                    "next_occurrence_config.column_name must be one of target_columns, "
+                    f"got {column_name!r}."
+                )
+            if self.target_column_types.get(column_name) != "categorical":
+                raise ValueError(
+                    "next_occurrence_config.column_name must refer to a categorical target column."
+                )
+            if column_name not in self.id_maps:
+                raise ValueError(
+                    "next_occurrence_config.column_name must have a preprocessing id_map, "
+                    f"got {column_name!r}."
+                )
+
+            id_map = self.id_maps[column_name]
+            missing_values = [
+                value
+                for value in next_occurrence_config.target_values
+                if value not in id_map
+            ]
+            if missing_values:
+                raise ValueError(
+                    "next_occurrence_config.target_values must match keys in "
+                    f"id_maps[{column_name!r}] exactly, missing {missing_values!r}."
+                )
         return self
 
     @field_validator("model_name")

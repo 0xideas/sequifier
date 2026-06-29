@@ -178,9 +178,10 @@ class InfererModel(BaseModel):
     @field_validator("training_objective")
     @classmethod
     def validate_training_objective(cls, v):
-        if v not in ["causal", "bert", "final_value"]:
+        if v not in ["causal", "bert", "final_value", "next_occurrence"]:
             raise ValueError(
-                f"Only 'causal', 'bert', and 'final_value' are allowed, found {v}"
+                "Only 'causal', 'bert', 'final_value', and 'next_occurrence' "
+                f"are allowed, found {v}"
             )
         return v
 

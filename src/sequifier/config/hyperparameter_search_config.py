@@ -13,6 +13,7 @@ from sequifier.config.train_config import (
     BERTSpecModel,
     DotDict,
     ModelSpecModel,
+    NextOccurrenceConfigModel,
     ReplacementDistribution,
     TrainingSpecModel,
     TrainModel,
@@ -225,6 +226,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     batch_size: OptunaInt
     learning_rate: list[float]  # Kept as list to preserve coupling with epochs
     bert_spec: Optional[BERTSpecHyperparameterSampling] = None
+    next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
     accumulation_steps: OptunaInt
@@ -284,20 +286,36 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     @field_validator("training_objective")
     @classmethod
     def validate_training_objective(cls, v):
-        allowed = {"causal", "bert", "final_value"}
+        allowed = {"causal", "bert", "final_value", "next_occurrence"}
         invalid = set(v).difference(allowed)
         if invalid:
             raise ValueError(
-                "Only 'causal', 'bert', and 'final_value' are allowed, "
+                "Only 'causal', 'bert', 'final_value', and 'next_occurrence' are allowed, "
                 f"found {invalid}"
             )
         return v
 
     @model_validator(mode="after")
-    def validate_bert_spec(self):
+    def validate_objective_specific_config(self):
         if "bert" in self.training_objective and self.bert_spec is None:
             raise ValueError(
                 "If 'bert' is in training_objective, bert_spec must be configured."
+            )
+        if (
+            "next_occurrence" in self.training_objective
+            and self.next_occurrence_config is None
+        ):
+            raise ValueError(
+                "If 'next_occurrence' is in training_objective, "
+                "next_occurrence_config must be configured."
+            )
+        if (
+            "next_occurrence" not in self.training_objective
+            and self.next_occurrence_config is not None
+        ):
+            raise ValueError(
+                "next_occurrence_config should only be configured if "
+                "'next_occurrence' is in training_objective."
             )
         return self
 
@@ -382,6 +400,11 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             if training_objective == "bert" and self.bert_spec is not None
             else None
         )
+        next_occurrence_config = (
+            self.next_occurrence_config
+            if training_objective == "next_occurrence"
+            else None
+        )
 
         batch_size = sample_param(trial, "batch_size", self.batch_size)
         dropout = sample_param(trial, "dropout", self.dropout)
@@ -411,6 +434,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             criterion=self.criterion,
             class_weights=self.class_weights,
             bert_spec=bert_spec,
+            next_occurrence_config=next_occurrence_config,
             accumulation_steps=accumulation_steps,
             dropout=dropout,
             loss_weights=self.loss_weights,
@@ -614,7 +638,7 @@ class HyperparameterSearchConfig(BaseModel):
                     f"({self.storage_layout.max_target_offset}) > stored_context_width ({self.storage_layout.stored_context_width}). "
                     "Model inputs cannot exceed the preprocessed sequence length."
                 )
-        forward_objectives = {"causal", "final_value"}
+        forward_objectives = {"causal", "final_value", "next_occurrence"}
         if (
             set(self.training_hyperparameter_sampling.training_objective)
             & forward_objectives
@@ -622,9 +646,10 @@ class HyperparameterSearchConfig(BaseModel):
             if self.storage_layout.max_target_offset < 1:
                 raise ValueError(
                     "The hyperparameter search space includes a forward-looking "
-                    "objective ('causal' or 'final_value'), "
+                    "objective ('causal', 'final_value', or 'next_occurrence'), "
                     "but the preprocessed dataset has max_target_offset=0. "
-                    "Causal and final_value modeling require max_target_offset >= 1."
+                    "Causal, final_value, and next_occurrence modeling require "
+                    "max_target_offset >= 1."
                 )
         return self
 

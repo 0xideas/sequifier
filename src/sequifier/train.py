@@ -772,6 +772,15 @@ class TransformerModel(nn.Module):
         self.index_maps = construct_index_maps(
             hparams.id_maps, self.class_share_log_columns, True
         )
+        self.next_occurrence_column = None
+        self.next_occurrence_target_ids: list[int] = []
+        next_occurrence_config = hparams.training_spec.next_occurrence_config
+        if next_occurrence_config is not None:
+            self.next_occurrence_column = next_occurrence_config.column_name
+            id_map = hparams.id_maps[self.next_occurrence_column]
+            self.next_occurrence_target_ids = [
+                id_map[value] for value in next_occurrence_config.target_values
+            ]
         self.export_embedding_model = hparams.export_embedding_model
         self.export_generative_model = hparams.export_generative_model
         self.export_onnx = hparams.export_onnx
@@ -892,7 +901,11 @@ class TransformerModel(nn.Module):
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
 
-        if hparams.training_spec.training_objective in ["causal", "final_value"]:
+        if hparams.training_spec.training_objective in [
+            "causal",
+            "final_value",
+            "next_occurrence",
+        ]:
             self.register_buffer(
                 "src_mask",
                 self._generate_square_subsequent_mask(self.context_length),
@@ -1342,6 +1355,11 @@ class TransformerModel(nn.Module):
             if training_spec.bert_spec is not None
             else None
         )
+        next_occurrence_config = (
+            training_spec.next_occurrence_config.model_dump(mode="json")
+            if training_spec.next_occurrence_config is not None
+            else None
+        )
         compatibility_settings = {
             "model_name": self.model_name,
             "read_format": self.hparams.read_format,
@@ -1363,6 +1381,7 @@ class TransformerModel(nn.Module):
             "seed": self.hparams.seed,
             "dropout": training_spec.dropout,
             "bert_spec": bert_spec,
+            "next_occurrence_config": next_occurrence_config,
             "sampling_strategy": training_spec.sampling_strategy,
             "criterion": training_spec.criterion,
             "class_weights": training_spec.class_weights,
@@ -2053,6 +2072,55 @@ class TransformerModel(nn.Module):
         return loss, backward_components
 
     @beartype
+    def _prepare_next_occurrence_loss_targets(
+        self,
+        targets: dict[str, Tensor],
+        valid_mask: Tensor,
+    ) -> tuple[dict[str, Tensor], Tensor]:
+        """Project event-position target values backward for next-occurrence loss."""
+        if self.hparams.training_spec.training_objective != "next_occurrence":
+            return targets, valid_mask
+
+        trigger_column = cast(str, self.next_occurrence_column)
+        trigger_values = targets[trigger_column]
+
+        target_ids = torch.tensor(
+            self.next_occurrence_target_ids,
+            device=trigger_values.device,
+            dtype=trigger_values.dtype,
+        )
+        occurrence_mask = (
+            trigger_values.unsqueeze(-1) == target_ids.view(1, 1, -1)
+        ).any(dim=-1) & valid_mask.bool()
+
+        batch_size, seq_len = occurrence_mask.shape
+        position_ids = torch.arange(
+            seq_len, device=trigger_values.device, dtype=torch.int64
+        ).unsqueeze(0)
+        position_ids = position_ids.expand(batch_size, seq_len)
+        sentinel_positions = torch.full(
+            (batch_size, seq_len),
+            seq_len,
+            device=trigger_values.device,
+            dtype=torch.int64,
+        )
+        occurrence_positions = torch.where(
+            occurrence_mask, position_ids, sentinel_positions
+        )
+        next_positions = torch.cummin(
+            occurrence_positions.flip(dims=[1]), dim=1
+        ).values.flip(dims=[1])
+        has_next_occurrence = next_positions < seq_len
+        next_occurrence_mask = valid_mask.bool() & has_next_occurrence
+        gather_indices = next_positions.clamp_max(seq_len - 1)
+
+        projected_targets = {}
+        for target_column, target_tensor in targets.items():
+            projected_targets[target_column] = target_tensor.gather(1, gather_indices)
+
+        return projected_targets, next_occurrence_mask
+
+    @beartype
     def _calculate_training_loss(
         self,
         output: dict[str, Tensor],
@@ -2067,6 +2135,9 @@ class TransformerModel(nn.Module):
         valid_mask = metadata["target_valid_mask"].bool()  # type: ignore
         if "bert_mask" in metadata:
             valid_mask = valid_mask & metadata["bert_mask"].bool()
+        targets, valid_mask = self._prepare_next_occurrence_loss_targets(
+            targets, valid_mask
+        )
 
         local_sums, local_count = self._calculate_local_loss_components(
             output, targets, valid_mask
@@ -2176,6 +2247,9 @@ class TransformerModel(nn.Module):
         valid_mask: Tensor,
     ) -> tuple[dict[str, Tensor], Tensor]:
         """Return detached local loss sums and one shared token count for metrics."""
+        targets, valid_mask = self._prepare_next_occurrence_loss_targets(
+            targets, valid_mask
+        )
         loss_sums, token_count = self._calculate_local_loss_components(
             output, targets, valid_mask
         )
@@ -2516,6 +2590,7 @@ class TransformerModel(nn.Module):
                                 if self.hparams.training_spec.training_objective in [
                                     "causal",
                                     "final_value",
+                                    "next_occurrence",
                                 ]:
                                     pseudo_output[col] = self._transform_val(
                                         col, data[col].transpose(0, 1)

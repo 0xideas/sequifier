@@ -239,6 +239,7 @@ def infer_worker(
         default_prediction_length = {
             "causal": 1,
             "final_value": 1,
+            "next_occurrence": 1,
             "bert": config.window_view.context_length,
         }
         prediction_length = (
@@ -294,7 +295,7 @@ def calculate_item_positions(
         # Anchor positions to the start of the input sequence and tile forwards
         base_positions = start_positions
         position_offsets = np.arange(0, prediction_length)
-    elif training_objective in ["causal", "final_value"]:
+    elif training_objective in ["causal", "final_value", "next_occurrence"]:
         # Anchor positions to the future token step and tile backwards
         base_positions = start_positions + context_length
         position_offsets = np.arange(-prediction_length + 1, 1)

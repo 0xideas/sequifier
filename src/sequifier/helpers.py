@@ -237,17 +237,22 @@ class ModelWindowView:
     def __post_init__(self) -> None:
         if self.context_length < 1:
             raise ValueError("context_length must be a positive integer")
-        if self.objective not in {"causal", "bert", "final_value"}:
+        if self.objective not in {"causal", "bert", "final_value", "next_occurrence"}:
             raise ValueError(
-                "Only 'causal', 'bert', and 'final_value' are allowed, "
+                "Only 'causal', 'bert', 'final_value', and 'next_occurrence' are allowed, "
                 f"found {self.objective}"
             )
         if self.target_offset < 0:
             raise ValueError("target_offset must be non-negative")
         if self.objective == "bert" and self.target_offset != 0:
             raise ValueError("BERT views require target_offset=0")
-        if self.objective in {"causal", "final_value"} and self.target_offset < 1:
-            raise ValueError("Causal and final_value views require target_offset >= 1")
+        if (
+            self.objective in {"causal", "final_value", "next_occurrence"}
+            and self.target_offset < 1
+        ):
+            raise ValueError(
+                "Causal, final_value, and next_occurrence views require target_offset >= 1"
+            )
 
 
 @dataclass(frozen=True)
