@@ -36,7 +36,6 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)
         self._start_batch_state = shared_int(0)
-        self.sampling_strategy = config.training_spec.sampling_strategy
 
         metadata_path = os.path.join(self.data_dir, "metadata.json")
         if not os.path.exists(metadata_path):
@@ -116,21 +115,13 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         write_shared_int(self._start_batch_state, start_batch)
 
     def _get_target_samples(self) -> int:
-        """Return per-rank sample count under the configured sampling strategy."""
+        """Return the padded per-rank sample count for aligned distributed steps."""
         world_size = dist.get_world_size() if dist.is_initialized() else 1
-        rank = dist.get_rank() if dist.is_initialized() else 0
 
         samples_per_rank = [
             len(range(r, self.n_samples, world_size)) for r in range(world_size)
         ]
-
-        if self.sampling_strategy == "exact":
-            return samples_per_rank[rank]
-        elif self.sampling_strategy == "oversampling":
-            return max(samples_per_rank)
-        elif self.sampling_strategy == "undersampling":
-            return min(samples_per_rank)
-        return samples_per_rank[rank]
+        return max(samples_per_rank)
 
     def __len__(self) -> int:
         return self.total_batches
@@ -156,24 +147,17 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         indices_for_rank = indices[rank::world_size].tolist()
         sample_is_real = [True] * len(indices_for_rank)
 
-        if self.sampling_strategy == "oversampling":
-            real_count = len(indices_for_rank)
-            if real_count == 0:
-                fallback_indices = indices.tolist()
-                while len(indices_for_rank) < self.target_samples and fallback_indices:
-                    n = min(
-                        len(fallback_indices),
-                        self.target_samples - len(indices_for_rank),
-                    )
-                    indices_for_rank.extend(fallback_indices[:n])
-                    sample_is_real.extend([False] * n)
+        real_count = len(indices_for_rank)
+        if real_count == 0:
+            fallback_indices = indices.tolist()
+            n = min(len(fallback_indices), self.target_samples)
+            indices_for_rank.extend(fallback_indices[:n])
+            sample_is_real.extend([False] * n)
+        else:
             while len(indices_for_rank) < self.target_samples:
                 n = min(real_count, self.target_samples - len(indices_for_rank))
                 indices_for_rank.extend(indices_for_rank[:n])
                 sample_is_real.extend([False] * n)
-        elif self.sampling_strategy == "undersampling":
-            indices_for_rank = indices_for_rank[: self.target_samples]
-            sample_is_real = sample_is_real[: self.target_samples]
 
         worker_batch_counts = [
             math.ceil(len(indices_for_rank[i::num_workers]) / self.batch_size)

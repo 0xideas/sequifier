@@ -252,7 +252,6 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: Optional[bool] = True
-    sampling_strategy: str = "exact"
     data_parallelism: Optional[str] = None
     fsdp_cpu_offload: Optional[bool] = None
     torch_compile: str = "outer"
@@ -452,7 +451,6 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             backend=self.backend,
             layer_type_dtypes=self.layer_type_dtypes,
             layer_autocast=self.layer_autocast,
-            sampling_strategy=self.sampling_strategy,
             data_parallelism=self.data_parallelism,
             fsdp_cpu_offload=self.fsdp_cpu_offload,
             torch_compile=self.torch_compile,

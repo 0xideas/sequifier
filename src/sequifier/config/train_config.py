@@ -255,7 +255,6 @@ class TrainingSpecModel(BaseModel):
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: Optional[bool] = True
-    sampling_strategy: str = "exact"
     data_parallelism: Optional[str] = None
     fsdp_cpu_offload: Optional[bool] = None
     torch_compile: str = "outer"
@@ -401,15 +400,6 @@ class TrainingSpecModel(BaseModel):
                 "If the training_objective is 'next_occurrence', next_occurrence_config must be set"
             )
         return self
-
-    @field_validator("sampling_strategy")
-    @classmethod
-    def validate_sampling_strategy(cls, v):
-        if v not in ["exact", "oversampling", "undersampling"]:
-            raise ValueError(
-                f"sampling_strategy must be 'exact', 'oversampling', or 'undersampling', got '{v}'"
-            )
-        return v
 
     @field_validator("data_parallelism")
     @classmethod
@@ -739,22 +729,6 @@ class TrainModel(BaseModel):
             raise ValueError(
                 "If data_parallelism is set to 'DDP' then torch_compile must be one of 'none' and 'outer'"
             )
-
-        if v.sampling_strategy in ["oversampling", "undersampling"]:
-            if v.world_size <= 1:
-                raise ValueError(
-                    f"sampling_strategy '{v.sampling_strategy}' is only admissible if world_size > 1"
-                )
-            if info.data.get("read_format") not in ["pt", "parquet"]:
-                raise ValueError(
-                    f"sampling_strategy '{v.sampling_strategy}' is only admissible if training data is a folder (read_format='pt' or 'parquet')"
-                )
-
-        if v.world_size > 1 and v.sampling_strategy == "exact":
-            if info.data.get("read_format") not in ["pt", "parquet"]:
-                raise ValueError(
-                    "If world_size > 1 and sampling_strategy == 'exact', the input data must be a folder (read_format='pt' or 'parquet')."
-                )
 
         if v.data_parallelism is None or v.data_parallelism != "FSDP":
             if v.fsdp_cpu_offload is not None:

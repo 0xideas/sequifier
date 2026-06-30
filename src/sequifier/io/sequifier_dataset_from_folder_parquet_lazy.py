@@ -3,7 +3,6 @@ import math
 import os
 from typing import Dict, Iterator
 
-import numpy as np
 import polars as pl
 import torch
 import torch.distributed as dist
@@ -56,7 +55,6 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
 
         self.batch_files_info = metadata["batch_files"]
         self.total_samples = metadata["total_samples"]
-        self.sampling_strategy = config.training_spec.sampling_strategy
 
         self.column_torch_types = {
             col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
@@ -90,7 +88,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         write_shared_int(self._start_batch_state, start_batch)
 
     def _get_target_samples(self) -> int:
-        """Return per-rank sample count under the configured sampling strategy."""
+        """Return the padded per-rank sample count for aligned distributed steps."""
         world_size = dist.get_world_size() if dist.is_initialized() else 1
 
         num_files = len(self.batch_files_info)
@@ -102,49 +100,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
                 sum(self.batch_files_info[i]["samples"] for i in f_r) if f_r else 0
             )
 
-        if self.sampling_strategy == "exact":
-            samples_per_rank = np.array(samples_per_rank)
-            unique_samples_per_rank, counts = np.unique(
-                samples_per_rank, return_counts=True
-            )
-            if len(unique_samples_per_rank) > 1:
-                if np.max(counts) / np.sum(counts) > 0.8:
-                    most_frequent_unique_samples_val = unique_samples_per_rank[
-                        np.argmax(counts)
-                    ]
-                    non_max_idx = np.where(
-                        samples_per_rank != most_frequent_unique_samples_val
-                    )[0]
-                    files_strings = []
-                    for i in non_max_idx:
-                        f_r = list(range(i, num_files, world_size))
-                        files_strings.append(
-                            "\n\t".join(
-                                [
-                                    f'{self.batch_files_info[j]["path"].split(os.sep)[-1]}: {self.batch_files_info[j]["samples"]}'
-                                    for j in f_r
-                                ]
-                            )
-                        )
-                    rank_details = [
-                        f"Rank {i}: {samples_per_rank[i]} samples, files:\n\t{files_strings[i]}"
-                        for i in non_max_idx
-                    ]
-                    rank_details = "\n".join(rank_details)
-                    exception_detail = f":\nMost frequent sample value: {most_frequent_unique_samples_val}\n{rank_details}"
-                else:
-                    exception_detail = ""
-
-                raise Exception(
-                    f"Found {len(unique_samples_per_rank)} different number of samples per rank/GPU: {unique_samples_per_rank}{exception_detail}"
-                )
-            return int(unique_samples_per_rank[0])
-
-        elif self.sampling_strategy == "oversampling":
-            return max(samples_per_rank)
-        else:
-            assert self.sampling_strategy == "undersampling"
-            return min(samples_per_rank)
+        return max(samples_per_rank)
 
     def __len__(self) -> int:
         return self.total_batches
@@ -169,10 +125,9 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         files_for_this_rank = original_files_for_this_rank.copy()
 
         if not files_for_this_rank:
-            if self.sampling_strategy == "oversampling":
-                files_for_this_rank = [rank % num_files]
-            else:
-                raise Exception(f"No file found for GPU rank {rank}.")
+            if self.target_samples == 0:
+                return
+            files_for_this_rank = [rank % num_files]
 
         base_samples_per_worker = self.target_samples // num_workers
         remainder = self.target_samples % num_workers

@@ -152,7 +152,6 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt` or `read_format: parquet`. |
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
 | `layer_autocast` | `bool` | No | `true` | Enable `torch.autocast`. |
-| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance for multi-GPU training. |
 | `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`. |
 | `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly `true` or `false` if data\_parallelism is 'FSDP'. |
 | `torch_compile` | `str` | No | `outer` | Controls torch.compile. Options are "outer", "inner", or "none". |

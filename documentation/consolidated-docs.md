@@ -439,7 +439,6 @@ These fields determine the size and complexity of the Transformer.
 | `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
 | `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
-| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance: `exact` requires exact divisibility of n_files by the number of GPUs (`world_size`), alternatively `oversampling` and `undersampling` equalise the number of samples seen
 | `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`
 | `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly true or false if data_parallelism is 'FSDP'. Must be `null` otherwise.
 | `torch_compile` | `str` | No | Controls torch.compile. Options are "outer" (compiles the whole model), "inner" (compiles individual transformer layers, for FSDP), or "none" (no compilation). Defaults to "outer". |
@@ -883,7 +882,6 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt` or `read_format: parquet`. |
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
 | `layer_autocast` | `bool` | No | `true` | Enable `torch.autocast`. |
-| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance for multi-GPU training. |
 | `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`. |
 | `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly `true` or `false` if data\_parallelism is 'FSDP'. |
 | `torch_compile` | `str` | No | `outer` | Controls torch.compile. Options are "outer", "inner", or "none". |
@@ -1016,9 +1014,10 @@ training_spec:
   fsdp_cpu_offload: false   # omit if using 'DDP', set to true to offload parameters to CPU RAM
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)
   backend: nccl        # 'nccl' is the standard and most efficient backend for NVIDIA GPUs
-  sampling_strategy: 'oversampling' # if the number of files isn't perfectly divisible by the number of GPUs, you need to choose either 'oversampling' or 'undersampling'. If it is perfectly divisible, you can set it to 'exact', but the files must be very close to each other in size to prevent timing mismatches
 
 ```
+
+When shards do not divide evenly across ranks, Sequifier automatically pads shorter ranks with repeated samples for step alignment. Those repeats are masked out of loss calculation, so each real sample contributes once.
 
 ## 3. Launching the Training Job
 

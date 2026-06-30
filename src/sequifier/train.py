@@ -1383,7 +1383,6 @@ class TransformerModel(nn.Module):
             "dropout": training_spec.dropout,
             "bert_spec": bert_spec,
             "next_occurrence_config": next_occurrence_config,
-            "sampling_strategy": training_spec.sampling_strategy,
             "criterion": training_spec.criterion,
             "class_weights": training_spec.class_weights,
             "loss_weights": training_spec.loss_weights,
