@@ -603,6 +603,7 @@ def format_number(number: int | float | np.float32) -> str:
 
 
 def _get_evaluation_loss_mask(metadata: dict[str, Tensor]) -> Tensor:
+    """Build the effective loss mask from token, objective, and sample masks."""
     valid_mask = metadata["target_valid_mask"].bool()
 
     if "bert_mask" in metadata:
@@ -2132,9 +2133,7 @@ class TransformerModel(nn.Module):
         if not target_names:
             raise RuntimeError("Loss calculation failed; no target columns were found.")
 
-        valid_mask = metadata["target_valid_mask"].bool()  # type: ignore
-        if "bert_mask" in metadata:
-            valid_mask = valid_mask & metadata["bert_mask"].bool()
+        valid_mask = _get_evaluation_loss_mask(metadata)
         targets, valid_mask = self._prepare_next_occurrence_loss_targets(
             targets, valid_mask
         )
