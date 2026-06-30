@@ -984,13 +984,6 @@ class Preprocessor:
         col_types: dict[str, str],
         selected_columns_statistics: dict[str, dict[str, float]],
     ) -> None:
-        effective_metadata = {
-            "n_classes": n_classes,
-            "id_maps": id_maps,
-            "column_types": col_types,
-            "selected_columns_statistics": selected_columns_statistics,
-            "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
-        }
         manifest = {
             "manifest_version": 1,
             "preprocessing_config": {
@@ -1008,17 +1001,28 @@ class Preprocessor:
                 "process_by_file": self.process_by_file,
                 "subsequence_start_mode": self.subsequence_start_mode,
                 "mask_column": self.mask_column,
-                "metadata_config_path": self.metadata_config_path,
                 "use_precomputed_maps": self.use_precomputed_maps,
-            },
-            "effective_metadata_digest": {
-                "algorithm": "sha256",
-                "value": _stable_json_digest(effective_metadata),
+                "n_classes": n_classes,
+                "id_maps": id_maps,
+                "column_types": col_types,
+                "selected_columns_statistics": selected_columns_statistics,
+                "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             },
         }
         manifest_path = os.path.join(
             self.project_root, "data", self.target_dir, "preprocess-manifest.json"
         )
+
+        with open(
+            os.path.join(
+                self.project_root,
+                "data",
+                self.target_dir,
+                "preprocess-manifest-check.json",
+            ),
+            "w",
+        ) as f:
+            json.dump(manifest, f, indent=4)
 
         if self.continue_preprocessing:
             if not os.path.exists(manifest_path):
