@@ -25,6 +25,7 @@ from sequifier.helpers import (
     validate_stored_window_width,
     write_data,
 )
+from sequifier.objectives import get_objective_class
 from sequifier.special_tokens import validate_special_token_ids
 from sequifier.train import (
     infer_with_embedding_model,
@@ -236,16 +237,13 @@ def infer_worker(
                 f"Unsupported input type or read format: {config.read_format}"
             )
 
-        default_prediction_length = {
-            "causal": 1,
-            "final_value": 1,
-            "next_occurrence": 1,
-            "bert": config.window_view.context_length,
-        }
+        objective_class = get_objective_class(config.training_objective)
         prediction_length = (
             config.prediction_length
             if config.prediction_length is not None
-            else default_prediction_length[config.training_objective]
+            else objective_class.default_prediction_length(
+                config.window_view.context_length
+            )
         )
 
         inferer = Inferer(
@@ -291,23 +289,11 @@ def calculate_item_positions(
     training_objective: str,
 ) -> np.ndarray:
     """Return flattened absolute item positions for inference outputs."""
-    if training_objective == "bert":
-        # Anchor positions to the start of the input sequence and tile forwards
-        base_positions = start_positions
-        position_offsets = np.arange(0, prediction_length)
-    elif training_objective in ["causal", "final_value", "next_occurrence"]:
-        # Anchor positions to the future token step and tile backwards
-        base_positions = start_positions + context_length
-        position_offsets = np.arange(-prediction_length + 1, 1)
-    else:
-        raise ValueError(f"Unknown objective {training_objective}")
-
-    # Repeat base anchors to match the number of predictions per sequence window
-    repeated_bases = np.repeat(base_positions, prediction_length)
-    # Tile the relative step offsets across all sequences in the batch chunk
-    tiled_offsets = np.tile(position_offsets, len(start_positions))
-
-    return repeated_bases + tiled_offsets
+    return get_objective_class(training_objective).item_positions(
+        start_positions,
+        context_length,
+        prediction_length,
+    )
 
 
 @beartype

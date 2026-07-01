@@ -1,13 +1,12 @@
 import glob
 import hashlib
-import math
 import os
 import random
 import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import polars as pl
@@ -17,6 +16,11 @@ from loguru import logger
 from pydantic import ValidationError
 from torch import Tensor
 
+from sequifier.objectives import (
+    ALLOWED_OBJECTIVE_NAMES,
+    OBJECTIVE_NAME_MESSAGE,
+    get_objective_class,
+)
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
 PANDAS_TO_TORCH_TYPES = {
@@ -237,22 +241,15 @@ class ModelWindowView:
     def __post_init__(self) -> None:
         if self.context_length < 1:
             raise ValueError("context_length must be a positive integer")
-        if self.objective not in {"causal", "bert", "final_value", "next_occurrence"}:
+        if self.objective not in ALLOWED_OBJECTIVE_NAMES:
             raise ValueError(
-                "Only 'causal', 'bert', 'final_value', and 'next_occurrence' are allowed, "
-                f"found {self.objective}"
+                f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {self.objective}"
             )
         if self.target_offset < 0:
             raise ValueError("target_offset must be non-negative")
-        if self.objective == "bert" and self.target_offset != 0:
-            raise ValueError("BERT views require target_offset=0")
-        if (
-            self.objective in {"causal", "final_value", "next_occurrence"}
-            and self.target_offset < 1
-        ):
-            raise ValueError(
-                "Causal, final_value, and next_occurrence views require target_offset >= 1"
-            )
+        get_objective_class(self.objective).validate_window_view(
+            self.context_length, self.target_offset
+        )
 
 
 @dataclass(frozen=True)
@@ -662,202 +659,3 @@ def get_last_training_batch_timedelta(
     t1, t2 = timestamps[-2], timestamps[-1]
 
     return (t2 - t1).total_seconds()
-
-
-def _build_bert_span_mask(
-    valid_mask: torch.Tensor,
-    masking_probability: float,
-    span_distribution: Any,
-    *,
-    generator: Optional[torch.Generator] = None,
-) -> torch.Tensor:
-    """Construct exact-budget, non-overlapping BERT span masks."""
-    valid_mask = valid_mask.bool()
-    batch_size, seq_len = valid_mask.shape
-    device = valid_mask.device
-
-    valid_lengths = valid_mask.sum(dim=1, dtype=torch.long)
-    budgets = (valid_lengths.to(torch.float32) * masking_probability).to(torch.long)
-
-    max_spans = max(1, math.floor(seq_len * masking_probability) + 10)
-    sampled_lengths = span_distribution.sample(
-        (batch_size, max_spans),
-        device=device,
-        generator=generator,
-    )
-    sampled_lengths = sampled_lengths.to(torch.long).clamp_min_(1)
-
-    used_before = sampled_lengths.cumsum(dim=1) - sampled_lengths
-    remaining = (budgets[:, None] - used_before).clamp_min(0)
-    span_lengths = torch.minimum(sampled_lengths, remaining)
-
-    n_spans = (span_lengths > 0).sum(dim=1)
-    total_gap_length = valid_lengths - budgets
-
-    gap_slot = torch.arange(max_spans + 1, device=device)
-    active_gap_slot = gap_slot[None, :] <= n_spans[:, None]
-
-    uniform = torch.rand(
-        (batch_size, max_spans + 1),
-        device=device,
-        dtype=torch.float32,
-        generator=generator,
-    )
-    uniform = uniform.clamp_min(torch.finfo(uniform.dtype).tiny)
-
-    gap_weights = torch.where(
-        active_gap_slot,
-        -torch.log(uniform),
-        torch.zeros_like(uniform),
-    )
-    cumulative_weights = gap_weights.cumsum(dim=1)
-    weight_totals = cumulative_weights[:, -1:].clamp_min(
-        torch.finfo(gap_weights.dtype).tiny
-    )
-
-    gap_edges = torch.floor(
-        cumulative_weights
-        / weight_totals
-        * total_gap_length[:, None].to(gap_weights.dtype)
-    ).to(torch.long)
-    gap_edges = torch.where(
-        gap_slot[None, :] >= n_spans[:, None],
-        total_gap_length[:, None],
-        gap_edges,
-    )
-
-    gaps = torch.diff(
-        torch.cat(
-            [
-                torch.zeros((batch_size, 1), dtype=torch.long, device=device),
-                gap_edges,
-            ],
-            dim=1,
-        ),
-        dim=1,
-    )
-
-    lengths_before = span_lengths.cumsum(dim=1) - span_lengths
-    gaps_through_current = gaps[:, :max_spans].cumsum(dim=1)
-
-    span_starts = lengths_before + gaps_through_current
-    span_ends = span_starts + span_lengths
-
-    compact_position = valid_mask.to(torch.long).cumsum(dim=1) - 1
-    compact_position = compact_position.clamp_min(0)
-
-    started_spans = torch.searchsorted(
-        span_starts.contiguous(),
-        compact_position.contiguous(),
-        right=True,
-    )
-    ended_spans = torch.searchsorted(
-        span_ends.contiguous(),
-        compact_position.contiguous(),
-        right=True,
-    )
-
-    return valid_mask & (started_spans > ended_spans)
-
-
-def apply_bert_masking(
-    data_batch: Dict[str, torch.Tensor],
-    targets_batch: Dict[str, torch.Tensor],
-    metadata_batch: Optional[Dict[str, torch.Tensor]],
-    config: Any,  # TrainConfig
-    eval_seed: Optional[int] = None,
-) -> tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
-    """Apply BERT span corruption and attach prediction masks."""
-    if not metadata_batch or "attention_valid_mask" not in metadata_batch:
-        raise ValueError("BERT masking requires metadata['attention_valid_mask']")
-
-    valid_mask = metadata_batch["attention_valid_mask"].bool()
-    batch_size, seq_len = valid_mask.shape
-    device = valid_mask.device
-
-    for target_name, target in targets_batch.items():
-        if target.shape != valid_mask.shape:
-            raise ValueError(
-                f"BERT target {target_name!r} has shape {target.shape}; "
-                f"expected {valid_mask.shape}"
-            )
-
-    generator: Optional[torch.Generator] = None
-    if eval_seed is not None:
-        seeded_generator = torch.Generator(device=device)
-        seeded_generator.manual_seed(eval_seed)
-        generator = seeded_generator
-
-    bert_spec = config.training_spec.bert_spec
-    if bert_spec is None:
-        raise ValueError("bert_spec must be configured for BERT training")
-
-    bert_mask = _build_bert_span_mask(
-        valid_mask,
-        bert_spec.masking_probability,
-        bert_spec.span_masking,
-        generator=generator,
-    )
-
-    replacement = bert_spec.replacement_distribution
-    p_masked = replacement.masked
-    p_random = replacement.random
-
-    replacement_probs = torch.rand(
-        (batch_size, seq_len),
-        device=device,
-        generator=generator,
-    )
-
-    mask_token_mask = bert_mask & (replacement_probs < p_masked)
-    random_token_mask = (
-        bert_mask
-        & (replacement_probs >= p_masked)
-        & (replacement_probs < (p_masked + p_random))
-    )
-
-    masked_data = dict(data_batch)
-
-    for col, tensor in data_batch.items():
-        if col in config.categorical_columns:
-            output = tensor.clone()
-
-            if p_masked > 0.0:
-                output.masked_fill_(mask_token_mask, SPECIAL_TOKEN_IDS.mask)
-
-            if p_random > 0.0:
-                random_tokens = torch.randint(
-                    low=SPECIAL_TOKEN_IDS.user_start,
-                    high=config.n_classes[col],
-                    size=tensor.shape,
-                    device=device,
-                    dtype=tensor.dtype,
-                    generator=generator,
-                )
-                output[random_token_mask] = random_tokens[random_token_mask]
-
-            masked_data[col] = output
-
-        elif col in config.real_columns:
-            output = tensor.clone()
-
-            if p_masked > 0.0:
-                output.masked_fill_(mask_token_mask, 0.0)
-
-            if p_random > 0.0:
-                random_noise = torch.randn(
-                    tensor.shape,
-                    device=device,
-                    dtype=tensor.dtype,
-                    generator=generator,
-                )
-                output[random_token_mask] = random_noise[random_token_mask]
-
-            masked_data[col] = output
-
-    detached_targets = {col: tensor.detach() for col, tensor in targets_batch.items()}
-    output_metadata = {key: tensor.detach() for key, tensor in metadata_batch.items()}
-    output_metadata["bert_mask"] = bert_mask
-    output_metadata["attention_valid_mask"] = valid_mask
-
-    return masked_data, detached_targets, output_metadata

@@ -32,6 +32,14 @@ from sequifier.helpers import (
     stored_window_layout_from_metadata,
     try_catch_excess_keys,
 )
+from sequifier.objectives import (
+    ALLOWED_OBJECTIVE_NAMES,
+    OBJECTIVE_NAME_MESSAGE,
+    BERTObjective,
+    NextOccurrenceObjective,
+    get_objective_class,
+    target_offset_for_objective,
+)
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 
 AnyType = str | int | float
@@ -85,10 +93,9 @@ def load_train_config(
                 f"got {storage_layout.version}."
             )
         training_objective = config_values["training_spec"]["training_objective"]
-        target_offset = (
-            0
-            if training_objective == "bert"
-            else int(config_values.pop("target_offset", 1))
+        target_offset = target_offset_for_objective(
+            training_objective,
+            int(config_values.pop("target_offset", 1)),
         )
         window_view = ModelWindowView(
             context_length=int(config_values.pop("context_length")),
@@ -368,34 +375,31 @@ class TrainingSpecModel(BaseModel):
     @field_validator("training_objective")
     @classmethod
     def validate_training_objective(cls, v):
-        if v not in ["causal", "bert", "final_value", "next_occurrence"]:
-            raise ValueError(
-                "Only 'causal', 'bert', 'final_value', and 'next_occurrence' "
-                f"are allowed, found {v}"
-            )
+        if v not in ALLOWED_OBJECTIVE_NAMES:
+            raise ValueError(f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {v}")
         return v
 
     @model_validator(mode="after")
     def validate_objective_specific_config(self):
-        if self.bert_spec is not None and self.training_objective != "bert":
+        objective_class = get_objective_class(self.training_objective)
+        is_bert_objective = issubclass(objective_class, BERTObjective)
+        is_next_occurrence_objective = issubclass(
+            objective_class,
+            NextOccurrenceObjective,
+        )
+        if self.bert_spec is not None and not is_bert_objective:
             raise ValueError(
                 "The BERT hyperparameters should only be configured if the training objective is 'bert'"
             )
-        if self.bert_spec is None and self.training_objective == "bert":
+        if self.bert_spec is None and is_bert_objective:
             raise ValueError(
                 "If the training_objective is 'bert', the BERT hyperparameters must be set"
             )
-        if (
-            self.next_occurrence_config is not None
-            and self.training_objective != "next_occurrence"
-        ):
+        if self.next_occurrence_config is not None and not is_next_occurrence_objective:
             raise ValueError(
                 "next_occurrence_config should only be configured if the training objective is 'next_occurrence'"
             )
-        if (
-            self.next_occurrence_config is None
-            and self.training_objective == "next_occurrence"
-        ):
+        if self.next_occurrence_config is None and is_next_occurrence_objective:
             raise ValueError(
                 "If the training_objective is 'next_occurrence', next_occurrence_config must be set"
             )
@@ -585,19 +589,19 @@ class TrainModel(BaseModel):
                 f"({self.window_view.objective} != {self.training_spec.training_objective})."
             )
         resolve_window_view(self.storage_layout, self.window_view)
-        if (
-            self.training_spec.training_objective == "bert"
-            and self.model_spec.prediction_length != self.window_view.context_length
-        ):
-            raise ValueError(
-                "For BERT training, model_spec.prediction_length must be equal to context_length "
-                f"(got prediction_length={self.model_spec.prediction_length}, context_length={self.window_view.context_length})."
-            )
+        get_objective_class(
+            self.training_spec.training_objective
+        ).validate_prediction_length(
+            self.model_spec.prediction_length,
+            self.window_view.context_length,
+            usage="training",
+        )
         return self
 
     @model_validator(mode="after")
     def validate_next_occurrence_config_matches_targets(self):
-        if self.training_spec.training_objective == "next_occurrence":
+        objective_class = get_objective_class(self.training_spec.training_objective)
+        if issubclass(objective_class, NextOccurrenceObjective):
             next_occurrence_config = self.training_spec.next_occurrence_config
             if next_occurrence_config is None:
                 raise ValueError(

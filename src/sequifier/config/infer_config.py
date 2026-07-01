@@ -23,6 +23,12 @@ from sequifier.helpers import (
     stored_window_layout_from_metadata,
     try_catch_excess_keys,
 )
+from sequifier.objectives import (
+    ALLOWED_OBJECTIVE_NAMES,
+    OBJECTIVE_NAME_MESSAGE,
+    get_objective_class,
+    target_offset_for_objective,
+)
 from sequifier.special_tokens import validate_special_token_ids
 
 
@@ -56,10 +62,9 @@ def load_inferer_config(
                 f"got {storage_layout.version}."
             )
         training_objective = config_values["training_objective"]
-        target_offset = (
-            0
-            if training_objective == "bert"
-            else int(config_values.pop("target_offset", 1))
+        target_offset = target_offset_for_objective(
+            training_objective,
+            int(config_values.pop("target_offset", 1)),
         )
         window_view = ModelWindowView(
             context_length=int(config_values.pop("context_length")),
@@ -159,30 +164,25 @@ class InfererModel(BaseModel):
                 "window_view objective must match training_objective "
                 f"({self.window_view.objective} != {self.training_objective})."
             )
+        objective_class = get_objective_class(self.training_objective)
         if self.prediction_length is None:
-            self.prediction_length = (
+            self.prediction_length = objective_class.default_prediction_length(
                 self.window_view.context_length
-                if self.training_objective == "bert"
-                else 1
             )
-        if self.training_objective == "bert":
-            if self.prediction_length != self.window_view.context_length:
-                raise ValueError(
-                    "For BERT inference, prediction_length must be equal to context_length "
-                    f"(got prediction_length={self.prediction_length}, context_length={self.window_view.context_length})."
-                )
-        else:
+        objective_class.validate_prediction_length(
+            self.prediction_length,
+            self.window_view.context_length,
+            usage="inference",
+        )
+        if objective_class.forward_looking:
             resolve_window_view(self.storage_layout, self.window_view)
         return self
 
     @field_validator("training_objective")
     @classmethod
     def validate_training_objective(cls, v):
-        if v not in ["causal", "bert", "final_value", "next_occurrence"]:
-            raise ValueError(
-                "Only 'causal', 'bert', 'final_value', and 'next_occurrence' "
-                f"are allowed, found {v}"
-            )
+        if v not in ALLOWED_OBJECTIVE_NAMES:
+            raise ValueError(f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {v}")
         return v
 
     @field_validator("model_type")
@@ -264,7 +264,9 @@ class InfererModel(BaseModel):
         if (
             v
             and info.data.get("training_objective") is not None
-            and info.data.get("training_objective") == "bert"
+            and not get_objective_class(
+                info.data.get("training_objective")
+            ).forward_looking
         ):
             raise ValueError(
                 "Autoregressive inference is not possible with BERT-style models."
