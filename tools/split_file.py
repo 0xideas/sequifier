@@ -4,7 +4,7 @@ import pandas as pd
 def split_file_up(
     data: pd.DataFrame,
     number_of_files: int,
-    seq_length: int,
+    context_length: int,
     prediction_length: int,
     folder_path: str,
 ):
@@ -15,18 +15,21 @@ def split_file_up(
     i_offset = 0
     first_start = True
     for i in range(number_of_files):
-        if (i * rows_per_file) >= (seq_length - prediction_length):
+        if (i * rows_per_file) >= (context_length - prediction_length):
             if first_start:
                 start = 0
                 first_start = False
             else:
                 start = (
-                    leading_rows + (i * rows_per_file) - seq_length + prediction_length
+                    leading_rows
+                    + (i * rows_per_file)
+                    - context_length
+                    + prediction_length
                 )
 
             end = leading_rows + ((i + 1) * rows_per_file) + 1
             print(
-                f"{start = }, {end = }, {(start + (seq_length - prediction_length)) = }, {(end - (start + (seq_length - prediction_length))) = })"
+                f"{start = }, {end = }, {(start + (context_length - prediction_length)) = }, {(end - (start + (context_length - prediction_length))) = })"
             )
             data_subset = data.iloc[start:end, :]
             data_subset.to_parquet(

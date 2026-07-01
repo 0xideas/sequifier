@@ -1,42 +1,32 @@
 import json
 import math
 import os
-from typing import Dict, Iterator, Tuple
+from typing import Dict, Iterator
 
-import numpy as np
 import torch
 import torch.distributed as dist
 from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
-from sequifier.helpers import normalize_path
+from sequifier.helpers import (
+    normalize_path,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
+    validate_stored_window_width,
+)
+from sequifier.io.batch import SequifierBatch
+from sequifier.io.iteration_state import (
+    read_shared_int,
+    resolve_resume_worker,
+    shared_int,
+    skip_samples_for_batches,
+    write_shared_int,
+)
 
 
 class SequifierDatasetFromFolderPtLazy(IterableDataset):
-    """
-    An efficient, memory-safe PyTorch IterableDataset for out-of-core training.
-
-    Streams pre-processed chunked files sequentially using cross-file buffering to yield
-    exact batches, eliminating CPU cloning bottlenecks. Fully supports DDP/FSDP by
-    precisely calculating and distributing sample boundaries across GPU ranks and workers.
-
-    Args:
-        data_path (str): Path to the directory containing `.pt` chunks and `metadata.json`.
-        config (TrainModel): Training configuration (batch size, workers, sequence length, etc.).
-        shuffle (bool, optional): If True, deterministically shuffles file order and
-            sample indices per epoch. Defaults to True.
-
-    Yields:
-        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]:
-            A batch tuple containing sequence dictionaries, target dictionaries,
-            and three `None` placeholders (for API compatibility).
-
-    Raises:
-        FileNotFoundError: If `metadata.json` is missing.
-        Exception: If sample counts are uneven across ranks using the 'exact' sampling
-            strategy, or if a GPU rank is assigned no files.
-    """
+    """Streams PT chunks into rank/worker-aligned batches."""
 
     def __init__(self, data_path: str, config: TrainModel, shuffle: bool = True):
         super().__init__()
@@ -44,7 +34,8 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         self.config = config
         self.batch_size = config.training_spec.batch_size
         self.shuffle = shuffle
-        self.epoch = 0
+        self._epoch_state = shared_int(0)
+        self._start_batch_state = shared_int(0)
 
         metadata_path = os.path.join(self.data_dir, "metadata.json")
         if not os.path.exists(metadata_path):
@@ -56,9 +47,11 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
+        self.folder_layout = stored_window_layout_from_metadata(metadata)
+        self.resolved_view = resolve_window_view(self.folder_layout, config.window_view)
+
         self.batch_files_info = metadata["batch_files"]
         self.total_samples = metadata["total_samples"]
-        self.sampling_strategy = config.training_spec.sampling_strategy
 
         self.target_samples = self._get_target_samples()
         self.total_batches = self._calculate_total_batches(self.target_samples)
@@ -79,11 +72,15 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         return total_batches
 
     def set_epoch(self, epoch: int):
-        """Allows the training loop to set the epoch for deterministic file shuffling."""
-        self.epoch = epoch
+        """Set the shuffle epoch."""
+        write_shared_int(self._epoch_state, epoch)
+
+    def set_start_batch(self, start_batch: int):
+        """Set the first global batch to yield on the next iteration."""
+        write_shared_int(self._start_batch_state, start_batch)
 
     def _get_target_samples(self) -> int:
-        """Calculates exact sample count per rank to ensure FSDP syncs properly."""
+        """Return the padded per-rank sample count for aligned distributed steps."""
         world_size = dist.get_world_size() if dist.is_initialized() else 1
 
         num_files = len(self.batch_files_info)
@@ -95,92 +92,68 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 sum(self.batch_files_info[i]["samples"] for i in f_r) if f_r else 0
             )
 
-        if self.sampling_strategy == "exact":
-            samples_per_rank = np.array(samples_per_rank)
-            unique_samples_per_rank, counts = np.unique(
-                samples_per_rank, return_counts=True
-            )
-            if len(unique_samples_per_rank) > 1:
-                if np.max(counts) / np.sum(counts) > 0.8:
-                    most_frequent_unique_samples_val = unique_samples_per_rank[
-                        np.argmax(counts)
-                    ]
-                    non_max_idx = np.where(
-                        samples_per_rank != most_frequent_unique_samples_val
-                    )[0]
-                    files_strings = []
-                    for i in non_max_idx:
-                        f_r = list(range(i, num_files, world_size))
-                        files_strings.append(
-                            "\n\t".join(
-                                [
-                                    f'{self.batch_files_info[j]["path"].split(os.sep)[-1]}: {self.batch_files_info[j]["samples"]}'
-                                    for j in f_r
-                                ]
-                            )
-                        )
-                    rank_details = [
-                        f"Rank {i}: {samples_per_rank[i]} samples, files:\n\t{files_strings[i]}"
-                        for i in non_max_idx
-                    ]
-                    rank_details = "\n".join(rank_details)
-                    exception_detail = f":\nMost frequent sample value: {most_frequent_unique_samples_val}\n{rank_details}"
-                else:
-                    exception_detail = ""
-
-                raise Exception(
-                    f"Found {len(unique_samples_per_rank)} different number of samples per rank/GPU: {unique_samples_per_rank}{exception_detail}"
-                )
-            return int(unique_samples_per_rank[0])
-
-        elif self.sampling_strategy == "oversampling":
-            return max(samples_per_rank)
-        else:
-            assert self.sampling_strategy == "undersampling"
-            return min(samples_per_rank)
+        return max(samples_per_rank)
 
     def __len__(self) -> int:
         return self.total_batches
 
     def __iter__(
         self,
-    ) -> Iterator[
-        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]
-    ]:
+    ) -> Iterator[SequifierBatch]:
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_initialized() else 0
 
         worker_info = get_worker_info()
-        worker_id = worker_info.id if worker_info is not None else 0
+        physical_worker_id = worker_info.id if worker_info is not None else 0
         num_workers = worker_info.num_workers if worker_info is not None else 1
+        epoch = read_shared_int(self._epoch_state)
+        start_batch = read_shared_int(self._start_batch_state)
 
-        # 1. Distribute files among ranks
         num_files = len(self.batch_files_info)
-        files_for_this_rank = list(range(rank, num_files, world_size))
+        original_files_for_this_rank = list(range(rank, num_files, world_size))
+        rank_real_samples = sum(
+            self.batch_files_info[i]["samples"] for i in original_files_for_this_rank
+        )
+        files_for_this_rank = original_files_for_this_rank.copy()
 
         if not files_for_this_rank:
-            if self.sampling_strategy == "oversampling":
-                files_for_this_rank = [rank % num_files]
-            else:
-                raise Exception(f"No file found for GPU rank {rank}.")
+            if self.target_samples == 0:
+                return
+            files_for_this_rank = [rank % num_files]
 
-        # 2. Assign exact sample quotas and boundaries to this specific worker thread
         base_samples_per_worker = self.target_samples // num_workers
         remainder = self.target_samples % num_workers
+        worker_sample_counts = [
+            base_samples_per_worker + (1 if i < remainder else 0)
+            for i in range(num_workers)
+        ]
+        worker_batch_counts = [
+            math.ceil(sample_count / self.batch_size)
+            for sample_count in worker_sample_counts
+        ]
+        worker_id, skip_batches = resolve_resume_worker(
+            start_batch,
+            physical_worker_id,
+            num_workers,
+            worker_batch_counts,
+        )
 
-        # Calculate exactly where this worker's data starts and ends in the global stream
         worker_start_sample = 0
         for i in range(worker_id):
-            worker_start_sample += base_samples_per_worker + (1 if i < remainder else 0)
+            worker_start_sample += worker_sample_counts[i]
 
-        worker_target_samples = base_samples_per_worker + (
-            1 if worker_id < remainder else 0
-        )
+        worker_target_samples = worker_sample_counts[worker_id]
         worker_end_sample = worker_start_sample + worker_target_samples
+        skipped_samples = skip_samples_for_batches(
+            skip_batches, self.batch_size, worker_target_samples
+        )
+        worker_start_sample += skipped_samples
+        worker_target_samples -= skipped_samples
+        if worker_target_samples <= 0:
+            return
 
-        # 3. Shuffle files deterministically
         g = torch.Generator()
-        g.manual_seed(self.config.seed + self.epoch)
+        g.manual_seed(self.config.seed + epoch)
 
         if self.shuffle:
             file_order = torch.randperm(len(files_for_this_rank), generator=g).tolist()
@@ -188,7 +161,6 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         else:
             ordered_files = files_for_this_rank.copy()
 
-        # 4. Extend files based on exact target requirements
         extended_files = []
         current_samples = 0
         file_idx = 0
@@ -198,14 +170,12 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             current_samples += self.batch_files_info[f_id]["samples"]
             file_idx += 1
 
-        # 5. Stream data using precise global boundaries and a CROSS-FILE BUFFER
         yielded_samples = 0
-        train_seq_len = self.config.seq_length
         global_file_start_sample = 0
 
-        # Initialize cross-file buffers
         seq_buffer: Dict[str, torch.Tensor] = {}
         tgt_buffer: Dict[str, torch.Tensor] = {}
+        meta_buffer: Dict[str, torch.Tensor] = {}
         buffer_len = 0
 
         for f_id in extended_files:
@@ -217,53 +187,66 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             file_end = global_file_start_sample + file_samples
             global_file_start_sample += file_samples
 
-            # Skip this file if it belongs entirely to other workers
             if file_end <= worker_start_sample or file_start >= worker_end_sample:
                 continue
 
-            # This file overlaps with our worker's assigned boundary. Load it.
             file_path = os.path.join(self.data_dir, self.batch_files_info[f_id]["path"])
-            (sequences_batch, _, _, _) = torch.load(
-                file_path, map_location="cpu", weights_only=False
-            )
+            (
+                sequences_batch,
+                _,
+                _,
+                _,
+                left_pad_lengths_batch,
+            ) = torch.load(file_path, map_location="cpu", weights_only=False)
+            for tensor in sequences_batch.values():
+                validate_stored_window_width(
+                    tensor, self.folder_layout.stored_context_width
+                )
 
-            # Generate indices for the whole file
             indices = torch.arange(file_samples)
             if self.shuffle:
                 g_file = torch.Generator()
-                g_file.manual_seed(self.config.seed + self.epoch + f_id + rank)
+                g_file.manual_seed(self.config.seed + epoch + f_id + rank)
                 indices = indices[torch.randperm(file_samples, generator=g_file)]
 
-            # Slice the indices to extract ONLY the portion belonging to this worker
             worker_file_start_idx = max(0, worker_start_sample - file_start)
             worker_file_end_idx = min(file_samples, worker_end_sample - file_start)
 
             worker_indices = indices[worker_file_start_idx:worker_file_end_idx]
+            logical_positions = torch.arange(
+                file_start + worker_file_start_idx,
+                file_start + worker_file_end_idx,
+                dtype=torch.int64,
+            )
+            sample_is_real = logical_positions < rank_real_samples
             num_new_samples = len(worker_indices)
 
             if num_new_samples == 0:
                 del sequences_batch
                 continue
 
-            # Extract the data subset for this worker (Advanced indexing copies the data)
             new_seq = {
-                k: v[worker_indices, -(train_seq_len + 1) : -1]
+                k: v[worker_indices, self.resolved_view.input_slice]
                 for k, v in sequences_batch.items()
                 if k in self.config.input_columns
             }
             new_tgt = {
-                k: v[worker_indices, -train_seq_len:]
+                k: v[worker_indices, self.resolved_view.target_slice]
                 for k, v in sequences_batch.items()
                 if k in self.config.target_columns
             }
 
-            # Free the large file immediately to keep RAM down
-            del sequences_batch
+            new_meta = self.resolved_view.build_masks(
+                left_pad_lengths_batch[worker_indices]
+            )
+            new_meta["sample_valid_mask"] = sample_is_real
 
-            # Append the new slice to the cross-file buffer
+            del sequences_batch, left_pad_lengths_batch
+
             if buffer_len == 0:
                 seq_buffer = new_seq
                 tgt_buffer = new_tgt
+                meta_buffer = new_meta
             else:
                 seq_buffer = {
                     k: torch.cat([seq_buffer[k], new_seq[k]], dim=0) for k in seq_buffer
@@ -271,32 +254,47 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 tgt_buffer = {
                     k: torch.cat([tgt_buffer[k], new_tgt[k]], dim=0) for k in tgt_buffer
                 }
+                if set(meta_buffer) != set(new_meta):
+                    raise RuntimeError(
+                        "Inconsistent leftPadLength metadata across PT chunks."
+                    )
+                meta_buffer = {
+                    k: torch.cat([meta_buffer[k], new_meta[k]], dim=0)
+                    for k in meta_buffer
+                }
 
             buffer_len += num_new_samples
 
-            # Yield batches as long as the buffer contains at least `batch_size` samples
             while buffer_len >= self.batch_size:
                 if yielded_samples >= worker_target_samples:
                     break
 
-                # Slice out a perfect batch from the top of the buffer
                 batch_seq = {k: v[: self.batch_size] for k, v in seq_buffer.items()}
                 batch_tgt = {k: v[: self.batch_size] for k, v in tgt_buffer.items()}
+                batch_meta = {k: v[: self.batch_size] for k, v in meta_buffer.items()}
 
-                yield batch_seq, batch_tgt, None, None, None
+                yield SequifierBatch(
+                    inputs=batch_seq,
+                    targets=batch_tgt,
+                    metadata=batch_meta,
+                )
                 yielded_samples += self.batch_size
 
-                # Keep the remainder in the buffer for the next loop/file
                 seq_buffer = {k: v[self.batch_size :] for k, v in seq_buffer.items()}
                 tgt_buffer = {k: v[self.batch_size :] for k, v in tgt_buffer.items()}
+                meta_buffer = {k: v[self.batch_size :] for k, v in meta_buffer.items()}
                 buffer_len -= self.batch_size
 
-        # 6. Yield the final partial batch from the buffer if any remains
         if buffer_len > 0 and yielded_samples < worker_target_samples:
             remaining_needed = worker_target_samples - yielded_samples
             final_yield_size = min(buffer_len, remaining_needed)
 
             batch_seq = {k: v[:final_yield_size] for k, v in seq_buffer.items()}
             batch_tgt = {k: v[:final_yield_size] for k, v in tgt_buffer.items()}
+            batch_meta = {k: v[:final_yield_size] for k, v in meta_buffer.items()}
 
-            yield batch_seq, batch_tgt, None, None, None
+            yield SequifierBatch(
+                inputs=batch_seq,
+                targets=batch_tgt,
+                metadata=batch_meta,
+            )

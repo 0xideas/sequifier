@@ -2,7 +2,6 @@
 import sys
 from pathlib import Path
 
-# 1. Define the exact order of files to read
 FILES_TO_READ = [
     "README.md",
     "documentation/configs/preprocess.md",
@@ -19,7 +18,6 @@ OUTPUT_FILE = "documentation/consolidated-docs.md"
 def main():
     consolidated_content = []
 
-    # 2. Read contents
     for filepath in FILES_TO_READ:
         path = Path(filepath)
         if not path.is_file():
@@ -28,23 +26,19 @@ def main():
 
         consolidated_content.append(path.read_text(encoding="utf-8"))
 
-    # 3. Join with newlines to preserve markdown structure between files
     final_content = "\n\n".join(consolidated_content)
 
     output_path = Path(OUTPUT_FILE)
 
-    # 4. Check current content to avoid failing the hook if nothing changed
     current_content = ""
     if output_path.is_file():
         current_content = output_path.read_text(encoding="utf-8")
 
-    # 5. Write and exit with status code 1 if an update was needed
     if current_content != final_content:
-        # Ensure the output directory exists
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(final_content, encoding="utf-8")
         print(f"Hook updated {OUTPUT_FILE}")
-        sys.exit(1)  # pre-commit requires a non-zero exit code when a file is modified
+        sys.exit(1)
 
 
 if __name__ == "__main__":

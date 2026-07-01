@@ -8,6 +8,20 @@ The `sequifier infer` command uses a trained Sequifier model (PyTorch `.pt` or O
 sequifier infer --config-path configs/infer.yaml
 ```
 
+## CLI Overrides
+
+Values passed on the command line override the YAML before validation.
+
+| Flag | Overrides / Action |
+| :--- | :--- |
+| `-r`, `--randomize` | Generates a random `seed`, taking precedence over `--seed`. |
+| `-dp`, `--data-path` | Overrides `data_path`. |
+| `-ic`, `--input-columns` | Overrides `input_columns` with a space-separated list. Use `None` to derive all columns from metadata. |
+| `-mc`, `--metadata-config-path` | Overrides `metadata_config_path`. |
+| `-sm`, `--skip-metadata` | Skips loading metadata-derived config values. All required schema fields must then be supplied directly. |
+| `-mp`, `--model-path` | Overrides `model_path`. |
+| `-s`, `--seed` | Overrides `seed`, unless `--randomize` is also set. |
+
 ## Configuration Fields
 
 The configuration is defined in a YAML file (e.g., `infer.yaml`).
@@ -17,9 +31,9 @@ The configuration is defined in a YAML file (e.g., `infer.yaml`).
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
-| `data_path` | `str` | **Yes** | - | Path to the input data file (`csv` or `parquet`) or folder (`pt` or `parquet`). |
+| `data_path` | `str` | No | Metadata split 2 | Path to the input data file (`csv` or `parquet`) or folder (`pt` or `parquet`). Defaults to split 2 from metadata, or the last available split if fewer than three splits exist. |
 | `model_path` | `str` or `list[str]` | **Yes** | - | Path to a specific model file, or a list of paths to process sequentially. (e.g., `models/sequifier-[NAME]-best-[EPOCH].pt`). |
-| `training_config_path`| `str` | No | `configs/train.yaml`| Path to the config used to train the model. Required to reconstruct the model architecture. |
+| `training_config_path`| `str` | No | `configs/train.yaml`| Path to the config used to train the model. Required to reconstruct PyTorch `.pt` exports. |
 | `metadata_config_path`| `str` | **Yes** | - | Path to the JSON metadata file generated during preprocessing. Used for ID mapping and normalization. |
 | `read_format` | `str` | No | `parquet` | Format of input data (`csv`, `parquet`, `pt`). |
 | `write_format` | `str` | No | `csv` | Format for output predictions (`csv`, `parquet`). |
@@ -30,9 +44,9 @@ These fields tell the inference engine which columns to extract from the new dat
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `input_columns` | `list[str]`| **Yes** | - | List of feature columns. Must match the columns the model was trained on. |
+| `input_columns` | `list[str]` or `null`| **Yes** | - | List of feature columns. Must match the columns the model was trained on. Set to `null` to use all metadata columns. |
 | `target_columns` | `list[str]`| **Yes** | - | The column(s) to predict. |
-| `column_types` | `dict` | **Yes** | - | Map of all columns to their type (e.g., `Int64`, `Float64`). Usually copied from training config. |
+| `column_types` | `dict` | No | Metadata column types | Map of all columns to their type (e.g., `Int64`, `Float64`). Usually copied from metadata. |
 | `target_column_types`| `dict` | **Yes** | - | Map of target columns to `categorical` or `real`. |
 
 ### 3\. Inference Logic & Modes
@@ -40,15 +54,17 @@ These fields tell the inference engine which columns to extract from the new dat
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `model_type` | `str` | **Yes** | - | `generative` (predict next value) or `embedding` (extract vector representation). |
-| `seq_length` | `int` | **Yes** | - | The context window size. Must match training. |
-| `prediction_length` | `int` | No | `1` | Number of steps to predict *simultaneously*. **Must be 1** if `autoregression: true`. |
+| `training_objective` | `str` | **Yes** | - | Objective used during training: `causal`, `bert`, `final_value`, or `next_occurrence`. |
+| `context_length` | `int` | **Yes** | - | The model context window size. It must match the trained model view and fit inside the stored metadata capacity. |
+| `target_offset` | `int` | No | `1` | Future offset used for forward-looking objectives. BERT-style inference forces this to `0`. |
+| `prediction_length` | `int` | No | `1` for forward objectives; `context_length` for BERT | Number of steps to predict *simultaneously*. **Must be 1** if `autoregression: true`. |
 | `inference_batch_size`| `int` | **Yes** | - | Number of sequences to process at once. |
 | `autoregression` | `bool` | No | `false` | If `true`, feeds predictions back into the model to predict further into the future. |
 | `autoregression_total_steps`| `int` | No | `null` | If `autoregression: true`, how many total steps to predict, starting from the *first* subsequence in the inference data. |
 | `output_probabilities`| `bool` | No | `false` | If `true`, outputs the full probability distribution for categorical targets. |
 | `sample_from_distribution_columns`| `Optional[list[str]]`| No | `null` | If set, the model **samples** from the predicted distribution for these columns instead of taking the top-1 (argmax). Essential for diversity in generation. |
-| `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). |
-| `infer_with_dropout` | `bool` | No | `false` | If `true`, keeps dropout active during inference (useful for uncertainty estimation/Monte Carlo Dropout). |
+| `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). Set to `false` for real-only targets. |
+| `infer_with_dropout` | `bool` | No | `false` | If `true`, keeps dropout active during inference (useful for uncertainty estimation/Monte Carlo Dropout). For ONNX models, this is only effective if the model was exported with `export_with_dropout: true` during training. |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
 
 ### 4\. System
@@ -81,8 +97,6 @@ These fields tell the inference engine which columns to extract from the new dat
       * *Use Case:* Creative generation or simulation where you want diversity. If `Probability(A)=0.6` and `Probability(B)=0.4`, Argmax always picks A. Sampling picks B 40% of the time.
 
 
-### 4\. Autoregressive Inference
-
 ### Autoregressive Inference
 
 When performing multi-step forecasting (`autoregression: true`), the model feeds its own predictions back into itself to generate future time steps. If you are configuring this feature, note the following strict behavioral rules for how generation is handled:
@@ -90,6 +104,7 @@ When performing multi-step forecasting (`autoregression: true`), the model feeds
 * **Uniform Step Count:** The model will generate the exact same number of predictions (defined by `autoregression_total_steps`) for **all** `sequenceId`s in your dataset.
 * **Independent of Ground Truth:** The length of the generated forecast is completely independent of how many actual ground truth values or historical rows exist for a given sequence.
 * **Fixed Starting Point:** Generation strictly begins from the **first** subsequence encountered in the inference data for each sequence. The model will anchor to that initial starting point and forecast forward sequentially, meaning any subsequent historical data provided for that specific `sequenceId` will not alter the trajectory of that specific autoregressive loop.
+* **Matching Inputs and Targets:** Autoregression requires `input_columns` and `target_columns` to contain the same columns, and it is not available for embedding or BERT-style models.
 
 -----
 
@@ -111,7 +126,7 @@ Results are saved in the `outputs/` folder within your project root.
 3.  **Embeddings:** `outputs/embeddings/[MODEL_NAME]-embeddings.[format]`
 
       * Generated only if `model_type: embedding`.
-      * Contains columns `0`, `1`, `2`... representing the vector dimensions.
+      * Contains `sequenceId`, `subsequenceId`, `itemPosition`, and columns `0`, `1`, `2`... representing the vector dimensions.
 
 ### Directory Output Mode (Sharded Inference)
 

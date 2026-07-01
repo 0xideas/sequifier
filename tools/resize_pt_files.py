@@ -2,16 +2,13 @@ import argparse
 import json
 import os
 import sys
-from typing import Any, Dict, List, Tuple  # Added List
+from typing import Any, Dict, List, Tuple
 
 import torch
 
 
 def unpack_dataset_tuple(data_tuple: Tuple) -> Dict[str, Any]:
-    """
-    Unpacks the standard Sequifier 5-element tuple into a structured dictionary
-    that is easier to handle programmatically.
-    """
+    """Unpack the standard Sequifier PT tuple."""
     return {
         "sequences": data_tuple[0],
         "targets": data_tuple[1],
@@ -22,9 +19,7 @@ def unpack_dataset_tuple(data_tuple: Tuple) -> Dict[str, Any]:
 
 
 def pack_dataset_tuple(data_dict: Dict[str, Any]) -> Tuple:
-    """
-    Repacks the dictionary back into the 5-element tuple format expected by Sequifier.
-    """
+    """Pack a dataset dict into the standard Sequifier PT tuple."""
     return (
         data_dict["sequences"],
         data_dict["targets"],
@@ -35,33 +30,26 @@ def pack_dataset_tuple(data_dict: Dict[str, Any]) -> Tuple:
 
 
 def concat_dataset_list(data_list: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Concatenates a list of dataset dictionaries along dim 0.
-    OPTIMIZED: Uses torch.cat on a list of tensors (O(N)) instead of iterative pairwise concat (O(N^2)).
-    """
+    """Concatenate dataset dictionaries along dim 0."""
     if not data_list:
         return {}
 
-    # If only one item, just return it (avoid copy)
     if len(data_list) == 1:
         return data_list[0]
 
     combined = {}
     first = data_list[0]
 
-    # Concatenate sequence dicts
     combined["sequences"] = {
         k: torch.cat([d["sequences"][k] for d in data_list], dim=0)
         for k in first["sequences"]
     }
 
-    # Concatenate target dicts
     combined["targets"] = {
         k: torch.cat([d["targets"][k] for d in data_list], dim=0)
         for k in first["targets"]
     }
 
-    # Concatenate metadata tensors
     combined["seq_ids"] = torch.cat([d["seq_ids"] for d in data_list], dim=0)
     combined["sub_ids"] = torch.cat([d["sub_ids"] for d in data_list], dim=0)
     combined["start_pos"] = torch.cat([d["start_pos"] for d in data_list], dim=0)
@@ -69,12 +57,8 @@ def concat_dataset_list(data_list: List[Dict[str, Any]]) -> Dict[str, Any]:
     return combined
 
 
-# ... [slice_dataset, clone_dataset, get_row_size_bytes remain unchanged] ...
 def slice_dataset(data: Dict[str, Any], start: int, end: int) -> Dict[str, Any]:
-    """
-    Slices a dataset dictionary from start to end index.
-    Returns a view (fast), not a copy.
-    """
+    """Slice a dataset dictionary without cloning."""
     sliced = {}
     sliced["sequences"] = {k: v[start:end] for k, v in data["sequences"].items()}
     sliced["targets"] = {k: v[start:end] for k, v in data["targets"].items()}
@@ -85,10 +69,7 @@ def slice_dataset(data: Dict[str, Any], start: int, end: int) -> Dict[str, Any]:
 
 
 def clone_dataset(data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Deep clones a dataset. Used for the remainder to allow the
-    large original tensor to be freed from memory.
-    """
+    """Clone all tensors in a dataset dictionary."""
     cloned = {}
     cloned["sequences"] = {k: v.clone() for k, v in data["sequences"].items()}
     cloned["targets"] = {k: v.clone() for k, v in data["targets"].items()}
@@ -99,14 +80,10 @@ def clone_dataset(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_row_size_bytes(data: Dict[str, Any]) -> float:
-    """
-    Calculates the exact size in bytes of a single row in the dataset.
-    """
+    """Return bytes per row across sequence/target tensors."""
     total_bytes = 0
-    # Add size of one row for every tensor in sequences
     for t in data["sequences"].values():
         total_bytes += t.element_size() * t.shape[1]
-    # Add size of one row for every tensor in targets
     for t in data["targets"].values():
         total_bytes += t.element_size() * t.shape[1]
 
@@ -127,7 +104,6 @@ def process_split(
 ):
     os.makedirs(output_dir, exist_ok=True)
 
-    # 1. Determine File Order via metadata
     meta_path = os.path.join(input_dir, "metadata.json")
     if os.path.exists(meta_path):
         with open(meta_path, "r") as f:
@@ -141,7 +117,6 @@ def process_split(
             f"Warning: No metadata.json found in {input_dir}. Using alphabetical sort."
         )
 
-    # State variables
     data_buffer: List[Dict[str, Any]] = []
     buffer_row_count = 0
 
@@ -150,18 +125,16 @@ def process_split(
     total_samples_processed = 0
 
     target_bytes = target_size_mb * 1024 * 1024
-    target_rows = None  # Calculated dynamically on first load
+    target_rows = None
 
     print(f"Processing {input_dir} -> {output_dir}")
 
-    # 2. Iterate Files
     for file_name in input_files:
         file_path = os.path.join(input_dir, file_name)
         if not os.path.exists(file_path):
             continue
 
         try:
-            # Load file
             loaded_tuple = torch.load(file_path, map_location="cpu", weights_only=False)
             current_data = unpack_dataset_tuple(loaded_tuple)
 
@@ -169,27 +142,21 @@ def process_split(
             if current_rows == 0:
                 continue
 
-            # Calculate target_rows if not yet set (once per split)
             if target_rows is None:
                 bytes_per_row = get_row_size_bytes(current_data)
                 target_rows = max(1, int(target_bytes / bytes_per_row))
 
-            # Add to buffer
             data_buffer.append(current_data)
             buffer_row_count += current_rows
 
-            # 3. Flush Buffer if we have enough data
             if buffer_row_count >= target_rows:
-                # O(N) Merge
                 full_data = concat_dataset_list(data_buffer)
 
-                # Clear buffer references immediately
                 data_buffer = []
                 buffer_row_count = 0
 
                 num_rows = full_data["seq_ids"].shape[0]
 
-                # Slice and Save Loop
                 start_idx = 0
                 while start_idx + target_rows <= num_rows:
                     end_idx = start_idx + target_rows
@@ -209,24 +176,19 @@ def process_split(
 
                     start_idx = end_idx
 
-                # Handle Remainder
                 if start_idx < num_rows:
-                    # Clone remainder to free the massive full_data tensor
                     remainder_data = clone_dataset(
                         slice_dataset(full_data, start_idx, num_rows)
                     )
-                    # Start new buffer with remainder
                     data_buffer = [remainder_data]
                     buffer_row_count = remainder_data["seq_ids"].shape[0]
 
-                # Explicitly free full_data
                 del full_data
 
         except Exception as e:
             print(f"Error processing {file_path}: {e}")
             sys.exit(1)
 
-    # 4. Flush final remainder
     if buffer_row_count > 0:
         full_data = concat_dataset_list(data_buffer)
         fname = f"{dataset_name}-{split_suffix}-{output_batch_idx}.pt"
@@ -237,7 +199,6 @@ def process_split(
         new_batch_files_metadata.append({"path": fname, "samples": chunk_len})
         total_samples_processed += chunk_len
 
-    # 5. Write New Metadata
     new_metadata = {
         "total_samples": total_samples_processed,
         "batch_files": new_batch_files_metadata,
@@ -245,7 +206,6 @@ def process_split(
     with open(os.path.join(output_dir, "metadata.json"), "w") as f:
         json.dump(new_metadata, f, indent=4)
 
-    # 6. Validation
     if (
         expected_total_samples is not None
         and total_samples_processed != expected_total_samples

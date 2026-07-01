@@ -8,23 +8,29 @@ from beartype import beartype
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.config.train_config import (
+    BERTSpecModel,
     DotDict,
     ModelSpecModel,
+    NextOccurrenceConfigModel,
+    ReplacementDistribution,
     TrainingSpecModel,
     TrainModel,
 )
-from sequifier.helpers import normalize_path, try_catch_excess_keys
+from sequifier.helpers import (
+    ModelWindowView,
+    StoredWindowLayout,
+    normalize_path,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
+    try_catch_excess_keys,
+)
+from sequifier.special_tokens import validate_special_token_ids
 
 
 class FloatDistribution(BaseModel):
-    """Pydantic model representing a floating-point hyperparameter distribution for Optuna.
-
-    Attributes:
-        low (float): The lower bound of the distribution.
-        high (float): The upper bound of the distribution.
-        log (bool): If True, sample from the distribution in the log domain. Defaults to False.
-    """
+    """Optuna float range with optional step/log sampling."""
 
     low: float
     high: float
@@ -42,14 +48,7 @@ class FloatDistribution(BaseModel):
 
 
 class IntDistribution(BaseModel):
-    """Pydantic model representing an integer hyperparameter distribution for Optuna.
-
-    Attributes:
-        low (int): The lower bound of the distribution.
-        high (int): The upper bound of the distribution.
-        step (int): The spacing between valid integer values. Defaults to 1.
-        log (bool): If True, sample from the distribution in the log domain. Defaults to False.
-    """
+    """Optuna integer range with step/log sampling."""
 
     low: int
     high: int
@@ -70,26 +69,66 @@ OptunaFloat = Union[list[float], FloatDistribution]
 OptunaInt = Union[list[int], IntDistribution]
 
 
+def sample_param(
+    trial: Any,
+    name: str,
+    space: Union[list, FloatDistribution, IntDistribution],
+):
+    if isinstance(space, list):
+        return trial.suggest_categorical(name, space)
+    if isinstance(space, FloatDistribution):
+        return trial.suggest_float(
+            name, space.low, space.high, step=space.step, log=space.log
+        )
+    if isinstance(space, IntDistribution):
+        return trial.suggest_int(
+            name, space.low, space.high, step=space.step, log=space.log
+        )
+    raise TypeError(f"Unsupported hyperparameter search space for {name}: {space}")
+
+
+class BERTSpecHyperparameterSampling(BaseModel):
+    """Search space for BERT objective masking parameters."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    masking_probability: OptunaFloat
+    replacement_distribution: list[ReplacementDistribution]
+    span_masking: list[ProbabilityDistribution]
+
+    def sample_trial(self, trial: Any) -> BERTSpecModel:
+        masking_probability = sample_param(
+            trial, "bert_masking_probability", self.masking_probability
+        )
+        replacement_distribution_index = trial.suggest_categorical(
+            "bert_replacement_distribution_index",
+            list(range(len(self.replacement_distribution))),
+        )
+        span_masking_index = trial.suggest_categorical(
+            "bert_span_masking_index", list(range(len(self.span_masking)))
+        )
+
+        replacement_distribution = self.replacement_distribution[
+            replacement_distribution_index
+        ].model_copy(deep=True)  # type: ignore
+        span_masking = self.span_masking[span_masking_index].model_copy(deep=True)  # type: ignore
+
+        logger.info(
+            f"{masking_probability = } - {replacement_distribution = } - {span_masking = }"
+        )
+
+        return BERTSpecModel(
+            masking_probability=masking_probability,
+            replacement_distribution=replacement_distribution,
+            span_masking=span_masking,
+        )
+
+
 @beartype
 def load_hyperparameter_search_config(
     config_path: str, skip_metadata: bool
 ) -> "HyperparameterSearchConfig":
-    """Load a hyperparameter search configuration from a YAML file.
-
-    This function reads a YAML configuration file, processes it to include
-    data-driven configurations if needed, and returns a HyperparameterSearchConfig
-    object.
-
-    Args:
-        config_path: The path to the hyperparameter search configuration file.
-        skip_metadata: A boolean flag indicating whether the configuration is
-            for unprocessed data. If False, it will load and integrate
-            data-driven configurations.
-
-    Returns:
-        An instance of the HyperparameterSearchConfig class, populated with the
-        configuration from the file.
-    """
+    """Load hyperparameter-search YAML plus optional metadata-derived fields."""
     with open(config_path, "r") as f:
         config_values = yaml.safe_load(f)
 
@@ -100,6 +139,11 @@ def load_hyperparameter_search_config(
             normalize_path(metadata_config_path, config_values["project_root"]), "r"
         ) as f:
             metadata_config = json.loads(f.read())
+
+        validate_special_token_ids(
+            metadata_config["special_token_ids"],
+            source=f"metadata config '{metadata_config_path}'",
+        )
 
         config_values["column_types"] = config_values.get(
             "column_types", [metadata_config["column_types"]]
@@ -132,6 +176,16 @@ def load_hyperparameter_search_config(
         config_values["n_classes"] = config_values.get(
             "n_classes", metadata_config["n_classes"]
         )
+
+        storage_layout = stored_window_layout_from_metadata(metadata_config)
+        if storage_layout.version != 2:
+            raise ValueError(
+                "Hyperparameter search requires metadata stored_window_layout_version=2, "
+                f"got {storage_layout.version}."
+            )
+
+        config_values["storage_layout"] = storage_layout
+
         config_values["training_data_path"] = normalize_path(
             config_values.get("training_data_path", metadata_config["split_paths"][0]),
             config_values["project_root"],
@@ -152,38 +206,7 @@ def load_hyperparameter_search_config(
 
 
 class TrainingSpecHyperparameterSampling(BaseModel):
-    """Pydantic model for training specification hyperparameter sampling.
-
-    Attributes:
-        device: The device to train on (e.g., 'cuda', 'cpu').
-        epochs: A list of possible numbers of epochs to train for.
-        log_interval: The interval in batches for logging.
-        class_share_log_columns: Columns for which to log class share.
-        early_stopping_epochs: Number of epochs for early stopping.
-        save_interval_epochs: Interval in epochs for saving model checkpoints.
-        save_latest_interval_minutes: the time interval in which a checkpoint is written to the "latest" checkpoint path
-        save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path
-        save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving
-        calculate_validation_loss_on_initialization: calculate val loss on weight initialization
-        batch_size: A list of possible batch sizes.
-        learning_rate: A list of possible learning rates.
-        criterion: A dictionary mapping target columns to loss functions.
-        class_weights: Optional dictionary mapping columns to class weights.
-        accumulation_steps: A list of possible gradient accumulation steps.
-        dropout: A list of possible dropout rates.
-        loss_weights: Optional dictionary mapping columns to loss weights.
-        optimizer: A list of possible optimizer configurations.
-        scheduler: A list of possible scheduler configurations.
-        continue_training: Flag to continue training from a checkpoint.
-        layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
-        layer_autocast: Whether to use autocast
-        sampling_strategy: data sampling in distributed training: 'exact', 'oversampling' or 'undersampling'
-        data_parallelism: 'DDP' or 'FSDP'
-        fsdp_cpu_offload: fsdp cpu offload
-        torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile, alternatively 'none'
-        float32_matmul_precision: precision level of float32 computations. One of 'highest', 'high' and 'medium'
-
-    """
+    """Training-spec search space with paired LR/scheduler candidates."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -194,12 +217,16 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     early_stopping_epochs: Optional[int] = None
     save_interval_epochs: int
     save_latest_interval_minutes: Optional[float] = None
-    save_batch_interval_minutes: Optional[float] = None
-    save_batch_interval_minutes_val_loss: bool = True
+    save_interval_minutes: Optional[float] = None
+    save_interval_val_loss: bool = True
+    save_interval_batches: Optional[int] = None
     calculate_validation_loss_on_initialization: bool = False
 
+    training_objective: list[str] = Field(default_factory=lambda: ["causal"])
     batch_size: OptunaInt
     learning_rate: list[float]  # Kept as list to preserve coupling with epochs
+    bert_spec: Optional[BERTSpecHyperparameterSampling] = None
+    next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
     accumulation_steps: OptunaInt
@@ -225,24 +252,13 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: Optional[bool] = True
-    sampling_strategy: str = "exact"
     data_parallelism: Optional[str] = None
     fsdp_cpu_offload: Optional[bool] = None
     torch_compile: str = "outer"
     float32_matmul_precision: str = "highest"
 
     def __init__(self, **kwargs):
-        """Initialize the TrainingSpecHyperparameterSampling instance.
-
-        This method initializes the Pydantic BaseModel and then processes the
-        optimizer and scheduler configurations from the provided keyword
-        arguments, converting them into DotDict objects.
-
-        Args:
-            **kwargs: Keyword arguments that correspond to the attributes of this
-                class. The 'optimizer' and 'scheduler' arguments are expected
-                to be lists of dictionaries.
-        """
+        """Normalize optimizer/scheduler dicts after Pydantic validation."""
         super().__init__(
             **{k: v for k, v in kwargs.items() if k not in ["optimizer", "scheduler"]}
         )
@@ -258,6 +274,49 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         self.scheduler = [
             DotDict(scheduler_config) for scheduler_config in kwargs["scheduler"]
         ]
+
+    @field_validator("training_objective", mode="before")
+    @classmethod
+    def normalize_training_objective(cls, v):
+        if isinstance(v, str):
+            return [v]
+        return v
+
+    @field_validator("training_objective")
+    @classmethod
+    def validate_training_objective(cls, v):
+        allowed = {"causal", "bert", "final_value", "next_occurrence"}
+        invalid = set(v).difference(allowed)
+        if invalid:
+            raise ValueError(
+                "Only 'causal', 'bert', 'final_value', and 'next_occurrence' are allowed, "
+                f"found {invalid}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def validate_objective_specific_config(self):
+        if "bert" in self.training_objective and self.bert_spec is None:
+            raise ValueError(
+                "If 'bert' is in training_objective, bert_spec must be configured."
+            )
+        if (
+            "next_occurrence" in self.training_objective
+            and self.next_occurrence_config is None
+        ):
+            raise ValueError(
+                "If 'next_occurrence' is in training_objective, "
+                "next_occurrence_config must be configured."
+            )
+        if (
+            "next_occurrence" not in self.training_objective
+            and self.next_occurrence_config is not None
+        ):
+            raise ValueError(
+                "next_occurrence_config should only be configured if "
+                "'next_occurrence' is in training_objective."
+            )
+        return self
 
     @field_validator("layer_type_dtypes")
     @classmethod
@@ -319,18 +378,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         return v
 
     def sample_trial(self, trial: Any) -> TrainingSpecModel:
-        """Samples training hyperparameters using an Optuna trial.
-
-        This method leverages the provided Optuna trial to suggest values for
-        hyperparameters like batch size, dropout, and learning rate based on the
-        defined search spaces (categorical lists or distributions).
-
-        Args:
-            trial (Any): The Optuna trial object used for suggesting hyperparameters.
-
-        Returns:
-            TrainingSpecModel: A populated training specification model with the sampled hyperparameters.
-        """
+        """Sample training hyperparameters for one Optuna trial."""
         lr_sched_index = trial.suggest_categorical(
             "lr_sched_index", list(range(len(self.learning_rate)))
         )
@@ -343,29 +391,32 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         )
         optimizer = self.optimizer[opt_index]
 
-        def sample_param(
-            name: str, space: Union[list, FloatDistribution, IntDistribution]
-        ):
-            if isinstance(space, list):
-                return trial.suggest_categorical(name, space)
-            elif isinstance(space, FloatDistribution):
-                return trial.suggest_float(
-                    name, space.low, space.high, step=space.step, log=space.log
-                )
-            elif isinstance(space, IntDistribution):
-                return trial.suggest_int(
-                    name, space.low, space.high, step=space.step, log=space.log
-                )
+        training_objective = trial.suggest_categorical(
+            "training_objective", self.training_objective
+        )
+        bert_spec = (
+            self.bert_spec.sample_trial(trial)
+            if training_objective == "bert" and self.bert_spec is not None
+            else None
+        )
+        next_occurrence_config = (
+            self.next_occurrence_config
+            if training_objective == "next_occurrence"
+            else None
+        )
 
-        batch_size = sample_param("batch_size", self.batch_size)
-        dropout = sample_param("dropout", self.dropout)
-        accumulation_steps = sample_param("accumulation_steps", self.accumulation_steps)
+        batch_size = sample_param(trial, "batch_size", self.batch_size)
+        dropout = sample_param(trial, "dropout", self.dropout)
+        accumulation_steps = sample_param(
+            trial, "accumulation_steps", self.accumulation_steps
+        )
 
         logger.info(
-            f"{learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }"
+            f"{training_objective = } - {learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }"
         )
 
         return TrainingSpecModel(
+            training_objective=training_objective,
             device=self.device,
             epochs=epochs,
             log_interval=self.log_interval,
@@ -373,13 +424,16 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             early_stopping_epochs=self.early_stopping_epochs,
             save_interval_epochs=self.save_interval_epochs,
             save_latest_interval_minutes=self.save_latest_interval_minutes,
-            save_batch_interval_minutes=self.save_batch_interval_minutes,
-            save_batch_interval_minutes_val_loss=self.save_batch_interval_minutes_val_loss,
+            save_interval_minutes=self.save_interval_minutes,
+            save_interval_batches=self.save_interval_batches,
+            save_interval_val_loss=self.save_interval_val_loss,
             calculate_validation_loss_on_initialization=self.calculate_validation_loss_on_initialization,
             batch_size=batch_size,
             learning_rate=learning_rate,
             criterion=self.criterion,
             class_weights=self.class_weights,
+            bert_spec=bert_spec,
+            next_occurrence_config=next_occurrence_config,
             accumulation_steps=accumulation_steps,
             dropout=dropout,
             loss_weights=self.loss_weights,
@@ -397,7 +451,6 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             backend=self.backend,
             layer_type_dtypes=self.layer_type_dtypes,
             layer_autocast=self.layer_autocast,
-            sampling_strategy=self.sampling_strategy,
             data_parallelism=self.data_parallelism,
             fsdp_cpu_offload=self.fsdp_cpu_offload,
             torch_compile=self.torch_compile,
@@ -406,17 +459,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
 
 
 class ModelSpecHyperparameterSampling(BaseModel):
-    """Pydantic model for model specification hyperparameter sampling.
-
-    Attributes:
-        initial_embedding_dim: A list of possible sizes for the initial input embedding.
-        feature_embedding_dims: A list of possible dictionaries defining embedding dimensions for each input column.
-        joint_embedding_dim: A list of possible sizes for the joint embedding layer projection.
-        dim_model: A list of possible numbers of expected features in the input (d_model).
-        n_head: A list of possible numbers of heads in the multi-head attention models.
-        dim_feedforward: A list of possible dimensions of the feedforward network model.
-        num_layers: A list of possible numbers of layers in the transformer model.
-    """
+    """Model-architecture search space with paired width choices."""
 
     initial_embedding_dim: list[int]
     joint_embedding_dim: list[Optional[int]]
@@ -471,19 +514,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         return v
 
     def sample_trial(self, trial: Any) -> ModelSpecModel:
-        """Samples model architecture hyperparameters using an Optuna trial.
-
-        This method uses the Optuna trial to suggest structural parameters such as
-        the number of layers, feedforward dimensions, and attention heads. It ensures
-        that dependent dimensions (like `n_head` and `dim_model`) stay correctly paired
-        and that invalid key-value head combinations are filtered out.
-
-        Args:
-            trial (Any): The Optuna trial object used for suggesting hyperparameters.
-
-        Returns:
-            ModelSpecModel: A populated model specification model with the sampled architecture parameters.
-        """
+        """Sample architecture hyperparameters for one Optuna trial."""
         dim_model_idx = trial.suggest_categorical(
             "dim_model_idx", list(range(len(self.dim_model)))
         )
@@ -498,23 +529,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
             else self.feature_embedding_dims[dim_model_idx]
         )
 
-        def sample_param(
-            name: str, space: Union[list, FloatDistribution, IntDistribution]
-        ):
-            if isinstance(space, list):
-                return trial.suggest_categorical(name, space)
-            elif isinstance(space, FloatDistribution):
-                return trial.suggest_float(
-                    name, space.low, space.high, step=space.step, log=space.log
-                )
-            elif isinstance(space, IntDistribution):
-                return trial.suggest_int(
-                    name, space.low, space.high, step=space.step, log=space.log
-                )
-
-        dim_feedforward = sample_param("dim_feedforward", self.dim_feedforward)
-        num_layers = sample_param("num_layers", self.num_layers)
-        rope_theta = sample_param("rope_theta", self.rope_theta)
+        dim_feedforward = sample_param(trial, "dim_feedforward", self.dim_feedforward)
+        num_layers = sample_param(trial, "num_layers", self.num_layers)
+        rope_theta = sample_param(trial, "rope_theta", self.rope_theta)
 
         activation_fn = trial.suggest_categorical("activation_fn", self.activation_fn)
         normalization = trial.suggest_categorical("normalization", self.normalization)
@@ -564,43 +581,13 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
 
 class HyperparameterSearchConfig(BaseModel):
-    """Pydantic model for hyperparameter search configuration.
-
-    Attributes:
-        project_root: The path to the sequifier project directory.
-        metadata_config_path: The path to the data-driven configuration file.
-        hp_search_name: The name for the hyperparameter search.
-        search_strategy: The search strategy, either "sample" or "grid".
-        n_samples: The number of samples to draw for the search.
-        model_config_write_path: The path to write the model configurations to.
-        training_data_path: The path to the training data.
-        validation_data_path: The path to the validation data.
-        read_format: The file format of the input data.
-        input_columns: A list of lists of columns to be used for training.
-        column_types: A list of dictionaries mapping columns to their types.
-        categorical_columns: A list of lists of categorical columns.
-        real_columns: A list of lists of real-valued columns.
-        target_columns: The list of target columns for model training.
-        target_column_types: A dictionary mapping target columns to their types.
-        id_maps: A dictionary mapping categorical values to their indexed representation.
-        seq_length: A list of possible sequence lengths.
-        n_classes: The number of classes for each categorical column.
-        inference_batch_size: The batch size for inference.
-        export_onnx: If True, exports the model in ONNX format.
-        export_pt: If True, exports the model using torch.save.
-        export_with_dropout: If True, exports the model with dropout enabled.
-        model_hyperparameter_sampling: The sampling configuration for model hyperparameters.
-        training_hyperparameter_sampling: The sampling configuration for training hyperparameters.
-        evaluation_inference_config: The inference config to infer on for hyperparameter search optimization
-        evaluation_script: The script that outputs the evaluation metrics, typically from the inference output
-        evaluation_metrics: The evaluation metrics to optimize during hyperparameter search
-        evaluation_metric_directions: The direction to optimize evaluation_metrics in. Only 'minimize' and 'maximize' are allowed
-    """
+    """Top-level Optuna search config."""
 
     project_root: str
     metadata_config_path: str
     hp_search_name: str
     search_strategy: str = "bayesian"
+    seed: Optional[int] = None
     n_trials: Optional[int] = Field(None, alias="n_samples")
     prune_trials: Optional[bool] = True
     model_config_write_path: str
@@ -616,7 +603,8 @@ class HyperparameterSearchConfig(BaseModel):
     target_column_types: dict[str, str]
     id_maps: dict[str, dict[str | int, int]]
 
-    seq_length: list[int]
+    context_length: list[int]
+    storage_layout: StoredWindowLayout
     n_classes: dict[str, int]
     inference_batch_size: int
 
@@ -635,6 +623,33 @@ class HyperparameterSearchConfig(BaseModel):
     training_hyperparameter_sampling: TrainingSpecHyperparameterSampling
 
     override_input: bool = False
+
+    @model_validator(mode="after")
+    def validate_sequence_layout(self):
+        for cl in self.context_length:
+            if (
+                cl + self.storage_layout.max_target_offset
+                > self.storage_layout.stored_context_width
+            ):
+                raise ValueError(
+                    f"Window capacity mismatch: context_length ({cl}) + max_target_offset "
+                    f"({self.storage_layout.max_target_offset}) > stored_context_width ({self.storage_layout.stored_context_width}). "
+                    "Model inputs cannot exceed the preprocessed sequence length."
+                )
+        forward_objectives = {"causal", "final_value", "next_occurrence"}
+        if (
+            set(self.training_hyperparameter_sampling.training_objective)
+            & forward_objectives
+        ):
+            if self.storage_layout.max_target_offset < 1:
+                raise ValueError(
+                    "The hyperparameter search space includes a forward-looking "
+                    "objective ('causal', 'final_value', or 'next_occurrence'), "
+                    "but the preprocessed dataset has max_target_offset=0. "
+                    "Causal, final_value, and next_occurrence modeling require "
+                    "max_target_offset >= 1."
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_prune_trials(self):
@@ -720,28 +735,29 @@ class HyperparameterSearchConfig(BaseModel):
         return v
 
     def sample_trial(self, trial: Any, run_index: int) -> TrainModel:
-        """Generates a complete training configuration using an Optuna trial.
-
-        This method orchestrates the sampling of both model and training specifications,
-        as well as data sequence parameters, combining them into a final configuration
-        ready for model execution.
-
-        Args:
-            trial (Any): The Optuna trial object used for suggesting hyperparameters.
-            run_index (int): The current run/trial index, used to assign a unique name to the model.
-
-        Returns:
-            TrainModel: A fully populated configuration instance for the current trial.
-        """
+        """Sample a concrete TrainModel for one trial/run index."""
         model_spec = self.model_hyperparameter_sampling.sample_trial(trial)
-        training_spec = self.training_hyperparameter_sampling.sample_trial(trial)
 
         input_columns_index = trial.suggest_categorical(
             "input_columns_index", list(range(len(self.input_columns)))
         )
-        seq_length = trial.suggest_categorical("seq_length", self.seq_length)
+        context_length = trial.suggest_categorical(
+            "context_length", self.context_length
+        )
+        training_spec = self.training_hyperparameter_sampling.sample_trial(trial)
+        if training_spec.training_objective == "bert":
+            model_spec = model_spec.model_copy(
+                update={"prediction_length": context_length}
+            )
 
-        logger.info(f"{input_columns_index = } - {seq_length = }")
+        window_view = ModelWindowView(
+            context_length=context_length,
+            objective=training_spec.training_objective,
+            target_offset=0 if training_spec.training_objective == "bert" else 1,
+        )
+        resolve_window_view(self.storage_layout, window_view)
+
+        logger.info(f"{input_columns_index = } - {context_length = }")
 
         return TrainModel(
             project_root=self.project_root,
@@ -757,7 +773,8 @@ class HyperparameterSearchConfig(BaseModel):
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
-            seq_length=seq_length,
+            storage_layout=self.storage_layout,
+            window_view=window_view,
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=101,

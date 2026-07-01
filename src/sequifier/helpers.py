@@ -1,10 +1,13 @@
 import glob
+import hashlib
+import math
 import os
 import random
 import re
 import sys
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import polars as pl
@@ -14,9 +17,11 @@ from loguru import logger
 from pydantic import ValidationError
 from torch import Tensor
 
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS
+
 PANDAS_TO_TORCH_TYPES = {
-    "Float64": torch.float32,
-    "float64": torch.float32,
+    "Float64": torch.float64,
+    "float64": torch.float64,
     "Float32": torch.float32,
     "float32": torch.float32,
     "Float16": torch.float16,
@@ -29,15 +34,302 @@ PANDAS_TO_TORCH_TYPES = {
     "int16": torch.int16,
     "Int8": torch.int8,
     "int8": torch.int8,
-    "UInt64": torch.int64,
-    "uint64": torch.int64,
-    "UInt32": torch.int64,
-    "uint32": torch.int64,
-    "UInt16": torch.int32,
-    "uint16": torch.int32,
-    "UInt8": torch.int16,
-    "uint8": torch.int16,
+    "UInt64": torch.uint64,
+    "uint64": torch.uint64,
+    "UInt32": torch.uint32,
+    "uint32": torch.uint32,
+    "UInt16": torch.uint16,
+    "uint16": torch.uint16,
+    "UInt8": torch.uint8,
+    "uint8": torch.uint8,
 }
+
+POLARS_NUMERIC_DTYPES = {
+    "Float64": pl.Float64,
+    "Float32": pl.Float32,
+    "Float16": pl.Float16,
+    "Int64": pl.Int64,
+    "Int32": pl.Int32,
+    "Int16": pl.Int16,
+    "Int8": pl.Int8,
+    "UInt64": pl.UInt64,
+    "UInt32": pl.UInt32,
+    "UInt16": pl.UInt16,
+    "UInt8": pl.UInt8,
+}
+
+POLARS_NUMERIC_DTYPE_ALIASES = {
+    alias: canonical
+    for canonical in POLARS_NUMERIC_DTYPES
+    for alias in (canonical, canonical.lower())
+}
+
+FLOAT_TYPE_ORDER = ("Float16", "Float32", "Float64")
+INTEGER_TYPE_ORDER = (
+    "Int8",
+    "UInt8",
+    "Int16",
+    "UInt16",
+    "Int32",
+    "UInt32",
+    "Int64",
+    "UInt64",
+)
+INTEGER_TYPE_INFO = {
+    "Int8": np.iinfo(np.int8),
+    "Int16": np.iinfo(np.int16),
+    "Int32": np.iinfo(np.int32),
+    "Int64": np.iinfo(np.int64),
+    "UInt8": np.iinfo(np.uint8),
+    "UInt16": np.iinfo(np.uint16),
+    "UInt32": np.iinfo(np.uint32),
+    "UInt64": np.iinfo(np.uint64),
+}
+FLOAT_TYPE_INFO = {
+    "Float16": np.finfo(np.float16),
+    "Float32": np.finfo(np.float32),
+    "Float64": np.finfo(np.float64),
+}
+FLOAT_EXACT_INTEGER_LIMITS = {
+    "Float16": 2**11,
+    "Float32": 2**24,
+    "Float64": 2**53,
+}
+
+
+@beartype
+def canonicalize_polars_dtype_name(dtype_name: str) -> str:
+    dtype_name = dtype_name.strip()
+    if dtype_name not in POLARS_NUMERIC_DTYPE_ALIASES:
+        raise ValueError(
+            f"Unsupported column type '{dtype_name}'. "
+            f"Supported types are: {sorted(POLARS_NUMERIC_DTYPES)}"
+        )
+    return POLARS_NUMERIC_DTYPE_ALIASES[dtype_name]
+
+
+@beartype
+def polars_dtype_from_name(dtype_name: str) -> Any:
+    return POLARS_NUMERIC_DTYPES[canonicalize_polars_dtype_name(dtype_name)]
+
+
+@beartype
+def assign_sequence_to_split(
+    sequence_id: int, split_ratios: list[float], seed: int
+) -> int:
+    """Deterministically assign one sequenceId to a split index."""
+    digest = hashlib.sha256(f"{seed}:{sequence_id}".encode("utf-8")).digest()
+    hash_value = int.from_bytes(digest[:8], byteorder="big", signed=False) / 2**64
+    split_index = int(
+        np.searchsorted(np.cumsum(split_ratios), hash_value, side="right")
+    )
+    return min(split_index, len(split_ratios) - 1)
+
+
+@beartype
+def is_float_dtype_name(dtype_name: str) -> bool:
+    return canonicalize_polars_dtype_name(dtype_name).startswith("Float")
+
+
+@beartype
+def is_integer_dtype_name(dtype_name: str) -> bool:
+    canonical = canonicalize_polars_dtype_name(dtype_name)
+    return canonical.startswith("Int") or canonical.startswith("UInt")
+
+
+@beartype
+def _highest_ranked_type(types: list[str], order: tuple[str, ...]) -> str:
+    return max(types, key=lambda type_: order.index(type_))
+
+
+@beartype
+def _smallest_float_covering_integer_range(integer_type: str) -> str:
+    integer_info = INTEGER_TYPE_INFO[integer_type]
+    largest_magnitude = max(abs(int(integer_info.min)), int(integer_info.max))
+    for float_type in FLOAT_TYPE_ORDER:
+        if (
+            largest_magnitude <= float(FLOAT_TYPE_INFO[float_type].max)
+            and largest_magnitude <= FLOAT_EXACT_INTEGER_LIMITS[float_type]
+        ):
+            return float_type
+    return "Float64"
+
+
+@beartype
+def _resolve_integer_sequence_type(integer_types: list[str]) -> Any:
+    if not integer_types:
+        raise ValueError("Cannot resolve an integer sequence type without integers")
+
+    min_value = min(int(INTEGER_TYPE_INFO[type_].min) for type_ in integer_types)
+    max_value = max(int(INTEGER_TYPE_INFO[type_].max) for type_ in integer_types)
+
+    if min_value >= 0 and all(type_.startswith("UInt") for type_ in integer_types):
+        for dtype_name in ("UInt8", "UInt16", "UInt32", "UInt64"):
+            info = INTEGER_TYPE_INFO[dtype_name]
+            if max_value <= int(info.max):
+                return polars_dtype_from_name(dtype_name)
+
+    for dtype_name in ("Int8", "Int16", "Int32", "Int64"):
+        info = INTEGER_TYPE_INFO[dtype_name]
+        if min_value >= int(info.min) and max_value <= int(info.max):
+            return polars_dtype_from_name(dtype_name)
+
+    raise ValueError(f"Cannot resolve a safe integer dtype for {integer_types}")
+
+
+@beartype
+def resolve_unified_polars_numeric_dtype(column_types: dict[str, str]) -> Any:
+    """Resolve one Polars dtype for long-format numeric sequence columns."""
+    if not column_types:
+        raise ValueError("column_types cannot be empty")
+
+    normalized_types = [
+        canonicalize_polars_dtype_name(type_) for type_ in column_types.values()
+    ]
+    float_types = [type_ for type_ in normalized_types if is_float_dtype_name(type_)]
+    integer_types = [
+        type_ for type_ in normalized_types if is_integer_dtype_name(type_)
+    ]
+
+    if not float_types:
+        return _resolve_integer_sequence_type(integer_types)
+
+    resolved_float = _highest_ranked_type(float_types, FLOAT_TYPE_ORDER)
+    if integer_types:
+        required_float = _highest_ranked_type(
+            [
+                _smallest_float_covering_integer_range(integer_type)
+                for integer_type in integer_types
+            ],
+            FLOAT_TYPE_ORDER,
+        )
+        if FLOAT_TYPE_ORDER.index(required_float) > FLOAT_TYPE_ORDER.index(
+            resolved_float
+        ):
+            resolved_float = required_float
+
+    return polars_dtype_from_name(resolved_float)
+
+
+@dataclass(frozen=True)
+class StoredWindowLayout:
+    stored_context_width: int
+    max_target_offset: int
+    version: int
+
+    def __post_init__(self) -> None:
+        if self.stored_context_width < 1:
+            raise ValueError("stored_context_width must be a positive integer")
+        if self.max_target_offset < 0:
+            raise ValueError("max_target_offset must be non-negative")
+        if self.max_target_offset >= self.stored_context_width:
+            raise ValueError(
+                "max_target_offset must be smaller than stored_context_width"
+            )
+
+
+@dataclass(frozen=True)
+class ModelWindowView:
+    context_length: int
+    objective: str
+    target_offset: int
+
+    def __post_init__(self) -> None:
+        if self.context_length < 1:
+            raise ValueError("context_length must be a positive integer")
+        if self.objective not in {"causal", "bert", "final_value", "next_occurrence"}:
+            raise ValueError(
+                "Only 'causal', 'bert', 'final_value', and 'next_occurrence' are allowed, "
+                f"found {self.objective}"
+            )
+        if self.target_offset < 0:
+            raise ValueError("target_offset must be non-negative")
+        if self.objective == "bert" and self.target_offset != 0:
+            raise ValueError("BERT views require target_offset=0")
+        if (
+            self.objective in {"causal", "final_value", "next_occurrence"}
+            and self.target_offset < 1
+        ):
+            raise ValueError(
+                "Causal, final_value, and next_occurrence views require target_offset >= 1"
+            )
+
+
+@dataclass(frozen=True)
+class ResolvedWindowView:
+    storage: StoredWindowLayout
+    view: ModelWindowView
+    required_width: int
+    input_slice: slice
+    target_slice: slice
+
+    def build_masks(self, left_pad_lengths: Tensor) -> dict[str, Tensor]:
+        """Build explicit input-attention and target-validity masks for this view."""
+        return {
+            "attention_valid_mask": build_valid_mask(
+                left_pad_lengths, self.storage.stored_context_width, self.input_slice
+            ),
+            "target_valid_mask": build_valid_mask(
+                left_pad_lengths, self.storage.stored_context_width, self.target_slice
+            ),
+        }
+
+
+@beartype
+def _right_aligned_slice(width: int, length: int, offset: int) -> slice:
+    start = width - (length + offset)
+    stop = width - offset
+    return slice(start, stop)
+
+
+@beartype
+def resolve_window_view(
+    storage: StoredWindowLayout, view: ModelWindowView
+) -> ResolvedWindowView:
+    if view.target_offset > storage.max_target_offset:
+        raise ValueError(
+            f"Model target_offset={view.target_offset} exceeds stored "
+            f"max_target_offset={storage.max_target_offset}."
+        )
+
+    input_offset = storage.max_target_offset
+    target_offset = storage.max_target_offset - view.target_offset
+    required_width = view.context_length + max(input_offset, target_offset)
+    if required_width > storage.stored_context_width:
+        raise ValueError(
+            f"Model view requires width {required_width}, but storage only has "
+            f"stored_context_width={storage.stored_context_width}."
+        )
+
+    return ResolvedWindowView(
+        storage=storage,
+        view=view,
+        required_width=required_width,
+        input_slice=_right_aligned_slice(
+            storage.stored_context_width, view.context_length, input_offset
+        ),
+        target_slice=_right_aligned_slice(
+            storage.stored_context_width, view.context_length, target_offset
+        ),
+    )
+
+
+@beartype
+def validate_stored_window_width(tensor: Tensor, stored_context_width: int) -> None:
+    if tensor.shape[1] != stored_context_width:
+        raise ValueError(
+            f"Stored window width {tensor.shape[1]} does not match "
+            f"metadata stored_context_width={stored_context_width}."
+        )
+
+
+@beartype
+def stored_window_layout_from_metadata(metadata: dict) -> StoredWindowLayout:
+    return StoredWindowLayout(
+        stored_context_width=int(metadata["stored_context_width"]),
+        max_target_offset=int(metadata["max_target_offset"]),
+        version=int(metadata["stored_window_layout_version"]),
+    )
 
 
 # Check an environment variable to see if we are in a testing context
@@ -77,39 +369,7 @@ def construct_index_maps(
     target_columns_index_map: list[str],
     map_to_id: Optional[bool],
 ) -> dict[str, dict[int, Union[str, int]]]:
-    """Constructs reverse index maps (int index to original ID).
-
-    This function creates reverse mappings from the integer indices back to
-    the original string or integer identifiers. It only performs this
-    operation if `map_to_id` is True and `id_maps` is provided.
-
-    A special mapping for index 0 is added:
-    - If original IDs are strings, 0 maps to "unknown".
-    - If original IDs are strings, 1 maps to "other".
-    - If original IDs are integers, 0 maps to (minimum original ID) - 2.
-    - If original IDs are integers, 1 maps to (minimum original ID) - 1.
-
-    Args:
-        id_maps: A nested dictionary mapping column names to their
-            respective ID-to-index maps (e.g.,
-            `{'col_name': {'original_id': 1, ...}}`). Expected to be
-            provided if `map_to_id` is True.
-        target_columns_index_map: A list of column names for which to
-            construct the reverse maps.
-        map_to_id: A boolean flag. If True, the reverse maps are
-            constructed. If False or None, an empty dictionary is returned.
-
-    Returns:
-        A dictionary where keys are column names from
-        `target_columns_index_map` and values are the reverse maps
-        (index-to-original-ID). Returns an empty dict if `map_to_id`
-        is not True.
-
-    Raises:
-        AssertionError: If `map_to_id` is True but `id_maps` is None.
-        AssertionError: If the values of a map are not consistently
-            string or integer (excluding the added '0' key).
-    """
+    """Build index-to-ID maps, including reserved token labels."""
     index_map = {}
     if map_to_id is not None and map_to_id:
         if id_maps is None:
@@ -117,15 +377,11 @@ def construct_index_maps(
         for target_column in target_columns_index_map:
             map_ = {v: k for k, v in id_maps[target_column].items()}
             val = next(iter(map_.values()))
-            if isinstance(val, str):
-                map_[0] = "unknown"
-                map_[1] = "other"
-            else:
-                if not isinstance(val, int):
-                    raise TypeError(f"Expected integer ID in map, got {type(val)}")
-                min_id = int(min(map_.values()))
-                map_[0] = min_id - 2  # type: ignore
-                map_[1] = min_id - 1
+            if not isinstance(val, (str, int)):
+                raise TypeError(
+                    f"Expected string or integer ID in map, got {type(val)}"
+                )
+            map_.update(SPECIAL_TOKEN_IDS.labels_by_id)
             index_map[target_column] = map_
     return index_map
 
@@ -134,21 +390,7 @@ def construct_index_maps(
 def read_data(
     path: str, read_format: str, columns: Optional[list[str]] = None
 ) -> pl.DataFrame:
-    """Reads data from a CSV or Parquet file into a Polars DataFrame.
-
-    Args:
-        path: The file path to read from.
-        read_format: The format of the file. Supported formats are
-            "csv" and "parquet".
-        columns: An optional list of column names to read. This argument
-            is only used when `read_format` is "parquet".
-
-    Returns:
-        A Polars DataFrame containing the data from the file.
-
-    Raises:
-        ValueError: If `read_format` is not "csv" or "parquet".
-    """
+    """Read CSV/Parquet into Polars."""
     if read_format == "csv":
         return pl.read_csv(path, separator=",")
     if read_format == "parquet":
@@ -158,32 +400,7 @@ def read_data(
 
 @beartype
 def write_data(data: pl.DataFrame, path: str, write_format: str, **kwargs) -> None:
-    """Writes a Polars (or Pandas) DataFrame to a CSV or Parquet file.
-
-    This function detects the type of the input DataFrame.
-    - For Polars DataFrames, it uses `.write_csv()` or `.write_parquet()`.
-    - For other DataFrame types (presumably Pandas), it uses `.to_csv()`
-      or `.to_parquet()`.
-
-    Note: The type hint specifies `pl.DataFrame`, but the implementation
-    includes a fallback path that suggests compatibility with Pandas
-    DataFrames.
-
-    Args:
-        data: The Polars (or Pandas) DataFrame to write.
-        path: The destination file path.
-        write_format: The format to write. Supported formats are
-            "csv" and "parquet".
-        **kwargs: Additional keyword arguments passed to the underlying
-            write function (e.g., `write_csv` for Polars, `to_csv` for
-            Pandas).
-
-    Returns:
-        None.
-
-    Raises:
-        ValueError: If `write_format` is not "csv" or "parquet".
-    """
+    """Write Polars/Pandas data as CSV or Parquet."""
     if isinstance(data, pl.DataFrame):
         if write_format == "csv":
             data.write_csv(path, **kwargs)
@@ -207,27 +424,7 @@ def write_data(data: pl.DataFrame, path: str, write_format: str, **kwargs) -> No
 def subset_to_input_columns(
     data: Union[pl.DataFrame, pl.LazyFrame], input_columns: list[str]
 ) -> Union[pl.DataFrame, pl.LazyFrame]:
-    """Filters a DataFrame to rows where 'inputCol' is in a list of column_names.
-
-    This function supports both Polars (DataFrame, LazyFrame) and Pandas
-    DataFrames, dispatching to the appropriate filtering method.
-
-    - For Polars objects, it uses `data.filter(pl.col("inputCol").is_in(...))`.
-    - For other objects (presumably Pandas), it builds a numpy boolean
-      mask and filters using `data.loc[...]`.
-
-    Note: The type hint only specifies Polars objects, but the
-    implementation includes a fallback path for Pandas-like objects.
-
-    Args:
-        data: The Polars (DataFrame, LazyFrame) or Pandas DataFrame to
-            filter. It must contain a column named "inputCol".
-        input_columns: A list of values. Rows will be kept if their
-            value in "inputCol" is present in this list.
-
-    Returns:
-        A filtered DataFrame or LazyFrame of the same type as the input.
-    """
+    """Keep long-format rows whose inputCol is selected."""
     if isinstance(data, (pl.DataFrame, pl.LazyFrame)):
         return data.filter(pl.col("inputCol").is_in(input_columns))
 
@@ -243,48 +440,19 @@ def numpy_to_pytorch(
     data: pl.DataFrame,
     column_types: dict[str, torch.dtype],
     all_columns: list[str],
-    seq_length: int,
-) -> dict[str, Tensor]:
-    """Converts a long-format Polars DataFrame to a dict of sequence tensors.
+    resolved_view: ResolvedWindowView,
+) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+    """Convert long-format Polars windows to tensors plus masks."""
+    input_seq_cols = columns_from_slice(
+        resolved_view.input_slice, resolved_view.storage.stored_context_width
+    )
+    target_seq_cols = columns_from_slice(
+        resolved_view.target_slice, resolved_view.storage.stored_context_width
+    )
 
-    This function assumes the input DataFrame `data` is in a long format
-    where each row represents a sequence for a specific feature. It expects
-    a column named "inputCol" that contains the feature name (e.g.,
-    'price', 'volume') and other columns representing time steps (e.g.,
-    "0", "1", ..., "L").
-
-    It generates two tensors for each column in `all_columns`:
-    1.  An "input" tensor (from time steps L down to 1).
-    2.  A "target" tensor (from time steps L-1 down to 0).
-
-    Example:
-        For `seq_length = 3` and `all_columns = ['price']`, it will create:
-        - 'price': Tensor from columns ["3", "2", "1"]
-        - 'price_target': Tensor from columns ["2", "1", "0"]
-
-    Args:
-        data: The long-format Polars DataFrame. Must contain "inputCol"
-            and columns named as strings of integers for time steps.
-        column_types: A dictionary mapping feature names (from "inputCol")
-            to their desired `torch.dtype`.
-        all_columns: A list of all feature names (from "inputCol") to
-            be processed and converted into tensors.
-        seq_length: The total sequence length (L). This determines the
-            column names for time steps (e.g., "0" to "L").
-
-    Returns:
-        A dictionary mapping feature names to their corresponding PyTorch
-        tensors. Target tensors are stored with a `_target` suffix
-        (e.g., `{'price': <tensor>, 'price_target': <tensor>}`).
-    """
-    input_seq_cols = [str(c) for c in range(seq_length, 0, -1)]
-    target_seq_cols = [str(c) for c in range(seq_length - 1, -1, -1)]
-
-    # We will create a unified dictionary
     unified_tensors = {}
 
     for col_name in all_columns:
-        # Create the input sequence tensor (e.g., from t=1 to t=L)
         input_tensor = torch.tensor(
             data.filter(pl.col("inputCol") == col_name)
             .select(input_seq_cols)
@@ -293,8 +461,6 @@ def numpy_to_pytorch(
         )
         unified_tensors[col_name] = input_tensor
 
-        # Create the target sequence tensor (e.g., from t=0 to t=L-1)
-        # We'll store it with a "_target" suffix to distinguish it
         target_tensor = torch.tensor(
             data.filter(pl.col("inputCol") == col_name)
             .select(target_seq_cols)
@@ -303,29 +469,61 @@ def numpy_to_pytorch(
         )
         unified_tensors[f"{col_name}_target"] = target_tensor
 
-    return unified_tensors
+    left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(data)
+    metadata = resolved_view.build_masks(left_pad_lengths)
+
+    return unified_tensors, metadata
+
+
+@beartype
+def build_valid_mask(
+    left_pad_lengths: Tensor,
+    full_length: int,
+    view_slice: slice,
+) -> Tensor:
+    """Boolean mask from left-padding metadata."""
+
+    full_positions = torch.arange(
+        full_length, device=left_pad_lengths.device, dtype=left_pad_lengths.dtype
+    )
+    full_valid = full_positions[None, :] >= left_pad_lengths[:, None]
+
+    return full_valid[:, view_slice]
+
+
+@beartype
+def columns_from_slice(view_slice: slice, stored_context_width: int) -> list[str]:
+    if view_slice.start is None or view_slice.stop is None:
+        raise ValueError("Resolved window slices must have concrete bounds")
+    return [
+        str(stored_context_width - 1 - i)
+        for i in range(view_slice.start, view_slice.stop)
+    ]
+
+
+@beartype
+def get_left_pad_lengths_from_preprocessed_data(data: pl.DataFrame) -> Tensor:
+    """One leftPadLength per long-format subsequence."""
+    if "leftPadLength" not in data.columns:
+        raise ValueError(
+            "Dataset layout v1 does not contain explicit padding metadata. "
+            "Please re-run preprocessing."
+        )
+    assert {"sequenceId", "subsequenceId"}.issubset(data.columns)
+
+    lengths = (
+        data.group_by(["sequenceId", "subsequenceId"], maintain_order=True)
+        .agg(pl.col("leftPadLength").first().alias("leftPadLength"))
+        .sort(["sequenceId", "subsequenceId"])
+        .get_column("leftPadLength")
+    )
+
+    return torch.tensor(lengths.to_numpy(), dtype=torch.int64)
 
 
 @beartype
 def normalize_path(path: str, project_root: str) -> str:
-    """Normalizes a path to be relative to a project path, then joins them.
-
-    This function ensures that a given `path` is correctly expressed as
-    an absolute path rooted at `project_root`. It does this by first
-    removing the `project_root` prefix from `path` (if it exists)
-    and then joining the result back to `project_root`.
-
-    This is useful for handling paths that might be provided as either
-    relative (e.g., "data/file.txt") or absolute
-    (e.g., "/abs/path/to/project/data/file.txt").
-
-    Args:
-        path: The path to normalize.
-        project_root: The absolute path to the project's root directory.
-
-    Returns:
-        A normalized, absolute path.
-    """
+    """Return path rooted under project_root."""
     project_root_normalized = (project_root + os.sep).replace(os.sep + os.sep, os.sep)
     path2 = os.path.join(project_root, path.replace(project_root_normalized, ""))
     return path2
@@ -333,18 +531,9 @@ def normalize_path(path: str, project_root: str) -> str:
 
 @beartype
 def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0):
-    """Configures Loguru to replicate the legacy LogFile behavior.
-
-    Legacy Behavior Mapping:
-    1. Console: Only Rank 0 prints high-level info.
-    2. File 2 (Detailed): Captures ALL logs (equivalent to old level 2).
-    3. File 3 (Summary): Captures only HIGH importance logs (equivalent to old level 3).
-    4. Formatting: Files contain raw messages only (no timestamp prefix).
-    """
-    # Clear default handler
+    """Configure console plus rank-scoped debug/info log files."""
     logger.remove()
 
-    # 1. Console Handler (Rank 0 only, INFO/Level 3 and up)
     if rank == 0 or rank is None:
         logger.add(
             sys.stderr,
@@ -352,15 +541,11 @@ def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0
             level="INFO",
         )
 
-    # Determine paths
     log_dir = os.path.join(project_root, "logs")
     os.makedirs(log_dir, exist_ok=True)
 
     rank_str = f"rank{rank}" if rank is not None else "rank0"
 
-    # 2. File 2 (Detailed/Debug) - Equivalent to old 'level=2'
-    # Captures everything from DEBUG up.
-    # Format is just {message} to match f.write(f"{string}\n")
     file_2_path = os.path.join(log_dir, f"sequifier-{model_name}-{rank_str}-2.txt")
     logger.add(
         file_2_path,
@@ -370,7 +555,6 @@ def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0
         mode="a",
     )
 
-    # 3. File 3 (Summary/Info)
     file_3_path = os.path.join(log_dir, f"sequifier-{model_name}-{rank_str}-3.txt")
     logger.add(
         file_3_path,
@@ -385,28 +569,22 @@ def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0
 @beartype
 def configure_determinism(seed: int, strict: bool = False) -> None:
     """Enforces deterministic execution for reproducibility."""
-    # 1. Set standard seeds
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    # 2. Ensure deterministic behavior in CUDA/CuDNN
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     if strict:
-        # 3. Enforce deterministic algorithms in PyTorch (crucial for SDPA/FlashAttention)
-        # This forces PyTorch to error out if a non-deterministic operation is used,
-        # or select the deterministic version of a kernel (e.g. for Flash Attn).
         torch.use_deterministic_algorithms(True, warn_only=True)
 
-        # 4. Set CuBLAS workspace (Required for deterministic algorithms with CUDA >= 10.2)
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 
 @beartype
 def get_torch_dtype(dtype_str: str) -> torch.dtype:
-    """Converts a string to a torch dtype, supporting bfloat16 and fp8."""
+    """String-to-torch dtype mapping."""
     dtype_map = {
         "float32": torch.float32,
         "float16": torch.float16,
@@ -431,22 +609,7 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
 def get_best_model_path(
     project_root: str, run_name: str, model_type: str
 ) -> tuple[str, int]:
-    """
-    Searches for the exported 'best' model file for a given run and returns its path and epoch.
-
-    Args:
-        project_root: The root directory of the project.
-        run_name: The unique identifier for the hyperparameter search run.
-        model_type: The extension of the exported model (e.g., 'onnx' or 'pt').
-
-    Returns:
-        A tuple containing:
-            - The file path to the best model (str).
-            - The actual epoch at which this model was saved (int).
-
-    Raises:
-        FileNotFoundError: If no matching model files are found.
-    """
+    """Return the highest-epoch exported best model path."""
     search_pattern = os.path.join(
         project_root, "models", f"sequifier-{run_name}-best-*.{model_type}"
     )
@@ -458,7 +621,6 @@ def get_best_model_path(
             f"Could not find an exported 'best' model matching: {search_pattern}"
         )
 
-    # Find the file with the highest epoch number in its name
     best_model_path = max(
         matching_models,
         key=lambda p: int(os.path.splitext(os.path.basename(p))[0].split("-")[-1]),
@@ -470,11 +632,7 @@ def get_best_model_path(
 def get_last_training_batch_timedelta(
     model_name: str, rank: int, project_root: str = "."
 ) -> float:
-    """
-    Reads the level 2 log file, finds the last two mid-epoch training logs,
-    and returns the timedelta between them in seconds.
-    """
-    # Construct the path to the level 2 log file based on configure_logger()
+    """Return seconds between the last two mid-epoch train log entries."""
     log_path = os.path.join(
         project_root, "logs", f"sequifier-{model_name}-rank{rank}-2.txt"
     )
@@ -482,8 +640,6 @@ def get_last_training_batch_timedelta(
     if not os.path.exists(log_path):
         raise FileNotFoundError(f"Log file not found: {log_path}")
 
-    # Regex to capture the timestamp of mid-epoch training batch logs
-    # Matches lines like: "2026-05-26 15:15:39 | INFO | [INFO] Epoch   1 | Batch   10/... | Loss: ..."
     train_log_pattern = re.compile(
         r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\|.*?\[INFO\] Epoch.*?Batch"
     )
@@ -503,7 +659,205 @@ def get_last_training_batch_timedelta(
             "Not enough mid-epoch training logs found in the file to calculate a timedelta."
         )
 
-    # Get the last two chronologically recorded batch timestamps
     t1, t2 = timestamps[-2], timestamps[-1]
 
     return (t2 - t1).total_seconds()
+
+
+def _build_bert_span_mask(
+    valid_mask: torch.Tensor,
+    masking_probability: float,
+    span_distribution: Any,
+    *,
+    generator: Optional[torch.Generator] = None,
+) -> torch.Tensor:
+    """Construct exact-budget, non-overlapping BERT span masks."""
+    valid_mask = valid_mask.bool()
+    batch_size, seq_len = valid_mask.shape
+    device = valid_mask.device
+
+    valid_lengths = valid_mask.sum(dim=1, dtype=torch.long)
+    budgets = (valid_lengths.to(torch.float32) * masking_probability).to(torch.long)
+
+    max_spans = max(1, math.floor(seq_len * masking_probability) + 10)
+    sampled_lengths = span_distribution.sample(
+        (batch_size, max_spans),
+        device=device,
+        generator=generator,
+    )
+    sampled_lengths = sampled_lengths.to(torch.long).clamp_min_(1)
+
+    used_before = sampled_lengths.cumsum(dim=1) - sampled_lengths
+    remaining = (budgets[:, None] - used_before).clamp_min(0)
+    span_lengths = torch.minimum(sampled_lengths, remaining)
+
+    n_spans = (span_lengths > 0).sum(dim=1)
+    total_gap_length = valid_lengths - budgets
+
+    gap_slot = torch.arange(max_spans + 1, device=device)
+    active_gap_slot = gap_slot[None, :] <= n_spans[:, None]
+
+    uniform = torch.rand(
+        (batch_size, max_spans + 1),
+        device=device,
+        dtype=torch.float32,
+        generator=generator,
+    )
+    uniform = uniform.clamp_min(torch.finfo(uniform.dtype).tiny)
+
+    gap_weights = torch.where(
+        active_gap_slot,
+        -torch.log(uniform),
+        torch.zeros_like(uniform),
+    )
+    cumulative_weights = gap_weights.cumsum(dim=1)
+    weight_totals = cumulative_weights[:, -1:].clamp_min(
+        torch.finfo(gap_weights.dtype).tiny
+    )
+
+    gap_edges = torch.floor(
+        cumulative_weights
+        / weight_totals
+        * total_gap_length[:, None].to(gap_weights.dtype)
+    ).to(torch.long)
+    gap_edges = torch.where(
+        gap_slot[None, :] >= n_spans[:, None],
+        total_gap_length[:, None],
+        gap_edges,
+    )
+
+    gaps = torch.diff(
+        torch.cat(
+            [
+                torch.zeros((batch_size, 1), dtype=torch.long, device=device),
+                gap_edges,
+            ],
+            dim=1,
+        ),
+        dim=1,
+    )
+
+    lengths_before = span_lengths.cumsum(dim=1) - span_lengths
+    gaps_through_current = gaps[:, :max_spans].cumsum(dim=1)
+
+    span_starts = lengths_before + gaps_through_current
+    span_ends = span_starts + span_lengths
+
+    compact_position = valid_mask.to(torch.long).cumsum(dim=1) - 1
+    compact_position = compact_position.clamp_min(0)
+
+    started_spans = torch.searchsorted(
+        span_starts.contiguous(),
+        compact_position.contiguous(),
+        right=True,
+    )
+    ended_spans = torch.searchsorted(
+        span_ends.contiguous(),
+        compact_position.contiguous(),
+        right=True,
+    )
+
+    return valid_mask & (started_spans > ended_spans)
+
+
+def apply_bert_masking(
+    data_batch: Dict[str, torch.Tensor],
+    targets_batch: Dict[str, torch.Tensor],
+    metadata_batch: Optional[Dict[str, torch.Tensor]],
+    config: Any,  # TrainConfig
+    eval_seed: Optional[int] = None,
+) -> tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+    """Apply BERT span corruption and attach prediction masks."""
+    if not metadata_batch or "attention_valid_mask" not in metadata_batch:
+        raise ValueError("BERT masking requires metadata['attention_valid_mask']")
+
+    valid_mask = metadata_batch["attention_valid_mask"].bool()
+    batch_size, seq_len = valid_mask.shape
+    device = valid_mask.device
+
+    for target_name, target in targets_batch.items():
+        if target.shape != valid_mask.shape:
+            raise ValueError(
+                f"BERT target {target_name!r} has shape {target.shape}; "
+                f"expected {valid_mask.shape}"
+            )
+
+    generator: Optional[torch.Generator] = None
+    if eval_seed is not None:
+        seeded_generator = torch.Generator(device=device)
+        seeded_generator.manual_seed(eval_seed)
+        generator = seeded_generator
+
+    bert_spec = config.training_spec.bert_spec
+    if bert_spec is None:
+        raise ValueError("bert_spec must be configured for BERT training")
+
+    bert_mask = _build_bert_span_mask(
+        valid_mask,
+        bert_spec.masking_probability,
+        bert_spec.span_masking,
+        generator=generator,
+    )
+
+    replacement = bert_spec.replacement_distribution
+    p_masked = replacement.masked
+    p_random = replacement.random
+
+    replacement_probs = torch.rand(
+        (batch_size, seq_len),
+        device=device,
+        generator=generator,
+    )
+
+    mask_token_mask = bert_mask & (replacement_probs < p_masked)
+    random_token_mask = (
+        bert_mask
+        & (replacement_probs >= p_masked)
+        & (replacement_probs < (p_masked + p_random))
+    )
+
+    masked_data = dict(data_batch)
+
+    for col, tensor in data_batch.items():
+        if col in config.categorical_columns:
+            output = tensor.clone()
+
+            if p_masked > 0.0:
+                output.masked_fill_(mask_token_mask, SPECIAL_TOKEN_IDS.mask)
+
+            if p_random > 0.0:
+                random_tokens = torch.randint(
+                    low=SPECIAL_TOKEN_IDS.user_start,
+                    high=config.n_classes[col],
+                    size=tensor.shape,
+                    device=device,
+                    dtype=tensor.dtype,
+                    generator=generator,
+                )
+                output[random_token_mask] = random_tokens[random_token_mask]
+
+            masked_data[col] = output
+
+        elif col in config.real_columns:
+            output = tensor.clone()
+
+            if p_masked > 0.0:
+                output.masked_fill_(mask_token_mask, 0.0)
+
+            if p_random > 0.0:
+                random_noise = torch.randn(
+                    tensor.shape,
+                    device=device,
+                    dtype=tensor.dtype,
+                    generator=generator,
+                )
+                output[random_token_mask] = random_noise[random_token_mask]
+
+            masked_data[col] = output
+
+    detached_targets = {col: tensor.detach() for col, tensor in targets_batch.items()}
+    output_metadata = {key: tensor.detach() for key, tensor in metadata_batch.items()}
+    output_metadata["bert_mask"] = bert_mask
+    output_metadata["attention_valid_mask"] = valid_mask
+
+    return masked_data, detached_targets, output_metadata

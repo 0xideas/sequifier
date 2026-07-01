@@ -5,26 +5,32 @@ from typing import Optional, Union
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
-from sequifier.helpers import normalize_path, try_catch_excess_keys
+from sequifier.helpers import (
+    ModelWindowView,
+    StoredWindowLayout,
+    canonicalize_polars_dtype_name,
+    normalize_path,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
+    try_catch_excess_keys,
+)
+from sequifier.special_tokens import validate_special_token_ids
 
 
 @beartype
 def load_inferer_config(
     config_path: str, args_config: dict, skip_metadata: bool
 ) -> "InfererModel":
-    """
-    Load inferer configuration from a YAML file and update it with args_config.
-
-    Args:
-        config_path: Path to the YAML configuration file.
-        args_config: Dictionary containing additional configuration arguments.
-        skip_metadata: Flag indicating whether to process the configuration or not.
-
-    Returns:
-        InfererModel instance with loaded configuration.
-    """
+    """Load inference YAML plus CLI overrides and optional metadata fields."""
     with open(config_path, "r") as f:
         config_values = yaml.safe_load(f)
     config_values.update(args_config)
@@ -39,6 +45,38 @@ def load_inferer_config(
         ) as f:
             metadata_config = json.load(f)
 
+        validate_special_token_ids(
+            metadata_config["special_token_ids"],
+            source=f"metadata config '{metadata_config_path}'",
+        )
+        storage_layout = stored_window_layout_from_metadata(metadata_config)
+        if storage_layout.version != 2:
+            raise ValueError(
+                "Inference requires metadata stored_window_layout_version=2, "
+                f"got {storage_layout.version}."
+            )
+        training_objective = config_values["training_objective"]
+        target_offset = (
+            0
+            if training_objective == "bert"
+            else int(config_values.pop("target_offset", 1))
+        )
+        window_view = ModelWindowView(
+            context_length=int(config_values.pop("context_length")),
+            objective=training_objective,
+            target_offset=target_offset,
+        )
+        resolve_window_view(storage_layout, window_view)
+        config_values["storage_layout"] = storage_layout
+        config_values["window_view"] = window_view
+        for key in (
+            "target_offset",
+            "stored_context_width",
+            "max_target_offset",
+            "stored_window_layout_version",
+        ):
+            config_values.pop(key, None)
+
         config_values["column_types"] = config_values.get(
             "column_types", metadata_config["column_types"]
         )
@@ -46,14 +84,16 @@ def load_inferer_config(
         if config_values["input_columns"] is None:
             config_values["input_columns"] = list(config_values["column_types"].keys())
 
+        configured_column_types = config_values["column_types"]
+
         config_values["categorical_columns"] = [
             col
-            for col, type_ in metadata_config["column_types"].items()
+            for col, type_ in configured_column_types.items()
             if "int" in type_.lower() and col in config_values["input_columns"]
         ]
         config_values["real_columns"] = [
             col
-            for col, type_ in metadata_config["column_types"].items()
+            for col, type_ in configured_column_types.items()
             if "float" in type_.lower() and col in config_values["input_columns"]
         ]
 
@@ -76,34 +116,7 @@ def load_inferer_config(
 
 
 class InfererModel(BaseModel):
-    """Pydantic model for inference configuration.
-
-    Attributes:
-        project_root: The path to the sequifier project directory.
-        metadata_config_path: The path to the data-driven configuration file.
-        model_path: The path to the trained model file(s).
-        model_type: The type of model, either 'embedding' or 'generative'.
-        data_path: The path to the data to be used for inference.
-        training_config_path: The path to the training configuration file.
-        read_format: The file format of the input data (e.g., 'csv', 'parquet').
-        write_format: The file format for the inference output.
-        input_columns: The list of input columns used for inference.
-        categorical_columns: A list of columns that are categorical.
-        real_columns: A list of columns that are real-valued.
-        target_columns: The list of target columns for inference.
-        column_types: A dictionary mapping each column to its numeric type ('int64' or 'float64').
-        target_column_types: A dictionary mapping target columns to their types ('categorical' or 'real').
-        output_probabilities: If True, outputs the probability distributions for categorical target columns.
-        map_to_id: If True, maps categorical output values back to their original IDs.
-        seed: The random seed for reproducibility.
-        device: The device to run inference on (e.g., 'cuda', 'cpu', 'mps').
-        seq_length: The sequence length of the model's input.
-        inference_batch_size: The batch size for inference.
-        sample_from_distribution_columns: A list of columns from which to sample from the distribution.
-        infer_with_dropout: If True, applies dropout during inference.
-        autoregression: If True, performs autoregressive inference.
-        autoregression_total_steps: The number of total steps for autoregressive inference.
-    """
+    """Top-level inference config."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -111,6 +124,7 @@ class InfererModel(BaseModel):
     metadata_config_path: str
     model_path: Union[str, list[str]]
     model_type: str
+    training_objective: str
     data_path: str
     training_config_path: str = Field(default="configs/train.yaml")
     read_format: str = Field(default="parquet")
@@ -128,14 +142,48 @@ class InfererModel(BaseModel):
     map_to_id: bool = Field(default=True)
     seed: int
     device: str
-    seq_length: int
-    prediction_length: int = Field(default=1)
+    storage_layout: StoredWindowLayout
+    window_view: ModelWindowView
+    prediction_length: Optional[int] = None
     inference_batch_size: int
 
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
     autoregression: bool = Field(default=False)
     autoregression_total_steps: Optional[int] = Field(default=None)
+
+    @model_validator(mode="after")
+    def normalize_prediction_length(self):
+        if self.window_view.objective != self.training_objective:
+            raise ValueError(
+                "window_view objective must match training_objective "
+                f"({self.window_view.objective} != {self.training_objective})."
+            )
+        if self.prediction_length is None:
+            self.prediction_length = (
+                self.window_view.context_length
+                if self.training_objective == "bert"
+                else 1
+            )
+        if self.training_objective == "bert":
+            if self.prediction_length != self.window_view.context_length:
+                raise ValueError(
+                    "For BERT inference, prediction_length must be equal to context_length "
+                    f"(got prediction_length={self.prediction_length}, context_length={self.window_view.context_length})."
+                )
+        else:
+            resolve_window_view(self.storage_layout, self.window_view)
+        return self
+
+    @field_validator("training_objective")
+    @classmethod
+    def validate_training_objective(cls, v):
+        if v not in ["causal", "bert", "final_value", "next_occurrence"]:
+            raise ValueError(
+                "Only 'causal', 'bert', 'final_value', and 'next_occurrence' "
+                f"are allowed, found {v}"
+            )
+        return v
 
     @field_validator("model_type")
     @classmethod
@@ -197,7 +245,11 @@ class InfererModel(BaseModel):
     def validate_autoregression(cls, v: bool, info: ValidationInfo):
         if v and info.data.get("model_type") == "embedding":
             raise ValueError("Autoregression is not possible for embedding models")
-        if v and info.data.get("prediction_length") > 1:
+        if (
+            v
+            and info.data.get("prediction_length") is not None
+            and info.data.get("prediction_length") > 1
+        ):
             raise ValueError(
                 "Autoregressive inference is not possible for models with prediction_length > 1"
             )
@@ -207,6 +259,15 @@ class InfererModel(BaseModel):
         ):
             raise ValueError(
                 "Autoregressive inference with non-identical 'input_columns' and 'target_columns' is possible but should not be performed"
+            )
+
+        if (
+            v
+            and info.data.get("training_objective") is not None
+            and info.data.get("training_objective") == "bert"
+        ):
+            raise ValueError(
+                "Autoregressive inference is not possible with BERT-style models."
             )
 
         return v
@@ -244,6 +305,23 @@ class InfererModel(BaseModel):
                 "target_columns and target_column_types must contain the same keys in the same order"
             )
         return v
+
+    @field_validator("column_types")
+    @classmethod
+    def validate_column_types(cls, v: dict, info: ValidationInfo) -> dict:
+        normalized = {
+            column: canonicalize_polars_dtype_name(dtype) for column, dtype in v.items()
+        }
+        input_columns = info.data.get("input_columns", [])
+        missing_input_columns = [
+            column for column in input_columns if column not in normalized
+        ]
+        if missing_input_columns:
+            raise ValueError(
+                "column_types must include every input column. "
+                f"Missing: {missing_input_columns}"
+            )
+        return normalized
 
     @field_validator("map_to_id")
     @classmethod

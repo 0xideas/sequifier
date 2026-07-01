@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import os
 import warnings
 from typing import Any, Optional, Union
@@ -10,29 +11,58 @@ import torch_optimizer
 import yaml
 from beartype import beartype
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 import sequifier
-from sequifier.helpers import normalize_path, try_catch_excess_keys
+from sequifier.config.probabilities import ProbabilityDistribution
+from sequifier.helpers import (
+    ModelWindowView,
+    StoredWindowLayout,
+    normalize_path,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
+    try_catch_excess_keys,
+)
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 
 AnyType = str | int | float
+NextOccurrenceTargetValue = StrictInt | StrictStr
+
+
+def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
+    training_spec = config_values.get("training_spec", {})
+
+    for col in training_spec.get("class_share_log_columns", []):
+        if col not in config_values["target_columns"]:
+            raise ValueError(f"Class-share column {col!r} must be a target column.")
+        if config_values["target_column_types"].get(col) != "categorical":
+            raise ValueError(
+                f"Class-share column {col!r} must be a categorical target column."
+            )
+        if col not in config_values["n_classes"]:
+            raise ValueError(
+                f"Class-share column {col!r} has no configured class count."
+            )
+        if col not in config_values["id_maps"]:
+            raise ValueError(
+                f"Class-share column {col!r} has no index map for logging."
+            )
 
 
 @beartype
 def load_train_config(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
 ) -> "TrainModel":
-    """
-    Load training configuration from a YAML file and update it with args_config.
-
-    Args:
-        config_path: Path to the YAML configuration file.
-        args_config: Dictionary containing additional configuration arguments.
-        skip_metadata: Flag indicating whether to process the configuration or not.
-
-    Returns:
-        TrainModel instance with loaded configuration.
-    """
+    """Load train YAML plus CLI overrides and optional metadata-derived fields."""
     with open(config_path, "r") as f:
         config_values = yaml.safe_load(f)
 
@@ -47,6 +77,42 @@ def load_train_config(
             normalize_path(metadata_config_path, config_values["project_root"]), "r"
         ) as f:
             metadata_config = json.loads(f.read())
+
+        storage_layout = stored_window_layout_from_metadata(metadata_config)
+        if storage_layout.version != 2:
+            raise ValueError(
+                "Training requires metadata stored_window_layout_version=2, "
+                f"got {storage_layout.version}."
+            )
+        training_objective = config_values["training_spec"]["training_objective"]
+        target_offset = (
+            0
+            if training_objective == "bert"
+            else int(config_values.pop("target_offset", 1))
+        )
+        window_view = ModelWindowView(
+            context_length=int(config_values.pop("context_length")),
+            objective=training_objective,
+            target_offset=target_offset,
+        )
+        resolve_window_view(storage_layout, window_view)
+        config_values["storage_layout"] = storage_layout
+        config_values["window_view"] = window_view
+        for key in (
+            "stored_context_width",
+            "max_target_offset",
+            "stored_window_layout_version",
+        ):
+            config_values.pop(key, None)
+        for key in (
+            "target_offset",
+            "stored_context_width",
+            "max_target_offset",
+            "stored_window_layout_version",
+        ):
+            config_values.pop(key, None)
+        for key in ("target_offset", "stored_context_width", "max_target_offset"):
+            config_values.get("training_spec", {}).pop(key, None)
 
         split_paths = metadata_config["split_paths"]
 
@@ -88,6 +154,15 @@ def load_train_config(
         )
 
         config_values["id_maps"] = metadata_config["id_maps"]
+        config_values["special_token_ids"] = validate_special_token_ids(
+            metadata_config.get(
+                "special_token_ids",
+                SPECIAL_TOKEN_IDS.ids_by_label,
+            ),
+            source=f"metadata config '{metadata_config_path}'",
+        )
+
+        _validate_class_share_log_columns(config_values)
 
     return try_catch_excess_keys(config_path, TrainModel, config_values)
 
@@ -109,46 +184,38 @@ class DotDict(dict):
         self.update(state)
 
 
-class TrainingSpecModel(BaseModel):
-    """Pydantic model for training specifications.
+class ReplacementDistribution(BaseModel):
+    masked: float = Field(..., ge=0.0, le=1.0)
+    random: float = Field(..., ge=0.0, le=1.0)
+    identical: float = Field(..., ge=0.0, le=1.0)
 
-    Attributes:
-        device: The torch.device to train the model on (e.g., 'cuda', 'cpu', 'mps').
-        device_max_concat_length: Maximum sequence length for concatenation on device.
-        epochs: The total number of epochs to train for.
-        log_interval: The interval in batches for logging.
-        class_share_log_columns: A list of column names for which to log the class share of predictions.
-        early_stopping_epochs: Number of epochs to wait for validation loss improvement before stopping.
-        save_interval_epochs: The interval in epochs for checkpointing the model.
-        save_latest_interval_minutes: the time interval in which a checkpoint is written to the "latest" checkpoint path
-        save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path
-        save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving
-        calculate_validation_loss_on_initialization: calculate val loss on weight initialization
-        batch_size: The training batch size.
-        learning_rate: The learning rate.
-        criterion: A dictionary mapping each target column to a loss function.
-        class_weights: A dictionary mapping categorical target columns to a list of class weights.
-        accumulation_steps: The number of gradient accumulation steps.
-        dropout: The dropout value for the transformer model.
-        loss_weights: A dictionary mapping columns to specific loss weights.
-        optimizer: The optimizer configuration.
-        scheduler: The learning rate scheduler configuration.
-        scheduler_step_on: The time of the .step() call on the scheduler, either 'epoch' or 'batch'
-        continue_training: If True, continue training from the latest checkpoint.
-        distributed: If True, enables distributed training.
-        load_full_data_to_ram: If True, loads the entire dataset into RAM.
-        world_size: The number of processes for distributed training.
-        num_workers: The number of worker threads for data loading.
-        backend: The distributed training backend (e.g., 'nccl').
-        layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).
-        layer_autocast: Whether to use autocast
-        sampling_strategy: how to equalize data between GPUs
-        torch_compile: compile entire model ('outer') or transformer layers ('inner') with torch.compile, alternatively 'none'
-        float32_matmul_precision: precision level of float32 computations. One of 'highest', 'high' and 'medium'
-    """
+    @model_validator(mode="after")
+    def validate_sum(self):
+        total = self.masked + self.random + self.identical
+        if not math.isclose(total, 1.0, abs_tol=1e-5):
+            raise ValueError(
+                f"Replacement distribution probabilities must sum to 1.0, got {total}"
+            )
+        return self
+
+
+class BERTSpecModel(BaseModel):
+    masking_probability: float = Field(..., gt=0.0, le=1.0)
+    replacement_distribution: ReplacementDistribution
+    span_masking: ProbabilityDistribution
+
+
+class NextOccurrenceConfigModel(BaseModel):
+    column_name: str
+    target_values: list[NextOccurrenceTargetValue] = Field(..., min_length=1)
+
+
+class TrainingSpecModel(BaseModel):
+    """Training loop, optimization, precision, and distribution settings."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
+    training_objective: str
     device: str
     device_max_concat_length: int = 12
     epochs: int
@@ -157,8 +224,9 @@ class TrainingSpecModel(BaseModel):
     early_stopping_epochs: Optional[int] = None
     save_interval_epochs: int
     save_latest_interval_minutes: Optional[float] = None
-    save_batch_interval_minutes: Optional[float] = None
-    save_batch_interval_minutes_val_loss: bool = True
+    save_interval_minutes: Optional[float] = None
+    save_interval_batches: Optional[int] = None
+    save_interval_val_loss: bool = True
     calculate_validation_loss_on_initialization: bool = True
     batch_size: int
     learning_rate: float
@@ -174,6 +242,9 @@ class TrainingSpecModel(BaseModel):
         )
     )
     scheduler_step_on: str = "epoch"
+    bert_spec: Optional[BERTSpecModel] = None
+    next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
+
     continue_training: bool = True
     enforce_determinism: bool = False
     distributed: bool = False
@@ -184,7 +255,6 @@ class TrainingSpecModel(BaseModel):
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: Optional[bool] = True
-    sampling_strategy: str = "exact"
     data_parallelism: Optional[str] = None
     fsdp_cpu_offload: Optional[bool] = None
     torch_compile: str = "outer"
@@ -199,6 +269,10 @@ class TrainingSpecModel(BaseModel):
         self.optimizer = DotDict(kwargs["optimizer"])
         self.validate_scheduler_config(kwargs["scheduler"], kwargs)
         self.scheduler = DotDict(kwargs["scheduler"])
+
+    @field_serializer("optimizer", "scheduler")
+    def serialize_dotdict(self, value: DotDict) -> dict[str, Any]:
+        return dict(value)
 
     @field_validator("layer_type_dtypes")
     @classmethod
@@ -291,14 +365,41 @@ class TrainingSpecModel(BaseModel):
             )
         return v
 
-    @field_validator("sampling_strategy")
+    @field_validator("training_objective")
     @classmethod
-    def validate_sampling_strategy(cls, v):
-        if v not in ["exact", "oversampling", "undersampling"]:
+    def validate_training_objective(cls, v):
+        if v not in ["causal", "bert", "final_value", "next_occurrence"]:
             raise ValueError(
-                f"sampling_strategy must be 'exact', 'oversampling', or 'undersampling', got '{v}'"
+                "Only 'causal', 'bert', 'final_value', and 'next_occurrence' "
+                f"are allowed, found {v}"
             )
         return v
+
+    @model_validator(mode="after")
+    def validate_objective_specific_config(self):
+        if self.bert_spec is not None and self.training_objective != "bert":
+            raise ValueError(
+                "The BERT hyperparameters should only be configured if the training objective is 'bert'"
+            )
+        if self.bert_spec is None and self.training_objective == "bert":
+            raise ValueError(
+                "If the training_objective is 'bert', the BERT hyperparameters must be set"
+            )
+        if (
+            self.next_occurrence_config is not None
+            and self.training_objective != "next_occurrence"
+        ):
+            raise ValueError(
+                "next_occurrence_config should only be configured if the training objective is 'next_occurrence'"
+            )
+        if (
+            self.next_occurrence_config is None
+            and self.training_objective == "next_occurrence"
+        ):
+            raise ValueError(
+                "If the training_objective is 'next_occurrence', next_occurrence_config must be set"
+            )
+        return self
 
     @field_validator("data_parallelism")
     @classmethod
@@ -311,16 +412,7 @@ class TrainingSpecModel(BaseModel):
 
 
 class ModelSpecModel(BaseModel):
-    """Pydantic model for model specifications.
-
-    Attributes:
-        initial_embedding_dim: The size of the input embedding. Must be equal to dim_model if joint_embedding_dim is None.
-        feature_embedding_dims: The embedding dimensions for each input column. Must sum to initial_embedding_dim.
-        joint_embedding_dim: Joint embedding layer after initial embedding. Must be equal to dim_model if specified.
-        n_head: The number of heads in the multi-head attention models.
-        dim_feedforward: The dimension of the feedforward network model.
-        num_layers: The number of layers in the transformer model.
-    """
+    """Transformer architecture settings."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -443,34 +535,7 @@ class ModelSpecModel(BaseModel):
 
 
 class TrainModel(BaseModel):
-    """Pydantic model for training configuration.
-
-    Attributes:
-        project_root: The path to the sequifier project directory.
-        metadata_config_path: The path to the data-driven configuration file.
-        model_name: The name of the model being trained.
-        training_data_path: The path to the training data.
-        validation_data_path: The path to the validation data.
-        read_format: The file format of the input data (e.g., 'csv', 'parquet').
-        input_columns: The list of input columns to be used for training.
-        column_types: A dictionary mapping each column to its numeric type ('int64' or 'float64').
-        categorical_columns: A list of columns that are categorical.
-        real_columns: A list of columns that are real-valued.
-        target_columns: The list of target columns for model training.
-        target_column_types: A dictionary mapping target columns to their types ('categorical' or 'real').
-        id_maps: For each categorical column, a map from distinct values to their indexed representation.
-        seq_length: The sequence length of the model's input.
-        n_classes: The number of classes for each categorical column.
-        inference_batch_size: The batch size to be used for inference after model export.
-        seed: The random seed for numpy and PyTorch.
-        export_generative_model: If True, exports the generative model.
-        export_embedding_model: If True, exports the embedding model.
-        export_onnx: If True, exports the model in ONNX format.
-        export_pt: If True, exports the model using torch.save.
-        export_with_dropout: If True, exports the model with dropout enabled.
-        model_spec: The specification of the transformer model architecture.
-        training_spec: The specification of the training run configuration.
-    """
+    """Top-level training config."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -488,8 +553,12 @@ class TrainModel(BaseModel):
     target_columns: list[str]
     target_column_types: dict[str, str]
     id_maps: dict[str, dict[str | int, int]]
+    special_token_ids: dict[str, int] = Field(
+        default_factory=lambda: SPECIAL_TOKEN_IDS.ids_by_label
+    )
 
-    seq_length: int
+    storage_layout: StoredWindowLayout
+    window_view: ModelWindowView
     n_classes: dict[str, int]
     inference_batch_size: int
     seed: int
@@ -502,6 +571,67 @@ class TrainModel(BaseModel):
 
     model_spec: ModelSpecModel
     training_spec: TrainingSpecModel
+
+    @field_validator("special_token_ids")
+    @classmethod
+    def validate_special_token_ids_match_runtime(cls, v):
+        return validate_special_token_ids(v, source="TrainModel")
+
+    @model_validator(mode="after")
+    def validate_bert_prediction_length_matches_context_length(self):
+        if self.window_view.objective != self.training_spec.training_objective:
+            raise ValueError(
+                "window_view objective must match training_spec.training_objective "
+                f"({self.window_view.objective} != {self.training_spec.training_objective})."
+            )
+        resolve_window_view(self.storage_layout, self.window_view)
+        if (
+            self.training_spec.training_objective == "bert"
+            and self.model_spec.prediction_length != self.window_view.context_length
+        ):
+            raise ValueError(
+                "For BERT training, model_spec.prediction_length must be equal to context_length "
+                f"(got prediction_length={self.model_spec.prediction_length}, context_length={self.window_view.context_length})."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_next_occurrence_config_matches_targets(self):
+        if self.training_spec.training_objective == "next_occurrence":
+            next_occurrence_config = self.training_spec.next_occurrence_config
+            if next_occurrence_config is None:
+                raise ValueError(
+                    "next_occurrence_config must be set for next_occurrence training."
+                )
+
+            column_name = next_occurrence_config.column_name
+            if column_name not in self.target_columns:
+                raise ValueError(
+                    "next_occurrence_config.column_name must be one of target_columns, "
+                    f"got {column_name!r}."
+                )
+            if self.target_column_types.get(column_name) != "categorical":
+                raise ValueError(
+                    "next_occurrence_config.column_name must refer to a categorical target column."
+                )
+            if column_name not in self.id_maps:
+                raise ValueError(
+                    "next_occurrence_config.column_name must have a preprocessing id_map, "
+                    f"got {column_name!r}."
+                )
+
+            id_map = self.id_maps[column_name]
+            missing_values = [
+                value
+                for value in next_occurrence_config.target_values
+                if value not in id_map
+            ]
+            if missing_values:
+                raise ValueError(
+                    "next_occurrence_config.target_values must match keys in "
+                    f"id_maps[{column_name!r}] exactly, missing {missing_values!r}."
+                )
+        return self
 
     @field_validator("model_name")
     @classmethod
@@ -560,16 +690,35 @@ class TrainModel(BaseModel):
             raise ValueError("save_latest_interval_minutes must be larger than 0")
 
         if (
-            v.save_batch_interval_minutes is not None
+            v.save_interval_minutes is not None
             and not os.getenv("SEQUIFIER_TESTING", "0") == "1"
-            and v.save_batch_interval_minutes == 0
+            and v.save_interval_minutes == 0
         ):
-            raise ValueError("save_batch_interval_minutes must be larger than 0")
+            raise ValueError("save_interval_minutes must be larger than 0")
+
+        if (
+            v.save_interval_batches is not None
+            and not os.getenv("SEQUIFIER_TESTING", "0") == "1"
+            and v.save_interval_batches == 0
+        ):
+            raise ValueError("save_interval_batches must be larger than 0")
 
         if v.torch_compile not in ["outer", "inner", "none"]:
             raise ValueError(
                 f'torch_compile {v.torch_compile} invalid, must be one of ["outer", "inner", "none"]'
             )
+
+        if v.data_parallelism == "FSDP":
+            if v.layer_type_dtypes is not None:
+                raise ValueError(
+                    "FSDP does not support manual layer pre-casting. Please set "
+                    "'layer_type_dtypes' to null when using FSDP, and rely on "
+                    "'layer_autocast' (MixedPrecisionPolicy) instead."
+                )
+            if v.fsdp_cpu_offload is None:
+                raise ValueError(
+                    "If data_parallelism == 'FSDP', fsdp_cpu_offload cannot be None"
+                )
 
         if v.data_parallelism == "FSDP" and v.torch_compile == "outer":
             raise ValueError(
@@ -580,22 +729,6 @@ class TrainModel(BaseModel):
             raise ValueError(
                 "If data_parallelism is set to 'DDP' then torch_compile must be one of 'none' and 'outer'"
             )
-
-        if v.sampling_strategy in ["oversampling", "undersampling"]:
-            if v.world_size <= 1:
-                raise ValueError(
-                    f"sampling_strategy '{v.sampling_strategy}' is only admissible if world_size > 1"
-                )
-            if info.data.get("read_format") not in ["pt", "parquet"]:
-                raise ValueError(
-                    f"sampling_strategy '{v.sampling_strategy}' is only admissible if training data is a folder (read_format='pt' or 'parquet')"
-                )
-
-        if v.world_size > 1 and v.sampling_strategy == "exact":
-            if info.data.get("read_format") not in ["pt", "parquet"]:
-                raise ValueError(
-                    "If world_size > 1 and sampling_strategy == 'exact', the input data must be a folder (read_format='pt' or 'parquet')."
-                )
 
         if v.data_parallelism is None or v.data_parallelism != "FSDP":
             if v.fsdp_cpu_offload is not None:
@@ -611,6 +744,17 @@ class TrainModel(BaseModel):
         if v.distributed and v.data_parallelism is None:
             raise ValueError(
                 "If 'distributed' is True, data_parallelism cannot be 'None'"
+            )
+
+        export_generative_model = info.data.get("export_generative_model")
+        export_embedding_model = info.data.get("export_embedding_model")
+        if (
+            not export_generative_model
+            and not export_embedding_model
+            and os.getenv("SEQUIFIER_PREVENT_EXPORT") is None
+        ):
+            raise ValueError(
+                "At least one of 'export_generative_model' and 'export_embedding_model' must be true. If you want to override this, set the env variable 'SEQUIFIER_PREVENT_EXPORT' to any value"
             )
 
         return v

@@ -5,25 +5,23 @@ from typing import Optional
 import numpy as np
 import yaml
 from beartype import beartype
-from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
-from sequifier.helpers import try_catch_excess_keys
+from sequifier.helpers import canonicalize_polars_dtype_name, try_catch_excess_keys
 
 
 @beartype
 def load_preprocessor_config(
     config_path: str, args_config: dict
 ) -> "PreprocessorModel":
-    """
-    Load preprocessor configuration from a YAML file and update it with args_config.
-
-    Args:
-        config_path: Path to the YAML configuration file.
-        args_config: Dictionary containing additional configuration arguments.
-
-    Returns:
-        PreprocessorModel instance with loaded configuration.
-    """
+    """Load preprocessing YAML plus CLI overrides."""
     with open(config_path, "r") as f:
         config_values = yaml.safe_load(f)
 
@@ -35,28 +33,7 @@ def load_preprocessor_config(
 
 
 class PreprocessorModel(BaseModel):
-    """
-    Pydantic model for preprocessor configuration.
-
-    Attributes:
-        project_root: The path to the sequifier project directory.
-        data_path: The path to the input data file.
-        read_format: The file type of the input data. Can be 'csv' or 'parquet'.
-        write_format: The file type for the preprocessed output data.
-        merge_output: If True, combines all preprocessed data into a single file.
-        selected_columns: A list of columns to be included in the preprocessing. If None, all columns are used.
-        split_ratios: A list of floats that define the relative sizes of data splits (e.g., for train, validation, test).
-                           The sum of proportions must be 1.0.
-        seq_length: The sequence length for the model inputs.
-        stride_by_split: A list of step sizes for creating subsequences within each data split.
-        max_rows: The maximum number of input rows to process. If None, all rows are processed.
-        seed: A random seed for reproducibility.
-        n_cores: The number of CPU cores to use for parallel processing. If None, it uses the available CPU cores.
-        batches_per_file: The number of batches to process per file.
-        process_by_file: A flag to indicate if processing should be done file by file.
-        continue_preprocessing: Continue preprocessing job that was interrupted while writing to temp folder.
-        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
-    """
+    """Top-level preprocessing config."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -65,10 +42,14 @@ class PreprocessorModel(BaseModel):
     read_format: str = "csv"
     write_format: str = "parquet"
     merge_output: bool = True
+    allow_sequence_splitting: bool = False
     selected_columns: Optional[list[str]] = None
+    column_types: Optional[dict[str, str]] = None
 
     split_ratios: list[float]
-    seq_length: int
+    split_method: str = Field(default="within_sequence")
+    stored_context_width: int = Field(gt=0)
+    max_target_offset: int = Field(default=1, ge=0)
     stride_by_split: Optional[list[int]] = None
     max_rows: Optional[int] = None
     seed: int
@@ -79,6 +60,7 @@ class PreprocessorModel(BaseModel):
     subsequence_start_mode: str = "distribute"
     use_precomputed_maps: Optional[list[str]] = None
     metadata_config_path: Optional[str] = None
+    mask_column: Optional[str] = None
 
     @field_validator("data_path")
     @classmethod
@@ -130,6 +112,15 @@ class PreprocessorModel(BaseModel):
             raise ValueError(f"All split_ratios must be positive: {v}")
         return v
 
+    @field_validator("split_method")
+    @classmethod
+    def validate_split_method(cls, v: str) -> str:
+        if v not in ["within_sequence", "between_sequence"]:
+            raise ValueError(
+                "split_method must be one of 'within_sequence', 'between_sequence'"
+            )
+        return v
+
     @field_validator("stride_by_split")
     @classmethod
     def validate_step_sizes(
@@ -158,6 +149,30 @@ class PreprocessorModel(BaseModel):
             raise ValueError("batches_per_file must be a positive integer")
         return v
 
+    @field_validator("column_types")
+    @classmethod
+    def validate_column_types(
+        cls, v: Optional[dict[str, str]], info: ValidationInfo
+    ) -> Optional[dict[str, str]]:
+        if v is None:
+            return None
+
+        normalized = {
+            column: canonicalize_polars_dtype_name(dtype) for column, dtype in v.items()
+        }
+        selected_columns = info.data.get("selected_columns")
+        if selected_columns is not None:
+            missing_columns = [
+                column for column in selected_columns if column not in normalized
+            ]
+            if missing_columns:
+                raise ValueError(
+                    "column_types must include every selected column. "
+                    f"Missing: {missing_columns}"
+                )
+
+        return normalized
+
     @field_validator("continue_preprocessing")
     @classmethod
     def validate_continue_preprocessing(cls, v: bool, info: ValidationInfo) -> bool:
@@ -176,8 +191,22 @@ class PreprocessorModel(BaseModel):
             )
         return v
 
+    @model_validator(mode="after")
+    def validate_mask_column_requires_metadata(self) -> "PreprocessorModel":
+        if self.mask_column is not None and self.metadata_config_path is None:
+            raise ValueError("metadata_config_path must be set when mask_column is set")
+        if self.mask_column in ("sequenceId", "itemPosition"):
+            raise ValueError("mask_column cannot be sequenceId or itemPosition")
+        if self.max_target_offset >= self.stored_context_width:
+            raise ValueError(
+                "max_target_offset must be smaller than stored_context_width"
+            )
+        return self
+
     def __init__(self, **kwargs):
-        default_stride_for_split = [kwargs["seq_length"]] * len(kwargs["split_ratios"])
+        default_stride_for_split = [kwargs["stored_context_width"]] * len(
+            kwargs["split_ratios"]
+        )
         kwargs["stride_by_split"] = kwargs.get(
             "stride_by_split", default_stride_for_split
         )

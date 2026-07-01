@@ -6,19 +6,14 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import numpy as np
-import plotly.colors as pc  # Added to fetch consistent colors
+import plotly.colors as pc
 import plotly.graph_objects as go
 from beartype import beartype
-
-# Import Loguru and your custom logger config
 from loguru import logger
 from plotly.subplots import make_subplots
 
 from sequifier.helpers import configure_logger
 
-# -------------------------------------------------------------------------
-# Configuration & Setup
-# -------------------------------------------------------------------------
 VAL_PATTERN = re.compile(
     r"\[INFO\] Validation\s+\|\s*Epoch:\s*(\d+)\s+\|\s*Batch:\s*(\d+)\s+\|\s*Loss:\s*([^\s\|]+)\s+\|\s*Baseline Loss:\s*([^\s\|]+)"
 )
@@ -28,24 +23,21 @@ TRAIN_PATTERN = re.compile(
 )
 
 
-# -------------------------------------------------------------------------
-# Custom Exceptions & Dataclasses
-# -------------------------------------------------------------------------
 class LogParsingError(Exception):
-    """Raised when a log line does not conform to the expected regex pattern."""
+    """Malformed training log line."""
 
     pass
 
 
 class DataContinuityError(Exception):
-    """Raised when training batches or epochs violate chronological order."""
+    """Non-monotonic training batch or epoch sequence."""
 
     pass
 
 
 @dataclass
 class TrainingMetrics:
-    """Encapsulates all extracted metrics to avoid returning massive generic tuples."""
+    """Parsed validation, baseline, variable, and training losses."""
 
     val_losses: dict[float, float] = field(default_factory=dict)
     baseline_losses: dict[float, float] = field(default_factory=dict)
@@ -55,18 +47,15 @@ class TrainingMetrics:
     )
 
     def clear_state(self) -> None:
-        """Clears all metrics; used when a sequence run restarts."""
+        """Clear parsed metrics after a detected run restart."""
         self.val_losses.clear()
         self.baseline_losses.clear()
         self.var_losses.clear()
         self.train_losses.clear()
 
 
-# -------------------------------------------------------------------------
-# Core Parsing Logic
-# -------------------------------------------------------------------------
 class LogParser:
-    """Handles line-by-line log parsing, encapsulating state to reduce complexity."""
+    """Stateful parser for sequifier training logs."""
 
     def __init__(self, model_name: str):
         self.model = model_name
@@ -90,7 +79,7 @@ class LogParser:
 
     @beartype
     def _process_line(self, line: str) -> None:
-        """Routes the line to the appropriate sub-parser based on strict string matching."""
+        """Dispatch one log line to the matching parser."""
         if "[INFO] Validation | Epoch:" in line:
             self._process_validation(line)
         elif self.pending_var_loss_epoch is not None and "[INFO]  - " in line:
@@ -111,7 +100,6 @@ class LogParser:
         val_loss = parse_number(match.group(3))
         baseline = parse_number(match.group(4))
 
-        # Check for restart (epoch 0, batch 0) or standard jump back
         if (epoch == 0 and batch == 0) or (
             self.current_epoch is not None and epoch < self.current_epoch and epoch != 0
         ):
@@ -120,17 +108,14 @@ class LogParser:
             self.current_batch = None
             self.expected_num_batches = None
 
-        # Determine precise x-coordinate for plotting
         if (
             epoch == 0
             and batch > 0
             and self.current_epoch is not None
             and self.expected_num_batches is not None
         ):
-            # Mid-epoch validation saves pass epoch as 0 in train.py
             calc_epoch = self.current_epoch - 1 + (batch / self.expected_num_batches)
         elif self.expected_num_batches is not None and batch > 0:
-            # End-of-epoch validation
             calc_epoch = epoch - 1 + (batch / self.expected_num_batches)
         else:
             calc_epoch = float(epoch)
@@ -215,7 +200,7 @@ class LogParser:
                 )
 
     def _handle_epoch_1_restart(self) -> None:
-        """Handles edge cases where a sequence restarts at Epoch 1 skipping Epoch 0."""
+        """Handle restarts that resume at epoch 1 without epoch 0 logs."""
         if 0.0 not in self.metrics.val_losses:
             self.metrics.clear_state()
         else:
@@ -243,19 +228,16 @@ class LogParser:
             raise DataContinuityError(f"[{self.model}]: No baseline loss data found.")
 
 
-# -------------------------------------------------------------------------
-# Utility Functions
-# -------------------------------------------------------------------------
 @beartype
 def parse_number(val: str) -> float:
-    """Strictly parse numbers, explicitly handling the 'NaN' strings."""
+    """Parse finite floats and literal NaN."""
     val = val.strip()
     return np.nan if val == "NaN" else float(val)
 
 
 @beartype
 def parse_args_to_models(args: argparse.Namespace) -> list[str]:
-    """Extracts the list of models from a file or comma-separated string."""
+    """Read model names from a file or comma-separated argument."""
     if os.path.isfile(args.models) and args.models.endswith(".txt"):
         with open(args.models, "r") as f:
             content = f.read()
@@ -266,7 +248,7 @@ def parse_args_to_models(args: argparse.Namespace) -> list[str]:
 
 @beartype
 def get_log_filepath(args: argparse.Namespace, model: str) -> str:
-    """Finds the appropriate log file for a given model."""
+    """Return the rank-0 log path for a model."""
     log_pattern = os.path.join(
         args.project_root, "logs", f"sequifier-{model}-rank0-3.txt"
     )
@@ -290,7 +272,7 @@ def get_log_filepath(args: argparse.Namespace, model: str) -> str:
 def format_plot_data(
     metrics: TrainingMetrics, bucket_batches: Optional[int], model: str
 ) -> dict[str, Any]:
-    """Formats raw parsed dataclass metrics into chronological arrays for Plotly."""
+    """Convert parsed metrics into Plotly-ready arrays."""
     val_x = sorted(list(metrics.val_losses.keys()))
     val_y = [metrics.val_losses[e] for e in val_x]
     base_y = [metrics.baseline_losses[e] for e in val_x]
@@ -347,14 +329,11 @@ def format_plot_data(
     }
 
 
-# -------------------------------------------------------------------------
-# Plotting & Reporting
-# -------------------------------------------------------------------------
 @beartype
 def _generate_single_model_plot(
     model: str, data: dict[str, Any], yaxis_type: str, out_path: str
 ) -> None:
-    """Handles subplot logic specifically for a single model."""
+    """Write a single-model training report."""
     has_var_losses = bool(data.get("var_losses"))
     subplot_titles = (
         ("Global Losses", "Normalized Variable Validation Losses")
@@ -446,18 +425,17 @@ def _generate_single_model_plot(
 def _generate_multi_model_plot(
     models: list[str], all_data: dict[str, Any], yaxis_type: str, out_path: str
 ) -> None:
-    """Handles subplot logic for comparing multiple models side-by-side."""
+    """Write a multi-model training report."""
     fig = make_subplots(
         rows=1, cols=2, subplot_titles=("Validation Losses", "Training Losses")
     )
     baseline_val = None
-    colors = pc.qualitative.Plotly  # Load Plotly's default distinct color array
+    colors = pc.qualitative.Plotly
 
     for i, model in enumerate(models):
         data = all_data[model]
-        color = colors[i % len(colors)]  # Cycle colors if models exceed palette limit
+        color = colors[i % len(colors)]
 
-        # Validation trace
         fig.add_trace(
             go.Scatter(
                 x=data["val_x"],
@@ -466,14 +444,13 @@ def _generate_multi_model_plot(
                 name=model,
                 legendgroup=model,
                 line=dict(color=color),
-                showlegend=True,  # Only show validation trace in legend to prevent duplicates
+                showlegend=True,
                 hovertemplate=f"<b>{model}</b><br>Val Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
             ),
             row=1,
             col=1,
         )
 
-        # Training trace
         fig.add_trace(
             go.Scatter(
                 x=data["train_x"],
@@ -482,7 +459,7 @@ def _generate_multi_model_plot(
                 name=model,
                 legendgroup=model,
                 line=dict(color=color),
-                showlegend=False,  # Hidden from legend, but linked via legendgroup
+                showlegend=False,
                 hovertemplate=f"<b>{model}</b><br>Train Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
             ),
             row=1,
@@ -504,7 +481,6 @@ def _generate_multi_model_plot(
                 )
 
     if baseline_val is not None:
-        # Plot baseline on the Validation subplot (col=1)
         max_val_x = max(
             [max(all_data[m]["val_x"]) for m in models if all_data[m]["val_x"]] + [0]
         )
@@ -534,7 +510,7 @@ def _generate_multi_model_plot(
 def generate_html_report(
     all_data: dict[str, Any], models: list[str], args: argparse.Namespace
 ) -> None:
-    """Router function to generate the appropriate HTML report based on model count."""
+    """Write the model-count-appropriate HTML report."""
     output_dir = os.path.join(args.project_root, "outputs", "visualization")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -549,12 +525,9 @@ def generate_html_report(
         _generate_multi_model_plot(models, all_data, yaxis_type, out_path)
 
 
-# -------------------------------------------------------------------------
-# Orchestrator
-# -------------------------------------------------------------------------
 @beartype
 def visualize_training(args: argparse.Namespace) -> None:
-    """Main orchestrator function."""
+    """Parse logs and write training visualization HTML."""
     models = parse_args_to_models(args)
     if not models:
         raise ValueError("No models provided to visualize.")

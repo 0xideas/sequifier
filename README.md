@@ -3,7 +3,7 @@
 
 ## What is sequifier?
 
-Sequifier makes training and inference of powerful causal transformer models fast and trustworthy.
+Sequifier makes training and inference of powerful transformer sequence models fast and trustworthy.
 
 The process looks like this:
 
@@ -25,17 +25,16 @@ This gives us a number of benefits:
 - native multi-core preprocessing
 - scales to datasets larger than RAM
 - hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
-- can be used for prediction, generation and embeddding on/of arbitrary sequences
+- can be used for prediction, generation and embedding on/of arbitrary sequences
 
 The only requirement is having sequifier installed, and having input data in the right format.
-
 
 
 ### The Six Commands
 
 There are six standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, and `visualize-training`.
 
-`make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, `hyperparameter-search` executes multiple training runs using Optuna to find optimal configurations, and `visualize-training` parses training logs to generate interactive HTML plots of your loss curves.
+`make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates predictions, probabilities, or embeddings from data in the preprocessed format, `hyperparameter-search` executes multiple training runs using Optuna to find optimal configurations, and `visualize-training` parses training logs to generate interactive HTML plots of your loss curves.
 
 There are documentation pages for each command, except make:
 
@@ -97,16 +96,16 @@ Let's start with the data format expected by sequifier. The basic data format th
 
 The two columns "sequenceId" and "itemPosition" have to be present, and then there must be at least one feature column. There can also be many feature columns, and these can be categorical or real valued.
 
-Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`, which takes this form:
+Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Preprocessing defines the physical `stored_context_width` and `max_target_offset`; training and inference choose the model-facing `context_length` from that stored capacity:
 
-|sequenceId|subsequenceId|startItemPosition|columnName|[Subsequence Length]|[Subsequence Length - 1]|...|0|
-|----------|-------------|-----------------|----------|--------------------|------------------------| - |-|
-|0|0|0|column1|"high"|"high"|...|"low"|
-|0|0|0|column2|12.3|10.2|...|14.9|
-|...|...|...|...|...|...|...|...|
-|1|0|15|column1|"medium"|"high"|...|"medium"|
-|1|0|15|column2|20.6|18.5|...|21.6|
-|...|...|...|...|...|...|...|...|
+|sequenceId|subsequenceId|startItemPosition|leftPadLength|inputCol|[Window Length - 1]|[Window Length - 2]|...|0|
+|----------|-------------|-----------------|-------------|--------|-------------------|-------------------| - |-|
+|0|0|0|0|column1|"high"|"high"|...|"low"|
+|0|0|0|0|column2|12.3|10.2|...|14.9|
+|...|...|...|...|...|...|...|...|...|
+|1|0|15|0|column1|"medium"|"high"|...|"medium"|
+|1|0|15|0|column2|20.6|18.5|...|21.6|
+|...|...|...|...|...|...|...|...|...|
 
 On inference, the output is returned in the library input format, introduced first.
 
@@ -159,7 +158,7 @@ sequifier train
 sequifier infer
 ```
 
-9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/sequifier-default-best-10-predictions.csv`
+9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/[EXPORTED_MODEL_BASENAME]-predictions.[FORMAT]`, for example `outputs/predictions/sequifier-your-model-best-10-predictions.csv`
 
 
 ## Other Features
@@ -177,17 +176,15 @@ Technical Details: The generated embedding has dimensionality `dim_model` and co
 
 ### Distributed Training
 
-Sequifier supports distributed training using torch `DistributedDataParallel` and `FullyShardedDataParallel`. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
+Sequifier supports distributed training using torch `DistributedDataParallel` and `FullyShardedDataParallel`. To make use of multi gpu support, the preprocessing step must write sharded output with `merge_output: false`. `write_format: pt` is the recommended production format; sharded `parquet` is also supported but currently considered beta for distributed training.
 
-For the full guide on how to configure a distributed run, check the [training config README](https://www.google.com/search?q=./documentation/training/multi-gpu-training.md)
+For the full guide on how to configure a distributed run, check the [multi-GPU training guide](./documentation/training/multi-gpu-training.md).
 
 ### System Requirements
 
 Tiny transformer models on little data can be trained on CPU. Bigger ones require an Nvidia GPU with a compatible cuda version installed.
 
 Sequifier currently runs on MacOS and Ubuntu.
-
-
 
 ## Citation
 
@@ -199,7 +196,7 @@ Please cite with:
   title = {sequifier - causal transformer models for multivariate sequence modelling},
   year = {2025},
   publisher = {GitHub},
-  version = {v1.2.0.0},
+  version = {v2.0.0.0},
   url = {[https://github.com/0xideas/sequifier](https://github.com/0xideas/sequifier)}
 }
 

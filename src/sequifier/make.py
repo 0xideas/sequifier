@@ -5,16 +5,16 @@ data_path: PLEASE FILL
 read_format: csv
 write_format: parquet
 selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
+column_types: null # optional map of selected columns to output dtypes, e.g. {EXAMPLE_INPUT_COLUMN_NAME: Float32}
+mask_column: null
 
 split_ratios:
 - 0.8
 - 0.1
 - 0.1
-seq_length: 48
-stride_by_split:
-- 1
-- 1
-- 1
+split_method: within_sequence # one of within_sequence, between_sequence
+stored_context_width: 49
+max_target_offset: 1
 max_rows: null
 """
 
@@ -28,7 +28,7 @@ target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
 target_column_types: # 'criterion' in training_spec must also be adapted
   EXAMPLE_TARGET_COLUMN_NAME: real
 
-seq_length: 48
+context_length: 48
 inference_batch_size: 10
 
 export_generative_model: PLEASE FILL # true or false
@@ -46,10 +46,11 @@ model_spec:
   num_layers: 3
   prediction_length: 1
 training_spec:
+  training_objective: causal
   device: cuda
   epochs: 10
   save_interval_epochs: 10
-  batch_size: 100
+  batch_size: 10
   log_interval: 10
   learning_rate: 0.0001
   accumulation_steps: 1
@@ -81,10 +82,11 @@ target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
 target_column_types:
   EXAMPLE_TARGET_COLUMN_NAME: real
 
+training_objective: causal
 output_probabilities: false
 map_to_id: true
 device: cpu
-seq_length: 48
+context_length: 48
 inference_batch_size: 10
 
 autoregression: true
@@ -100,11 +102,7 @@ state/
 
 
 def make(args):
-    """Creates a new sequifier project.
-
-    Args:
-        args: The command-line arguments.
-    """
+    """Create a sequifier project scaffold."""
     project_name = args.project_name
 
     if not (project_name and len(project_name) > 0):

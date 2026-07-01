@@ -4,16 +4,7 @@ import polars as pl
 
 
 def invert_normalization(values, target_column, selected_columns_statistics):
-    """
-    Invert the normalization of values for a target column.
-
-    Args:
-        values: Normalized values.
-        target_column: Target column name.
-
-    Returns:
-        Denormalized values.
-    """
+    """Invert target-column normalization."""
     std = selected_columns_statistics[target_column]["std"]
     mean = selected_columns_statistics[target_column]["mean"]
     return (values * (std - 1e-9)) + mean

@@ -10,17 +10,10 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
-        # 1. Cast input to float32 once for stability
         x_fp32 = x.to(torch.float32)
-
-        # 2. Calculate variance
         var = torch.mean(x_fp32.pow(2), dim=-1, keepdim=True)
-
-        # 3. Normalize
         x_normed = x_fp32 * torch.rsqrt(var + self.eps)
 
-        # 4. Cast back to the *input tensor's* dtype (traceable),
-        #    rather than self.weight.dtype (not traceable in Cast ops)
         return (self.weight.to(x_normed.dtype) * x_normed).to(x.dtype)
 
 
@@ -106,7 +99,7 @@ class SelfAttention(nn.Module):
         n_kv_heads,
         attention_type,
         dropout,
-        seq_length,
+        context_length,
         use_rope=False,
         rope_theta=10000.0,
     ):
@@ -127,7 +120,7 @@ class SelfAttention(nn.Module):
 
         if use_rope:
             self.rope = RotaryEmbedding(
-                self.head_dim, max_seq_len=seq_length, theta=rope_theta
+                self.head_dim, max_seq_len=context_length, theta=rope_theta
             )
             if self.head_dim % 2 != 0:
                 raise ValueError(f"head_dim ({self.head_dim}) must be even for RoPE")
@@ -176,7 +169,9 @@ class SelfAttention(nn.Module):
 
 
 class SequifierEncoderLayer(nn.Module):
-    def __init__(self, config, dim_model, n_head, dim_feedforward, dropout, seq_length):
+    def __init__(
+        self, config, dim_model, n_head, dim_feedforward, dropout, context_length
+    ):
         super().__init__()
         self.norm_first = config.norm_first
 
@@ -192,7 +187,7 @@ class SequifierEncoderLayer(nn.Module):
             n_kv_heads=config.n_kv_heads,
             attention_type=config.attention_type,
             dropout=dropout,
-            seq_length=seq_length,
+            context_length=context_length,
             use_rope=(config.positional_encoding == "rope"),
             rope_theta=config.rope_theta,
         )

@@ -9,6 +9,16 @@ sequifier hyperparameter-search --config-path configs/hyperparameter_search.yaml
 
 ```
 
+## CLI Overrides
+
+The search runner reads most configuration from YAML. The config-related CLI flag currently used by this command is:
+
+| Flag | Action |
+| --- | --- |
+| `-sm`, `--skip-metadata` | Skips loading metadata-derived config values. All required schema fields must then be supplied directly. |
+
+Although the parser accepts `--input-columns` and `--metadata-config-path`, the current `hyperparameter-search` command does not apply them as config overrides.
+
 ## Configuration Fields
 
 The configuration is defined in a YAML file. To define the search space, fields accept either **lists** of categorical choices or **distribution dictionaries** defining numerical ranges.
@@ -22,11 +32,13 @@ The configuration is defined in a YAML file. To define the search space, fields 
 | `hp_search_name` | `str` | **Yes** | - | A prefix for the generated runs and the Optuna database (e.g., `my-search`). |
 | `model_config_write_path` | `str` | **Yes** | - | Directory to save the generated config files for each run (e.g., `configs/hp_search/`). |
 | `search_strategy` | `str` | No | `bayesian` | `bayesian` (TPE sampler), `sample` (Random Search), or `grid` (Brute Force Grid Search). |
-| `n_samples` / `n_trials` | `int` | *Conditional* | - | Number of distinct runs to execute. Required unless `search_strategy: grid`. |
+| `n_samples` | `int` | *Conditional* | - | Number of distinct runs to execute. Required unless `search_strategy: grid`. |
+| `seed` | `int` | No | `null` | Seed passed to the Optuna sampler. |
 | `prune_trials` | `bool` | No | `true` | Enables cooperative early stopping of unpromising trials via Optuna. *Beta notice: Pruning with distributed training is currently experimental.* |
-| `override_input` | `bool` | No | `false` | Suppresses interactive confirmation prompts. Useful for CI/CD. |
+| `override_input` | `bool` | No | `false` | Parsed for compatibility; the current search runner does not use this field. |
 | `training_data_path` | `str` | No | Metadata split 0 | Path to training data. |
 | `validation_data_path` | `str` | No | Metadata split 1 | Path to validation data. |
+| `read_format` | `str` | No | `parquet` | Format of preprocessed training data (`parquet`, `csv`, or `pt`). |
 
 ### 2. Custom Evaluation & Multi-Objective Search
 
@@ -57,9 +69,9 @@ Sequifier allows you to search not just for model parameters, but for the best *
 
 | Field | Type | Mandatory | Description |
 | --- | --- | --- | --- |
-| `input_columns` | `list[list[str]]` | **Yes** | A list of input sets. E.g., `[['col1'], ['col1', 'col2']]`. |
+| `input_columns` | `list[list[str]]` or `null` | **Yes** | A list of input sets. E.g., `[['col1'], ['col1', 'col2']]`. Set to `null` to derive one input set from `column_types`. |
 | `target_columns` | `list[str]` | **Yes** | The target column(s) to predict. Fixed across all runs. |
-| `seq_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
+| `context_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
 | `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
 
@@ -103,12 +115,12 @@ dim_feedforward:
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
 | `initial_embedding_dim` | `list[int]` | **Yes** | Feature embedding size. Usually matches `dim_model`. |
-| `feature_embedding_dims` | `list[dict]` | No | List of maps for feature embedding dimensions. Used if mixing real and categorical features. |
-| `joint_embedding_dim` | `list[int]` | **Yes** | Joint embedding size. If not null, must match `dim_model`. |
-| `prediction_length` | `int` | **Yes** | Number of steps into the future to predict simultaneously. |
+| `feature_embedding_dims` | `list[dict]` or `null` | **Yes** | List of maps for feature embedding dimensions. Use `null` only when auto-calculation is valid. |
+| `joint_embedding_dim` | `list[int or null]` | **Yes** | Joint embedding size. If not null, must match `dim_model`. |
+| `prediction_length` | `int` | **Yes** | Number of steps to predict simultaneously. BERT trials override this to the sampled `context_length`. |
 | `activation_fn` | `list[str]` | **Yes** | E.g., `['swiglu', 'gelu']`. |
 | `attention_type` | `list[str]` | **Yes** | E.g., `['mha', 'mqa']`. |
-| `n_kv_heads` | `list[int]` | **Yes** | Number of KV heads (for MQA/GQA). Use `null` for MHA. |
+| `n_kv_heads` | `list[int or null]` | **Yes** | Number of KV heads. Use `1` for MQA, a divisor of `n_head` for GQA, and `null` only with MHA. |
 | `normalization` | `list[str]` | **Yes** | E.g., `['rmsnorm']`. |
 | `norm_first` | `list[bool]` | **Yes** | Pre-LN vs Post-LN. |
 | `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope']`. |
@@ -121,22 +133,23 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `device` | `str` | **Yes** | - | The device to train on (e.g., `cuda`). |
 | `learning_rate` | `list[float]` | **Yes** | - | List of learning rates. Linked to `epochs` and `scheduler`. |
 | `epochs` | `list[int]` | **Yes** | - | Epochs to train. Paired with `learning_rate`. |
-| `scheduler` | `list[dict]` | No | `[{'name': 'StepLR'...}]` | List of scheduler configs. |
+| `scheduler` | `list[dict]` | **Yes** | - | List of scheduler configs. |
+| `training_objective` | `list[str]` or `str` | No | `['causal']` | Objectives to sample from: `causal`, `bert`, `final_value`, or `next_occurrence`. |
 | `batch_size` | `list` or `Distribution` | **Yes** | - | Batch sizes to test. |
 | `accumulation_steps` | `list` or `Distribution` | **Yes** | - | Gradient accumulation steps. |
 | `dropout` | `list` or `Distribution` | No | `[0.0]` | Dropout probabilities. |
 | `criterion` | `dict` | **Yes** | - | Map of target columns to loss functions. |
-| `optimizer` | `list[dict]` | No | `[{'name': 'Adam'}]` | List of optimizer configs. |
+| `bert_spec` | `dict` | Conditional | `null` | Required if `training_objective` includes `bert`; samples BERT masking settings. |
+| `next_occurrence_config` | `dict` | Conditional | `null` | Required if `training_objective` includes `next_occurrence`; configures the categorical target column and target values. |
+| `optimizer` | `list[dict]` | **Yes** | - | List of optimizer configs. |
 | `continue_training` | `bool` | **Yes** | - | Load model weights from the latest checkpoint to resume. |
 | `save_interval_epochs` | `int` | **Yes** | - | Checkpoint save frequency. |
-| `dropout` | `list[float]`| No | `[0.0]` | List of dropout probabilities. |
-| `optimizer` | `list[dict]` | No | `[{'name': 'Adam'}]`| List of optimizer configs (e.g., `[{'name': 'AdamW'}, {'name': 'AdEMAMix'}]`). |
-| `scheduler` | `list[dict]` | No | `[{'name': 'StepLR'...}]`| List of scheduler configs. `scheduler.step()` is only called if \< total\_steps, so correct configuration is essential. |
 | `scheduler_step_on` | `str` | No | `epoch` | When to step the scheduler: `epoch` or `batch`. |
 | `save_latest_interval_minutes`| `float`| No | `null` | Time interval to overwrite a "latest" checkpoint. |
-| `save_batch_interval_minutes` | `float` | No | `null` | Time interval to save a unique, batch-specific checkpoint. |
-| `save_batch_interval_minutes_val_loss` | `bool` | No | `true` | Whether to calculate validation loss at the moment of the batch interval save. |
-| `calculate_validation_loss_on_initialization` | `bool` | No | `false` | Determines if a validation pass runs before epoch 1 begins. |
+| `save_interval_minutes` | `float` | No | `null` | Time interval to save a unique, batch-specific checkpoint. |
+| `save_interval_batches` | `int` | No | `null` | Batch interval to save a unique, batch-specific checkpoint. |
+| `save_interval_val_loss` | `bool` | No | `true` | Whether to calculate validation loss at the moment of the batch interval save. |
+| `calculate_validation_loss_on_initialization` | `bool` | No | `false` | Determines if a validation pass runs before epoch 1 begins. Standard `train` defaults this field to `true`. |
 | `log_interval` | `int` | No | `10` | Logging frequency (batches). |
 | `class_share_log_columns`| `list[str]`| No | `[]` | Columns for which to log the predicted class distribution in validation. |
 | `early_stopping_epochs`| `int` | No | `null` | Stop if validation metric doesn't improve. |
@@ -144,18 +157,17 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `loss_weights` | `dict` | No | `null` | Weights for multi-objective loss. |
 | `class_weights` | `dict` | No | `null` | Weights for imbalanced classes. |
 | `world_size` | `int` | No | `1` | Number of processes for distributed training. |
-| `backend` | str | No | `nccl` | The distributed training backend to use (e.g., `nccl` for GPUs). Only relevant if `distributed: true`. |
+| `backend` | `str` | No | `nccl` | The distributed training backend to use (e.g., `nccl` for GPUs). Only relevant if `distributed: true`. |
 | `device_max_concat_length` | `int` | No | `12` | Controls recursive tensor concatenation to prevent CUDA kernel limits. |
 | `max_ram_gb` | `int` or `float`| No | `16` | RAM limit (GB) for the cache when using lazy loading. |
 | `load_full_data_to_ram` | `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
-| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt` or `read_format: parquet`. |
-| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types to dtypes (e.g., `{'linear': 'bfloat16'}`). |
+| `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt` or `read_format: parquet` and folder-style sharded data. |
+| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float64`, `float8_e4m3fn`, `float8_e5m2`). |
 | `layer_autocast` | `bool` | No | `true` | Enable `torch.autocast`. |
-| `sampling_strategy` | `str` | No | `exact` | How to address input file imbalance for multi-GPU training. |
 | `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`. |
 | `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly `true` or `false` if data\_parallelism is 'FSDP'. |
 | `torch_compile` | `str` | No | `outer` | Controls torch.compile. Options are "outer", "inner", or "none". |
-| `float32_matmul_precision` | str | No | `highest` | Sets the internal pytorch matmul precision. Options are "highest", "high", or "medium". |
+| `float32_matmul_precision` | `str` | No | `highest` | Sets the internal PyTorch matmul precision. Options are "highest", "high", or "medium". |
 
 -----
 
@@ -185,12 +197,12 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 All other parameters are considered **Independent**. Sequifier will test every value in these lists against every combination of the linked groups above.
 
   * **Model:** `num_layers`, `dim_feedforward`, `activation_fn`, `normalization`, `norm_first`, `positional_encoding`, `attention_type`, `rope_theta`.
-  * **Training:** `batch_size`, `dropout`, `accumulation_steps`, `optimizer`.
-  * **Data:** `seq_length`.
+  * **Training:** `training_objective`, `batch_size`, `dropout`, `accumulation_steps`, `optimizer`.
+  * **Data:** `context_length`.
 
 ### 3\. Special Case: `n_kv_heads`
 
-`n_kv_heads` is sampled independently but validated dynamically. If a selected `n_kv_heads` value does not mathematically divide the selected `n_head`, the system automatically reverts to `n_kv_heads = null` (standard Multi-Head Attention) for that run to prevent a crash.
+`n_kv_heads` is sampled independently after filtering out values that do not divide the selected `n_head`. Ensure the remaining values are compatible with `attention_type`: `mqa` requires `n_kv_heads: 1`, `gqa` requires a non-null divisor of `n_head`, and `mha` accepts `null` or `n_head`.
 
 -----
 
@@ -228,7 +240,7 @@ Optuna monitors intermediate validation loss at validation loss calculation, whi
 
 ### 4. Multi-Objective Search (Pareto Front)
 
-If you define multiple metrics in `evaluation_metrics` (e.g., you want to maximize `accuracy` but also minimize `latency`), Optuna automatically transitions to an NSGA-II algorithm to find the **Pareto Front**—a set of best models where no metric can be improved without degrading another.
+If you define multiple metrics in `evaluation_metrics` (e.g., you want to maximize `accuracy` but also minimize `latency`), Sequifier creates a multi-objective Optuna study with the configured sampler and reports the **Pareto Front**: a set of best models where no metric can be improved without degrading another.
 
 ## Outputs
 

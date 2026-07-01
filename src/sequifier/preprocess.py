@@ -1,9 +1,11 @@
+import hashlib
 import json
 import math
 import multiprocessing
 import os
 import re
 import shutil
+import warnings
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -15,25 +17,264 @@ from beartype import beartype
 from loguru import logger
 
 from sequifier.config.preprocess_config import load_preprocessor_config
-from sequifier.helpers import PANDAS_TO_TORCH_TYPES, read_data, write_data
+from sequifier.helpers import (
+    PANDAS_TO_TORCH_TYPES,
+    StoredWindowLayout,
+    assign_sequence_to_split,
+    canonicalize_polars_dtype_name,
+    is_float_dtype_name,
+    is_integer_dtype_name,
+    polars_dtype_from_name,
+    read_data,
+    write_data,
+)
+from sequifier.special_tokens import (
+    SPECIAL_TOKEN_ID_VALUES,
+    SPECIAL_TOKEN_IDS,
+    SPECIAL_TOKEN_LABELS,
+    validate_special_token_ids,
+)
+
+INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
+REAL_MASK_VALUE = 0.0
+CURRENT_STORED_WINDOW_LAYOUT_VERSION = 2
+
+FLOAT_TYPE_ORDER = ("Float16", "Float32", "Float64")
+INTEGER_TYPE_ORDER = (
+    "Int8",
+    "UInt8",
+    "Int16",
+    "UInt16",
+    "Int32",
+    "UInt32",
+    "Int64",
+    "UInt64",
+)
+INTEGER_TYPE_INFO = {
+    "Int8": np.iinfo(np.int8),
+    "Int16": np.iinfo(np.int16),
+    "Int32": np.iinfo(np.int32),
+    "Int64": np.iinfo(np.int64),
+    "UInt8": np.iinfo(np.uint8),
+    "UInt16": np.iinfo(np.uint16),
+    "UInt32": np.iinfo(np.uint32),
+    "UInt64": np.iinfo(np.uint64),
+}
+FLOAT_TYPE_INFO = {
+    "Float16": np.finfo(np.float16),
+    "Float32": np.finfo(np.float32),
+    "Float64": np.finfo(np.float64),
+}
+FLOAT_EXACT_INTEGER_LIMITS = {
+    "Float16": 2**11,
+    "Float32": 2**24,
+    "Float64": 2**53,
+}
+
+
+def _stable_json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _stable_json_value(val)
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_stable_json_value(item) for item in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, float) and math.isnan(value):
+        return "NaN"
+    return value
+
+
+def _stable_json_digest(value: Any) -> str:
+    encoded = json.dumps(
+        _stable_json_value(value),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@beartype
+def _normalize_column_types(
+    column_types: Optional[dict[str, str]],
+) -> Optional[dict[str, str]]:
+    if column_types is None:
+        return None
+    return {
+        column: canonicalize_polars_dtype_name(dtype)
+        for column, dtype in column_types.items()
+    }
+
+
+@beartype
+def _configured_column_types_for_data_columns(
+    column_types: Optional[dict[str, str]],
+    data_columns: list[str],
+) -> Optional[dict[str, str]]:
+    if column_types is None:
+        return None
+
+    missing_columns = [column for column in data_columns if column not in column_types]
+    if missing_columns:
+        raise ValueError(
+            "column_types must include every to-be-processed column. "
+            f"Missing: {missing_columns}"
+        )
+
+    return {column: column_types[column] for column in data_columns}
+
+
+@beartype
+def _dtype_is_numeric(dtype: Any) -> bool:
+    return dtype.is_numeric() if hasattr(dtype, "is_numeric") else False
+
+
+@beartype
+def _apply_configured_input_casting(
+    data: pl.DataFrame,
+    data_columns: list[str],
+    column_types: Optional[dict[str, str]],
+) -> pl.DataFrame:
+    """Cast input columns early when the requested type defines processing semantics."""
+    configured = _configured_column_types_for_data_columns(column_types, data_columns)
+    if configured is None:
+        return data
+
+    casts = []
+    for column in data_columns:
+        target_type = configured[column]
+        source_dtype = data.schema[column]
+
+        if is_float_dtype_name(target_type):
+            casts.append(pl.col(column).cast(polars_dtype_from_name(target_type)))
+        elif is_integer_dtype_name(target_type) and _dtype_is_numeric(source_dtype):
+            casts.append(pl.col(column).cast(polars_dtype_from_name(target_type)))
+
+    if not casts:
+        return data
+
+    return data.with_columns(casts)
+
+
+@beartype
+def _apply_output_type_casting(
+    data: pl.DataFrame,
+    data_columns: list[str],
+    col_types: dict[str, str],
+) -> pl.DataFrame:
+    casts = [
+        pl.col(column).cast(polars_dtype_from_name(col_types[column]))
+        for column in data_columns
+    ]
+    if not casts:
+        return data
+    return data.with_columns(casts)
+
+
+@beartype
+def _highest_ranked_type(types: list[str], order: tuple[str, ...]) -> str:
+    return max(types, key=lambda type_: order.index(type_))
+
+
+@beartype
+def _smallest_float_covering_integer_range(integer_type: str) -> str:
+    integer_info = INTEGER_TYPE_INFO[integer_type]
+    largest_magnitude = max(abs(int(integer_info.min)), int(integer_info.max))
+    for float_type in FLOAT_TYPE_ORDER:
+        if (
+            largest_magnitude <= float(FLOAT_TYPE_INFO[float_type].max)
+            and largest_magnitude <= FLOAT_EXACT_INTEGER_LIMITS[float_type]
+        ):
+            return float_type
+    return "Float64"
+
+
+@beartype
+def _resolve_integer_sequence_type(integer_types: list[str]) -> Any:
+    if not integer_types:
+        raise ValueError("Cannot resolve an integer sequence type without integers")
+
+    min_value = min(int(INTEGER_TYPE_INFO[type_].min) for type_ in integer_types)
+    max_value = max(int(INTEGER_TYPE_INFO[type_].max) for type_ in integer_types)
+
+    if min_value >= 0 and all(type_.startswith("UInt") for type_ in integer_types):
+        for dtype_name in ("UInt8", "UInt16", "UInt32", "UInt64"):
+            info = INTEGER_TYPE_INFO[dtype_name]
+            if max_value <= int(info.max):
+                return polars_dtype_from_name(dtype_name)
+
+    for dtype_name in ("Int8", "Int16", "Int32", "Int64"):
+        info = INTEGER_TYPE_INFO[dtype_name]
+        if min_value >= int(info.min) and max_value <= int(info.max):
+            return polars_dtype_from_name(dtype_name)
+
+    raise ValueError(f"Cannot resolve a safe integer dtype for {integer_types}")
+
+
+@beartype
+def _resolve_unified_parquet_type(column_types: dict[str, str]) -> Any:
+    if not column_types:
+        raise ValueError("column_types cannot be empty")
+
+    normalized_types = [
+        canonicalize_polars_dtype_name(type_) for type_ in column_types.values()
+    ]
+    float_types = [type_ for type_ in normalized_types if is_float_dtype_name(type_)]
+    integer_types = [
+        type_ for type_ in normalized_types if is_integer_dtype_name(type_)
+    ]
+
+    if not float_types:
+        if len(set(integer_types)) > 1:
+            logger.warning(
+                "Multiple integer column_types were specified for Parquet output; "
+                "using a unified integer schema."
+            )
+        return _resolve_integer_sequence_type(integer_types)
+
+    resolved_float = _highest_ranked_type(float_types, FLOAT_TYPE_ORDER)
+    if len(set(normalized_types)) > 1:
+        logger.warning(
+            "Multiple column_types were specified for Parquet output; "
+            f"using unified sequence dtype {resolved_float}."
+        )
+
+    if integer_types:
+        required_float = _highest_ranked_type(
+            [
+                _smallest_float_covering_integer_range(integer_type)
+                for integer_type in integer_types
+            ],
+            FLOAT_TYPE_ORDER,
+        )
+        if FLOAT_TYPE_ORDER.index(required_float) > FLOAT_TYPE_ORDER.index(
+            resolved_float
+        ):
+            logger.warning(
+                "An integer column_type has a range exceeding "
+                f"{resolved_float}; upgrading unified Parquet sequence dtype "
+                f"to {required_float}."
+            )
+            resolved_float = required_float
+
+    return polars_dtype_from_name(resolved_float)
+
+
+@beartype
+def _resolve_pt_extraction_type(column_types: dict[str, str]) -> Any:
+    normalized_types = [
+        canonicalize_polars_dtype_name(type_) for type_ in column_types.values()
+    ]
+    if any(is_float_dtype_name(type_) for type_ in normalized_types):
+        return pl.Float64
+    return _resolve_integer_sequence_type(normalized_types)
 
 
 @beartype
 def preprocess(args: Any, args_config: dict[str, Any]) -> None:
-    """Runs the main data preprocessing pipeline.
-
-    This function loads the preprocessing configuration, initializes the
-    `Preprocessor` class, and executes the preprocessing steps based on the
-    loaded configuration.
-
-    Args:
-        args: An object containing command-line arguments. Expected to have
-            a `config_path` attribute specifying the path to the YAML
-            configuration file.
-        args_config: A dictionary containing additional configuration parameters
-            that may override or supplement the settings loaded from the
-            config file.
-    """
+    """Load preprocessing config and run preprocessing."""
     logger.info("--- Starting Preprocessing ---")
     config_path = args.config_path or "configs/preprocess.yaml"
     config = load_preprocessor_config(config_path, args_config)
@@ -42,22 +283,7 @@ def preprocess(args: Any, args_config: dict[str, Any]) -> None:
 
 
 class Preprocessor:
-    """A class for preprocessing data for the sequifier model.
-
-    This class handles loading, preprocessing, and saving data. It supports
-    single-file and multi-file processing, and can handle large datasets by
-    processing them in batches.
-
-    Attributes:
-        project_root (str): The path to the sequifier project directory.
-        batches_per_file (int): The number of batches to process per file.
-        data_name_root (str): The root name of the data file.
-        merge_output (bool): Whether to combine the output into a single file.
-        target_dir (str): The target directory for temporary files.
-        seed (int): The random seed for reproducibility.
-        n_cores (int): The number of cores to use for parallel processing.
-        split_paths (list[str]): The paths to the output split files.
-    """
+    """Stateful preprocessing pipeline for single-file or folder inputs."""
 
     @beartype
     def __init__(
@@ -68,9 +294,10 @@ class Preprocessor:
         read_format: str,
         write_format: str,
         merge_output: bool,
+        allow_sequence_splitting: bool,
         selected_columns: Optional[list[str]],
         split_ratios: list[float],
-        seq_length: int,
+        stored_context_width: int,
         stride_by_split: list[int],
         max_rows: Optional[int],
         seed: int,
@@ -80,29 +307,17 @@ class Preprocessor:
         subsequence_start_mode: str,
         use_precomputed_maps: Optional[list[str]],
         metadata_config_path: Optional[str],
+        max_target_offset: int = 1,
+        mask_column: Optional[str] = None,
+        column_types: Optional[dict[str, str]] = None,
+        split_method: str = "within_sequence",
     ):
-        """Initializes the Preprocessor with the given parameters.
-
-        Args:
-            project_root: The path to the sequifier project directory.
-            data_path: The path to the input data file.
-            read_format: The file type of the input data.
-            write_format: The file type for the preprocessed output data.
-            merge_output: Whether to combine the output into a single file.
-            selected_columns: A list of columns to be included in the preprocessing.
-            split_ratios: A list of floats that define the relative sizes of data splits.
-            seq_length: The sequence length for the model inputs.
-            stride_by_split: A list of step sizes for creating subsequences.
-            max_rows: The maximum number of input rows to process.
-            seed: A random seed for reproducibility.
-            n_cores: The number of CPU cores to use for parallel processing.
-            batches_per_file: The number of batches to process per file.
-            process_by_file: A flag to indicate if processing should be done file by file.
-            use_precomputed_maps: An optional list of columns for which to enforce precomputed maps
-            metadata_config_path: Optional path to a precomputed metadata config
-        """
+        """Initialize and run preprocessing from validated config fields."""
         self.project_root = project_root
         self.batches_per_file = batches_per_file
+        self.data_path = data_path
+        self.read_format = read_format
+        self.write_format = write_format
 
         self.data_name_root = os.path.splitext(os.path.basename(data_path))[0]
         self.merge_output = merge_output
@@ -115,26 +330,49 @@ class Preprocessor:
                 )
             self.target_dir = f"{self.data_name_root}-temp"
 
+        self.allow_sequence_splitting = allow_sequence_splitting
+
         self.use_precomputed_maps = use_precomputed_maps
         self.metadata_config_path = metadata_config_path
+        self.mask_column = mask_column
+        if split_method not in ["within_sequence", "between_sequence"]:
+            raise ValueError(
+                "split_method must be one of 'within_sequence', 'between_sequence'"
+            )
+        self.split_method = split_method
+        self.split_ratios = split_ratios
+        self.stride_by_split = stride_by_split
+        self.max_rows = max_rows
+        self.process_by_file = process_by_file
+        self.subsequence_start_mode = subsequence_start_mode
+        self.column_types = _normalize_column_types(column_types)
+        if self.mask_column is not None and self.metadata_config_path is None:
+            raise ValueError("metadata_config_path must be set when mask_column is set")
+
         self.seed = seed
         np.random.seed(seed)
         self.n_cores = n_cores or multiprocessing.cpu_count()
         self.continue_preprocessing = continue_preprocessing
+        self.storage_layout = StoredWindowLayout(
+            stored_context_width=stored_context_width,
+            max_target_offset=max_target_offset,
+            version=CURRENT_STORED_WINDOW_LAYOUT_VERSION,
+        )
         self._setup_directories()
 
         if selected_columns is not None:
             selected_columns = ["sequenceId", "itemPosition"] + selected_columns
+            if self.mask_column is not None and self.mask_column in selected_columns:
+                raise ValueError(
+                    f"'{self.mask_column}' is not allowed to be in 'selected_columns'"
+                )
 
         self._setup_split_paths(write_format, len(split_ratios))
 
         if self.continue_preprocessing:
-            # 1. Determine what paths indicate "completion"
             if self.merge_output:
-                # If merging, check for the final files (e.g., "data/mydata-split0.pt")
                 paths_to_check = self.split_paths
             else:
-                # If not merging, check for the output folders (e.g., "data/mydata-split0")
                 paths_to_check = [
                     os.path.join(
                         self.project_root, "data", f"{self.data_name_root}-split{i}"
@@ -142,7 +380,6 @@ class Preprocessor:
                     for i in range(len(split_ratios))
                 ]
 
-            # 2. If any target exists, skip processing and jump to cleanup
             if any(os.path.exists(p) for p in paths_to_check):
                 logger.info(
                     "Existing split paths found with continue_preprocessing=True. "
@@ -153,11 +390,19 @@ class Preprocessor:
 
         if os.path.isfile(data_path):
             data = _load_and_preprocess_data(
-                data_path, read_format, selected_columns, max_rows
+                data_path,
+                read_format,
+                selected_columns,
+                max_rows,
+                self.mask_column,
             )
-            data_columns = [
-                col for col in data.columns if col not in ["sequenceId", "itemPosition"]
-            ]
+            data_columns = _get_data_columns(data, self.mask_column)
+            configured_col_types = _configured_column_types_for_data_columns(
+                self.column_types, data_columns
+            )
+            data = _apply_configured_input_casting(
+                data, data_columns, configured_col_types
+            )
             if self.metadata_config_path:
                 metadata_path = os.path.join(
                     self.project_root, self.metadata_config_path
@@ -166,6 +411,10 @@ class Preprocessor:
                 with open(metadata_path, "r") as f:
                     preexisting_metadata = json.load(f)
 
+                validate_special_token_ids(
+                    preexisting_metadata["special_token_ids"],
+                    source=f"metadata config '{self.metadata_config_path}'",
+                )
                 id_maps = preexisting_metadata["id_maps"]
                 selected_columns_statistics = preexisting_metadata[
                     "selected_columns_statistics"
@@ -186,6 +435,7 @@ class Preprocessor:
                     selected_columns_statistics,
                     0,
                     precomputed_id_maps,
+                    self.mask_column,
                 )
 
                 id_maps = id_maps | precomputed_id_maps
@@ -198,13 +448,29 @@ class Preprocessor:
                 id_maps,
                 selected_columns_statistics,
                 n_classes=n_classes,
-                col_types=col_types,
+                col_types=configured_col_types or col_types,
+            )
+            if configured_col_types is not None:
+                col_types = configured_col_types
+            data = _apply_mask_column(data, data_columns, col_types, self.mask_column)
+            data = _apply_output_type_casting(data, data_columns, col_types)
+
+            self._write_or_validate_resume_manifest(
+                selected_columns,
+                write_format,
+                data_columns,
+                id_maps,
+                n_classes,
+                col_types,
+                selected_columns_statistics,
             )
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
 
-            schema = self._create_schema(col_types, seq_length + 1)
+            schema = self._create_schema(
+                col_types, self.storage_layout.stored_context_width
+            )
 
             data = data.sort(["sequenceId", "itemPosition"])
             n_batches = _process_batches_single_file(
@@ -213,7 +479,7 @@ class Preprocessor:
                 data,
                 schema,
                 self.n_cores,
-                seq_length,
+                self.storage_layout,
                 stride_by_split,
                 data_columns,
                 col_types,
@@ -224,6 +490,9 @@ class Preprocessor:
                 self.batches_per_file,
                 subsequence_start_mode,
                 self.merge_output,
+                self.allow_sequence_splitting,
+                self.split_method,
+                self.seed,
             )
 
             if self.merge_output:
@@ -254,6 +523,10 @@ class Preprocessor:
                 with open(metadata_path, "r") as f:
                     preexisting_metadata = json.load(f)
 
+                validate_special_token_ids(
+                    preexisting_metadata["special_token_ids"],
+                    source=f"metadata config '{self.metadata_config_path}'",
+                )
                 id_maps = preexisting_metadata["id_maps"]
                 selected_columns_statistics = preexisting_metadata[
                     "selected_columns_statistics"
@@ -265,8 +538,13 @@ class Preprocessor:
                 data_columns = [
                     col
                     for col in col_types.keys()
-                    if col not in ["sequenceId", "itemPosition"]
+                    if col not in _reserved_input_columns(self.mask_column)
                 ]
+                configured_col_types = _configured_column_types_for_data_columns(
+                    self.column_types, data_columns
+                )
+                if configured_col_types is not None:
+                    col_types = configured_col_types
 
                 # We still need to find the files to process
                 files_to_process = []
@@ -283,15 +561,31 @@ class Preprocessor:
                     col_types,
                     data_columns,
                 ) = self._get_column_metadata_across_files(
-                    data_path, read_format, max_rows, selected_columns
+                    data_path,
+                    read_format,
+                    max_rows,
+                    selected_columns,
+                    self.column_types,
                 )
                 for col in id_maps:
-                    col_types[col] = "Int64"
+                    if self.column_types is None:
+                        col_types[col] = "Int64"
 
+            self._write_or_validate_resume_manifest(
+                selected_columns,
+                write_format,
+                data_columns,
+                id_maps,
+                n_classes,
+                col_types,
+                selected_columns_statistics,
+            )
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
-            schema = self._create_schema(col_types, seq_length + 1)
+            schema = self._create_schema(
+                col_types, self.storage_layout.stored_context_width
+            )
 
             self._process_batches_multiple_files(
                 files_to_process,
@@ -300,7 +594,7 @@ class Preprocessor:
                 max_rows,
                 schema,
                 self.n_cores,
-                seq_length,
+                self.storage_layout,
                 stride_by_split,
                 data_columns,
                 n_classes,
@@ -317,48 +611,27 @@ class Preprocessor:
 
     @beartype
     def _create_schema(
-        self, col_types: dict[str, str], seq_length: int
+        self, col_types: dict[str, str], stored_context_width: int
     ) -> dict[str, Any]:
-        """Creates the Polars schema for the intermediate sequence DataFrame.
-
-        This schema defines the structure of the DataFrame after sequence
-        extraction, which includes sequence identifiers, the start item position
-        within the original sequence, the input column name, and columns for
-        each item in the sequence (named '0', '1', ..., 'seq_length-1').
-
-        Args:
-            col_types: A dictionary mapping data column names to their Polars
-                string representations (e.g., "Int64", "Float64").
-            seq_length: The length of the sequences being extracted.
-
-        Returns:
-            A dictionary defining the Polars schema. Keys are column names
-            (e.g., "sequenceId", "subsequenceId", "startItemPosition", "inputCol", "0", "1", ...)
-            and values are Polars data types (e.g., `pl.Int64`).
-        """
+        """Build the long-format extracted-window schema."""
         schema = {
             "sequenceId": pl.Int64,
             "subsequenceId": pl.Int64,
             "startItemPosition": pl.Int64,
+            "leftPadLength": pl.Int64,
             "inputCol": pl.String,
         }
 
-        if (np.unique(list(col_types.values())) == np.array(["Int64"]))[0]:
-            sequence_position_type = pl.Int64
+        if self.write_format == "parquet":
+            sequence_position_type = _resolve_unified_parquet_type(col_types)
         else:
-            if not np.all(
-                [
-                    type_.lower().startswith("int")
-                    or type_.lower().startswith("uint")
-                    or type_.lower().startswith("float")
-                    for type_ in col_types.values()
-                ]
-            ):
-                raise ValueError("All column types must start with int or float")
-            sequence_position_type = pl.Float64
+            sequence_position_type = _resolve_pt_extraction_type(col_types)
 
         schema.update(
-            {str(i): sequence_position_type for i in range(seq_length - 1, -1, -1)}
+            {
+                str(i): sequence_position_type
+                for i in range(stored_context_width - 1, -1, -1)
+            }
         )
 
         return schema
@@ -370,6 +643,7 @@ class Preprocessor:
         read_format: str,
         max_rows: Optional[int],
         selected_columns: Optional[list[str]],
+        column_types: Optional[dict[str, str]],
     ) -> tuple[
         list[str],
         dict[str, int],
@@ -378,39 +652,7 @@ class Preprocessor:
         dict[str, str],
         list[str],
     ]:
-        """Scans multiple data files to compute combined column metadata.
-
-        This method iterates through all files in `data_path` matching `read_format`,
-        loading each one to incrementally build up metadata. It computes:
-        1.  ID maps for categorical/string columns.
-        2.  Mean and standard deviation for numerical (float) columns.
-        3.  The total number of unique classes for mapped columns.
-        4.  The data types of all columns.
-
-        This is used when the dataset is split into multiple files to get a
-        consistent global view of the data.
-
-        Args:
-            data_path: The path to the root data directory.
-            read_format: The file extension (e.g., "csv", "parquet") to read.
-            max_rows: The maximum total number of rows to process across all
-                files. If `None`, all rows are processed.
-            selected_columns: A list of columns to include. If `None`, all
-                columns (except "sequenceId" and "itemPosition") are used.
-
-        Returns:
-            A tuple containing:
-                - n_classes (dict[str, int]): Map of column name to its
-                  number of unique classes (including padding/unknown).
-                - id_maps (dict[str, dict[Union[str, int], int]]): Nested map
-                  from column name to its value-to-integer-ID map.
-                - selected_columns_statistics (dict[str, dict[str, float]]):
-                  Nested map from numerical column name to its 'mean' and 'std'.
-                - col_types (dict[str, str]): Map of column name to its
-                  Polars string data type.
-                - data_columns (list[str]): List of all processed data
-                  column names.
-        """
+        """Accumulate metadata/statistics over a folder input."""
 
         n_rows_running_count = 0
         id_maps, selected_columns_statistics = {}, {}
@@ -441,18 +683,24 @@ class Preprocessor:
                         read_format,
                         selected_columns,
                         max_rows_inner,
+                        self.mask_column,
                     )
 
-                    # Get columns for the current file (excluding metadata cols)
-                    current_file_cols = [
-                        col
-                        for col in data.columns
-                        if col not in ["sequenceId", "itemPosition"]
-                    ]
+                    current_file_cols = _get_data_columns(data, self.mask_column)
+                    current_configured_col_types = (
+                        _configured_column_types_for_data_columns(
+                            column_types, current_file_cols
+                        )
+                    )
+                    data = _apply_configured_input_casting(
+                        data, current_file_cols, current_configured_col_types
+                    )
 
                     if col_types is None:
                         data_columns = current_file_cols
-                        col_types = {col: str(data.schema[col]) for col in data_columns}
+                        col_types = current_configured_col_types or {
+                            col: str(data.schema[col]) for col in data_columns
+                        }
 
                         for col in precomputed_id_maps.keys():
                             if col not in data_columns:
@@ -471,12 +719,13 @@ class Preprocessor:
                                 f"Extra: {extra}"
                             )
 
-                        for col in current_file_cols:
-                            if str(data.schema[col]) != col_types[col]:
-                                raise ValueError(
-                                    f"Type mismatch for column '{col}' in file '{file}'. "
-                                    f"Expected {col_types[col]}, got {str(data.schema[col])}"
-                                )
+                        if column_types is None:
+                            for col in current_file_cols:
+                                if str(data.schema[col]) != col_types[col]:
+                                    raise ValueError(
+                                        f"Type mismatch for column '{col}' in file '{file}'. "
+                                        f"Expected {col_types[col]}, got {str(data.schema[col])}"
+                                    )
 
                     if data_columns is None:
                         raise ValueError("data_columns is None")
@@ -488,6 +737,7 @@ class Preprocessor:
                         selected_columns_statistics,
                         n_rows_running_count,
                         precomputed_id_maps,
+                        self.mask_column,
                     )
                     n_rows_running_count += data.shape[0]
 
@@ -512,13 +762,7 @@ class Preprocessor:
 
     @beartype
     def _setup_directories(self) -> None:
-        """Sets up the output directories for preprocessed data.
-
-        This method creates the base `data/` directory within the `project_root`
-        if it doesn't exist. It also creates a temporary directory (defined by
-        `self.target_dir`) for storing intermediate batch files, removing it
-        first if it already exists to ensure a clean run.
-        """
+        """Prepare or validate preprocessing temp directories."""
 
         temp_path = os.path.join(self.project_root, "data", self.target_dir)
 
@@ -533,16 +777,7 @@ class Preprocessor:
 
     @beartype
     def _setup_split_paths(self, write_format: str, n_splits: int) -> None:
-        """Sets up the final output paths for the data splits.
-
-        This method constructs the full file paths for each data split
-        (e.g., train, validation, test) based on the `data_name_root` and
-        `write_format`. The paths are stored in the `self.split_paths` attribute.
-
-        Args:
-            write_format: The file extension for the output files (e.g., "pt", "parquet").
-            n_splits: The number of splits to create (e.g., 3 for train/val/test).
-        """
+        """Set final split output paths."""
         split_paths = [
             os.path.join(
                 self.project_root,
@@ -563,7 +798,7 @@ class Preprocessor:
         max_rows: Optional[int],
         schema: Any,
         n_cores: int,
-        seq_length: int,
+        layout: StoredWindowLayout,
         stride_by_split: list[int],
         data_columns: list[str],
         n_classes: dict[str, int],
@@ -574,28 +809,12 @@ class Preprocessor:
         write_format: str,
         process_by_file: bool = True,
         subsequence_start_mode: str = "distribute",
+        mask_column: Optional[str] = None,
     ) -> None:
-        """Processes batches of data from multiple files.
+        """Dispatch folder preprocessing by file or by process shard."""
+        if mask_column is None:
+            mask_column = self.mask_column
 
-        Args:
-            file_paths: A list of file paths to process.
-            read_format: The file format to read.
-            selected_columns: A list of columns to be included in the preprocessing.
-            max_rows: The maximum number of rows to process.
-            schema: The schema for the preprocessed data.
-            n_cores: The number of cores to use for parallel processing.
-            seq_length: The sequence length for the model inputs.
-            stride_by_split: A list of step sizes for creating subsequences.
-            data_columns: A list of data columns.
-            n_classes: A dictionary containing the number of classes for each categorical column.
-            id_maps: A dictionary containing the id maps for each categorical column.
-            selected_columns_statistics: A dictionary containing the statistics for each numerical column.
-            col_types: A dictionary containing the column types.
-            split_ratios: A list of floats that define the relative sizes of data splits.
-            write_format: The file format for the output files.
-            process_by_file: A flag to indicate if processing should be done file by file.
-            subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
-        """
         if process_by_file:
             _process_batches_multiple_files_inner(
                 project_root=self.project_root,
@@ -607,7 +826,7 @@ class Preprocessor:
                 max_rows=max_rows,
                 schema=schema,
                 n_cores=n_cores,
-                seq_length=seq_length,
+                layout=layout,
                 stride_by_split=stride_by_split,
                 data_columns=data_columns,
                 n_classes=n_classes,
@@ -620,8 +839,12 @@ class Preprocessor:
                 target_dir=self.target_dir,
                 batches_per_file=self.batches_per_file,
                 merge_output=self.merge_output,
+                allow_sequence_splitting=self.allow_sequence_splitting,
                 continue_preprocessing=self.continue_preprocessing,
                 subsequence_start_mode=subsequence_start_mode,
+                mask_column=mask_column,
+                split_method=self.split_method,
+                seed=self.seed,
             )
             input_files = create_file_paths_for_multiple_files2(
                 self.project_root,
@@ -651,7 +874,7 @@ class Preprocessor:
                 "max_rows": max_rows,
                 "schema": schema,
                 "n_cores": 1,
-                "seq_length": seq_length,
+                "layout": layout,
                 "stride_by_split": stride_by_split,
                 "data_columns": data_columns,
                 "n_classes": n_classes,
@@ -664,8 +887,12 @@ class Preprocessor:
                 "target_dir": self.target_dir,
                 "batches_per_file": self.batches_per_file,
                 "merge_output": self.merge_output,
+                "allow_sequence_splitting": self.allow_sequence_splitting,
                 "continue_preprocessing": self.continue_preprocessing,
                 "subsequence_start_mode": subsequence_start_mode,
+                "mask_column": mask_column,
+                "split_method": self.split_method,
+                "seed": self.seed,
             }
 
             job_params = [
@@ -705,21 +932,7 @@ class Preprocessor:
 
     @beartype
     def _cleanup(self, write_format: str) -> None:
-        """Finalizes output files and removes temporary directories.
-
-        If `write_format` is 'pt' and `merge_output` is False,
-        this method moves the processed .pt batch files from the temporary
-        `target_dir` into their final split-specific subfolders (e.g.,
-        'data_name_root-split0/'). It also generates a 'metadata.json' file
-        in each of these subfolders, which is required by
-        `SequifierDatasetFromFolderPt`.
-
-        Finally, it removes the temporary `target_dir` if it's empty or
-        if `target_dir` is "temp" (implying `merge_output` was True).
-
-        Args:
-            write_format: The file format of the output files (e.g., "pt").
-        """
+        """Move split outputs, write folder metadata, and remove temp files."""
 
         logger.info("Start cleanup")
         temp_output_path = os.path.join(self.project_root, "data", self.target_dir)
@@ -753,6 +966,85 @@ class Preprocessor:
             shutil.rmtree(directory)
 
     @beartype
+    def _layout_metadata(self) -> dict[str, int]:
+        return {
+            "stored_context_width": self.storage_layout.stored_context_width,
+            "max_target_offset": self.storage_layout.max_target_offset,
+            "stored_window_layout_version": self.storage_layout.version,
+        }
+
+    @beartype
+    def _write_or_validate_resume_manifest(
+        self,
+        selected_columns: Optional[list[str]],
+        write_format: str,
+        data_columns: list[str],
+        id_maps: dict[str, dict[Union[str, int], int]],
+        n_classes: dict[str, int],
+        col_types: dict[str, str],
+        selected_columns_statistics: dict[str, dict[str, float]],
+    ) -> None:
+        manifest = {
+            "manifest_version": 1,
+            "preprocessing_config": {
+                **self._layout_metadata(),
+                "read_format": self.read_format,
+                "write_format": write_format,
+                "merge_output": self.merge_output,
+                "selected_columns": selected_columns,
+                "data_columns": data_columns,
+                "split_ratios": self.split_ratios,
+                "split_method": self.split_method,
+                "seed": self.seed,
+                "stride_by_split": self.stride_by_split,
+                "max_rows": self.max_rows,
+                "process_by_file": self.process_by_file,
+                "subsequence_start_mode": self.subsequence_start_mode,
+                "mask_column": self.mask_column,
+                "use_precomputed_maps": self.use_precomputed_maps,
+                "n_classes": n_classes,
+                "id_maps": id_maps,
+                "column_types": col_types,
+                "selected_columns_statistics": selected_columns_statistics,
+                "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
+            },
+        }
+        manifest_path = os.path.join(
+            self.project_root, "data", self.target_dir, "preprocess-manifest.json"
+        )
+
+        with open(
+            os.path.join(
+                self.project_root,
+                "data",
+                self.target_dir,
+                "preprocess-manifest-check.json",
+            ),
+            "w",
+        ) as f:
+            json.dump(manifest, f, indent=4)
+
+        if self.continue_preprocessing:
+            if not os.path.exists(manifest_path):
+                raise ValueError(
+                    "Cannot continue preprocessing because the temp manifest is missing."
+                )
+            with open(manifest_path, "r") as f:
+                previous_manifest = json.load(f)
+            if _stable_json_value(previous_manifest) != _stable_json_value(manifest):
+                raise ValueError(
+                    "Cannot continue preprocessing with a different preprocessing "
+                    "manifest. Check sequence layout, input path, selected/data "
+                    "columns, output format, mask/metadata settings, split/stride "
+                    "settings, max_rows, process_by_file, subsequence_start_mode, "
+                    "or metadata/maps/statistics."
+                )
+            return
+
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=4)
+
+    @beartype
     def _export_metadata(
         self,
         id_maps: dict[str, dict[Union[str, int], int]],
@@ -760,32 +1052,21 @@ class Preprocessor:
         col_types: dict[str, str],
         selected_columns_statistics: dict[str, dict[str, float]],
     ) -> None:
-        """Exports the computed data metadata to a JSON file.
-
-        Saves metadata such as class counts, ID mappings, split paths,
-        column types, and numerical statistics to a JSON file. This file is
-        saved in the `configs/metadata_configs/` directory, named after the
-        `data_name_root`. This metadata is essential for initializing the
-        model and data loaders during training.
-
-        Args:
-            id_maps: A dictionary containing the id maps for each
-                categorical column.
-            n_classes: A dictionary containing the number of classes for
-                each categorical column.
-            col_types: A dictionary containing the column types.
-            selected_columns_statistics: A dictionary containing the
-                statistics for each numerical column.
-        """
+        """Write metadata config JSON for training/inference."""
         data_driven_config = {
             "n_classes": n_classes,
             "id_maps": id_maps,
+            "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             "split_paths": [
                 os.path.splitext(split_path)[0] if not self.merge_output else split_path
                 for split_path in self.split_paths
             ],
             "column_types": col_types,
-            "selected_columns_statistics": selected_columns_statistics,
+            "selected_columns_statistics": {
+                col: {"mean": stats["mean"], "std": stats["std"]}
+                for col, stats in selected_columns_statistics.items()
+            },
+            **self._layout_metadata(),
         }
         os.makedirs(
             os.path.join(self.project_root, "configs", "metadata_configs"),
@@ -805,19 +1086,7 @@ class Preprocessor:
 
     @beartype
     def _create_metadata_for_folder(self, folder_path: str, write_format: str) -> None:
-        """Scans a directory for batch files, counts samples, and writes metadata.json.
-
-        This method is used when `merge_output` is False. It iterates over all
-        files in the given `folder_path` matching the `write_format`, loads each
-        one to count the number of samples (sequences), and writes a `metadata.json`
-        file in that same folder. This JSON file contains the total sample count and a
-        list of all batch files with their respective sample counts.
-
-        Args:
-            folder_path: The path to the directory containing the batch files
-                for a specific data split.
-            write_format: The file format of the output files (e.g., 'pt', 'parquet').
-        """
+        """Write metadata.json for an unmerged split folder."""
         logger.info(f"Creating metadata for folder '{folder_path}'")
         batch_files_metadata = []
         total_samples = 0
@@ -835,7 +1104,9 @@ class Preprocessor:
         for file_path in files:
             try:
                 if write_format == "pt":
-                    sequences_dict, _, _, _ = torch.load(file_path, weights_only=False)
+                    sequences_dict, _, _, _, _ = torch.load(
+                        file_path, weights_only=False
+                    )
                     if sequences_dict:
                         n_samples = sequences_dict[
                             list(sequences_dict.keys())[0]
@@ -864,11 +1135,109 @@ class Preprocessor:
         metadata = {
             "total_samples": total_samples,
             "batch_files": batch_files_metadata,
+            **self._layout_metadata(),
         }
 
         metadata_path = directory / "metadata.json"
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=4)
+
+
+@beartype
+def _reserved_input_columns(mask_column: Optional[str]) -> tuple[str, ...]:
+    if mask_column is None:
+        return INPUT_METADATA_COLUMNS
+    return (*INPUT_METADATA_COLUMNS, mask_column)
+
+
+@beartype
+def _get_data_columns(
+    data: pl.DataFrame, mask_column: Optional[str] = None
+) -> list[str]:
+    return [
+        col for col in data.columns if col not in _reserved_input_columns(mask_column)
+    ]
+
+
+@beartype
+def _deduplicate_columns(columns: list[str]) -> list[str]:
+    return list(dict.fromkeys(columns))
+
+
+@beartype
+def _selected_columns_with_optional_mask(
+    data_path: str,
+    read_format: str,
+    selected_columns: Optional[list[str]],
+    mask_column: Optional[str] = None,
+) -> Optional[list[str]]:
+    if selected_columns is None or mask_column is None:
+        return selected_columns
+
+    if read_format != "parquet":
+        return _deduplicate_columns(selected_columns + [mask_column])
+
+    schema_columns = pq.read_schema(data_path).names
+    if mask_column in schema_columns:
+        return _deduplicate_columns(selected_columns + [mask_column])
+    raise ValueError(f"mask_column '{mask_column}' not found in {data_path}")
+
+
+@beartype
+def _validate_and_create_mask_column_expr(
+    series: Any, mask_dtype: Any, mask_column: str
+) -> pl.Expr:
+    mask_col = pl.col(mask_column)
+
+    if mask_dtype == pl.Boolean:
+        return mask_col
+
+    if mask_dtype.is_numeric():
+        if not series.drop_nulls().is_in([0, 1]).all():
+            raise ValueError(
+                f"Mask column {mask_column} contains inadmissible values not in (0, 1)"
+            )
+        return mask_col == 1
+
+    raise ValueError(
+        f"Column {mask_column} must be boolean or numeric, got {mask_dtype}"
+    )
+
+
+@beartype
+def _apply_mask_column(
+    data: pl.DataFrame,
+    data_columns: list[str],
+    col_types: dict[str, str],
+    mask_column: Optional[str] = None,
+) -> pl.DataFrame:
+    if mask_column is None:
+        return data
+    if mask_column not in data.columns:
+        raise ValueError(f"mask_column '{mask_column}' not found in input data")
+
+    mask_expr = _validate_and_create_mask_column_expr(
+        data[mask_column], data.schema[mask_column], mask_column
+    )
+    updates = []
+    for col in data_columns:
+        mask_value = (
+            SPECIAL_TOKEN_IDS.mask
+            if is_integer_dtype_name(col_types[col])
+            else REAL_MASK_VALUE
+        )
+        updates.append(
+            pl.when(mask_expr)
+            .then(pl.lit(mask_value))
+            .otherwise(pl.col(col))
+            .cast(data.schema[col])
+            .alias(col)
+        )
+
+    if updates:
+        data = data.with_columns(updates)
+
+    return data.drop(mask_column)
 
 
 @beartype
@@ -880,47 +1249,31 @@ def _apply_column_statistics(
     n_classes: Optional[dict[str, int]] = None,
     col_types: Optional[dict[str, str]] = None,
 ) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
-    """Applies pre-computed statistics to transform the data.
+    """Apply categorical maps and numeric standardization."""
+    col_types_was_provided = col_types is not None
 
-    This function performs two main transformations on the DataFrame:
-    1.  **Categorical Mapping**: Replaces original values in categorical
-        columns with their corresponding integer IDs using `id_maps`.
-    2.  **Numerical Standardization**: Standardizes numerical columns
-        (those in `selected_columns_statistics`) using the Z-score
-        formula: (value - mean) / (std + 1e-9).
-
-    It also computes `n_classes` and `col_types` if they are not provided.
-
-    Args:
-        data: The input Polars DataFrame to transform.
-        data_columns: A list of column names to process.
-        id_maps: A nested dictionary mapping column names to their
-            value-to-integer-ID maps.
-        selected_columns_statistics: A nested dictionary mapping
-            column names to their 'mean' and 'std' statistics.
-        n_classes: An optional dictionary mapping column names to
-            their total number of unique classes. If `None`, it's computed
-            from `id_maps`.
-        col_types: An optional dictionary mapping column names to
-            their string data types. If `None`, it's inferred from the
-            `data` schema.
-
-    Returns:
-        A tuple `(data, n_classes, col_types)` where:
-            - `data`: The transformed Polars DataFrame.
-            - `n_classes`: The (potentially computed) class count dictionary.
-            - `col_types`: The (potentially computed) column type dictionary.
-    """
     if n_classes is None:
         n_classes = {col: max(id_maps[col].values()) + 1 for col in id_maps}
 
     if col_types is None:
         col_types = {col: str(data.schema[col]) for col in data_columns}
 
+    missing_columns = [
+        col
+        for col in data_columns
+        if col not in id_maps and col not in selected_columns_statistics
+    ]
+    if missing_columns:
+        raise ValueError(
+            "No unmasked examples found for columns: "
+            f"{missing_columns}. Check the mask column or provide precomputed metadata."
+        )
+
     for col in data_columns:
         if col in id_maps:
             data = data.with_columns(pl.col(col).replace(id_maps[col], default=1))
-            col_types[col] = "Int64"
+            if not col_types_was_provided:
+                col_types[col] = "Int64"
         elif col in selected_columns_statistics:
             data = data.with_columns(
                 (
@@ -938,17 +1291,7 @@ def load_precomputed_id_maps(
     data_columns: Optional[list[str]],
     required_maps: Optional[list[str]] = None,
 ) -> dict[str, dict[Union[str, int], int]]:
-    """Loads custom ID maps from configs/id_maps if the folder exists.
-
-    Args:
-        project_root: The path to the project root directory.
-        data_columns: Optional list of columns present in the data to validate
-            against the found map files.
-        required_maps: Optional list of columns for which a precomputed id_map is required
-
-    Returns:
-        A dictionary mapping column names to their ID maps.
-    """
+    """Load and validate precomputed ID maps."""
     custom_maps = {}
     path = os.path.join(project_root, "configs", "id_maps")
 
@@ -967,16 +1310,44 @@ def load_precomputed_id_maps(
                     )
 
                 with open(os.path.join(path, file), "r") as f:
-                    # Load and ensure values are integers
                     m = {k: int(v) for k, v in json.load(f).items()}
 
                     if not len(m) > 0:
                         raise ValueError(f"map in {file} does not contain any values")
-                    min_val = min(m.values())
-                    if min_val != 2:
+                    for (
+                        reserved_key,
+                        expected_value,
+                    ) in SPECIAL_TOKEN_IDS.ids_by_label.items():
+                        if reserved_key in m and m[reserved_key] != expected_value:
+                            raise ValueError(
+                                f"{reserved_key} in map {file} must map to {expected_value}"
+                            )
+
+                    user_values = [
+                        value
+                        for key, value in m.items()
+                        if key not in SPECIAL_TOKEN_LABELS
+                    ]
+                    if not user_values:
                         raise ValueError(
-                            f"minimum value in map {file} is {min_val}, must be 2."
+                            f"map in {file} does not contain any non-reserved values"
                         )
+
+                    min_val = min(user_values)
+                    if min_val == 2:
+                        raise ValueError(
+                            f"Precomputed map {file} uses legacy user IDs starting at 2"
+                        )
+                    if min_val != SPECIAL_TOKEN_IDS.user_start:
+                        raise ValueError(
+                            f"minimum non-reserved value in map {file} is {min_val}, must be {SPECIAL_TOKEN_IDS.user_start}."
+                        )
+                    if any(value in SPECIAL_TOKEN_ID_VALUES for value in user_values):
+                        raise ValueError(
+                            f"non-reserved values in map {file} must not use reserved IDs {SPECIAL_TOKEN_ID_VALUES}"
+                        )
+                    if len(set(m.values())) != len(m.values()):
+                        raise ValueError(f"map in {file} contains duplicate IDs")
                     custom_maps[col_name] = m
     if required_maps:
         missing_maps = [col for col in required_maps if col not in custom_maps]
@@ -997,42 +1368,21 @@ def _get_column_statistics(
     selected_columns_statistics: dict[str, dict[str, float]],
     n_rows_running_count: int,
     precomputed_id_maps: dict[str, dict[Union[str, int], int]],
+    mask_column: Optional[str] = None,
 ) -> tuple[
     dict[str, dict[Union[str, int], int]],
     dict[str, dict[str, float]],
 ]:
-    """Computes or updates column statistics from a data chunk.
+    """Update ID maps and numeric statistics from one chunk."""
+    if mask_column is not None and mask_column in data.columns:
+        mask_expr = _validate_and_create_mask_column_expr(
+            data[mask_column], data.schema[mask_column], mask_column
+        )
+        data = data.filter(~mask_expr)
 
-    This function iterates over the `data_columns` and updates the
-    `id_maps` and `selected_columns_statistics` dictionaries based on the
-    provided `data` chunk.
+    if data.is_empty():
+        return id_maps, selected_columns_statistics
 
-    - For string/integer columns: It creates an ID map of unique values and
-      merges it with any existing map in `id_maps`.
-    - For float columns: It computes the mean and standard deviation of the
-      chunk and combines them with the existing statistics in
-      `selected_columns_statistics` using a numerically stable parallel
-      algorithm, weighted by `n_rows_running_count`.
-
-    Args:
-        data: The Polars DataFrame chunk to process.
-        data_columns: A list of column names in `data` to analyze.
-        id_maps: The dictionary of existing ID maps to be updated.
-        selected_columns_statistics: The dictionary of existing numerical
-            statistics to be updated.
-        n_rows_running_count: The total number of rows processed *before*
-            this chunk, used for weighting statistics.
-        precomputed_id_maps: A dictionary of pre-loaded ID maps that should
-            be applied and not re-computed.
-
-    Returns:
-        A tuple `(id_maps, selected_columns_statistics)` containing the
-        updated dictionaries.
-
-    Raises:
-        ValueError: If a column has an unsupported data type (neither
-            string, integer, nor float).
-    """
     for data_col in data_columns:
         dtype = data.schema[data_col]
         if isinstance(
@@ -1055,24 +1405,35 @@ def _get_column_statistics(
                 id_maps[data_col] = combine_maps(new_id_map, id_maps.get(data_col, {}))
             else:
                 logger.info(f"Applying precomputed map for {data_col}")
-        elif isinstance(dtype, (pl.Float32, pl.Float64)):
+        elif isinstance(dtype, (pl.Float16, pl.Float32, pl.Float64)):
             if data_col in precomputed_id_maps:
                 raise ValueError(
                     f"Column {data_col} is not categorical, precomputed map is invalid."
                 )
 
-            combined_mean, combined_std = get_combined_statistics(
-                data.shape[0],
-                data.get_column(data_col).mean(),
-                data.get_column(data_col).std(),
-                n_rows_running_count,
-                selected_columns_statistics.get(data_col, {"mean": 0.0})["mean"],
-                selected_columns_statistics.get(data_col, {"std": 0.0})["std"],
-            )
+            chunk_mean = data.get_column(data_col).mean()
+            chunk_std = data.get_column(data_col).std() or 0.0
+            previous_stats = selected_columns_statistics.get(data_col)
+
+            if previous_stats is None:
+                combined_mean, combined_std = chunk_mean, chunk_std
+                combined_count = data.shape[0]
+            else:
+                previous_count = int(previous_stats.get("count", n_rows_running_count))
+                combined_mean, combined_std = get_combined_statistics(
+                    data.shape[0],
+                    chunk_mean,
+                    chunk_std,
+                    previous_count,
+                    previous_stats["mean"],
+                    previous_stats["std"],
+                )
+                combined_count = previous_count + data.shape[0]
 
             selected_columns_statistics[data_col] = {
                 "std": combined_std,
                 "mean": combined_mean,
+                "count": float(combined_count),
             }
         else:
             raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
@@ -1086,38 +1447,29 @@ def _load_and_preprocess_data(
     read_format: str,
     selected_columns: Optional[list[str]],
     max_rows: Optional[int],
+    mask_column: Optional[str] = None,
 ) -> pl.DataFrame:
-    """Loads data from a file and performs initial preparation.
-
-    This function reads a data file using the specified `read_format`.
-    It then performs the following steps:
-    1.  Asserts that the data contains no null or NaN values.
-    2.  Selects only the `selected_columns` if provided.
-    3.  Slices the DataFrame to `max_rows` if provided.
-
-    Args:
-        data_path: The path to the data file.
-        read_format: The file format to read (e.g., "csv", "parquet").
-        selected_columns: A list of columns to load. If `None`, all
-            columns are loaded.
-        max_rows: The maximum number of rows to load. If `None`, all
-            rows are loaded.
-
-    Returns:
-        A Polars DataFrame containing the loaded and initially
-        prepared data.
-    """
+    """Read, validate, column-filter, and row-limit one input file."""
     logger.info(f"Reading data from '{data_path}'...")
-    data = read_data(data_path, read_format, columns=selected_columns)
+    columns_to_read = _selected_columns_with_optional_mask(
+        data_path, read_format, selected_columns, mask_column
+    )
+    data = read_data(data_path, read_format, columns=columns_to_read)
+
+    if mask_column is not None and mask_column not in data.columns:
+        raise ValueError(f"mask_column '{mask_column}' not found in {data_path}")
 
     if data.null_count().sum().sum_horizontal().item() != 0:
         raise ValueError(f"NaN or null values not accepted: {data.null_count()}")
 
     if selected_columns:
         selected_columns_filtered = [
-            col for col in selected_columns if col not in ["sequenceId", "itemPosition"]
+            col for col in selected_columns if col not in INPUT_METADATA_COLUMNS
         ]
-        data = data.select(["sequenceId", "itemPosition"] + selected_columns_filtered)
+        columns_to_select = list(INPUT_METADATA_COLUMNS) + selected_columns_filtered
+        if mask_column is not None and mask_column in data.columns:
+            columns_to_select.append(mask_column)
+        data = data.select(_deduplicate_columns(columns_to_select))
 
     if max_rows:
         data = data.slice(0, int(max_rows))
@@ -1176,6 +1528,31 @@ def _check_file_has_been_processed(
 
 
 @beartype
+def _get_processed_prefixes(
+    project_root: str,
+    target_dir: str,
+    write_format: str,
+) -> set[str]:
+    temp_dir = Path(project_root) / "data" / target_dir
+
+    if not temp_dir.is_dir():
+        return set()
+
+    suffix = f".{write_format}"
+    processed = set()
+
+    with os.scandir(temp_dir) as entries:
+        for entry in entries:
+            if not entry.is_file() or not entry.name.endswith(suffix):
+                continue
+
+            if "-split" in entry.name:
+                processed.add(entry.name.rsplit("-split", 1)[0])
+
+    return processed
+
+
+@beartype
 def _process_batches_multiple_files_inner(
     project_root: str,
     data_name_root: str,
@@ -1186,7 +1563,7 @@ def _process_batches_multiple_files_inner(
     max_rows: Optional[int],
     schema: Any,
     n_cores: int,
-    seq_length: int,
+    layout: StoredWindowLayout,
     stride_by_split: list[int],
     data_columns: list[str],
     n_classes: dict[str, int],
@@ -1199,37 +1576,20 @@ def _process_batches_multiple_files_inner(
     target_dir: str,
     batches_per_file: int,
     merge_output: bool,
+    allow_sequence_splitting: bool,
     continue_preprocessing: bool,
     subsequence_start_mode: str,
+    mask_column: Optional[str],
+    split_method: str,
+    seed: int,
 ):
-    """Inner function for processing batches of data from multiple files.
+    """Process this worker's file shard."""
 
-    Args:
-        project_root: The path to the sequifier project directory.
-        data_name_root: The root name of the data file.
-        process_id: The id of the process.
-        file_paths: A list of file paths to process.
-        read_format: The file format to read.
-        selected_columns: A list of columns to be included in the preprocessing.
-        max_rows: The maximum number of rows to process.
-        schema: The schema for the preprocessed data.
-        n_cores: The number of cores to use for parallel processing.
-        seq_length: The sequence length for the model inputs.
-        stride_by_split: A list of step sizes for creating subsequences.
-        data_columns: A list of data columns.
-        n_classes: A dictionary containing the number of classes for each categorical column.
-        id_maps: A dictionary containing the id maps for each categorical column.
-        selected_columns_statistics: A dictionary containing the statistics for each numerical column.
-        col_types: A dictionary containing the column types.
-        split_ratios: A list of floats that define the relative sizes of data splits.
-        write_format: The file format for the output files.
-        split_paths: The paths to the output split files.
-        target_dir: The target directory for temporary files.
-        batches_per_file: The number of batches to process per file.
-        merge_output: Whether to combine the output into a single file.
-        continue_preprocessing: Continue preprocessing job that was interrupted while writing to temp folder.
-        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
-    """
+    processed_prefixes = (
+        _get_processed_prefixes(project_root, target_dir, write_format)
+        if continue_preprocessing and not merge_output
+        else set()
+    )
     n_files = len(file_paths)
     if n_files <= 0:
         raise ValueError("No files found to process.")
@@ -1247,32 +1607,42 @@ def _process_batches_multiple_files_inner(
                 for path in split_paths
             ]
             if continue_preprocessing:
-                file_has_been_processed = _check_file_has_been_processed(
-                    project_root,
-                    data_name_root,
-                    process_id,
-                    split_ratios,
-                    write_format,
-                    target_dir,
-                    merge_output,
-                    file_index_str,
-                )
+                file_prefix_str = f"{data_name_root}-{process_id}-{file_index_str}"
 
+                if not merge_output:
+                    file_has_been_processed = file_prefix_str in processed_prefixes
+                else:
+                    file_has_been_processed = _check_file_has_been_processed(
+                        project_root,
+                        data_name_root,
+                        process_id,
+                        split_ratios,
+                        write_format,
+                        target_dir,
+                        merge_output,
+                        file_index_str,
+                    )
                 if file_has_been_processed:
                     logger.info(f"Skipping already processed file: {path}")
                     if max_rows is not None:
                         data = _load_and_preprocess_data(
-                            path, read_format, selected_columns, max_rows_inner
+                            path,
+                            read_format,
+                            selected_columns,
+                            max_rows_inner,
+                            mask_column,
                         )
                         n_rows_running_count += data.shape[0]
                     continue
 
             data = _load_and_preprocess_data(
-                path, read_format, selected_columns, max_rows_inner
+                path,
+                read_format,
+                selected_columns,
+                max_rows_inner,
+                mask_column,
             )
-            data = _load_and_preprocess_data(
-                path, read_format, selected_columns, max_rows_inner
-            )
+            data = _apply_configured_input_casting(data, data_columns, col_types)
             data, _, _ = _apply_column_statistics(
                 data,
                 data_columns,
@@ -1281,6 +1651,8 @@ def _process_batches_multiple_files_inner(
                 n_classes,
                 col_types,
             )
+            data = _apply_mask_column(data, data_columns, col_types, mask_column)
+            data = _apply_output_type_casting(data, data_columns, col_types)
 
             data_name_root_inner = f"{data_name_root}-{process_id}-{file_index_str}"
 
@@ -1290,7 +1662,7 @@ def _process_batches_multiple_files_inner(
                 data,
                 schema,
                 n_cores,
-                seq_length,
+                layout,
                 stride_by_split,
                 data_columns,
                 col_types,
@@ -1301,6 +1673,9 @@ def _process_batches_multiple_files_inner(
                 batches_per_file,
                 subsequence_start_mode,
                 merge_output,
+                allow_sequence_splitting,
+                split_method,
+                seed,
             )
 
             if merge_output:
@@ -1337,7 +1712,7 @@ def _process_batches_single_file(
     data: pl.DataFrame,
     schema: Any,
     n_cores: Optional[int],
-    seq_length: int,
+    layout: StoredWindowLayout,
     stride_by_split: list[int],
     data_columns: list[str],
     col_types: dict[str, str],
@@ -1348,32 +1723,13 @@ def _process_batches_single_file(
     batches_per_file: int,
     subsequence_start_mode: str,
     merge_output: bool,
+    allow_sequence_splitting: bool,
+    split_method: str = "within_sequence",
+    seed: int = 1010,
 ) -> int:
-    """Processes batches of data from a single file.
-
-    Args:
-        project_root: The path to the sequifier project directory.
-        data_name_root: The root name of the data file.
-        data: The data to process.
-        schema: The schema for the preprocessed data.
-        n_cores: The number of cores to use for parallel processing.
-        seq_length: The sequence length for the model inputs.
-        stride_by_split: A list of step sizes for creating subsequences.
-        data_columns: A list of data columns.
-        col_types: A dictionary containing the column types.
-        split_ratios: A list of floats that define the relative sizes of data splits.
-        write_format: The file format for the output files.
-        split_paths: The paths to the output split files.
-        target_dir: The target directory for temporary files.
-        batches_per_file: The number of batches to process per file.
-        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
-        merge_output: merge output
-
-    Returns:
-        The number of batches processed.
-    """
+    """Split one file into worker batches and preprocess them."""
     n_cores = n_cores or multiprocessing.cpu_count()
-    batch_limits = get_batch_limits(data, n_cores)
+    batch_limits = get_batch_limits(data, n_cores, allow_sequence_splitting)
     valid_batch_limits = [(s, e) for s, e in batch_limits if (e - s) > 0]
     batches = [
         (
@@ -1383,7 +1739,7 @@ def _process_batches_single_file(
             data.slice(start, end - start),
             schema,
             split_paths,
-            seq_length,
+            layout,
             stride_by_split,
             data_columns,
             col_types,
@@ -1393,6 +1749,8 @@ def _process_batches_single_file(
             batches_per_file,
             subsequence_start_mode,
             merge_output,
+            split_method,
+            seed,
         )
         for process_id, (start, end) in enumerate(valid_batch_limits)
     ]
@@ -1410,33 +1768,20 @@ def _process_batches_single_file(
 def get_combined_statistics(
     n1: int, mean1: float, std1: float, n2: int, mean2: float, std2: float
 ) -> tuple[float, float]:
-    """Calculates the combined mean and standard deviation of two data subsets.
+    """Combine two mean/std summaries."""
+    if n1 == 0:
+        return mean2, std2
+    if n2 == 0:
+        return mean1, std1
 
-    Uses a stable parallel algorithm (related to Welford's algorithm) to
-    combine statistics from two subsets without needing the original data.
-
-    Args:
-        n1: Number of samples in subset 1.
-        mean1: Mean of subset 1.
-        std1: Standard deviation of subset 1.
-        n2: Number of samples in subset 2.
-        mean2: Mean of subset 2.
-        std2: Standard deviation of subset 2.
-
-    Returns:
-        A tuple `(combined_mean, combined_std)` containing the combined
-        mean and standard deviation of the two subsets.
-    """
-    # Step 1: Calculate the combined mean.
     combined_mean = (n1 * mean1 + n2 * mean2) / (n1 + n2)
 
-    # Step 2: Calculate the pooled sum of squared differences.
-    # This includes the internal variance of each subset and the variance
-    # between the subset mean and the combined mean.
+    if n1 + n2 <= 1:
+        return combined_mean, 0.0
+
     sum_of_squares1 = (n1 - 1) * std1**2 + n1 * (mean1 - combined_mean) ** 2
     sum_of_squares2 = (n2 - 1) * std2**2 + n2 * (mean2 - combined_mean) ** 2
 
-    # Step 3: Calculate the combined standard deviation.
     combined_std = math.sqrt((sum_of_squares1 + sum_of_squares2) / (n1 + n2 - 1))
 
     return combined_mean, combined_std
@@ -1444,113 +1789,157 @@ def get_combined_statistics(
 
 @beartype
 def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]:
-    """Creates a map from unique values in a column to integer indices.
-
-    Finds all unique values in the specified `column` of the `data`
-    DataFrame, sorts them, and creates a dictionary mapping each unique
-    value to a 1-based integer index.
-
-    Args:
-        data: The Polars DataFrame containing the column.
-        column: The name of the column to map.
-
-    Returns:
-        A dictionary mapping unique values (str or int) to an integer
-        index (starting from 1).
-    """
+    """Map sorted user values to IDs after reserved tokens."""
     ids = sorted(
         [int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]
     )  # type: ignore
-    id_map = {id_: i + 2 for i, id_ in enumerate(ids)}
+
+    if isinstance(ids[0], str):
+        if SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask] in ids:
+            raise ValueError(
+                f"Found value '{SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask]}' in {column}, this is invalid"
+            )
+
+        for special_val in [
+            SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown],
+            SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other],
+        ]:
+            if special_val in ids:
+                warnings.warn(
+                    f"Found special value {special_val} in {column}, these will be combined with the sequifier-internal special value {special_val}"
+                )
+        ids = [
+            id_
+            for id_ in ids
+            if id_
+            not in [
+                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown],
+                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other],
+            ]
+        ]
+        id_map = {id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(ids)}
+        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]] = (
+            SPECIAL_TOKEN_IDS.unknown
+        )
+        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]] = (
+            SPECIAL_TOKEN_IDS.other
+        )
+    else:
+        id_map = {id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(ids)}
     return dict(id_map)
 
 
 @beartype
-def get_batch_limits(data: pl.DataFrame, n_batches: int) -> list[tuple[int, int]]:
-    """Calculates row indices to split a DataFrame into batches.
+def get_batch_limits(
+    data: pl.DataFrame, n_batches: int, allow_sequence_splitting: bool
+) -> list[tuple[int, int]]:
+    """Split rows into batches without crossing sequenceId boundaries unless allowed."""
+    if n_batches <= 0:
+        raise ValueError("n_batches must be positive.")
+    if data.is_empty():
+        raise ValueError("Cannot split an empty dataset into batches.")
 
-    This function divides the DataFrame into `n_batches` roughly equal
-    chunks. Crucially, it ensures that no `sequenceId` is split across
-    two different batches. It does this by finding the ideal split points
-    and then adjusting them to the nearest `sequenceId` boundary.
-
-    Args:
-        data: The DataFrame to split. Must be sorted by "sequenceId".
-        n_batches: The desired number of batches.
-
-    Returns:
-        A list of `(start_index, end_index)` tuples, where each tuple
-        defines the row indices for a batch.
-    """
     sequence_ids = data.get_column("sequenceId").to_numpy()
-    new_sequence_id_indices = np.concatenate(
-        [
-            [0],
-            np.where(
-                np.concatenate([[False], sequence_ids[1:] != sequence_ids[:-1]], axis=0)
-            )[0],
-        ]
+    sequence_start_indices = np.concatenate(
+        [[0], np.where(sequence_ids[1:] != sequence_ids[:-1])[0] + 1]
     )
+    sequence_boundaries = np.concatenate([sequence_start_indices, [data.shape[0]]])
+    sequence_count = len(sequence_start_indices)
 
-    ideal_step = math.ceil(data.shape[0] / n_batches)
-    ideal_limits = np.array(
-        [ideal_step * m for m in range(n_batches)] + [data.shape[0]]
-    )
-    distances = [
-        np.abs(new_sequence_id_indices - ideal_limit)
-        for ideal_limit in ideal_limits[:-1]
-    ]
-    actual_limit_indices = [
-        np.where(distance == np.min(distance))[0] for distance in distances
-    ]
-    actual_limits = [
-        int(new_sequence_id_indices[limit_index[0]])
-        for limit_index in actual_limit_indices
-    ] + [data.shape[0]]
-    return list(zip(actual_limits[:-1], actual_limits[1:]))
+    if n_batches > sequence_count:
+        if not allow_sequence_splitting:
+            raise ValueError(
+                "Cannot create more non-empty batches than there are sequences without "
+                "splitting a sequence."
+            )
+
+        original_lengths = np.diff(sequence_boundaries)
+        pieces = np.ones(len(original_lengths), dtype=int)
+
+        for _ in range(n_batches - sequence_count):
+            largest_piece_idx = int(np.argmax(original_lengths / pieces))
+            pieces[largest_piece_idx] += 1
+
+        if np.any(pieces > original_lengths):
+            raise ValueError(
+                "Cannot split further: sequences are too short to reach the "
+                "requested number of non-empty batches."
+            )
+
+        new_boundaries = []
+        for start, length, num_pieces in zip(
+            sequence_boundaries[:-1], original_lengths, pieces
+        ):
+            # Calculate evenly spaced boundaries within this sequence
+            splits = start + np.round(np.linspace(0, length, num_pieces + 1)).astype(
+                int
+            )
+
+            if not new_boundaries:
+                new_boundaries.extend(splits)
+            else:
+                new_boundaries.extend(
+                    splits[1:]
+                )  # Avoid duplicating the shared boundary
+
+        sequence_boundaries = np.array(new_boundaries)
+
+    interior_boundaries = sequence_boundaries[1:-1]
+    ideal_limits = np.linspace(0, data.shape[0], n_batches + 1)[1:-1]
+
+    selected_boundaries: list[int] = []
+    previous_boundary = 0
+    for batch_index, ideal_limit in enumerate(ideal_limits):
+        remaining_boundaries_needed = len(ideal_limits) - batch_index - 1
+        candidates = [
+            int(boundary)
+            for boundary in interior_boundaries
+            if boundary > previous_boundary
+            and (data.shape[0] - boundary) >= remaining_boundaries_needed
+        ]
+        if not candidates:
+            raise ValueError(
+                "Cannot create requested non-empty batches without splitting a sequence."
+            )
+
+        selected_boundary = min(
+            candidates,
+            key=lambda boundary: abs(boundary - ideal_limit),
+        )
+        selected_boundaries.append(selected_boundary)
+        previous_boundary = selected_boundary
+
+    limits = [0, *selected_boundaries, data.shape[0]]
+    return list(zip(limits[:-1], limits[1:]))
 
 
 @beartype
 def combine_maps(
     map1: dict[Union[str, int], int], map2: dict[Union[str, int], int]
 ) -> dict[Union[str, int], int]:
-    """Combines two ID maps into a new, consolidated map.
+    """Merge maps and reassign user IDs after reserved tokens."""
+    keys1 = {k for k in map1.keys() if k not in SPECIAL_TOKEN_LABELS}
+    keys2 = {k for k in map2.keys() if k not in SPECIAL_TOKEN_LABELS}
 
-    Takes all unique keys from both `map1` and `map2`, sorts them,
-    and creates a new, single map where keys are mapped to 1-based
-    indices based on the sorted order. This ensures a consistent
-    mapping across different data chunks.
+    combined_keys = sorted(list(keys1.union(keys2)))
+    id_map = {
+        id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(combined_keys)
+    }
 
-    Args:
-        map1: The first ID map.
-        map2: The second ID map.
+    if combined_keys and isinstance(combined_keys[0], str):
+        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]] = (
+            SPECIAL_TOKEN_IDS.unknown
+        )
+        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]] = (
+            SPECIAL_TOKEN_IDS.other
+        )
 
-    Returns:
-        A new, combined, and re-indexed ID map.
-    """
-    combined_keys = sorted(list(set(list(map1.keys())).union(list(set(map2.keys())))))
-    id_map = {id_: i + 2 for i, id_ in enumerate(combined_keys)}
     return id_map
 
 
 @beartype
 def get_group_bounds(data_subset: pl.DataFrame, split_ratios: list[float]):
-    """Calculates row indices for splitting a sequence into groups.
-
-    This function takes a DataFrame `data_subset` (which typically
-    contains all items for a single `sequenceId`) and calculates the
-    row indices to split it into multiple groups (e.g., train, val, test)
-    based on the provided `split_ratios`.
-
-    Args:
-        data_subset: The DataFrame (for a single sequence) to split.
-        split_ratios: A list of floats (e.g., [0.8, 0.1, 0.1]) that
-            sum to 1.0, defining the relative sizes of the splits.
-
-    Returns:
-        A list of `(start_index, end_index)` tuples, one for each
-        proportion, defining the row slices for each group.
-    """
+    """Return per-split row bounds for one sequence."""
     n = data_subset.shape[0]
     upper_bounds = list((np.cumsum(split_ratios) * n).astype(int))
     lower_bounds = [0] + list(upper_bounds[:-1])
@@ -1560,44 +1949,29 @@ def get_group_bounds(data_subset: pl.DataFrame, split_ratios: list[float]):
 
 @beartype
 def process_and_write_data_pt(
-    data: pl.DataFrame, seq_length: int, path: str, column_types: dict[str, str]
+    data: pl.DataFrame,
+    stored_context_width: int,
+    path: str,
+    column_types: dict[str, str],
 ):
-    """Processes the sequence DataFrame and writes it to a .pt file.
-
-    This function takes the long-format sequence DataFrame (`data`),
-    aggregates it by `sequenceId` and `subsequenceId`, and pivots it
-    so that each `inputCol` becomes its own column containing a list
-    of sequence items. It also extracts the `startItemPosition`.
-
-    It then converts these lists into NumPy arrays, splits them into
-    `sequences` (all but last item) and `targets` (all but first item),
-    and converts them to PyTorch tensors along with sequence/subsequence IDs
-    and start positions. The final data tuple
-    `(sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor)`
-    is saved to a .pt file using `torch.save`.
-
-    Args:
-        data: The long-format Polars DataFrame of extracted sequences.
-        seq_length: The total sequence length (N). The resulting tensors
-            will have sequence length N-1.
-        path: The output file path (e.g., "data/batch_0.pt").
-        column_types: A dictionary mapping column names to their
-            string data types, used to determine the correct torch dtype.
-    """
+    """Write long-format sequences as packed PT tensors."""
     if data.is_empty():
         return
 
-    sequence_cols = [str(c) for c in range(seq_length, -1, -1)]
+    sequence_cols = [str(c) for c in range(stored_context_width - 1, -1, -1)]
 
     all_feature_cols = data.get_column("inputCol").unique().to_list()
 
     aggs = [
         pl.concat_list(sequence_cols)
         .filter(pl.col("inputCol") == col_name)
-        .flatten()
+        .list.explode(keep_nulls=False, empty_as_null=False)  # flatten
         .alias(f"seq_{col_name}")
         for col_name in all_feature_cols
-    ] + [pl.col("startItemPosition").first().alias("startItemPosition")]
+    ] + [
+        pl.col("startItemPosition").first().alias("startItemPosition"),
+        pl.col("leftPadLength").first().alias("leftPadLength"),
+    ]
 
     aggregated_data = (
         data.group_by(["sequenceId", "subsequenceId"])
@@ -1616,6 +1990,9 @@ def process_and_write_data_pt(
     )
     start_item_positions_tensor = torch.tensor(
         aggregated_data.get_column("startItemPosition").to_numpy(), dtype=torch.int64
+    )
+    left_pad_lengths_tensor = torch.tensor(
+        aggregated_data.get_column("leftPadLength").to_numpy(), dtype=torch.int64
     )
     sequences_dict = {}
 
@@ -1637,6 +2014,7 @@ def process_and_write_data_pt(
         sequence_ids_tensor,
         subsequence_ids_tensor,
         start_item_positions_tensor,
+        left_pad_lengths_tensor,
     )
     torch.save(data_to_save, path)
 
@@ -1649,26 +2027,10 @@ def _write_accumulated_sequences(
     process_id: int,
     file_index_str: str,
     target_dir: str,
-    seq_length: int,
+    layout: StoredWindowLayout,
     col_types: dict[str, str],
 ):
-    """Helper to write a batch of accumulated sequences to a single .pt file.
-
-    This function concatenates a list of sequence DataFrames and writes
-    the combined DataFrame to a single .pt file using
-    `process_and_write_data_pt`. This is used to batch multiple sequences
-    into fewer, larger files when `write_format` is 'pt'.
-
-    Args:
-        sequences_to_write: A list of Polars DataFrames to combine and write.
-        split_path: The base path for the split (e.g., "data/split0.pt").
-        write_format: The file format (e.g., "pt").
-        process_id: The ID of the parent multiprocessing process.
-        file_index: The index of this file batch for this split and process.
-        target_dir: The temporary directory to write the file into.
-        seq_length: The total sequence length.
-        col_types: A dictionary mapping column names to their string types.
-    """
+    """Write one accumulated sequence shard."""
 
     if not sequences_to_write:
         return
@@ -1680,9 +2042,61 @@ def _write_accumulated_sequences(
     out_path = insert_top_folder(split_path_batch_seq, target_dir)
 
     if write_format == "pt":
-        process_and_write_data_pt(combined_df, seq_length, out_path, col_types)
+        process_and_write_data_pt(
+            combined_df, layout.stored_context_width, out_path, col_types
+        )
     elif write_format == "parquet":
         combined_df.write_parquet(out_path)
+
+
+@beartype
+def _extract_sequences_for_splits(
+    data_subset: pl.DataFrame,
+    sequence_id: int,
+    schema: Any,
+    layout: StoredWindowLayout,
+    stride_by_split: list[int],
+    data_columns: list[str],
+    split_ratios: list[float],
+    subsequence_start_mode: str,
+    split_method: str,
+    seed: int,
+) -> dict[int, pl.DataFrame]:
+    """Return extracted windows for one sequence across configured splits."""
+    if split_method == "within_sequence":
+        group_bounds = get_group_bounds(data_subset, split_ratios)
+        return {
+            i: cast_columns_to_string(
+                extract_sequences(
+                    data_subset.slice(lb, ub - lb),
+                    schema,
+                    layout,
+                    stride_by_split[i],
+                    data_columns,
+                    subsequence_start_mode,
+                )
+            )
+            for i, (lb, ub) in enumerate(group_bounds)
+        }
+
+    if split_method == "between_sequence":
+        assigned_group = assign_sequence_to_split(sequence_id, split_ratios, seed)
+        sequences = {i: pl.DataFrame(schema=schema) for i in range(len(split_ratios))}
+        sequences[assigned_group] = cast_columns_to_string(
+            extract_sequences(
+                data_subset,
+                schema,
+                layout,
+                stride_by_split[assigned_group],
+                data_columns,
+                subsequence_start_mode,
+            )
+        )
+        return sequences
+
+    raise ValueError(
+        "split_method must be one of 'within_sequence', 'between_sequence'"
+    )
 
 
 @beartype
@@ -1693,7 +2107,7 @@ def preprocess_batch(
     batch: pl.DataFrame,
     schema: Any,
     split_paths: list[str],
-    seq_length: int,
+    layout: StoredWindowLayout,
     stride_by_split: list[int],
     data_columns: list[str],
     col_types: dict[str, str],
@@ -1703,50 +2117,31 @@ def preprocess_batch(
     batches_per_file: int,
     subsequence_start_mode: str,
     merge_output: bool,
+    split_method: str = "within_sequence",
+    seed: int = 1010,
 ) -> None:
-    """Processes a batch of data.
-
-    Args:
-        project_root: The path to the sequifier project directory.
-        data_name_root: The root name of the data file.
-        process_id: The id of the process.
-        batch: The batch of data to process.
-        schema: The schema for the preprocessed data.
-        split_paths: The paths to the output split files.
-        seq_length: The sequence length for the model inputs.
-        stride_by_split: A list of step sizes for creating subsequences.
-        data_columns: A list of data columns.
-        col_types: A dictionary containing the column types.
-        split_ratios: A list of floats that define the relative sizes of data splits.
-        target_dir: The target directory for temporary files.
-        write_format: The file format for the output files.
-        batches_per_file: The number of batches to process per file.
-        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
-    """
+    """Extract and write all split windows for one batch."""
     sequence_ids = sorted(batch.get_column("sequenceId").unique().to_list())
 
     if not merge_output:
-        # New logic for batching sequences into files for .pt format
         sequences_by_split = {i: [] for i in range(len(split_paths))}
         file_indices = {i: 0 for i in range(len(split_paths))}
 
         pad_width = len(str(math.ceil(len(sequence_ids) / batches_per_file) + 1))
         for i, sequence_id in enumerate(sequence_ids):
             data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
-            group_bounds = get_group_bounds(data_subset, split_ratios)
-            sequences = {
-                i: cast_columns_to_string(
-                    extract_sequences(
-                        data_subset.slice(lb, ub - lb),
-                        schema,
-                        seq_length,
-                        stride_by_split[i],
-                        data_columns,
-                        subsequence_start_mode,
-                    )
-                )
-                for i, (lb, ub) in enumerate(group_bounds)
-            }
+            sequences = _extract_sequences_for_splits(
+                data_subset,
+                sequence_id,
+                schema,
+                layout,
+                stride_by_split,
+                data_columns,
+                split_ratios,
+                subsequence_start_mode,
+                split_method,
+                seed,
+            )
 
             for group, split_df in sequences.items():
                 if not split_df.is_empty():
@@ -1761,7 +2156,7 @@ def preprocess_batch(
                         process_id,
                         str(file_indices[group]).zfill(pad_width),
                         target_dir,
-                        seq_length,
+                        layout,
                         col_types,
                     )
                     # Reset the accumulator and increment the file index
@@ -1777,7 +2172,7 @@ def preprocess_batch(
                 process_id,
                 str(file_indices[group]).zfill(pad_width),
                 target_dir,
-                seq_length,
+                layout,
                 col_types,
             )
 
@@ -1785,23 +2180,22 @@ def preprocess_batch(
         written_files: dict[int, list[str]] = {i: [] for i in range(len(split_paths))}
         for i, sequence_id in enumerate(sequence_ids):
             data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
-            group_bounds = get_group_bounds(data_subset, split_ratios)
-            sequences = {
-                j: cast_columns_to_string(
-                    extract_sequences(
-                        data_subset.slice(lb, ub - lb),
-                        schema,
-                        seq_length,
-                        stride_by_split[j],
-                        data_columns,
-                        subsequence_start_mode,
-                    )
-                )
-                for j, (lb, ub) in enumerate(group_bounds)
-            }
+            sequences = _extract_sequences_for_splits(
+                data_subset,
+                sequence_id,
+                schema,
+                layout,
+                stride_by_split,
+                data_columns,
+                split_ratios,
+                subsequence_start_mode,
+                split_method,
+                seed,
+            )
             post_split_str = f"{process_id}-{i}"
 
-            for split_path, (group, split) in zip(split_paths, sequences.items()):
+            for group, split in sequences.items():
+                split_path = split_paths[group]
                 split_path_batch_seq = split_path.replace(
                     f".{write_format}", f"-{post_split_str}.{write_format}"
                 )
@@ -1832,35 +2226,12 @@ def preprocess_batch(
 def extract_sequences(
     data: pl.DataFrame,
     schema: Any,
-    seq_length: int,
+    layout: StoredWindowLayout,
     stride_for_split: int,
     columns: list[str],
     subsequence_start_mode: str,
 ) -> pl.DataFrame:
-    """Extracts subsequences from a DataFrame of full sequences.
-
-    This function takes a DataFrame where each row contains all items
-    for a single `sequenceId`. It iterates through each `sequenceId`,
-    extracts all possible subsequences of `seq_length` using the
-    specified `stride_for_split`, calculates the starting position of each
-    subsequence within the original sequence, and formats them into a new,
-    long-format DataFrame that conforms to the provided `schema`.
-
-    Args:
-        data: The input Polars DataFrame, grouped by "sequenceId".
-        schema: The schema for the output long-format DataFrame.
-        seq_length: The length of the subsequences to extract.
-        stride_for_split: The step size to use when sliding the window
-            to create subsequences.
-        columns: A list of the data column names (features) to extract.
-        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
-
-    Returns:
-        A new, long-format Polars DataFrame containing the extracted
-        subsequences, matching the provided `schema`. Includes columns
-        for `sequenceId`, `subsequenceId`, `startItemPosition`, `inputCol`,
-        and the sequence items ('0', '1', ...).
-    """
+    """Extract long-format windows from grouped sequences."""
     if data.is_empty():
         return pl.DataFrame(schema=schema)
 
@@ -1872,9 +2243,9 @@ def extract_sequences(
     for in_row in raw_sequences.iter_rows(named=True):
         in_seq_lists_only = {col: in_row[col] for col in columns}
 
-        subsequences = extract_subsequences(
+        subsequences, left_pad_lengths, subsequence_starts = extract_subsequences(
             in_seq_lists_only,
-            seq_length,
+            layout.stored_context_width,
             stride_for_split,
             columns,
             subsequence_start_mode,
@@ -1885,12 +2256,15 @@ def extract_sequences(
                 row = [
                     in_row["sequenceId"],
                     subsequence_id,
-                    subsequence_id * stride_for_split,
+                    int(subsequence_starts[subsequence_id])
+                    - left_pad_lengths[subsequence_id],
+                    left_pad_lengths[subsequence_id],
                     col,
                 ] + subseqs[subsequence_id]
-                if len(row) != (seq_length + 5):
+                expected_row_length = 5 + layout.stored_context_width
+                if len(row) != expected_row_length:
                     raise RuntimeError(
-                        f"Row length mismatch. Expected {seq_length + 5}, got {len(row)}. Row: {row}"
+                        f"Row length mismatch. Expected {expected_row_length}, got {len(row)}. Row: {row}"
                     )
                 rows.append(row)
 
@@ -1904,35 +2278,19 @@ def extract_sequences(
 
 @beartype
 def get_subsequence_starts(
-    in_seq_length: int,
-    seq_length: int,
+    in_context_length: int,
+    stored_context_width: int,
     stride_for_split: int,
     subsequence_start_mode: str,
 ) -> np.ndarray:
-    """Calculates the start indices for extracting subsequences.
-
-    This function determines the starting indices for sliding a window of
-    `seq_length` over an input sequence of `in_seq_length`. It aims to
-    use `stride_for_split`, but adjusts the step size slightly to ensure
-    that the windows are distributed as evenly as possible and cover the
-    full sequence from the beginning to the end.
-
-    Args:
-        in_seq_length: The length of the original input sequence.
-        seq_length: The length of the subsequences to extract.
-        stride_for_split: The *desired* step size between subsequences.
-        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
-
-    Returns:
-        A numpy array of integer start indices for each subsequence.
-    """
+    """Return window start indices for distribute/exact modes."""
     if subsequence_start_mode not in ["distribute", "exact"]:
         raise ValueError(
             f"subsequence_start_mode must be 'distribute' or 'exact', got '{subsequence_start_mode}'"
         )
 
     if subsequence_start_mode == "distribute":
-        last_available_start = in_seq_length - (seq_length + 1)
+        last_available_start = in_context_length - stored_context_width
         raw_starts = np.arange(
             0, last_available_start + stride_for_split, stride_for_split
         )
@@ -1943,11 +2301,11 @@ def get_subsequence_starts(
         return np.unique(starts)
 
     if subsequence_start_mode == "exact":
-        if ((in_seq_length - 1) - seq_length) % stride_for_split != 0:
+        if (in_context_length - stored_context_width) % stride_for_split != 0:
             raise ValueError(
-                f"'exact' mode requires sequence length alignment, i.e. if: ((in_seq_length - 1) - seq_length) % stride_for_split == 0, {(in_seq_length -1) = }, {seq_length = }, {stride_for_split = }"
+                f"'exact' mode requires sequence length alignment, i.e. if: (in_context_length - stored_context_width) % stride_for_split == 0, {in_context_length = }, {stored_context_width = }, {stride_for_split = }"
             )
-        last_possible_start = in_seq_length - (seq_length + 1)
+        last_possible_start = in_context_length - stored_context_width
         return np.arange(0, last_possible_start + 1, stride_for_split)
     return np.array([])
 
@@ -1955,43 +2313,24 @@ def get_subsequence_starts(
 @beartype
 def extract_subsequences(
     in_seq: dict[str, list],
-    seq_length: int,
+    stored_context_width: int,
     stride_for_split: int,
     columns: list[str],
     subsequence_start_mode: str,
-) -> dict[str, list[list[Union[float, int]]]]:
-    """Extracts subsequences from a dictionary of sequence lists.
-
-    This function takes a dictionary `in_seq` where keys are column
-    names and values are lists of items for a single full sequence.
-    It first pads the sequences with 0s at the beginning if they are
-    shorter than `seq_length`. Then, it calculates the subsequence
-    start indices using `get_subsequence_starts` and extracts all
-    subsequences.
-
-    Args:
-        in_seq: A dictionary mapping column names to lists of items
-            (e.g., `{'col_A': [1, 2, 3, 4, 5], 'col_B': [6, 7, 8, 9, 10]}`).
-        seq_length: The length of the subsequences to extract.
-        stride_for_split: The desired step size between subsequences.
-        columns: A list of the column names (keys in `in_seq`) to process.
-        subsequence_start_mode: "distribute" to minimize max subsequence overlap, or "exact".
-
-    Returns:
-        A dictionary mapping column names to a *list of lists*, where
-        each inner list is a subsequence.
-    """
-    if not in_seq[columns[0]]:
-        return {col: [] for col in columns}
-
+) -> tuple[dict[str, list[list[Union[float, int]]]], list[int], np.ndarray]:
+    """Extract padded windows plus left-pad lengths from one sequence."""
     in_seq_len = len(in_seq[columns[0]])
-    if in_seq_len < (seq_length + 1):
-        pad_len = (seq_length + 1) - in_seq_len
+    pad_len = 0
+    if in_seq_len < stored_context_width:
+        pad_len = stored_context_width - in_seq_len
         in_seq = {col: ([0] * pad_len) + in_seq[col] for col in columns}
-    in_seq_length = len(in_seq[columns[0]])
+    in_context_length = len(in_seq[columns[0]])
 
     subsequence_starts = get_subsequence_starts(
-        in_seq_length, seq_length, stride_for_split, subsequence_start_mode
+        in_context_length,
+        stored_context_width,
+        stride_for_split,
+        subsequence_start_mode,
     )
     subsequence_starts_diff = subsequence_starts[1:] - subsequence_starts[:-1]
     if not np.all(subsequence_starts_diff <= stride_for_split):
@@ -1999,26 +2338,20 @@ def extract_subsequences(
             f"Diff of {subsequence_starts = }, {subsequence_starts_diff = } larger than {stride_for_split = }"
         )
 
-    return {
-        col: [list(in_seq[col][i : i + seq_length + 1]) for i in subsequence_starts]
+    result = {
+        col: [
+            list(in_seq[col][i : i + stored_context_width]) for i in subsequence_starts
+        ]
         for col in columns
     }
+    left_pad_lengths = [pad_len] * len(subsequence_starts)
+
+    return result, left_pad_lengths, subsequence_starts
 
 
 @beartype
 def insert_top_folder(path: str, folder_name: str) -> str:
-    """Inserts a directory name into a file path, just before the filename.
-
-    Example:
-        `insert_top_folder("a/b/c.txt", "temp")` returns `"a/b/temp/c.txt"`
-
-    Args:
-        path: The original file path.
-        folder_name: The name of the folder to insert.
-
-    Returns:
-        The new path string with the folder inserted.
-    """
+    """Insert folder_name before the basename."""
     components = os.path.split(path)
     new_components = list(components[:-1]) + [folder_name] + [components[-1]]
     return os.path.join(*new_components)
@@ -2026,30 +2359,14 @@ def insert_top_folder(path: str, folder_name: str) -> str:
 
 @beartype
 def cast_columns_to_string(data: pl.DataFrame) -> pl.DataFrame:
-    """Casts the column names of a Polars DataFrame to strings.
-
-    This is often necessary because Polars schemas may use integers as
-    column names (e.g., '0', '1', '2'...) which need to be strings for
-    some operations.
-
-    Args:
-        data: The Polars DataFrame.
-
-    Returns:
-        The same DataFrame with its `columns` attribute modified.
-    """
+    """Cast Polars column names to strings."""
     data.columns = [str(col) for col in data.columns]
     return data
 
 
 @beartype
 def delete_files(files: Union[list[str], dict[int, list[str]]]) -> None:
-    """Deletes a list of files from the filesystem.
-
-    Args:
-        files: A list of file paths to delete, or a dictionary
-            whose values are lists of file paths to delete.
-    """
+    """Delete paths from a list or split-indexed dict."""
     if isinstance(files, dict):
         files = [x for y in list(files.values()) for x in y]
     for file in files:
@@ -2067,29 +2384,7 @@ def create_file_paths_for_multiple_files1(
     dataset_name: str,
     write_format: str,
 ) -> dict[int, list[str]]:
-    """Creates a dictionary of temporary file paths for a specific data file.
-
-    This is used in the multi-file, `merge_output=True`
-    workflow. It generates file path names for intermediate batches
-    *before* they are combined.
-
-    The naming pattern is:
-    `{dataset_name}-{process_id}-{file_index_str}-split{split}-{batch_id}.{write_format}`
-
-    Args:
-        project_root: The path to the sequifier project directory.
-        target_dir: The temporary directory to place files in.
-        n_splits: The number of data splits.
-        n_batches: The number of batches created by the process.
-        process_id: The ID of the multiprocessing worker.
-        file_index_str: The index of the file being processed by this worker.
-        dataset_name: The root name of the dataset.
-        write_format: The file extension.
-
-    Returns:
-        A dictionary mapping a split index (int) to a list of file paths
-        (str) for all batches in that split.
-    """
+    """Return per-split temp paths for one multi-file shard."""
     files = {}
     for split in range(n_splits):
         files_for_split = [
@@ -2114,27 +2409,7 @@ def create_file_paths_for_single_file(
     dataset_name: str,
     write_format: str,
 ) -> dict[int, list[str]]:
-    """Creates a dictionary of temporary file paths for a single-file run.
-
-    This is used in the single-file, `merge_output=True`
-    workflow. It generates file path names for intermediate batches
-    created by different processes *before* they are combined.
-
-    The naming pattern is:
-    `{dataset_name}-split{split}-{core_id}.{write_format}`
-
-    Args:
-        project_root: The path to the sequifier project directory.
-        target_dir: The temporary directory to place files in.
-        n_splits: The number of data splits.
-        n_batches: The number of processes (batches) running in parallel.
-        dataset_name: The root name of the dataset.
-        write_format: The file extension.
-
-    Returns:
-        A dictionary mapping a split index (int) to a list of file paths
-        (str) for all batches in that split.
-    """
+    """Return per-split temp paths for one single-file run."""
     files = {}
     for split in range(n_splits):
         files_for_split = [
@@ -2160,29 +2435,7 @@ def create_file_paths_for_multiple_files2(
     dataset_name: str,
     write_format: str,
 ) -> dict[int, list[str]]:
-    """Creates a dictionary of intermediate file paths for a multi-file run.
-
-    This is used in the multi-file, `merge_output=True`
-    workflow. It generates the file paths for the *combined* files
-    from each process, which are the *inputs* to the final combination step.
-
-    The naming pattern is:
-    `{dataset_name}-{process_id}-{file_index}-split{split}.{write_format}`
-
-    Args:
-        project_root: The path to the sequifier project directory.
-        target_dir: The temporary directory where files are located.
-        n_splits: The number of data splits.
-        n_processes: The total number of multiprocessing workers.
-        n_files: A dictionary mapping `process_id` to the number of
-            files that process handled.
-        dataset_name: The root name of the dataset.
-        write_format: The file extension.
-
-    Returns:
-        A dictionary mapping a split index (int) to a list of all
-        intermediate combined file paths (str) for that split.
-    """
+    """Return per-split intermediate paths for multi-file merge."""
     files = {}
     n_files_max = max(n_files.values()) if n_files else 1
     pad_width = len(str(n_files_max - 1))
@@ -2214,31 +2467,7 @@ def combine_multiprocessing_outputs(
     pre_split_str: Optional[str] = None,
     post_split_str: Optional[str] = None,
 ) -> None:
-    """Combines multiple intermediate batch files into final split files.
-
-    This function iterates through each split and combines all the
-    intermediate files listed in `input_files[split]` into a single
-    final output file for that split.
-
-    - For "csv" format, it uses the `csvstack` command-line utility.
-    - For "parquet" format, it uses `pyarrow.parquet.ParquetWriter`
-      to concatenate the files efficiently.
-
-    Args:
-        project_root: The path to the sequifier project directory.
-        target_dir: The temporary directory containing intermediate files.
-        n_splits: The number of data splits.
-        input_files: A dictionary mapping split index (int) to a list
-            of input file paths (str) for that split.
-        dataset_name: The root name for the final output files.
-        write_format: The file format ("csv" or "parquet").
-        in_target_dir: If True, the final combined file is written
-            inside `target_dir`. If False, it's written to `data/`.
-        pre_split_str: An optional string to insert into the filename
-            before the "-split{i}" part.
-        post_split_str: An optional string to insert into the filename
-            after the "-split{i}" part.
-    """
+    """Combine per-split intermediate files."""
     for split in range(n_splits):
         split_file_path = create_split_file_path(
             project_root,
@@ -2294,18 +2523,7 @@ def create_split_file_path(
 
 @beartype
 def combine_parquet_files(files: list[str], out_path: str) -> None:
-    """Combines multiple Parquet files into a single Parquet file.
-
-    This function reads the schema from the first file and uses it to
-    initialize a `ParquetWriter`. It then iterates through all files in
-    the list, reading each one as a table and writing it to the new
-    combined file. This is more memory-efficient than reading all files
-    into one large table first.
-
-    Args:
-        files: A list of paths to the Parquet files to combine.
-        out_path: The path for the combined output Parquet file.
-    """
+    """Stream-concatenate Parquet files with the first file schema."""
     schema = pq.ParquetFile(files[0]).schema_arrow
     with pq.ParquetWriter(out_path, schema=schema, compression="snappy") as writer:
         for file in files:

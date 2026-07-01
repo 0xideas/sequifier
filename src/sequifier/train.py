@@ -1,20 +1,23 @@
 import contextlib
 import copy
 import glob
+import hashlib
 import json
 import logging
 import math
 import os
+import random
+import re
 import sys
+from dataclasses import asdict
 
 os.environ["TORCH_NCCL_ASYNC_ERROR_HANDLING"] = "1"
 import time  # noqa: E402
 import uuid  # noqa: E402
 import warnings  # noqa: E402
-from typing import Any, Optional, Union  # noqa: E402
+from typing import Any, Optional, Union, cast  # noqa: E402
 
 import numpy as np  # noqa: E402
-import polars as pl  # noqa: E402
 import torch  # noqa: E402
 import torch._dynamo  # noqa: E402
 import torch.distributed as dist  # noqa: E402
@@ -22,7 +25,7 @@ import torch.multiprocessing as mp  # noqa: E402
 from beartype import beartype  # noqa: E402
 from packaging import version  # noqa: E402
 from torch import Tensor, nn  # noqa: E402
-from torch.amp import GradScaler  # noqa: E402
+from torch.amp.grad_scaler import GradScaler  # noqa: E402
 from torch.distributed.checkpoint.state_dict import (  # noqa: E402
     StateDictOptions,
     get_model_state_dict,
@@ -39,9 +42,9 @@ if version.parse(torch.__version__) >= version.parse("2.6.0"):
     )
 else:
     from torch.distributed._composable.fsdp import (  # noqa: E402
-        MixedPrecisionPolicy,
-        OffloadPolicy,
-        fully_shard,
+        MixedPrecisionPolicy,  # type: ignore
+        OffloadPolicy,  # type: ignore
+        fully_shard,  # type: ignore
     )
 
 from torch.distributed.device_mesh import init_device_mesh  # noqa: E402
@@ -52,16 +55,30 @@ from torch.utils.data import DataLoader  # noqa: E402
 
 torch._dynamo.config.suppress_errors = True
 
+ClassCounts = dict[str, Tensor]
+CHECKPOINT_FORMAT_VERSION = 2
+SUPPORTED_CHECKPOINT_FORMAT_VERSIONS = {2}
+EMBEDDING_INDEX_DTYPES = (torch.int32, torch.int64)
+NARROW_EMBEDDING_INDEX_DTYPES = (
+    torch.int8,
+    torch.uint8,
+    torch.int16,
+    torch.uint16,
+)
+WIDE_UNSIGNED_EMBEDDING_INDEX_DTYPES = (torch.uint32, torch.uint64)
+
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
-from sequifier.helpers import normalize_path  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
+    apply_bert_masking,
     conditional_beartype,
     configure_determinism,
     configure_logger,
     construct_index_maps,
     get_torch_dtype,
+    normalize_path,
 )
+from sequifier.io.batch import SequifierBatch  # noqa: E402
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
 )
@@ -79,25 +96,63 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
 )
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS  # noqa: E402
 
 
 def cleanup():
-    """Cleans up the distributed training environment."""
+    """Destroy the active distributed process group."""
     dist.destroy_process_group()
 
 
+def _smallest_embedding_safe_dtype(dtype: torch.dtype) -> torch.dtype:
+    """Return the narrowest dtype accepted by torch embedding for this integer dtype."""
+    if dtype in EMBEDDING_INDEX_DTYPES:
+        return dtype
+    if dtype in NARROW_EMBEDDING_INDEX_DTYPES:
+        return torch.int32
+    if dtype in WIDE_UNSIGNED_EMBEDDING_INDEX_DTYPES:
+        return torch.int64
+    raise TypeError(f"Embedding indices must use an integer dtype, got {dtype}.")
+
+
 @beartype
-def create_dummy_data(config: TrainModel, local_rank: int) -> dict[str, Tensor]:
+def _embedding_safe_indices(indices: Tensor) -> Tensor:
+    target_dtype = _smallest_embedding_safe_dtype(indices.dtype)
+    if indices.dtype == target_dtype:
+        return indices
+    return indices.to(dtype=target_dtype)
+
+
+@beartype
+def _class_index_tensor(indices: Tensor) -> Tensor:
+    """Return integer class indices in the dtype required by PyTorch losses."""
+    _smallest_embedding_safe_dtype(indices.dtype)
+    if indices.dtype == torch.int64:
+        return indices
+    return indices.to(dtype=torch.int64)
+
+
+@beartype
+def create_dummy_data_and_metadata(
+    config: TrainModel, local_rank: int
+) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     dummy_data = {}
     for col in config.input_columns:
         dtype = torch.int64 if col in config.categorical_columns else torch.float32
         dummy_data[col] = torch.ones(
-            (config.training_spec.batch_size, config.seq_length),
+            (config.training_spec.batch_size, config.window_view.context_length),
             dtype=dtype,
             device=local_rank,
         )
 
-    return dummy_data
+    dummy_metadata = {
+        "attention_valid_mask": torch.ones(
+            (config.training_spec.batch_size, config.window_view.context_length),
+            dtype=torch.bool,
+            device=local_rank,
+        )
+    }
+    return dummy_data, dummy_metadata
 
 
 @beartype
@@ -109,16 +164,7 @@ def train_worker(
     global_rank: int,
     torch_compile: str,
 ):
-    """The worker function for distributed training.
-
-    Args:
-        rank: The rank of the current process.
-        world_size: The total number of processes.
-        config: The training configuration.
-        from_folder: Whether to load data from a folder (e.g., preprocessed .pt files)
-                     or a single file (e.g., .parquet).
-        global_rank: The global rank
-    """
+    """Run one local distributed-training worker."""
     logger = configure_logger(config.project_root, config.model_name, global_rank)
 
     if config.training_spec.distributed:
@@ -128,7 +174,6 @@ def train_worker(
             global_rank, local_rank, world_size, config.training_spec.backend
         )
 
-    # 1. Create Datasets and DataLoaders with DistributedSampler
     if from_folder:
         if config.read_format == "pt":
             if config.training_spec.load_full_data_to_ram:
@@ -171,6 +216,13 @@ def train_worker(
         train_dataset = SequifierDatasetFromFile(config.training_data_path, config)
         valid_dataset = SequifierDatasetFromFile(config.validation_data_path, config)
 
+    configure_determinism(config.seed, config.training_spec.enforce_determinism)
+
+    train_loader_generator = torch.Generator()
+    train_loader_generator.manual_seed(config.seed + 10_001)
+    valid_loader_generator = torch.Generator()
+    valid_loader_generator.manual_seed(config.seed + 10_002)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=None,  # Batching is handled natively by the IterableDataset
@@ -179,6 +231,7 @@ def train_worker(
         pin_memory=config.training_spec.device not in ["mps", "cpu"],
         prefetch_factor=4 if config.training_spec.num_workers > 0 else None,
         persistent_workers=(config.training_spec.num_workers > 0),
+        generator=train_loader_generator,
     )
 
     valid_loader = DataLoader(
@@ -189,11 +242,14 @@ def train_worker(
         pin_memory=config.training_spec.device not in ["mps", "cpu"],
         prefetch_factor=4 if config.training_spec.num_workers > 0 else None,
         persistent_workers=(config.training_spec.num_workers > 0),
+        generator=valid_loader_generator,
     )
 
-    configure_determinism(config.seed, config.training_spec.enforce_determinism)
-
     model = TransformerModel(config, rank=global_rank, local_rank=local_rank)
+    model._data_loader_generators = {
+        "train": train_loader_generator,
+        "valid": valid_loader_generator,
+    }
     base_model = model
 
     latest_model_path = model._get_latest_model_name()
@@ -209,15 +265,21 @@ def train_worker(
             checkpoint = torch.load(
                 latest_model_path, map_location="cpu", weights_only=False
             )
+            model._validate_checkpoint_compatibility(checkpoint, len(train_loader))
             model.load_state_dict(checkpoint["model_state_dict"])
             model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-            if checkpoint["batch"] + 1 >= len(train_loader):
-                base_model.start_epoch = checkpoint["epoch"] + 1
-                base_model.start_batch = 0
-            else:
-                base_model.start_epoch = checkpoint["epoch"]
-                base_model.start_batch = checkpoint["batch"] + 1
+            base_model.start_epoch, base_model.start_batch = _checkpoint_start_position(
+                checkpoint, len(train_loader)
+            )
+            model._apply_checkpoint_training_state(
+                checkpoint.get("scaler_state_dict"),
+                checkpoint.get("best_val_loss", float("inf")),
+                checkpoint.get("n_epochs_no_improvement", 0),
+                checkpoint.get("best_model_state_dict"),
+                checkpoint.get("rng_state"),
+                checkpoint.get("data_loader_generator_states"),
+            )
         else:
             model.start_epoch = 1
             model.start_batch = 0
@@ -232,54 +294,78 @@ def train_worker(
                 for i in range(len(model.layers)):
                     model.layers[i] = torch.compile(model.layers[i])
 
+        if checkpoint is not None:
+            base_model._restore_rng_state()
+            base_model._restore_data_loader_generator_states()
+
         model.train_model(train_loader, valid_loader, ddp_model=None)
     elif config.training_spec.data_parallelism == "FSDP":
         mesh = init_device_mesh(
             "cuda", (world_size,)
         )  # 1D mesh for standard ZeRO-3 full sharding
+        model._data_parallel_group = mesh.get_group()
 
-        mp_policy = None
+        fsdp_kwargs = {"mesh": mesh}
         if config.training_spec.layer_autocast:
             amp_dtype = get_torch_dtype(
                 config.training_spec.layer_type_dtypes.get("linear", "bfloat16")
                 if config.training_spec.layer_type_dtypes
                 else "bfloat16"
             )
-            mp_policy = MixedPrecisionPolicy(
+
+            fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy(
                 param_dtype=amp_dtype,
                 reduce_dtype=amp_dtype,
                 output_dtype=amp_dtype,
             )
+        else:
+            fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy()
 
-        offload_policy = (
-            OffloadPolicy() if config.training_spec.fsdp_cpu_offload else None
-        )
+        if config.training_spec.fsdp_cpu_offload:
+            fsdp_kwargs["offload_policy"] = OffloadPolicy()
         for layer in model.layers:
-            fully_shard(
-                layer, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
-            )
-        fully_shard(
-            model, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy
-        )
+            fully_shard(layer, **fsdp_kwargs)
+
+        fully_shard(model, **fsdp_kwargs)
         dist.barrier()
 
         params_to_optimize = model.parameters()
         model.initialize_optimizer(params=params_to_optimize)
 
-        if config.training_spec.continue_training and latest_model_path:
+        resume_signal = [
+            config.training_spec.continue_training and latest_model_path is not None
+            if global_rank == 0
+            else None
+        ]
+        dist.broadcast_object_list(resume_signal, src=0)
+        did_resume = cast(bool, resume_signal[0])
+
+        if did_resume:
             if global_rank == 0:
+                if latest_model_path is None:
+                    raise RuntimeError("Rank 0 selected resume without a checkpoint.")
                 checkpoint = torch.load(
                     latest_model_path, map_location="cpu", weights_only=False
                 )
                 full_msd = checkpoint["model_state_dict"]
                 full_osd = checkpoint["optimizer_state_dict"]
-
-                if checkpoint["batch"] + 1 >= len(train_loader):
-                    start_epoch = checkpoint["epoch"] + 1
-                    start_batch = 0
-                else:
-                    start_epoch = checkpoint["epoch"]
-                    start_batch = checkpoint["batch"] + 1
+                start_epoch, start_batch = _checkpoint_start_position(
+                    checkpoint, len(train_loader)
+                )
+                resume_state = {
+                    "scaler_state_dict": checkpoint.get("scaler_state_dict"),
+                    "best_val_loss": checkpoint.get("best_val_loss", float("inf")),
+                    "n_epochs_no_improvement": checkpoint.get(
+                        "n_epochs_no_improvement", 0
+                    ),
+                    "has_best_model_state_dict": checkpoint.get("best_model_state_dict")
+                    is not None,
+                    "rng_state": checkpoint.get("rng_state"),
+                    "data_loader_generator_states": checkpoint.get(
+                        "data_loader_generator_states"
+                    ),
+                    "checkpoint_metadata": checkpoint.get("checkpoint_metadata"),
+                }
 
                 meta = [
                     start_epoch,
@@ -287,15 +373,33 @@ def train_worker(
                     checkpoint["scheduler_state_dict"],
                     full_msd,
                     full_osd,
+                    resume_state,
                 ]
             else:
-                meta = [None, None, None, None, None]
+                meta = [None, None, None, None, None, None]
 
             # Broadcast the checkpoint data to all ranks simultaneously
             dist.broadcast_object_list(meta, src=0)
 
-            # Unpack on all ranks
-            model.start_epoch, model.start_batch, sched_state, full_msd, full_osd = meta  # type: ignore
+            # Unpack on all ranks. The placeholder Nones are replaced by broadcast.
+            (
+                start_epoch_obj,
+                start_batch_obj,
+                sched_state_obj,
+                full_msd_obj,
+                full_osd_obj,
+                resume_state_obj,
+            ) = meta
+            model.start_epoch = cast(int, start_epoch_obj)
+            model.start_batch = cast(int, start_batch_obj)
+            sched_state = cast(Optional[dict[str, Any]], sched_state_obj)
+            full_msd = cast(dict[str, Tensor], full_msd_obj)
+            full_osd = cast(dict[str, Any], full_osd_obj)
+            resume_state = cast(dict[str, Any], resume_state_obj)
+            model._validate_checkpoint_compatibility(
+                {"checkpoint_metadata": resume_state.get("checkpoint_metadata")},
+                len(train_loader),
+            )
 
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
 
@@ -314,6 +418,20 @@ def train_worker(
 
             if sched_state is not None:
                 base_model.scheduler.load_state_dict(sched_state)
+            best_model_state_dict = None
+            if resume_state.get("has_best_model_state_dict"):
+                if global_rank == 0 and checkpoint is not None:
+                    best_model_state_dict = checkpoint.get("best_model_state_dict")
+                else:
+                    best_model_state_dict = {}
+            model._apply_checkpoint_training_state(
+                resume_state.get("scaler_state_dict"),
+                resume_state.get("best_val_loss", float("inf")),
+                resume_state.get("n_epochs_no_improvement", 0),
+                best_model_state_dict,
+                resume_state.get("rng_state"),
+                resume_state.get("data_loader_generator_states"),
+            )
 
         else:
             model.start_epoch = 1
@@ -328,37 +446,49 @@ def train_worker(
                     model.layers[i] = torch.compile(model.layers[i])
 
         if config.training_spec.device.startswith("cuda"):
-            dummy_data = create_dummy_data(config, local_rank)
+            dummy_data, dummy_metadata = create_dummy_data_and_metadata(
+                config, local_rank
+            )
             with torch.no_grad():
-                _ = model(dummy_data, False)
+                _ = model(dummy_data, dummy_metadata, False)
 
             dist.barrier()
+
+        if did_resume:
+            base_model._restore_rng_state()
+            base_model._restore_data_loader_generator_states()
 
         model.train_model(train_loader, valid_loader, ddp_model=base_model)
         cleanup()
     elif config.training_spec.data_parallelism == "DDP":  # DDP
+        params_to_optimize = model.parameters()
+        model.initialize_optimizer(params=params_to_optimize)
+
         if config.training_spec.continue_training and latest_model_path:
             checkpoint = torch.load(
                 latest_model_path, map_location="cpu", weights_only=False
             )
+            base_model._validate_checkpoint_compatibility(checkpoint, len(train_loader))
             base_model.load_state_dict(checkpoint["model_state_dict"])
             base_model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             base_model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-            if checkpoint["batch"] + 1 >= len(train_loader):
-                base_model.start_epoch = checkpoint["epoch"] + 1
-                base_model.start_batch = 0
-            else:
-                base_model.start_epoch = checkpoint["epoch"]
-                base_model.start_batch = checkpoint["batch"] + 1
+            base_model.start_epoch, base_model.start_batch = _checkpoint_start_position(
+                checkpoint, len(train_loader)
+            )
+            base_model._apply_checkpoint_training_state(
+                checkpoint.get("scaler_state_dict"),
+                checkpoint.get("best_val_loss", float("inf")),
+                checkpoint.get("n_epochs_no_improvement", 0),
+                checkpoint.get("best_model_state_dict"),
+                checkpoint.get("rng_state"),
+                checkpoint.get("data_loader_generator_states"),
+            )
         else:
             model.start_epoch = 1
             model.start_batch = 0
             logger.info(
                 f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
             )
-
-        params_to_optimize = model.parameters()
-        model.initialize_optimizer(params=params_to_optimize)
 
         if config.training_spec.device.startswith("cuda"):
             if torch_compile == "outer":
@@ -370,18 +500,23 @@ def train_worker(
         ddp_model = DDP(model, device_ids=device_ids, find_unused_parameters=False)
 
         if config.training_spec.device.startswith("cuda"):
-            dummy_data = create_dummy_data(config, local_rank)
+            dummy_data, dummy_metadata = create_dummy_data_and_metadata(
+                config, local_rank
+            )
 
             if config.training_spec.layer_autocast:
                 with torch.no_grad(), torch.autocast(
                     device_type="cuda", dtype=torch.bfloat16
                 ):
-                    _ = ddp_model(dummy_data, False)
+                    _ = ddp_model(dummy_data, dummy_metadata, False)
             else:
                 with torch.no_grad():
-                    _ = ddp_model(dummy_data, False)
+                    _ = ddp_model(dummy_data, dummy_metadata, False)
 
             dist.barrier()
+        if checkpoint is not None:
+            base_model._restore_rng_state()
+            base_model._restore_data_loader_generator_states()
         model.train_model(train_loader, valid_loader, ddp_model=ddp_model)
         cleanup()
     else:
@@ -408,12 +543,7 @@ def _mp_train_worker_wrapper(
 
 @beartype
 def train(args: Any, args_config: dict[str, Any]) -> None:
-    """The main training function.
-
-    Args:
-        args: The command-line arguments.
-        args_config: The configuration dictionary.
-    """
+    """Load train config and launch local or distributed training."""
     config_path = args.config_path or "configs/train.yaml"
     config = load_train_config(config_path, args_config, args.skip_metadata)
 
@@ -463,50 +593,110 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
 
 
 @beartype
-def format_number(number: Union[int, float, np.float32]) -> str:
-    """Format a number for display.
-
-    Args:
-        number: The number to format.
-
-    Returns:
-        A formatted string representation of the number.
-    """
-    if np.isnan(number):
+def format_number(number: int | float | np.float32) -> str:
+    value = float(number)
+    if math.isnan(value):
         return "NaN"
-    elif number == 0:
-        order_of_magnitude = 0
-    else:
-        order_of_magnitude = math.floor(math.log(np.abs(number), 10))
+    if math.isinf(value):
+        return "Inf" if value > 0 else "-Inf"
+    return f"{value: .2e}"
 
-    number_adjusted = number * (10 ** (-order_of_magnitude))
-    return f"{number_adjusted:5.2f}e{order_of_magnitude}"
+
+def _get_evaluation_loss_mask(metadata: dict[str, Tensor]) -> Tensor:
+    """Build the effective loss mask from token, objective, and sample masks."""
+    valid_mask = metadata["target_valid_mask"].bool()
+
+    if "bert_mask" in metadata:
+        valid_mask = valid_mask & metadata["bert_mask"].bool()
+
+    if "sample_valid_mask" in metadata:
+        sample_valid_mask = metadata["sample_valid_mask"].bool()
+
+        if sample_valid_mask.ndim != 1:
+            raise ValueError("sample_valid_mask must have shape [batch_size].")
+        if sample_valid_mask.shape[0] != valid_mask.shape[0]:
+            raise ValueError(
+                "sample_valid_mask batch dimension does not match target_valid_mask."
+            )
+
+        valid_mask = valid_mask & sample_valid_mask.unsqueeze(1)
+
+    return valid_mask
+
+
+@beartype
+def _checkpoint_start_position(
+    checkpoint: dict[str, Any], num_batches: int
+) -> tuple[int, int]:
+    """Return the next epoch/batch position after a saved checkpoint."""
+    if checkpoint["batch"] + 1 >= num_batches:
+        return checkpoint["epoch"] + 1, 0
+    return checkpoint["epoch"], checkpoint["batch"] + 1
+
+
+def _update_file_metadata_hash(hasher: Any, file_path: str) -> None:
+    """Hash file identity metadata without reading the file contents."""
+    normalized_path = os.path.abspath(file_path)
+    file_stat = os.stat(normalized_path)
+    hasher.update(normalized_path.encode("utf-8"))
+    hasher.update(str(file_stat.st_size).encode("utf-8"))
+    hasher.update(str(file_stat.st_mtime_ns).encode("utf-8"))
+
+
+@beartype
+def accumulate_class_counts(
+    counts: ClassCounts,
+    output: dict[str, Tensor],
+    valid_mask: Tensor,
+    n_classes: dict[str, int],
+) -> None:
+    """Accumulates predicted class counts over valid evaluation tokens."""
+    flattened_mask = valid_mask.bool().T.contiguous().reshape(-1)
+
+    for col, running_counts in counts.items():
+        if col not in output:
+            raise RuntimeError(f"Output is missing class-share column {col!r}.")
+
+        predicted_ids = output[col].argmax(dim=-1).contiguous().reshape(-1)
+
+        if predicted_ids.numel() != flattened_mask.numel():
+            raise RuntimeError(
+                f"Prediction/mask size mismatch for {col!r}: "
+                f"{predicted_ids.numel()} predictions versus "
+                f"{flattened_mask.numel()} mask entries."
+            )
+
+        valid_predictions = predicted_ids[flattened_mask]
+
+        if valid_predictions.numel() == 0:
+            continue
+
+        batch_counts = torch.bincount(
+            valid_predictions.to(torch.int64),
+            minlength=n_classes[col],
+        )
+
+        if batch_counts.numel() != running_counts.numel():
+            raise RuntimeError(
+                f"Class-count size mismatch for {col!r}: "
+                f"{batch_counts.numel()} counts versus "
+                f"{running_counts.numel()} expected classes."
+            )
+
+        running_counts.add_(batch_counts)
 
 
 class TransformerEmbeddingModel(nn.Module):
-    """A wrapper around the TransformerModel to expose the embedding functionality."""
+    """Embedding-only wrapper for TransformerModel."""
 
     def __init__(self, transformer_model: "TransformerModel"):
-        """Initializes the TransformerEmbeddingModel.
-
-        Args:
-            transformer_model: The TransformerModel to wrap.
-        """
         super().__init__()
         self.transformer_model = transformer_model
         self.logger = self.transformer_model.logger
 
     @beartype
     def _copy_model(self):
-        """Copies the model.
-
-        This creates a deep copy of the model, typically for saving the
-        "best model". It temporarily removes the `log_file` attribute
-        before copying to avoid errors, then re-initializes it.
-
-        Returns:
-            A deep copy of the current TransformerModel instance.
-        """
+        """Deep-copy without copying the logger handle."""
         logger_ref = self.transformer_model.logger
         del self.transformer_model.logger
         del self.logger
@@ -517,43 +707,35 @@ class TransformerEmbeddingModel(nn.Module):
         return model_copy
 
     @conditional_beartype
-    def forward(self, src: dict[str, Tensor]):
-        """Forward pass for the embedding model.
+    def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]):
+        """Return embedding output from the wrapped model."""
+        return self.transformer_model.forward_embed(src, metadata=metadata)
 
-        Args:
-            src: The input data.
 
-        Returns:
-            The embedded output.
-        """
-        return self.transformer_model.forward_embed(src)
+class _OnnxExportWrapper(nn.Module):
+    def __init__(
+        self,
+        model: Union["TransformerModel", TransformerEmbeddingModel],
+        feature_columns: list[str],
+    ):
+        super().__init__()
+        self.model = model
+        self.feature_columns = feature_columns
+
+    def forward(self, *inputs: Tensor):
+        features = dict(zip(self.feature_columns, inputs[:-1]))
+        metadata = {"attention_valid_mask": inputs[-1]}
+        return self.model(features, metadata=metadata)
 
 
 class TransformerModel(nn.Module):
-    """The main Transformer model for the sequifier.
-
-    This class implements the Transformer model, including the training and
-    evaluation loops, as well as the export functionality.
-    """
+    """Sequifier transformer plus train/eval/export routines."""
 
     @beartype
     def __init__(
         self, hparams: Any, rank: Optional[int] = None, local_rank: Optional[int] = None
     ):
-        """Initializes the TransformerModel.
-
-        Based on the hyperparameters, this initializes:
-        - Embeddings for categorical and real features (self.encoder)
-        - Positional encoders (self.pos_encoder)
-        - The main TransformerEncoder (self.transformer_encoder)
-        - Output decoders for each target column (self.decoder)
-        - Loss functions (self.criterion)
-        - Optimizer (self.optimizer) and scheduler (self.scheduler)
-
-        Args:
-            hparams: The hyperparameters for the model (e.g., from TrainModel config).
-            rank: The rank of the current process (for distributed training).
-        """
+        """Build model modules and training state from config."""
         super().__init__()
         self.project_root = hparams.project_root
         self.model_type = "Transformer"
@@ -581,7 +763,9 @@ class TransformerModel(nn.Module):
         self.target_columns = hparams.target_columns
         self.target_column_types = hparams.target_column_types
         self.loss_weights = hparams.training_spec.loss_weights
-        self.seq_length = hparams.seq_length
+        self.storage_layout = hparams.storage_layout
+        self.window_view = hparams.window_view
+        self.context_length = hparams.window_view.context_length
         self.n_classes = hparams.n_classes
         self.inference_batch_size = hparams.inference_batch_size
         self.log_interval = hparams.training_spec.log_interval
@@ -589,6 +773,15 @@ class TransformerModel(nn.Module):
         self.index_maps = construct_index_maps(
             hparams.id_maps, self.class_share_log_columns, True
         )
+        self.next_occurrence_column = None
+        self.next_occurrence_target_ids: list[int] = []
+        next_occurrence_config = hparams.training_spec.next_occurrence_config
+        if next_occurrence_config is not None:
+            self.next_occurrence_column = next_occurrence_config.column_name
+            id_map = hparams.id_maps[self.next_occurrence_column]
+            self.next_occurrence_target_ids = [
+                id_map[value] for value in next_occurrence_config.target_values
+            ]
         self.export_embedding_model = hparams.export_embedding_model
         self.export_generative_model = hparams.export_generative_model
         self.export_onnx = hparams.export_onnx
@@ -640,12 +833,12 @@ class TransformerModel(nn.Module):
             self.pos_encoder = ModuleDict()
             for col in self.real_columns:
                 self.pos_encoder[col] = nn.Embedding(
-                    self.seq_length, self.feature_embedding_dims[col]
+                    self.context_length, self.feature_embedding_dims[col]
                 )
             for col, n_classes in self.n_classes.items():
                 if col in self.categorical_columns:
                     self.pos_encoder[col] = nn.Embedding(
-                        self.seq_length, self.feature_embedding_dims[col]
+                        self.context_length, self.feature_embedding_dims[col]
                     )
         else:
             self.pos_encoder = None
@@ -658,7 +851,7 @@ class TransformerModel(nn.Module):
                     hparams.model_spec.n_head,
                     hparams.model_spec.dim_feedforward,
                     hparams.training_spec.dropout,
-                    hparams.seq_length,
+                    hparams.window_view.context_length,
                 )
                 for _ in range(hparams.model_spec.num_layers)
             ]
@@ -709,11 +902,24 @@ class TransformerModel(nn.Module):
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
 
-        self.register_buffer(
-            "src_mask",
-            self._generate_square_subsequent_mask(self.seq_length),
-            persistent=False,  # Optional: prevents the mask from being saved in your checkpoints
-        )
+        if hparams.training_spec.training_objective in [
+            "causal",
+            "final_value",
+            "next_occurrence",
+        ]:
+            self.register_buffer(
+                "src_mask",
+                self._generate_square_subsequent_mask(self.context_length),
+                persistent=False,  # Optional: prevents the mask from being saved in your checkpoints
+            )
+        elif hparams.training_spec.training_objective == "bert":
+            self.register_buffer(
+                "src_mask",
+                torch.zeros(self.context_length, self.context_length),
+                persistent=False,
+            )
+        else:
+            pass
 
         self._init_weights()
 
@@ -723,12 +929,9 @@ class TransformerModel(nn.Module):
         self.save_latest_interval_minutes = (
             hparams.training_spec.save_latest_interval_minutes
         )
-        self.save_batch_interval_minutes = (
-            hparams.training_spec.save_batch_interval_minutes
-        )
-        self.save_batch_interval_minutes_val_loss = (
-            hparams.training_spec.save_batch_interval_minutes_val_loss
-        )
+        self.save_interval_minutes = hparams.training_spec.save_interval_minutes
+        self.save_interval_batches = hparams.training_spec.save_interval_batches
+        self.save_interval_val_loss = hparams.training_spec.save_interval_val_loss
         self.continue_training = hparams.training_spec.continue_training
 
         use_scaler = False
@@ -737,6 +940,12 @@ class TransformerModel(nn.Module):
                 use_scaler = True
 
         self.scaler = GradScaler(device=self.device.split(":")[0], enabled=use_scaler)
+        self._resume_best_val_loss = float("inf")
+        self._resume_n_epochs_no_improvement = 0
+        self._resume_best_model_state_dict = None
+        self._resume_rng_state = None
+        self._resume_data_loader_generator_states = None
+        self._data_loader_generators: dict[str, torch.Generator] = {}
 
         self._apply_layer_dtypes()
 
@@ -744,7 +953,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def initialize_optimizer(self, params: Any = None) -> None:
-        """Initializes the optimizer and scheduler."""
+        """Create optimizer and scheduler from training config."""
         if params is None:
             params = self.parameters()
 
@@ -759,7 +968,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _apply_layer_dtypes(self) -> None:
-        """Casts specific layer types to configured dtypes (e.g., bfloat16, float8)."""
+        """Cast configured layer classes to requested dtypes."""
         layer_config = self.hparams.training_spec.layer_type_dtypes
 
         if not layer_config:
@@ -767,9 +976,7 @@ class TransformerModel(nn.Module):
 
         self.logger.info(f"[INFO] Applying custom layer dtypes: {layer_config}")
 
-        # Iterate over all sub-modules and cast based on type
         for name, module in self.named_modules():
-            # Linear Layers
             if isinstance(module, nn.Linear):
                 is_decoder = any(module is m for m in self.decoder.values())
                 if is_decoder and "decoder" in layer_config:
@@ -777,12 +984,10 @@ class TransformerModel(nn.Module):
                 elif "linear" in layer_config:
                     module.to(dtype=get_torch_dtype(layer_config["linear"]))
 
-            # Embeddings
             elif isinstance(module, nn.Embedding) and "embedding" in layer_config:
                 target_dtype = get_torch_dtype(layer_config["embedding"])
                 module.to(dtype=target_dtype)
 
-            # Normalization (RMSNorm, LayerNorm)
             elif isinstance(module, (nn.LayerNorm, RMSNorm)) and "norm" in layer_config:
                 target_dtype = get_torch_dtype(layer_config["norm"])
                 module.to(dtype=target_dtype)
@@ -795,15 +1000,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _init_criterion(self, hparams: Any) -> ModuleDict:
-        """Initializes the criterion (loss function) for each target column.
-
-        Args:
-            hparams: The hyperparameters for the model, used to find criterion names
-                and class weights.
-
-        Returns:
-            A dictionary mapping target column names to their loss function instances.
-        """
+        """Build unreduced per-target loss modules."""
         criterion = ModuleDict()
         for target_column in self.target_columns:
             criterion_name = hparams.training_spec.criterion[target_column]
@@ -833,19 +1030,7 @@ class TransformerModel(nn.Module):
         categorical_columns: list[str],
         real_columns: list[str],
     ) -> dict[str, int]:
-        """Calculates the embedding dimension for each column.
-
-        This attempts to distribute the total `embedding_size` across all
-        input columns.
-
-        Args:
-            embedding_size: The total embedding dimension (initial_embedding_dim).
-            categorical_columns: List of categorical column names.
-            real_columns: List of real-valued column names.
-
-        Returns:
-            A dictionary mapping column names to their calculated embedding dimension.
-        """
+        """Allocate embedding dimensions across homogeneous input columns."""
         if not (len(categorical_columns) + len(real_columns)) > 0:
             raise ValueError("No columns found")
 
@@ -892,35 +1077,17 @@ class TransformerModel(nn.Module):
 
     @staticmethod
     def _generate_square_subsequent_mask(sz: int) -> Tensor:
-        """Generates an upper-triangular matrix of -inf, with zeros on diag.
-
-        This is used as a mask to prevent attention to future tokens in the
-        transformer.
-
-        Args:
-            sz: The size of the square mask (sequence length).
-
-        Returns:
-            A square tensor of shape (sz, sz) with -inf in the upper triangle.
-        """
+        """Return a causal attention mask."""
         return torch.triu(torch.ones(sz, sz) * float("-inf"), diagonal=1)
 
     @staticmethod
     def _filter_key(dict_: dict[str, Any], key: str) -> dict[str, Any]:
-        """Filters a key from a dictionary.
-
-        Args:
-            dict_: The dictionary to filter.
-            key: The key to remove.
-
-        Returns:
-            A new dictionary without the specified key.
-        """
+        """Return a copy without key."""
         return {k: v for k, v in dict_.items() if k != key}
 
     @beartype
     def _init_weights(self) -> None:
-        """Initializes the weights of the model."""
+        """Initialize trainable weights with the model default."""
         init_std = 0.02
         for col in self.categorical_columns:
             self.encoder[col].weight.data.normal_(mean=0.0, std=init_std)
@@ -940,18 +1107,7 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def _recursive_concat(self, srcs: list[Tensor]):
-        """Recursively concatenates a list of tensors.
-
-        This is used to avoid device-specific limits on the number of tensors
-        that can be concatenated at once by breaking the operation into
-        smaller, recursive chunks.
-
-        Args:
-            srcs: A list of tensors to concatenate along dimension 2.
-
-        Returns:
-            A single tensor resulting from the recursive concatenation.
-        """
+        """Concatenate tensors in chunks to avoid device concat limits."""
         if len(srcs) <= self.device_max_concat_length:
             return torch.cat(srcs, 2)
         else:
@@ -964,30 +1120,58 @@ class TransformerModel(nn.Module):
             return self._recursive_concat(srcs_inner)
 
     @conditional_beartype
-    def forward_inner(self, src: dict[str, Tensor]) -> Tensor:
-        """The inner forward pass of the model.
+    def _build_attention_mask(self, valid_mask: Tensor, dtype: torch.dtype) -> Tensor:
+        batch_size, context_length = valid_mask.shape
+        device = valid_mask.device
 
-        This handles embedding lookup, positional encoding, and passing the
-        combined tensor through the transformer encoder.
+        expected_context_length = self.src_mask.shape[-1]
+        if context_length != expected_context_length:
+            raise ValueError(
+                f"valid_mask sequence length ({context_length}) must match "
+                f"model sequence length ({expected_context_length})."
+            )
 
-        Args:
-            src: A dictionary mapping column names to input tensors
-                 (batch_size, seq_length).
+        base_mask = self.src_mask.to(device=device, dtype=dtype)
+        base_mask = base_mask.view(1, 1, context_length, context_length)
 
-        Returns:
-            The raw output tensor from the TransformerEncoder
-            (seq_length, batch_size, dim_model).
-        """
+        invalid_keys = ~valid_mask.bool()
+
+        padding_mask = torch.zeros(
+            batch_size,
+            1,
+            1,
+            context_length,
+            device=device,
+            dtype=dtype,
+        )
+
+        padding_mask = padding_mask.masked_fill(
+            invalid_keys[:, None, None, :],
+            torch.finfo(dtype).min,
+        )
+
+        return base_mask + padding_mask
+
+    @conditional_beartype
+    def _zero_padding_positions(self, x: Tensor, valid_mask: Tensor) -> Tensor:
+        """Zero padded query positions after attention/FFN layers."""
+        return x * valid_mask[:, :, None].to(dtype=x.dtype)
+
+    @conditional_beartype
+    def forward_inner(
+        self, src: dict[str, Tensor], metadata: dict[str, Tensor]
+    ) -> Tensor:
+        """Encode inputs into contextual hidden states."""
         srcs = []
         for col in self.categorical_columns:
-            src_t = self.encoder[col](src[col].T) * math.sqrt(
+            src_t = self.encoder[col](_embedding_safe_indices(src[col]).T) * math.sqrt(
                 self.initial_embedding_dim
             )
 
             if not self.use_rope:
                 pos = (
                     torch.arange(
-                        0, self.seq_length, dtype=torch.long, device=src_t.device
+                        0, self.context_length, dtype=torch.long, device=src_t.device
                     )
                     .repeat(src_t.shape[1], 1)
                     .T
@@ -1015,7 +1199,7 @@ class TransformerModel(nn.Module):
             if not self.use_rope:
                 pos = (
                     torch.arange(
-                        0, self.seq_length, dtype=torch.long, device=src_t.device
+                        0, self.context_length, dtype=torch.long, device=src_t.device
                     )
                     .repeat(src_t.shape[1], 1)
                     .T
@@ -1033,46 +1217,39 @@ class TransformerModel(nn.Module):
         if self.joint_embedding_layer is not None:
             src2 = self.joint_embedding_layer(src2)
 
-        mask = self.src_mask.to(dtype=src2.dtype)
+        valid_mask = metadata["attention_valid_mask"].bool()  # type: ignore
+        if valid_mask.shape != src2.shape[:2]:
+            raise ValueError(
+                f"Invalid attention mask shape: got {tuple(valid_mask.shape)}, "
+                f"expected {tuple(src2.shape[:2])} = (batch_size, context_length). "
+                "Check attention_valid_mask / leftPadLength construction."
+            )
+        src2 = self._zero_padding_positions(src2, valid_mask)
+
+        mask = self._build_attention_mask(valid_mask, dtype=src2.dtype)
+
         for layer in self.layers:
             src2 = layer(src2, src_mask=mask)
+            src2 = self._zero_padding_positions(src2, valid_mask)
 
         src2 = self.final_norm(src2)
+        src2 = self._zero_padding_positions(src2, valid_mask)
 
         return src2.transpose(0, 1)
 
     @conditional_beartype
-    def forward_embed(self, src: dict[str, Tensor]) -> Tensor:
-        """Forward pass for the embedding model.
-
-        This returns only the embedding from the *last* token in the sequence.
-
-        Args:
-            src: A dictionary mapping column names to input tensors
-                 (batch_size, seq_length).
-
-        Returns:
-            The embedding tensor for the last token
-            (batch_size, dim_model).
-        """
-        return self.forward_inner(src)[-self.prediction_length :, :, :]
+    def forward_embed(
+        self, src: dict[str, Tensor], metadata: dict[str, Tensor]
+    ) -> Tensor:
+        """Return final-step embeddings."""
+        return self.forward_inner(src, metadata)[-self.prediction_length :, :, :]
 
     @conditional_beartype
-    def forward_train(self, src: dict[str, Tensor]) -> dict[str, Tensor]:
-        """Forward pass for training.
-
-        This runs the inner forward pass and then applies the appropriate
-        decoder for each target column.
-
-        Args:
-            src: A dictionary mapping column names to input tensors
-                 (batch_size, seq_length).
-
-        Returns:
-            A dictionary mapping target column names to their raw output
-            (logit) tensors (seq_length, batch_size, n_classes/1).
-        """
-        output = self.forward_inner(src)
+    def forward_train(
+        self, src: dict[str, Tensor], metadata: dict[str, Tensor]
+    ) -> dict[str, Tensor]:
+        """Return raw decoded outputs for all target columns."""
+        output = self.forward_inner(src, metadata)
         output = {
             target_column: self.decode(target_column, output)
             for target_column in self.target_columns
@@ -1082,19 +1259,7 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def decode(self, target_column: str, output: Tensor) -> Tensor:
-        """Decodes the output of the transformer encoder.
-
-        Applies the appropriate final linear layer for a given target column.
-
-        Args:
-            target_column: The name of the target column to decode.
-            output: The raw output tensor from the TransformerEncoder
-                    (seq_length, batch_size, dim_model).
-
-        Returns:
-            The decoded output (logits or real value) for the target column
-            (seq_length, batch_size, n_classes/1).
-        """
+        """Project hidden states through one target decoder."""
 
         target_dtype = self.decoder[target_column].weight.dtype
         decoded = self.decoder[target_column](output.to(target_dtype)).to(torch.float32)
@@ -1103,18 +1268,7 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def apply_softmax(self, target_column: str, output: Tensor) -> Tensor:
-        """Applies softmax to the output of the decoder.
-
-        If the target is real, it returns the output unchanged.
-        If the target is categorical, it applies LogSoftmax.
-
-        Args:
-            target_column: The name of the target column.
-            output: The decoded output tensor (logits or real value).
-
-        Returns:
-            The output tensor, with LogSoftmax applied if categorical.
-        """
+        """Apply LogSoftmax only for categorical targets."""
         if target_column in self.real_columns:
             return output
         else:
@@ -1122,24 +1276,13 @@ class TransformerModel(nn.Module):
 
     @conditional_beartype
     def forward(
-        self, src: dict[str, Tensor], return_logits: Union[bool, Tensor] = False
+        self,
+        src: dict[str, Tensor],
+        metadata: dict[str, Tensor],
+        return_logits: Union[bool, Tensor] = False,
     ) -> dict[str, Tensor]:
-        """The main forward pass of the model.
-
-        This is typically used for inference/evaluation, returning the
-        probabilities/values for the *last* token in the sequence.
-
-        Args:
-            src: A dictionary mapping column names to input tensors
-                 (batch_size, seq_length).
-            return_logits: Return logits
-
-        Returns:
-            A dictionary mapping target column names to their final
-            output (LogSoftmax probabilities or real values) for the
-            last token (batch_size, n_classes/1).
-        """
-        output = self.forward_train(src)
+        """Return final-step logits or predictions for inference/eval."""
+        output = self.forward_train(src, metadata)
         if return_logits:
             return output
         return {
@@ -1173,14 +1316,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _check_and_terminate(self):
-        """Checks for an external pruning signal and terminates the process if required.
-
-        This method looks for a specific `.prune` file generated by the Optuna orchestrator.
-        If running in a distributed setting, the rank 0 process checks for the file and
-        broadcasts a termination signal to all other ranks. If the signal is received,
-        the process cleans up its distributed process group, clears the GPU cache, and
-        gracefully exits with code 143 (SIGTERM) to allow Optuna to prune the trial.
-        """
+        """Exit 143 when rank 0 broadcasts an Optuna prune sentinel."""
         if os.getenv("SEQUIFIER_HYPERPARAMETER_SEARCH_RUN") is not None:
             should_prune = 0
             if self.rank == 0:
@@ -1210,44 +1346,299 @@ class TransformerModel(nn.Module):
                 sys.exit(143)
 
     @beartype
+    def _checkpoint_compatibility_metadata(
+        self, num_batches: Optional[int]
+    ) -> dict[str, Any]:
+        """Return resume-critical settings stored with each new checkpoint."""
+        training_spec = self.hparams.training_spec
+        bert_spec = (
+            training_spec.bert_spec.model_dump(mode="json")
+            if training_spec.bert_spec is not None
+            else None
+        )
+        next_occurrence_config = (
+            training_spec.next_occurrence_config.model_dump(mode="json")
+            if training_spec.next_occurrence_config is not None
+            else None
+        )
+        compatibility_settings = {
+            "model_name": self.model_name,
+            "read_format": self.hparams.read_format,
+            "num_batches": num_batches,
+            "batch_size": self.batch_size,
+            "accumulation_steps": self.accumulation_steps,
+            "learning_rate": training_spec.learning_rate,
+            "scheduler_step_on": self.scheduler_step_on,
+            "scheduler": dict(training_spec.scheduler),
+            "optimizer": dict(training_spec.optimizer),
+            "distributed": training_spec.distributed,
+            "data_parallelism": training_spec.data_parallelism,
+            "world_size": (
+                dist.get_world_size(group=self._data_parallel_process_group())
+                if self._distributed_is_initialized()
+                else training_spec.world_size
+            ),
+            "training_objective": training_spec.training_objective,
+            "seed": self.hparams.seed,
+            "dropout": training_spec.dropout,
+            "bert_spec": bert_spec,
+            "next_occurrence_config": next_occurrence_config,
+            "criterion": training_spec.criterion,
+            "class_weights": training_spec.class_weights,
+            "loss_weights": training_spec.loss_weights,
+            "layer_type_dtypes": training_spec.layer_type_dtypes,
+            "layer_autocast": training_spec.layer_autocast,
+            "num_workers": training_spec.num_workers,
+            "load_full_data_to_ram": training_spec.load_full_data_to_ram,
+            "fsdp_cpu_offload": training_spec.fsdp_cpu_offload,
+            "storage_layout": asdict(self.storage_layout),
+            "window_view": asdict(self.window_view),
+            "column_types": self.hparams.column_types,
+            "categorical_columns": self.categorical_columns,
+            "real_columns": self.real_columns,
+            "input_columns": self.input_columns,
+            "target_columns": self.target_columns,
+            "target_column_types": self.target_column_types,
+            "n_classes": self.n_classes,
+            "id_maps": self.hparams.id_maps,
+            "special_token_ids": self.hparams.special_token_ids,
+            "model_spec": self.hparams.model_spec.model_dump(mode="json"),
+        }
+        provenance = {
+            "training_data_path": normalize_path(
+                self.hparams.training_data_path, self.project_root
+            ),
+            "validation_data_path": normalize_path(
+                self.hparams.validation_data_path, self.project_root
+            ),
+            "metadata_config_path": normalize_path(
+                self.hparams.metadata_config_path, self.project_root
+            ),
+        }
+        fingerprint_input = json.dumps(
+            compatibility_settings, sort_keys=True, default=str
+        ).encode("utf-8")
+        return {
+            "format_version": CHECKPOINT_FORMAT_VERSION,
+            "config_fingerprint": hashlib.sha256(fingerprint_input).hexdigest(),
+            "resume_settings": compatibility_settings,
+            "provenance": provenance,
+        }
+
+    @beartype
+    def _validate_checkpoint_compatibility(
+        self, checkpoint: dict[str, Any], num_batches: int
+    ) -> None:
+        """Reject checkpoints whose resume-critical settings no longer match."""
+        checkpoint_metadata = checkpoint.get("checkpoint_metadata")
+        if checkpoint_metadata is None:
+            self.logger.warning(
+                "[WARNING] Checkpoint has no compatibility metadata; "
+                "continuing with legacy resume behavior."
+            )
+            return
+        if not isinstance(checkpoint_metadata, dict):
+            raise ValueError("Checkpoint compatibility metadata must be a dictionary.")
+
+        format_version = checkpoint_metadata.get("format_version")
+        if format_version not in SUPPORTED_CHECKPOINT_FORMAT_VERSIONS:
+            raise ValueError(
+                "Unsupported checkpoint format version "
+                f"{format_version!r}; supported versions are "
+                f"{sorted(SUPPORTED_CHECKPOINT_FORMAT_VERSIONS)!r}."
+            )
+
+        saved_settings = checkpoint_metadata.get("resume_settings")
+        if not isinstance(saved_settings, dict):
+            raise ValueError(
+                "Checkpoint compatibility metadata is missing resume_settings."
+            )
+
+        current_metadata = self._checkpoint_compatibility_metadata(num_batches)
+        current_settings = current_metadata["resume_settings"]
+        mismatches = []
+        for key, current_value in current_settings.items():
+            saved_value = saved_settings.get(key)
+            if saved_value != current_value:
+                mismatches.append(
+                    f"{key}: checkpoint={saved_value!r}, current={current_value!r}"
+                )
+
+        if mismatches:
+            mismatch_text = "; ".join(mismatches)
+            warnings.warn(
+                "Checkpoint is not identical with the current training configuration. "
+                "Ensure that this is the intended configuration. "
+                f"{mismatch_text}"
+            )
+
+        saved_fingerprint = checkpoint_metadata.get("config_fingerprint")
+        current_fingerprint = current_metadata["config_fingerprint"]
+        if saved_fingerprint != current_fingerprint:
+            warnings.warn(
+                "Checkpoint configuration fingerprint mismatch: "
+                f"checkpoint={saved_fingerprint!r}, current={current_fingerprint!r}"
+            )
+
+    @beartype
+    def _get_rng_state(self) -> dict[str, Any]:
+        """Capture Python, NumPy, Torch CPU, and CUDA RNG state for this rank."""
+        device = torch.device(self.device)
+        return {
+            "python": random.getstate(),
+            "numpy": np.random.get_state(),
+            "torch": torch.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state(device=device)
+            if device.type == "cuda" and torch.cuda.is_available()
+            else None,
+        }
+
+    @beartype
+    def _collect_rng_states_for_checkpoint(self) -> Optional[list[Any]]:
+        """Gather per-rank RNG states on rank 0 for checkpointing."""
+        rng_state = self._get_rng_state()
+        if not self.hparams.training_spec.distributed:
+            return [rng_state]
+
+        rng_states = (
+            [None] * dist.get_world_size(group=self._data_parallel_process_group())
+            if self.rank == 0
+            else None
+        )
+        dist.gather_object(
+            rng_state,
+            object_gather_list=rng_states,
+            dst=0,
+            group=self._data_parallel_process_group(),
+        )
+        return rng_states
+
+    @beartype
+    def _select_rng_state_for_rank(self, rng_states: Any) -> Optional[dict[str, Any]]:
+        """Return this rank's saved RNG state from a checkpoint payload."""
+        if rng_states is None:
+            return None
+        if isinstance(rng_states, dict):
+            return rng_states
+        if not isinstance(rng_states, list) or len(rng_states) == 0:
+            return None
+
+        rank = self.rank or 0
+        if rank < len(rng_states):
+            return rng_states[rank]
+        self.logger.warning(
+            "[WARNING] Checkpoint has no RNG state for this rank; "
+            "using rank 0 RNG state as a fallback."
+        )
+        return rng_states[0]
+
+    @beartype
+    def _get_data_loader_generator_states(self) -> dict[str, Tensor]:
+        """Capture dedicated DataLoader generator states."""
+        return {
+            name: generator.get_state()
+            for name, generator in self._data_loader_generators.items()
+        }
+
+    @beartype
+    def _restore_data_loader_generator_states(self) -> None:
+        """Restore dedicated DataLoader generator states when present."""
+        states = self._resume_data_loader_generator_states
+        if states is None:
+            return
+        if not isinstance(states, dict):
+            self.logger.warning(
+                "[WARNING] Checkpoint DataLoader generator state is not a dictionary; "
+                "using freshly seeded DataLoader generators."
+            )
+            return
+
+        for name, generator in self._data_loader_generators.items():
+            state = states.get(name)
+            if isinstance(state, Tensor):
+                generator.set_state(state)
+
+    @beartype
+    def _apply_checkpoint_training_state(
+        self,
+        scaler_state_dict: Optional[dict[str, Any]],
+        best_val_loss: Any,
+        n_epochs_no_improvement: Any,
+        best_model_state_dict: Any,
+        rng_states: Any,
+        data_loader_generator_states: Any,
+    ) -> None:
+        """Restore non-model training state from a checkpoint payload."""
+        if scaler_state_dict is not None:
+            self.scaler.load_state_dict(scaler_state_dict)
+        elif self.scaler.is_enabled():
+            self.logger.warning(
+                "[WARNING] Checkpoint has no GradScaler state; "
+                "resuming with a freshly initialized scaler."
+            )
+
+        self._resume_best_val_loss = float(best_val_loss)
+        self._resume_n_epochs_no_improvement = int(n_epochs_no_improvement)
+        self._resume_best_model_state_dict = best_model_state_dict
+        self._resume_rng_state = self._select_rng_state_for_rank(rng_states)
+        self._resume_data_loader_generator_states = data_loader_generator_states
+
+    @beartype
+    def _restore_rng_state(self) -> None:
+        """Apply the checkpoint RNG state after compile/warm-up work is finished."""
+        rng_state = self._resume_rng_state
+        if rng_state is None:
+            self.logger.warning(
+                "[WARNING] Checkpoint has no RNG state; stochastic training will "
+                "continue from the current process RNG state."
+            )
+            return
+
+        random.setstate(rng_state["python"])
+        np.random.set_state(rng_state["numpy"])
+        torch.set_rng_state(rng_state["torch"])
+        cuda_state = rng_state.get("cuda")
+        device = torch.device(self.device)
+        if (
+            cuda_state is not None
+            and device.type == "cuda"
+            and torch.cuda.is_available()
+        ):
+            torch.cuda.set_rng_state(cuda_state, device=device)
+
+    @beartype
     def train_model(
         self,
         train_loader: DataLoader,
         valid_loader: DataLoader,
         ddp_model: Optional[nn.Module] = None,
     ) -> None:
-        """Trains the model.
-
-        This method contains the main training loop, including epoch iteration,
-        validation, early stopping logic, and model saving/exporting.
-
-        Args:
-            train_loader: DataLoader for the training dataset.
-            valid_loader: DataLoader for the validation dataset.
-            ddp_model: ddp model
-        """
+        """Run epochs, validation, checkpointing, export, and interruption cleanup."""
         self.logger.info(f"--- Starting Training for model: {self.model_name} ---")
 
-        best_val_loss = float("inf")
-        n_epochs_no_improvement = 0
+        best_val_loss: float = float(self._resume_best_val_loss)
+        n_epochs_no_improvement = self._resume_n_epochs_no_improvement
         last_epoch = self.start_epoch - 1
-        best_model_state = None
+        best_model_state = self._resume_best_model_state_dict
 
         try:
             self.last_latest_save_time = time.time()
             self.last_batch_save_time = time.time()
+            self.last_batch_save_global_step = (self.start_epoch - 1) * len(
+                train_loader
+            ) + self.start_batch
 
             if (
                 self.start_epoch == 1
                 and self.hparams.training_spec.calculate_validation_loss_on_initialization
             ):
-                total_loss, total_losses, output = self._evaluate(
+                total_loss, total_losses, class_counts = self._evaluate(
                     valid_loader, ddp_model
                 )
                 elapsed = 0.0
 
                 self._log_epoch_results(
-                    0, 0, elapsed, total_loss, total_losses, output, 0
+                    0, 0, elapsed, total_loss, total_losses, class_counts, 0
                 )
             for epoch in range(self.start_epoch, self.hparams.training_spec.epochs + 1):
                 if (
@@ -1263,9 +1654,17 @@ class TransformerModel(nn.Module):
                     train_loader.dataset.set_epoch(epoch)
                     valid_loader.dataset.set_epoch(epoch)
 
-                    self._train_epoch(train_loader, valid_loader, epoch, ddp_model)
+                    self._train_epoch(
+                        train_loader,
+                        valid_loader,
+                        epoch,
+                        ddp_model,
+                        best_val_loss,
+                        n_epochs_no_improvement,
+                        best_model_state,
+                    )
 
-                    total_loss, total_losses, output = self._evaluate(
+                    total_loss, total_losses, class_counts = self._evaluate(
                         valid_loader, ddp_model
                     )
                     elapsed = time.time() - epoch_start_time
@@ -1277,12 +1676,12 @@ class TransformerModel(nn.Module):
                         elapsed,
                         total_loss,
                         total_losses,
-                        output,
+                        class_counts,
                         total_expected_batches,
                     )
 
                     if total_loss < best_val_loss:
-                        best_val_loss = total_loss
+                        best_val_loss = float(total_loss)
                         best_model_state = self._get_full_state_dict(ddp_model)
                         n_epochs_no_improvement = 0
                     else:
@@ -1302,6 +1701,10 @@ class TransformerModel(nn.Module):
                             total_loss,
                             ddp_model=ddp_model,
                             suffix=f"epoch-{epoch}",
+                            best_val_loss=best_val_loss,
+                            n_epochs_no_improvement=n_epochs_no_improvement,
+                            best_model_state_dict=best_model_state,
+                            num_batches=len(train_loader),
                         )
 
                     last_epoch = epoch
@@ -1313,10 +1716,8 @@ class TransformerModel(nn.Module):
             if self.hparams.training_spec.distributed:
                 dist.barrier()
 
-            # 1. Use a list to hold the answer so it can be broadcasted across ranks
             answer_list = ["n"]
 
-            # 2. Only Rank 0 prompts the user
             if self.rank == 0:
                 try:
                     answer = (
@@ -1331,11 +1732,9 @@ class TransformerModel(nn.Module):
                 except EOFError:  # Handle non-interactive environments
                     answer_list[0] = "n"
 
-            # 3. Broadcast the decision to all GPUs so they stay in sync
             if self.hparams.training_spec.distributed:
                 dist.broadcast_object_list(answer_list, src=0)
 
-            # 4. If the decision is 'y', ALL ranks must participate in state dict extraction
             if answer_list[0] == "y":
                 if self.rank == 0:
                     self.logger.info("[INFO] User opted to export models.")
@@ -1346,10 +1745,9 @@ class TransformerModel(nn.Module):
                             f"[INFO] Exporting 'last' model from epoch {last_epoch}..."
                         )
 
-                    # ALL RANKS MUST EXECUTE THIS to prevent FSDP all_gather deadlocks
+                    # FSDP state extraction is collective; only rank 0 writes the result.
                     last_model_state = self._get_full_state_dict(ddp_model)
 
-                    # ONLY Rank 0 executes the file I/O
                     if self.rank == 0:
                         self._export(last_model_state, "last", last_epoch)
 
@@ -1379,8 +1777,6 @@ class TransformerModel(nn.Module):
                 )
             best_model_state = last_model_state
 
-        # 2. Restrict the export saving to Rank 0 inside the _export method (which you already do)
-        # or guard the I/O specifically:
         if self.rank == 0:
             self._export(last_model_state, "last", last_epoch, clean=True)  # type: ignore
             self._export(best_model_state, "best", last_epoch, clean=True)  # type: ignore
@@ -1396,32 +1792,44 @@ class TransformerModel(nn.Module):
         valid_loader: DataLoader,
         epoch: int,
         ddp_model: Optional[nn.Module] = None,
+        best_val_loss: float = float("inf"),
+        n_epochs_no_improvement: int = 0,
+        best_model_state: Optional[dict[str, Tensor]] = None,
     ) -> None:
-        """Trains the model for one epoch.
+        """Run one train epoch with optional mid-epoch saves."""
+        target_names = self._loss_target_names()
+        train_loss_sums, train_token_count = self._new_loss_accumulators(target_names)
 
-        Iterates through the training DataLoader, computes loss, performs
-        backpropagation, and updates model parameters. The DataLoader is expected
-        to yield tuples of (sequences_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
-        The IDs and positions are currently unused in this training loop.
-
-        Args:
-            train_loader: DataLoader for the training dataset.
-            epoch: The current epoch number (used for logging).
-        """
-        total_loss = 0.0
         batches_aggregated = 0
 
         start_time = time.time()
         num_batches = len(train_loader)
         start_batch = self.start_batch
         self.start_batch = 0
+        set_dataset_start_batch = getattr(train_loader.dataset, "set_start_batch", None)
+        dataset_handles_start_batch = callable(set_dataset_start_batch)
+        if dataset_handles_start_batch:
+            set_dataset_start_batch(start_batch)
 
         model_to_call = ddp_model if ddp_model is not None else self
 
         model_to_call.train()
 
-        for batch_count, (data, targets, _, _, _) in enumerate(train_loader):
+        for batch_offset, batch in enumerate(train_loader):
+            if not isinstance(batch, SequifierBatch):
+                raise TypeError(
+                    "Training DataLoader must yield SequifierBatch objects, "
+                    f"got {type(batch).__name__}."
+                )
+            batch_count = (
+                start_batch + batch_offset
+                if dataset_handles_start_batch
+                else batch_offset
+            )
             if batch_count >= start_batch:
+                data = batch.inputs
+                targets = batch.targets
+                metadata = batch.metadata
                 data = {
                     k: v.to(self.device, non_blocking=True)
                     for k, v in data.items()
@@ -1432,6 +1840,13 @@ class TransformerModel(nn.Module):
                     for k, v in targets.items()
                     if k in self.target_column_types
                 }
+                metadata = {
+                    k: v.to(self.device, non_blocking=True) for k, v in metadata.items()
+                }
+                if self.hparams.training_spec.training_objective == "bert":
+                    data, targets, metadata = apply_bert_masking(
+                        data, targets, metadata, self.hparams
+                    )
 
                 # Only use standard torch.autocast if FSDP MixedPrecision is NOT handling it natively
                 if (
@@ -1448,19 +1863,52 @@ class TransformerModel(nn.Module):
                     with torch.autocast(
                         device_type=self.device.split(":")[0], dtype=amp_dtype
                     ):
-                        output = model_to_call(data, True)
-                        loss, losses = self._calculate_loss(output, targets)
+                        output = model_to_call(
+                            data, metadata=metadata, return_logits=True
+                        )
+                        (
+                            loss,
+                            backward_components,
+                            local_loss_sums,
+                            local_token_count,
+                        ) = self._calculate_training_loss(output, targets, metadata)
                 else:
-                    output = model_to_call(data, True)
-                    loss, losses = self._calculate_loss(output, targets)
+                    output = model_to_call(data, metadata=metadata, return_logits=True)
+                    (
+                        loss,
+                        backward_components,
+                        local_loss_sums,
+                        local_token_count,
+                    ) = self._calculate_training_loss(output, targets, metadata)
 
-                self.scaler.scale(loss).backward()
+                if self.accumulation_steps is None:
+                    accumulation_divisor = 1
+                else:
+                    window_start = (
+                        batch_count // self.accumulation_steps
+                    ) * self.accumulation_steps
+                    accumulation_divisor = min(
+                        self.accumulation_steps,
+                        num_batches - window_start,
+                    )
 
-                if (
+                backward_loss = loss / accumulation_divisor
+                self.scaler.scale(backward_loss).backward()
+                self._accumulate_loss_components(
+                    train_loss_sums,
+                    train_token_count,
+                    local_loss_sums,
+                    local_token_count,
+                )
+
+                optimizer_step_due = (
                     self.accumulation_steps is None
                     or (batch_count + 1) % self.accumulation_steps == 0
                     or (batch_count + 1) == num_batches
-                ):
+                )
+                optimizer_step_performed = False
+
+                if optimizer_step_due:
                     self.scaler.unscale_(self.optimizer)
 
                     torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
@@ -1468,212 +1916,479 @@ class TransformerModel(nn.Module):
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                     self.optimizer.zero_grad()
+                    optimizer_step_performed = True
 
-                total_loss += loss.item()
+                if optimizer_step_due:
+                    if not optimizer_step_performed:
+                        self.optimizer.zero_grad()
+
                 batches_aggregated += 1
                 if (batch_count + 1) % self.log_interval == 0:
+                    avg_train_loss, _ = self._finalize_loss_components(
+                        train_loss_sums,
+                        train_token_count,
+                        target_names,
+                        "training",
+                        raise_on_empty=False,
+                    )
                     if self.rank == 0:
                         learning_rate = self.scheduler.get_last_lr()[0]
                         s_per_batch = (time.time() - start_time) / max(
                             1, batches_aggregated
                         )
-                        avg_train_loss = total_loss / max(1, batches_aggregated)
                         self.logger.info(
-                            f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss)} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
+                            f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss.detach().cpu().item())} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
                         )
-                        total_loss = 0.0
+
+                    train_loss_sums, train_token_count = self._new_loss_accumulators(
+                        target_names
+                    )
+                    if self.rank == 0:
                         batches_aggregated = 0
                         self.start_batch = 0
                         start_time = time.time()
                     self._check_and_terminate()
 
-                del data, targets, output, loss, losses
+                del data, targets, output, loss, backward_loss, backward_components
 
-                if self.scheduler_step_on == "batch":
+                if self.scheduler_step_on == "batch" and optimizer_step_performed:
                     if (
                         not hasattr(self.scheduler, "total_steps")
                         or self.scheduler.last_epoch < self.scheduler.total_steps
                     ):
                         self.scheduler.step()
 
-                should_save_latest = torch.tensor(
-                    [0], dtype=torch.int32, device=self.device
-                )
-                should_save_batch = torch.tensor(
-                    [0], dtype=torch.int32, device=self.device
-                )
-                val_loss_batch = torch.tensor(
-                    [np.float32(np.nan)], dtype=torch.float32, device=self.device
-                )
-
-                current_time = time.time()
-
-                if not self.hparams.training_spec.distributed or self.rank == 0:
-                    if self.save_latest_interval_minutes is not None and (
-                        current_time - self.last_latest_save_time
-                    ) >= (self.save_latest_interval_minutes * 60):
-                        current_time = time.time()
-                        should_save_latest[0] = 1
-                        self.last_latest_save_time = current_time
-
-                    if self.save_batch_interval_minutes is not None and (
-                        current_time - self.last_batch_save_time
-                    ) >= (self.save_batch_interval_minutes * 60):
-                        should_save_batch[0] = 1
-                        self.last_batch_save_time = current_time
-
-                if self.hparams.training_spec.distributed:
-                    dist.broadcast(should_save_latest, src=0)
-                    dist.broadcast(should_save_batch, src=0)
-                    dist.barrier()
-
-                if should_save_batch.item() == 1:
-                    if self.save_batch_interval_minutes_val_loss:
-                        val_loss, val_losses, output = self._evaluate(
-                            valid_loader, ddp_model
-                        )
-
-                        if not self.hparams.training_spec.distributed or self.rank == 0:
-                            current_global_step = (epoch - 1) * num_batches + (
-                                batch_count + 1
-                            )
-                            self._log_epoch_results(
-                                0,
-                                batch_count + 1,
-                                (current_time - self.last_batch_save_time),
-                                val_loss,
-                                val_losses,
-                                output,
-                                current_global_step,
-                            )
-                            val_loss_batch[0] = float(val_loss)
-                        self._check_and_terminate()
-                    else:
-                        val_loss_batch[0] = np.float32(np.nan)
-
-                if self.hparams.training_spec.distributed:
-                    dist.broadcast(val_loss_batch, src=0)
-
-                if should_save_latest.item() == 1:
-                    self._save(
-                        epoch,
-                        batch_count,
-                        np.float32(np.nan),
-                        ddp_model,
-                        suffix="latest",
+                if optimizer_step_due:
+                    should_save_latest = torch.tensor(
+                        [0], dtype=torch.int32, device=self.device
                     )
-                    if self.rank != 0:
+                    should_save_batch = torch.tensor(
+                        [0], dtype=torch.int32, device=self.device
+                    )
+                    val_loss_batch = torch.tensor(
+                        [np.float32(np.nan)], dtype=torch.float32, device=self.device
+                    )
+
+                    current_time = time.time()
+                    elapsed_since_batch_save = current_time - self.last_batch_save_time
+                    current_global_step = (epoch - 1) * num_batches + (batch_count + 1)
+                    batches_since_batch_save = (
+                        current_global_step - self.last_batch_save_global_step
+                    )
+
+                    if not self.hparams.training_spec.distributed or self.rank == 0:
+                        if self.save_latest_interval_minutes is not None and (
+                            current_time - self.last_latest_save_time
+                        ) >= (self.save_latest_interval_minutes * 60):
+                            should_save_latest[0] = 1
+
+                        if self.save_interval_minutes is not None and (
+                            elapsed_since_batch_save
+                        ) >= (self.save_interval_minutes * 60):
+                            should_save_batch[0] = 1
+
+                        if (
+                            self.save_interval_batches is not None
+                            and batches_since_batch_save >= self.save_interval_batches
+                        ):
+                            should_save_batch[0] = 1
+
+                    if self.hparams.training_spec.distributed:
+                        dist.broadcast(should_save_latest, src=0)
+                        dist.broadcast(should_save_batch, src=0)
+                        dist.barrier()
+
+                    if should_save_batch.item() == 1:
+                        if self.save_interval_val_loss:
+                            val_loss, val_losses, class_counts = self._evaluate(
+                                valid_loader, ddp_model
+                            )
+
+                            if (
+                                not self.hparams.training_spec.distributed
+                                or self.rank == 0
+                            ):
+                                self._log_epoch_results(
+                                    0,
+                                    batch_count + 1,
+                                    elapsed_since_batch_save,
+                                    val_loss,
+                                    val_losses,
+                                    class_counts,
+                                    current_global_step,
+                                )
+                                val_loss_batch[0] = float(val_loss)
+                            self._check_and_terminate()
+                        else:
+                            val_loss_batch.fill_(torch.nan)
+
+                    if self.hparams.training_spec.distributed:
+                        dist.broadcast(val_loss_batch, src=0)
+
+                    if should_save_latest.item() == 1:
+                        self._save(
+                            epoch,
+                            batch_count,
+                            np.float32(np.nan),
+                            ddp_model,
+                            suffix="latest",
+                            best_val_loss=best_val_loss,
+                            n_epochs_no_improvement=n_epochs_no_improvement,
+                            best_model_state_dict=best_model_state,
+                            num_batches=num_batches,
+                        )
                         self.last_latest_save_time = time.time()
 
-                val_loss = np.float32(val_loss_batch.item())
-                if should_save_batch.item() != 0:
-                    self._save(
-                        epoch,
-                        batch_count,
-                        val_loss,  # type: ignore
-                        ddp_model,
-                        suffix=f"epoch-{epoch}-batch-{batch_count + 1}",
-                    )
-                    if self.rank != 0:
+                    val_loss = np.float32(val_loss_batch.item())
+                    if should_save_batch.item() != 0:
+                        self._save(
+                            epoch,
+                            batch_count,
+                            val_loss,  # type: ignore
+                            ddp_model,
+                            suffix=f"epoch-{epoch}-batch-{batch_count + 1}",
+                            best_val_loss=best_val_loss,
+                            n_epochs_no_improvement=n_epochs_no_improvement,
+                            best_model_state_dict=best_model_state,
+                            num_batches=num_batches,
+                        )
                         self.last_batch_save_time = time.time()
+                        self.last_batch_save_global_step = current_global_step
+
+        if dataset_handles_start_batch:
+            set_dataset_start_batch(0)
 
     @beartype
     def _calculate_loss(
-        self, output: dict[str, Tensor], targets: dict[str, Tensor]
+        self,
+        output: dict[str, Tensor],
+        targets: dict[str, Tensor],
+        metadata: dict[str, Tensor],
     ) -> tuple[Tensor, dict[str, Tensor]]:
-        """Calculates the loss for the given output and targets.
+        """Return backward-scaled loss and components for the current rank."""
+        loss, backward_components, _, _ = self._calculate_training_loss(
+            output, targets, metadata
+        )
+        return loss, backward_components
 
-        Compares the model's output (from `forward_train`) with the target
-        values, applying the appropriate criterion for each target column
-        and combining them using loss weights.
+    @beartype
+    def _prepare_next_occurrence_loss_targets(
+        self,
+        targets: dict[str, Tensor],
+        valid_mask: Tensor,
+    ) -> tuple[dict[str, Tensor], Tensor]:
+        """Project event-position target values backward for next_occurrence loss."""
+        if self.hparams.training_spec.training_objective != "next_occurrence":
+            return targets, valid_mask
 
-        Args:
-            output: A dictionary of output tensors from the model
-                    (seq_length, batch_size, n_classes/1).
-            targets: A dictionary of target tensors
-                     (batch_size, seq_length).
+        trigger_column = cast(str, self.next_occurrence_column)
+        trigger_values = targets[trigger_column]
 
-        Returns:
-            A tuple containing:
-            - The total combined (weighted) loss as a single Tensor.
-            - A dictionary of individual (unweighted) loss Tensors for each
-              target column.
-        """
-        mask_col = next(
-            (
-                col
-                for col in targets.keys()
-                if self.target_column_types[col] == "categorical"
-            ),
-            list(targets.keys())[0],
+        target_ids = torch.tensor(
+            self.next_occurrence_target_ids,
+            device=trigger_values.device,
+            dtype=trigger_values.dtype,
+        )
+        occurrence_mask = (
+            trigger_values.unsqueeze(-1) == target_ids.view(1, 1, -1)
+        ).any(dim=-1) & valid_mask.bool()
+
+        batch_size, seq_len = occurrence_mask.shape
+        position_ids = torch.arange(
+            seq_len, device=trigger_values.device, dtype=torch.int64
+        ).unsqueeze(0)
+        position_ids = position_ids.expand(batch_size, seq_len)
+        sentinel_positions = torch.full(
+            (batch_size, seq_len),
+            seq_len,
+            device=trigger_values.device,
+            dtype=torch.int64,
+        )
+        occurrence_positions = torch.where(
+            occurrence_mask, position_ids, sentinel_positions
+        )
+        next_positions = torch.cummin(
+            occurrence_positions.flip(dims=[1]), dim=1
+        ).values.flip(dims=[1])
+        has_next_occurrence = next_positions < seq_len
+        next_occurrence_mask = valid_mask.bool() & has_next_occurrence
+        gather_indices = next_positions.clamp_max(seq_len - 1)
+
+        projected_targets = {}
+        for target_column, target_tensor in targets.items():
+            projected_targets[target_column] = target_tensor.gather(1, gather_indices)
+
+        return projected_targets, next_occurrence_mask
+
+    @beartype
+    def _calculate_training_loss(
+        self,
+        output: dict[str, Tensor],
+        targets: dict[str, Tensor],
+        metadata: dict[str, Tensor],
+    ) -> tuple[Tensor, dict[str, Tensor], dict[str, Tensor], Tensor]:
+        """Return the normalized backward loss plus local metric primitives."""
+        target_names = self._loss_target_names(targets)
+        if not target_names:
+            raise RuntimeError("Loss calculation failed; no target columns were found.")
+
+        valid_mask = _get_evaluation_loss_mask(metadata)
+        targets, valid_mask = self._prepare_next_occurrence_loss_targets(
+            targets, valid_mask
         )
 
-        if self.target_column_types[mask_col] == "real":
-            seq_mask_2d = (targets[mask_col] != 0.0).long().cumsum(dim=1) > 0
-        else:
-            seq_mask_2d = targets[mask_col] != 0
+        local_sums, local_count = self._calculate_local_loss_components(
+            output, targets, valid_mask
+        )
+        global_count = local_count.detach().clone()
+        gradient_average_factor = self._gradient_reduction_factor()
 
-        mask = seq_mask_2d.T.contiguous().reshape(-1)
-
-        losses = {}
-        for target_column in targets.keys():
-            target_column_type = self.target_column_types[target_column]
-            if target_column_type == "categorical":
-                output[target_column] = (
-                    output[target_column]
-                    .float()
-                    .reshape(-1, self.n_classes[target_column])
-                )
-            elif target_column_type == "real":
-                output[target_column] = (
-                    output[target_column].to(dtype=torch.float32).reshape(-1)
-                )
-
-            target_tensor = targets[target_column].T.contiguous().reshape(-1)
-
-            if self.target_column_types[target_column] == "real":
-                target_tensor = target_tensor.to(dtype=output[target_column].dtype)
-
-            raw_loss = self.criterion[target_column](
-                output[target_column], target_tensor
-            )
-
-            current_mask = mask.to(dtype=raw_loss.dtype)
-
-            losses[target_column] = (raw_loss * current_mask).sum() / (
-                current_mask.sum() + 1e-9
+        if gradient_average_factor > 1:
+            dist.all_reduce(
+                global_count,
+                op=dist.ReduceOp.SUM,
+                group=self._data_parallel_process_group(),
             )
 
         loss = None
-        for target_column in targets.keys():
-            losses[target_column] = losses[target_column] * (
-                self.loss_weights[target_column]
-                if self.loss_weights is not None
-                else 1.0
+        backward_components = {}
+        denominator = global_count.clamp_min(1)
+        for target_column in target_names:
+            denominator_for_sum = denominator.to(dtype=local_sums[target_column].dtype)
+            backward_components[target_column] = (
+                local_sums[target_column]
+                * self._loss_weight(target_column)
+                * gradient_average_factor
+                / denominator_for_sum
             )
             if loss is None:
-                loss = losses[target_column].clone()
+                loss = backward_components[target_column].clone()
             else:
-                loss += losses[target_column]
+                loss += backward_components[target_column]
 
         if loss is None:
             raise RuntimeError(
                 "Loss calculation failed; no loss tensors were generated."
             )
 
-        return loss, losses
+        return loss, backward_components, local_sums, local_count
+
+    @beartype
+    def _calculate_local_loss_components(
+        self,
+        output: dict[str, Tensor],
+        targets: dict[str, Tensor],
+        valid_mask: Tensor,
+    ) -> tuple[dict[str, Tensor], Tensor]:
+        """Return unweighted, unnormalized local loss sums and one token count."""
+        target_names = self._loss_target_names(targets)
+        if not target_names:
+            raise RuntimeError("Loss calculation failed; no target columns were found.")
+
+        mask = valid_mask.bool().T.contiguous().reshape(-1)
+        token_count = mask.sum(dtype=torch.int64)
+
+        loss_sums = {}
+        for target_column in target_names:
+            target_column_type = self.target_column_types[target_column]
+            if target_column_type == "categorical":
+                output_tensor = (
+                    output[target_column]
+                    .float()
+                    .reshape(-1, self.n_classes[target_column])
+                )
+            elif target_column_type == "real":
+                output_tensor = (
+                    output[target_column].to(dtype=torch.float32).reshape(-1)
+                )
+            else:
+                raise ValueError(
+                    f"Target column type {target_column_type} not in ['categorical', 'real']"
+                )
+
+            target_tensor = self._loss_target_tensor(target_column, targets)
+
+            if self.target_column_types[target_column] == "real":
+                target_tensor = target_tensor.to(dtype=output_tensor.dtype)
+
+            raw_loss = self.criterion[target_column](output_tensor, target_tensor)
+            if raw_loss.numel() != mask.numel():
+                raise RuntimeError(
+                    "Loss/mask size mismatch for target column "
+                    f"{target_column!r}: loss has {raw_loss.numel()} elements "
+                    f"but mask has {mask.numel()}."
+                )
+            current_mask = mask.to(dtype=raw_loss.dtype)
+
+            loss_sums[target_column] = (raw_loss * current_mask).sum()
+
+        return loss_sums, token_count
+
+    @beartype
+    def _loss_target_tensor(
+        self, target_column: str, targets: dict[str, Tensor]
+    ) -> Tensor:
+        """Return flattened targets for the configured training objective."""
+        target_values = targets[target_column]
+        if self.hparams.training_spec.training_objective == "final_value":
+            target_values = target_values[:, -1:].expand_as(target_values)
+        target_tensor = target_values.T.contiguous().reshape(-1)
+        if self.target_column_types[target_column] == "categorical":
+            target_tensor = _class_index_tensor(target_tensor)
+        return target_tensor
+
+    @beartype
+    def _calculate_loss_components(
+        self,
+        output: dict[str, Tensor],
+        targets: dict[str, Tensor],
+        valid_mask: Tensor,
+    ) -> tuple[dict[str, Tensor], Tensor]:
+        """Return detached local loss sums and one shared token count for metrics."""
+        targets, valid_mask = self._prepare_next_occurrence_loss_targets(
+            targets, valid_mask
+        )
+        loss_sums, token_count = self._calculate_local_loss_components(
+            output, targets, valid_mask
+        )
+        return (
+            {
+                col: loss_sum.detach().to(dtype=self._metric_float_dtype())
+                for col, loss_sum in loss_sums.items()
+            },
+            token_count.detach(),
+        )
+
+    @beartype
+    def _metric_float_dtype(self) -> torch.dtype:
+        """Return the highest precision floating dtype supported by this device."""
+        if torch.device(self.device).type == "mps":
+            return torch.float32
+        return torch.float64
+
+    @beartype
+    def _loss_target_names(
+        self, targets: Optional[dict[str, Tensor]] = None
+    ) -> list[str]:
+        """Return configured target columns in stable training-config order."""
+        configured_targets = getattr(
+            self, "target_columns", list(self.target_column_types.keys())
+        )
+        if targets is not None:
+            missing_targets = [
+                col
+                for col in configured_targets
+                if col in self.target_column_types and col not in targets
+            ]
+            if missing_targets:
+                raise RuntimeError(f"Missing target columns: {sorted(missing_targets)}")
+
+        return [col for col in configured_targets if col in self.target_column_types]
+
+    @beartype
+    def _loss_weight(self, target_column: str) -> float:
+        """Return the configured scalar loss weight for a target column."""
+        if self.loss_weights is None:
+            return 1.0
+        return float(self.loss_weights[target_column])
+
+    @beartype
+    def _distributed_is_initialized(self) -> bool:
+        """Return whether torch.distributed collectives are currently usable."""
+        return dist.is_available() and dist.is_initialized()
+
+    @beartype
+    def _data_parallel_process_group(self) -> Optional[dist.ProcessGroup]:
+        """Return the process group used by the data-parallel reducer."""
+        return getattr(self, "_data_parallel_group", None)
+
+    @beartype
+    def _gradient_reduction_factor(self) -> int:
+        """Return the gradient multiplier needed before averaged reducers run."""
+        if not self._distributed_is_initialized():
+            return 1
+
+        training_spec = getattr(getattr(self, "hparams", None), "training_spec", None)
+        data_parallelism = getattr(training_spec, "data_parallelism", None)
+        if data_parallelism in {"DDP", "FSDP"}:
+            return dist.get_world_size(group=self._data_parallel_process_group())
+
+        return 1
+
+    @beartype
+    def _new_loss_accumulators(
+        self, target_names: list[str]
+    ) -> tuple[dict[str, Tensor], Tensor]:
+        """Create detached sum/count accumulators for logging or validation."""
+        dtype = self._metric_float_dtype()
+        return (
+            {
+                col: torch.zeros((), device=self.device, dtype=dtype)
+                for col in target_names
+            },
+            torch.zeros((), device=self.device, dtype=dtype),
+        )
+
+    @beartype
+    def _accumulate_loss_components(
+        self,
+        sums: dict[str, Tensor],
+        count: Tensor,
+        batch_sums: dict[str, Tensor],
+        batch_count: Tensor,
+    ) -> None:
+        """Accumulate detached local unweighted loss sums and token counts."""
+        for col in batch_sums:
+            sums[col] = sums[col] + batch_sums[col].detach().to(
+                device=sums[col].device,
+                dtype=sums[col].dtype,
+            )
+        count += batch_count.detach().to(device=count.device, dtype=count.dtype)
+
+    @beartype
+    def _finalize_loss_components(
+        self,
+        sums: dict[str, Tensor],
+        count: Tensor,
+        target_names: list[str],
+        label: str,
+        raise_on_empty: bool = True,
+    ) -> tuple[Tensor, dict[str, Tensor]]:
+        """Reduce local loss sums/counts and return weighted token means."""
+        packed = torch.stack([sums[col] for col in target_names] + [count])
+
+        if self._distributed_is_initialized():
+            dist.all_reduce(
+                packed,
+                op=dist.ReduceOp.SUM,
+                group=self._data_parallel_process_group(),
+            )
+
+        n_targets = len(target_names)
+        reduced_sums = dict(zip(target_names, packed[:n_targets]))
+        reduced_count = packed[n_targets]
+
+        if reduced_count.detach().cpu().item() == 0:
+            if raise_on_empty:
+                raise RuntimeError(f"No valid {label} tokens found.")
+
+            dtype = self._metric_float_dtype()
+            losses = {
+                col: torch.zeros((), device=self.device, dtype=dtype)
+                for col in target_names
+            }
+            return torch.zeros((), device=self.device, dtype=dtype), losses
+
+        losses = {}
+        total = torch.zeros((), device=self.device, dtype=self._metric_float_dtype())
+        for col in target_names:
+            losses[col] = reduced_sums[col] / reduced_count * self._loss_weight(col)
+            total = total + losses[col]
+        return total, losses
 
     @beartype
     def _copy_model(self):
-        """Copies the model.
-
-        This creates a deep copy of the model, typically for saving the
-        "best model". It temporarily removes the `log_file` attribute
-        before copying to avoid errors, then re-initializes it.
-
-        Returns:
-            A deep copy of the current TransformerModel instance.
-        """
+        """Deep-copy without copying the logger handle."""
         logger_ref = self.logger
         del self.logger
         model_copy = copy.deepcopy(self)
@@ -1683,24 +2398,11 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _transform_val(self, col: str, val: Tensor) -> Tensor:
-        """ "Transforms input data to match the format of model output.
-
-        This is used *only* for calculating the baseline loss, where
-        the input (e.g., categorical indices) needs to be one-hot encoded
-        to be comparable to the model's (logit) output.
-
-        Args:
-            col: The name of the column being transformed.
-            val: The input tensor (categorical indices).
-
-        Returns:
-            A tensor transformed to be compatible with the loss function
-            (e.g., one-hot encoded).
-        """
+        """Transform targets into baseline-loss output shape."""
         if self.target_column_types[col] == "categorical":
             target_dtype = self.decoder[col].weight.dtype
             return (
-                one_hot(val, self.n_classes[col])
+                one_hot(_class_index_tensor(val), self.n_classes[col])
                 .reshape(-1, self.n_classes[col])
                 .to(dtype=target_dtype)
             )
@@ -1712,199 +2414,254 @@ class TransformerModel(nn.Module):
     @beartype
     def _evaluate(
         self, valid_loader: DataLoader, ddp_model: Optional[nn.Module] = None
-    ) -> tuple[np.float32, dict[str, np.float32], dict[str, Tensor]]:
-        """Evaluates the model on the validation set.
-
-        Iterates through the validation data, calculates the total loss,
-        and aggregates results across all processes if in distributed mode.
-        Also calculates a one-time baseline loss on the first call.
-        The DataLoader is expected to yield tuples of
-        (sequences_dict, targets_dict, sequence_ids, subsequence_ids, start_positions).
-        The IDs and positions are currently unused during evaluation.
-
-        Args:
-            valid_loader: DataLoader for the validation dataset.
-            ddp_model: DDP model
-
-        Returns:
-            A tuple containing:
-            - The total aggregated validation loss (float).
-            - A dictionary of aggregated losses for each target column (dict[str, float]).
-            - The output tensor dictionary from the last batch (used for class share logging).
-        """
-
-        total_loss_collect = []
-        # Initialize a dict to hold lists of losses for each target
-        total_losses_collect = {col: [] for col in self.target_columns}
-        output = {}  # for type checking
+    ) -> tuple[np.float32, dict[str, np.float32], ClassCounts]:
+        """Evaluate validation loss and optional class-share counts."""
 
         model_to_call = ddp_model if ddp_model is not None else self
+        target_names = self._loss_target_names()
+        class_count_columns = list(dict.fromkeys(self.class_share_log_columns))
 
+        for col in class_count_columns:
+            missing_class_ids = [
+                class_id
+                for class_id in range(self.n_classes[col])
+                if class_id not in self.index_maps[col]
+            ]
+            if missing_class_ids:
+                raise ValueError(
+                    f"Class-share column {col!r} is missing index-map entries "
+                    f"for class IDs {missing_class_ids}."
+                )
+
+        local_class_counts: ClassCounts = {
+            col: torch.zeros(
+                self.n_classes[col],
+                dtype=torch.int64,
+                device=self.device,
+            )
+            for col in class_count_columns
+        }
+
+        was_training = model_to_call.training
         model_to_call.eval()
 
-        with torch.no_grad():
-            for data, targets, _, _, _ in valid_loader:
-                # Move data to the current process's assigned GPU
-                data = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in data.items()
-                    if k in self.input_columns
-                }
-                targets = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in targets.items()
-                    if k in self.target_column_types
-                }
+        try:
+            total_loss_sums, total_loss_count = self._new_loss_accumulators(
+                target_names
+            )
 
-                if (
-                    self.hparams.training_spec.layer_autocast
-                    and self.hparams.training_spec.data_parallelism != "FSDP"
-                ):
-                    amp_dtype = get_torch_dtype(
-                        self.hparams.training_spec.layer_type_dtypes.get(
-                            "linear", "bfloat16"
+            with torch.no_grad():
+                for batch_idx, batch in enumerate(valid_loader):
+                    if not isinstance(batch, SequifierBatch):
+                        raise TypeError(
+                            "Validation DataLoader must yield SequifierBatch objects, "
+                            f"got {type(batch).__name__}."
                         )
-                        if self.hparams.training_spec.layer_type_dtypes
-                        else "bfloat16"
-                    )
-                    with torch.autocast(
-                        device_type=self.device.split(":")[0], dtype=amp_dtype
+                    data = batch.inputs
+                    targets = batch.targets
+                    metadata = batch.metadata
+                    # Move data to the current process's assigned GPU
+                    data = {
+                        k: v.to(self.device, non_blocking=True)
+                        for k, v in data.items()
+                        if k in self.input_columns
+                    }
+                    targets = {
+                        k: v.to(self.device, non_blocking=True)
+                        for k, v in targets.items()
+                        if k in self.target_column_types
+                    }
+                    metadata = {
+                        k: v.to(self.device, non_blocking=True)
+                        for k, v in metadata.items()
+                    }
+                    if self.hparams.training_spec.training_objective == "bert":
+                        data, targets, metadata = apply_bert_masking(
+                            data,
+                            targets,
+                            metadata,
+                            self.hparams,
+                            eval_seed=self.hparams.seed + batch_idx,
+                        )
+
+                    valid_mask = _get_evaluation_loss_mask(metadata)
+
+                    if (
+                        self.hparams.training_spec.layer_autocast
+                        and self.hparams.training_spec.data_parallelism != "FSDP"
                     ):
-                        output = model_to_call(data, True)
-                        loss, losses = self._calculate_loss(output, targets)
-                else:
-                    output = model_to_call(data, True)
-                    loss, losses = self._calculate_loss(output, targets)
-
-                total_loss_collect.append(loss.item())
-                for col, loss in losses.items():
-                    total_losses_collect[col].append(loss.item())
-
-                # Free up GPU memory
-                del data, targets, loss, losses
-                if self.device == "cuda":
-                    torch.cuda.empty_cache()
-
-        if len(total_loss_collect) > 0:
-            total_loss_local = np.mean(total_loss_collect)
-            total_losses_local = {
-                col: np.mean(loss_list)
-                for col, loss_list in total_losses_collect.items()
-            }
-        else:
-            # Handle empty validation set case
-            total_loss_local = 0.0
-            total_losses_local = {col: 0.0 for col in self.target_columns}
-
-        # 2. Aggregate losses across all GPUs if in distributed mode
-        if self.hparams.training_spec.distributed:
-            # Put local losses into tensors for reduction
-            total_loss_tensor = torch.tensor(
-                total_loss_local, device=self.device, dtype=torch.float32
-            )
-
-            # Ensure consistent order for the losses tensor
-            loss_keys = sorted(total_losses_local.keys())
-            losses_values = [total_losses_local[k] for k in loss_keys]
-            losses_tensor = torch.tensor(
-                losses_values, device=self.device, dtype=torch.float32
-            )
-
-            # Sum losses from all processes. The result is broadcast back to all processes.
-            dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
-            dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
-
-            world_size = dist.get_world_size()
-            total_loss_tensor /= world_size
-            losses_tensor /= world_size
-
-            # Update local variables with the aggregated global results
-            total_loss_global = total_loss_tensor.cpu().numpy()
-            losses_global_values = losses_tensor.cpu().numpy()
-            total_losses_global = dict(zip(loss_keys, losses_global_values))
-        else:
-            # If not distributed, local losses are the global losses
-            total_loss_global = total_loss_local
-            total_losses_global = total_losses_local
-
-        # 3. Handle one-time baseline loss calculation (must also be synchronized)
-        if not hasattr(self, "baseline_loss"):
-            baseline_loss_local_collect = []
-            baseline_losses_local_collect = {col: [] for col in self.target_columns}
-
-            # Iterate over the sharded validation loader
-            for data, targets, _, _, _ in valid_loader:
-                data = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in data.items()
-                    if k in self.input_columns
-                }
-                targets = {
-                    k: v.to(self.device, non_blocking=True)
-                    for k, v in targets.items()
-                    if k in self.target_column_types
-                }
-
-                pseudo_output = {}
-                targets_for_baseline = {}
-                for col in self.target_columns:
-                    if col in data:
-                        pseudo_output[col] = self._transform_val(
-                            col, data[col].transpose(0, 1)
+                        amp_dtype = get_torch_dtype(
+                            self.hparams.training_spec.layer_type_dtypes.get(
+                                "linear", "bfloat16"
+                            )
+                            if self.hparams.training_spec.layer_type_dtypes
+                            else "bfloat16"
                         )
-                        targets_for_baseline[col] = targets[col]
+                        with torch.autocast(
+                            device_type=self.device.split(":")[0], dtype=amp_dtype
+                        ):
+                            output = model_to_call(
+                                data, metadata=metadata, return_logits=True
+                            )
+                            loss_sums, token_counts = self._calculate_loss_components(
+                                output, targets, valid_mask
+                            )
+                    else:
+                        output = model_to_call(
+                            data, metadata=metadata, return_logits=True
+                        )
+                        loss_sums, token_counts = self._calculate_loss_components(
+                            output, targets, valid_mask
+                        )
 
-                if len(pseudo_output) > 0:
-                    loss, losses = self._calculate_loss(
-                        pseudo_output, targets_for_baseline
+                    self._accumulate_loss_components(
+                        total_loss_sums,
+                        total_loss_count,
+                        loss_sums,
+                        token_counts,
                     )
-                    baseline_loss_local_collect.append(loss.item())
-                    for col, loss_ in losses.items():
-                        baseline_losses_local_collect[col].append(loss_.item())
+                    accumulate_class_counts(
+                        local_class_counts,
+                        output,
+                        valid_mask,
+                        self.n_classes,
+                    )
 
-            # Sum the losses for the local shard
-            if len(baseline_loss_local_collect):
-                baseline_loss_local = np.mean(baseline_loss_local_collect)
-                baseline_losses_local = {
-                    col: np.mean(loss_list)
-                    for col, loss_list in baseline_losses_local_collect.items()
+            total_loss_global, total_losses_global = self._finalize_loss_components(
+                total_loss_sums, total_loss_count, target_names, "validation"
+            )
+
+            if self._distributed_is_initialized():
+                for col in class_count_columns:
+                    dist.all_reduce(
+                        local_class_counts[col],
+                        op=dist.ReduceOp.SUM,
+                        group=self._data_parallel_process_group(),
+                    )
+
+            # Handle one-time baseline loss calculation with the same aggregation semantics.
+            if not hasattr(self, "baseline_loss"):
+                baseline_loss_sums, baseline_loss_count = self._new_loss_accumulators(
+                    target_names
+                )
+
+                with torch.no_grad():
+                    for batch_idx, batch in enumerate(valid_loader):
+                        if not isinstance(batch, SequifierBatch):
+                            raise TypeError(
+                                "Validation DataLoader must yield SequifierBatch objects, "
+                                f"got {type(batch).__name__}."
+                            )
+                        data = batch.inputs
+                        targets = batch.targets
+                        metadata = batch.metadata
+                        data = {
+                            k: v.to(self.device, non_blocking=True)
+                            for k, v in data.items()
+                            if k in self.input_columns
+                        }
+                        targets = {
+                            k: v.to(self.device, non_blocking=True)
+                            for k, v in targets.items()
+                            if k in self.target_column_types
+                        }
+                        metadata = {
+                            k: v.to(self.device, non_blocking=True)
+                            for k, v in metadata.items()
+                        }
+
+                        if self.hparams.training_spec.training_objective == "bert":
+                            _, _, metadata = apply_bert_masking(
+                                data,
+                                targets,
+                                metadata,
+                                self.hparams,
+                                eval_seed=self.hparams.seed + batch_idx,
+                            )
+
+                        valid_mask = _get_evaluation_loss_mask(metadata)
+
+                        pseudo_output = {}
+                        targets_for_baseline = {}
+                        for col in self.target_columns:
+                            if col in targets:
+                                if self.hparams.training_spec.training_objective in [
+                                    "causal",
+                                    "final_value",
+                                    "next_occurrence",
+                                ]:
+                                    pseudo_output[col] = self._transform_val(
+                                        col, data[col].transpose(0, 1)
+                                    )
+                                elif (
+                                    self.hparams.training_spec.training_objective
+                                    == "bert"
+                                ):
+                                    shifted_targets = torch.roll(
+                                        targets[col], shifts=1, dims=1
+                                    )
+
+                                    if self.target_column_types[col] == "categorical":
+                                        shifted_targets[:, 0] = (
+                                            SPECIAL_TOKEN_IDS.unknown
+                                        )
+                                    else:
+                                        shifted_targets[:, 0] = 0.0
+                                    pseudo_output[col] = self._transform_val(
+                                        col, shifted_targets.transpose(0, 1)
+                                    )
+                                else:
+                                    raise ValueError("Impossible")
+
+                                target_val = targets[col]
+                                if (
+                                    self.hparams.training_spec.training_objective
+                                    == "final_value"
+                                ):
+                                    target_val = target_val[:, -1:].expand_as(
+                                        target_val
+                                    )
+                                targets_for_baseline[col] = target_val
+
+                        if len(pseudo_output) > 0:
+                            loss_sums, token_counts = self._calculate_loss_components(
+                                pseudo_output,
+                                targets_for_baseline,
+                                valid_mask,
+                            )
+                            self._accumulate_loss_components(
+                                baseline_loss_sums,
+                                baseline_loss_count,
+                                loss_sums,
+                                token_counts,
+                            )
+
+                baseline_loss, baseline_losses = self._finalize_loss_components(
+                    baseline_loss_sums,
+                    baseline_loss_count,
+                    target_names,
+                    "baseline validation",
+                )
+                self.baseline_loss = baseline_loss.detach().cpu().item()
+                self.baseline_losses = {
+                    col: loss.detach().cpu().item()
+                    for col, loss in baseline_losses.items()
                 }
-            else:
-                baseline_loss_local = -1.0
-                baseline_losses_local = {col: -1.0 for col in self.target_columns}
 
-            # Broadcast the baseline values from the main process to all others
-            if self.hparams.training_spec.distributed:
-                total_loss_tensor = torch.tensor(
-                    baseline_loss_local, device=self.device, dtype=torch.float32
-                )
-                dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
-                loss_keys = sorted(baseline_losses_local.keys())
-                losses_values = [baseline_losses_local[k] for k in loss_keys]
-                losses_tensor = torch.tensor(
-                    losses_values, device=self.device, dtype=torch.float32
-                )
-                dist.all_reduce(losses_tensor, op=dist.ReduceOp.SUM)
-
-                world_size = dist.get_world_size()
-                total_loss_tensor /= world_size
-                losses_tensor /= world_size
-
-                self.baseline_loss = total_loss_tensor.item()
-                self.baseline_losses = dict(zip(loss_keys, losses_tensor.cpu().numpy()))
-            else:
-                # If not distributed, local is global
-                self.baseline_loss = baseline_loss_local
-                self.baseline_losses = baseline_losses_local
-
-        model_to_call.train()
-        torch.clear_autocast_cache()
-
-        return (
-            np.float32(total_loss_global),
-            {k: np.float32(v) for k, v in total_losses_global.items()},
-            output,
-        )
+            return (
+                np.float32(total_loss_global.detach().cpu().item()),
+                {
+                    k: np.float32(v.detach().cpu().item())
+                    for k, v in total_losses_global.items()
+                },
+                {
+                    col: counts.detach().cpu()
+                    for col, counts in local_class_counts.items()
+                },
+            )
+        finally:
+            model_to_call.train(was_training)
+            torch.clear_autocast_cache()
 
     @beartype
     def _export(
@@ -1914,16 +2671,7 @@ class TransformerModel(nn.Module):
         epoch: int,
         clean: bool = False,
     ) -> None:
-        """Exports the model.
-
-        This is a wrapper function that handles exporting the model (and
-        optionally the embedding-only model) on rank 0 only.
-
-        Args:
-            state_dict: The state dict of the model instance to export (e.g., best model or last model).
-            suffix: A string suffix to append to the model filename (e.g., "best", "last").
-            epoch: The current epoch number, included in the filename.
-        """
+        """Export configured model variants from rank 0."""
         if self.rank != 0:
             return
 
@@ -1953,16 +2701,9 @@ class TransformerModel(nn.Module):
         suffix: str,
         epoch: int,
     ) -> None:
-        """Exports the model to ONNX and/or PyTorch format.
+        """Write one model as ONNX and/or PT."""
+        os.makedirs(os.path.join(self.project_root, "models"), exist_ok=True)
 
-        Saves the model weights as a .pt file and/or exports the model
-        graph and weights as an .onnx file based on the config.
-
-        Args:
-            model: The model instance (TransformerModel or TransformerEmbeddingModel).
-            suffix: A string suffix for the filename (e.g., "best", "last-embedding").
-            epoch: The current epoch number, included in the filename.
-        """
         if self.export_onnx:
             is_different_type = any(
                 p.dtype in [torch.float16, torch.bfloat16, torch.float64]
@@ -1981,28 +2722,38 @@ class TransformerModel(nn.Module):
 
             x_cat = {
                 col: torch.randint(
-                    0, self.n_classes[col], (self.inference_batch_size, self.seq_length)
+                    0,
+                    self.n_classes[col],
+                    (self.inference_batch_size, self.context_length),
                 ).to(export_device, non_blocking=True)
                 for col in self.categorical_columns
             }
 
             dtype_real = torch.float32 if is_different_type else None
             x_real = {
-                col: torch.rand(self.inference_batch_size, self.seq_length).to(
+                col: torch.rand(self.inference_batch_size, self.context_length).to(
                     export_device, non_blocking=True, dtype=dtype_real
                 )
                 for col in self.real_columns
             }
 
             input_dict = {**x_cat, **x_real}
+            attention_valid_mask = torch.ones(
+                self.inference_batch_size,
+                self.context_length,
+                dtype=torch.bool,
+                device=export_device,
+            )
+            attention_valid_mask[0, 0] = False
 
-            # Wrap in a tuple with an empty dict to prevent PyTorch from treating input_dict as kwargs
-            x = (input_dict, {})
+            feature_columns = list(input_dict.keys())
+            x = tuple(input_dict[col] for col in feature_columns) + (
+                attention_valid_mask,
+            )
+            export_wrapper = _OnnxExportWrapper(model_to_export, feature_columns)
 
-            # PyTree flattening sorts dictionary keys automatically, so we sort names to match
-            input_names = [
-                f"{col}_in" if col in sorted(list(input_dict.keys())) else col
-                for col in sorted(self.target_columns)
+            input_names = [f"{col}_in" for col in input_dict.keys()] + [
+                "attention_valid_mask"
             ]
 
             # Determine output names based on the model type
@@ -2032,7 +2783,6 @@ class TransformerModel(nn.Module):
                 logging.getLogger("torch.onnx").setLevel(logging.ERROR)
             except (ImportError, AttributeError):
                 torch.onnx.disable_log()  # Fallback for older PyTorch versions
-            # 2. Catch and ignore standard Python warnings temporarily
             with warnings.catch_warnings(), open(
                 os.devnull, "w"
             ) as fnull, contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(
@@ -2047,7 +2797,7 @@ class TransformerModel(nn.Module):
                 warnings.filterwarnings("ignore", category=FutureWarning)
 
                 torch.onnx.export(
-                    model_to_export,
+                    export_wrapper,
                     x,
                     export_path,
                     export_params=True,
@@ -2080,17 +2830,12 @@ class TransformerModel(nn.Module):
         val_loss: np.float32,
         ddp_model: Optional[nn.Module] = None,
         suffix: Optional[str] = None,
+        best_val_loss: float = float("inf"),
+        n_epochs_no_improvement: int = 0,
+        best_model_state_dict: Optional[dict[str, Tensor]] = None,
+        num_batches: Optional[int] = None,
     ) -> None:
-        """Saves the model checkpoint.
-
-        Saves the model state, optimizer state, and epoch number to a .pt
-        file in the checkpoints directory. Only runs on rank 0.
-
-        Args:
-            val_loss: The validation loss at the current epoch.
-            ddp_model: DDP model
-            suffix: Checkpoint file suffix.
-        """
+        """Save rank-0 checkpoint state."""
         model_to_extract = ddp_model if ddp_model is not None else self
 
         if self.hparams.training_spec.data_parallelism == "FSDP":
@@ -2112,7 +2857,10 @@ class TransformerModel(nn.Module):
             model_state_dict = {
                 k.replace("_orig_mod.", ""): v for k, v in self.state_dict().items()
             }
-            optim_state_dict = self.optimizer.state_dict()
+            optim_state_dict = copy.deepcopy(self.optimizer.state_dict())
+
+        rng_state = self._collect_rng_states_for_checkpoint()
+        data_loader_generator_states = self._get_data_loader_generator_states()
 
         if self.rank != 0:
             return
@@ -2127,33 +2875,39 @@ class TransformerModel(nn.Module):
             file_name,
         )
 
-        torch.save(
-            {
-                "epoch": epoch,
-                "batch": batch,
-                "model_state_dict": model_state_dict,
-                "optimizer_state_dict": optim_state_dict,
-                "scheduler_state_dict": self.scheduler.state_dict(),
-                "loss": val_loss,
-            },
-            output_path,
+        checkpoint = {
+            "checkpoint_metadata": self._checkpoint_compatibility_metadata(num_batches),
+            "epoch": epoch,
+            "batch": batch,
+            "model_state_dict": model_state_dict,
+            "optimizer_state_dict": optim_state_dict,
+            "scheduler_state_dict": self.scheduler.state_dict(),
+            "scaler_state_dict": self.scaler.state_dict(),
+            "rng_state": rng_state,
+            "data_loader_generator_states": data_loader_generator_states,
+            "best_val_loss": float(best_val_loss),
+            "n_epochs_no_improvement": int(n_epochs_no_improvement),
+            "best_model_state_dict": best_model_state_dict,
+            "loss": val_loss,
+        }
+
+        temp_path = os.path.join(
+            self.project_root,
+            "checkpoints",
+            f".{file_name}.{uuid.uuid4().hex}.tmp",
         )
+        try:
+            torch.save(checkpoint, temp_path)
+            os.replace(temp_path, output_path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.remove(temp_path)
+            raise
         self.logger.info(f"[INFO] Saved checkpoint to {output_path}")
 
     @beartype
     def _get_optimizer(self, params: Any, **kwargs):
-        """Gets the optimizer.
-
-        Initializes the optimizer specified in the hyperparameters.
-
-        Args:
-            params: params
-            **kwargs: Additional arguments to pass to the optimizer constructor
-                      (e.g., weight_decay).
-
-        Returns:
-            An initialized torch.optim.Optimizer instance.
-        """
+        """Instantiate the configured optimizer."""
         optimizer_class = get_optimizer_class(self.hparams.training_spec.optimizer.name)
         return optimizer_class(
             params, lr=self.hparams.training_spec.learning_rate, **kwargs
@@ -2161,17 +2915,7 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _get_scheduler(self, **kwargs):
-        """Gets the scheduler.
-
-        Initializes the learning rate scheduler specified in the hyperparameters.
-
-        Args:
-            **kwargs: Additional arguments to pass to the scheduler constructor
-                      (e.g., step_size).
-
-        Returns:
-            An initialized torch.optim.lr_scheduler._LRScheduler instance.
-        """
+        """Instantiate the configured LR scheduler."""
         scheduler_name = self.hparams.training_spec.scheduler.name
         if hasattr(torch.optim.lr_scheduler, scheduler_name):
             scheduler_class = getattr(torch.optim.lr_scheduler, scheduler_name)
@@ -2183,29 +2927,27 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _initialize_log_file(self):
-        """Initializes the log file."""
-        # Replaces old LogFile class instantiation
+        """Attach the configured logger."""
         self.logger = configure_logger(self.project_root, self.model_name, self.rank)
 
     @beartype
     def _get_latest_model_name(self) -> Optional[str]:
-        """Gets the name of the latest model checkpoint.
-
-        Scans the checkpoints directory for files matching the current
-        `model_name` and returns the path to the most recently modified one.
-
-        Returns:
-            The file path (str) to the latest checkpoint, or None if no
-            checkpoint is found.
-        """
-        checkpoint_path = os.path.join(self.project_root, "checkpoints", "*")
+        """Return the newest checkpoint path for this model name."""
+        checkpoint_path = os.path.join(
+            self.project_root, "checkpoints", f"{glob.escape(self.model_name)}-*.pt"
+        )
+        checkpoint_name_re = re.compile(
+            rf"^{re.escape(self.model_name)}-(?:latest|epoch-\d+(?:-batch-\d+)?)\.pt$"
+        )
 
         files = glob.glob(checkpoint_path)
         files = [
-            file for file in files if os.path.split(file)[1].startswith(self.model_name)
+            file
+            for file in files
+            if checkpoint_name_re.fullmatch(os.path.split(file)[1])
         ]
         if files:
-            return max(files, key=os.path.getctime)
+            return max(files, key=os.path.getmtime)
         else:
             return None
 
@@ -2217,24 +2959,10 @@ class TransformerModel(nn.Module):
         elapsed: float,
         total_loss: np.float32,
         total_losses: dict[str, np.float32],
-        output: dict[str, Tensor],
+        class_counts: ClassCounts,
         global_step: int,
     ) -> None:
-        """Logs the results of an epoch.
-
-        Writes validation loss, individual losses, learning rate, and
-        class share statistics (if configured) to the log file.
-        Only runs on rank 0.
-
-        Args:
-            epoch: Current epoch number.
-            elapsed: Time taken for the epoch (in seconds).
-            total_loss: The total aggregated validation loss.
-            total_losses: A dictionary of aggregated losses for each target.
-            output: The output tensor dictionary from the last validation batch,
-                    used for class share logging.
-            batch: Current batch number.
-        """
+        """Log validation metrics and class shares from rank 0."""
         if self.rank == 0:
             learning_rate = self.optimizer.state_dict()["param_groups"][0]["lr"]
 
@@ -2270,22 +2998,31 @@ class TransformerModel(nn.Module):
                 self.logger.info("[INFO]  - " + ", ".join(loss_strs))
 
             for categorical_column in self.class_share_log_columns:
-                output_values = (
-                    output[categorical_column].argmax(1).cpu().detach().numpy()
-                )
-                output_counts_df = (
-                    pl.Series("values", output_values).value_counts().sort("values")
-                )
-                output_counts = output_counts_df.get_column("count")
+                counts = class_counts[categorical_column].to(torch.int64)
+                total = counts.sum()
 
-                output_counts = output_counts / output_counts.sum()
-                value_shares = " | ".join(
-                    [
-                        f"{self.index_maps[categorical_column][row['values']]}: {row['count']:5.5f}"
-                        for row in output_counts_df.iter_rows(named=True)
-                    ]
+                if total.item() == 0:
+                    self.logger.warning(
+                        "[WARNING] No valid predictions available for "
+                        f"class-share column {categorical_column!r}."
+                    )
+                    continue
+
+                share_dtype = (
+                    torch.float32 if counts.device.type == "mps" else torch.float64
                 )
-                self.logger.info(f"[INFO] {categorical_column}: {value_shares}")
+                shares = counts.to(share_dtype) / total
+
+                value_shares = " | ".join(
+                    f"{self.index_maps[categorical_column][class_id]}: "
+                    f"{shares[class_id].item():5.5f}"
+                    for class_id in range(counts.numel())
+                    if counts[class_id].item() > 0
+                )
+
+                self.logger.info(
+                    f"[INFO] {categorical_column} (n={total.item()}): {value_shares}"
+                )
 
             self.logger.info("-" * 89)
 
@@ -2299,21 +3036,7 @@ def load_inference_model(
     device: str,
     infer_with_dropout: bool,
 ) -> torch.nn.Module:
-    """Loads a trained model for inference.
-
-    Args:
-        model_type: "generative" or "embedding".
-        model_path: Path to the saved .pt model file.
-        training_config_path: Path to the .yaml config file used for training.
-        args_config: A dictionary of override configurations.
-        device: The device to load the model onto (e.g., "cuda", "cpu").
-        infer_with_dropout: Whether to force dropout layers to be active
-                          during inference.
-
-    Returns:
-        The loaded and compiled torch.nn.Module (TransformerModel or
-        TransformerEmbeddingModel) in evaluation mode.
-    """
+    """Load a PT checkpoint as a generative or embedding inference module."""
     skip_metadata = args_config.get("skip_metadata", False)
     args_config_subset = {
         k: v for k, v in args_config.items() if k not in ["model_path", "data_path"]
@@ -2366,25 +3089,16 @@ def infer_with_embedding_model(
     device: str,
     size: int,
     target_columns: list[str],
+    metadata: list[dict[str, np.ndarray]],
+    column_types: dict[str, torch.dtype],
 ) -> np.ndarray:
-    """Performs inference with an embedding model.
-
-    Args:
-        model: The loaded TransformerEmbeddingModel.
-        x: A list of input data dictionaries (batched).
-        device: The device to run inference on.
-        size: The total number of samples (unused in this function).
-        target_columns: List of target column names (unused in this function).
-
-    Returns:
-        A NumPy array containing the concatenated embeddings from all batches.
-    """
+    """Run batched embedding inference and concatenate CPU outputs."""
     outs0 = []
 
     categorical_cols = set(model.transformer_model.categorical_columns)
 
     with torch.no_grad():
-        for x_sub in x:
+        for batch_idx, x_sub in enumerate(x):
             layer_types = (
                 model.transformer_model.hparams.training_spec.layer_type_dtypes or {}
             )
@@ -2395,9 +3109,19 @@ def infer_with_embedding_model(
                 if col in categorical_cols:
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
                 else:
-                    data_gpu[col] = torch.from_numpy(x_).to(device, dtype=ref_dtype)
+                    data_gpu[col] = torch.from_numpy(x_).to(
+                        device, dtype=column_types.get(col, ref_dtype)
+                    )
+            metadata_gpu = (
+                {
+                    col: torch.from_numpy(x_).to(device)
+                    for col, x_ in metadata[batch_idx].items()
+                }
+                if metadata
+                else {}
+            )
 
-            output_gpu = model.forward(data_gpu)
+            output_gpu = model.forward(data_gpu, metadata=metadata_gpu)
             output_cpu = output_gpu.cpu().detach().float().numpy()
             output_cpu = output_cpu.transpose(1, 0, 2).reshape(
                 output_cpu.shape[0] * output_cpu.shape[1], output_cpu.shape[2]
@@ -2417,26 +3141,16 @@ def infer_with_generative_model(
     device: str,
     size: int,
     target_columns: list[str],
+    metadata: list[dict[str, np.ndarray]],
+    column_types: dict[str, torch.dtype],
 ) -> dict[str, np.ndarray]:
-    """Performs inference with a generative model.
-
-    Args:
-        model: The loaded TransformerModel.
-        x: A list of input data dictionaries (batched).
-        device: The device to run inference on.
-        size: The total number of samples to trim the final output to.
-        target_columns: List of target column names to extract from the output.
-
-    Returns:
-        A dictionary mapping target column names to their concatenated
-        output NumPy arrays, trimmed to `size`.
-    """
+    """Run batched generative inference and trim CPU outputs."""
     outs0 = []
 
     categorical_cols = set(model.categorical_columns)
 
     with torch.no_grad():
-        for x_sub in x:
+        for batch_idx, x_sub in enumerate(x):
             layer_types = model.hparams.training_spec.layer_type_dtypes or {}
             dtype_str = layer_types.get("linear", "float32")
             ref_dtype = get_torch_dtype(dtype_str)
@@ -2445,9 +3159,19 @@ def infer_with_generative_model(
                 if col in categorical_cols:
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
                 else:
-                    data_gpu[col] = torch.from_numpy(x_).to(device, dtype=ref_dtype)
+                    data_gpu[col] = torch.from_numpy(x_).to(
+                        device, dtype=column_types.get(col, ref_dtype)
+                    )
+            metadata_gpu = (
+                {
+                    col: torch.from_numpy(x_).to(device)
+                    for col, x_ in metadata[batch_idx].items()
+                }
+                if metadata
+                else {}
+            )
 
-            output_gpu = model.forward(data_gpu)
+            output_gpu = model.forward(data_gpu, metadata=metadata_gpu)
             output_cpu = {k: v.cpu().detach() for k, v in output_gpu.items()}
             outs0.append(output_cpu)
             if device == "cuda":

@@ -1,7 +1,7 @@
 import json
 import math
 import os
-from typing import Dict, Iterator, Tuple
+from typing import Dict, Iterator
 
 import polars as pl
 import torch
@@ -10,17 +10,26 @@ from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
-from sequifier.helpers import PANDAS_TO_TORCH_TYPES, normalize_path
+from sequifier.helpers import (
+    PANDAS_TO_TORCH_TYPES,
+    columns_from_slice,
+    get_left_pad_lengths_from_preprocessed_data,
+    normalize_path,
+    resolve_window_view,
+    stored_window_layout_from_metadata,
+)
+from sequifier.io.batch import SequifierBatch
+from sequifier.io.iteration_state import (
+    read_shared_int,
+    resolve_resume_worker,
+    shared_int,
+    skip_samples_for_batches,
+    write_shared_int,
+)
 
 
 class SequifierDatasetFromFolderParquet(IterableDataset):
-    """
-    An efficient PyTorch IterableDataset that pre-loads a folder of chunked
-    Parquet files entirely into CPU RAM at initialization.
-
-    Yields full, pre-collated batches natively. Fully supports DDP/FSDP distributed
-    environments using customizable sampling strategies.
-    """
+    """Eager Parquet-folder dataset yielding rank/worker-aligned batches."""
 
     def __init__(self, data_path: str, config: TrainModel, shuffle: bool = True):
         super().__init__()
@@ -28,8 +37,8 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         self.config = config
         self.batch_size = config.training_spec.batch_size
         self.shuffle = shuffle
-        self.epoch = 0
-        self.sampling_strategy = config.training_spec.sampling_strategy
+        self._epoch_state = shared_int(0)
+        self._start_batch_state = shared_int(0)
 
         metadata_path = os.path.join(self.data_dir, "metadata.json")
         if not os.path.exists(metadata_path):
@@ -40,6 +49,9 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
 
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
+
+        self.folder_layout = stored_window_layout_from_metadata(metadata)
+        self.resolved_view = resolve_window_view(self.folder_layout, config.window_view)
 
         self.n_samples = metadata["total_samples"]
 
@@ -53,21 +65,28 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         }
 
         # Sequence formatting structures matching long-format schema boundaries
-        train_seq_len = self.config.seq_length
-        input_seq_cols = [str(c) for c in range(train_seq_len, 0, -1)]
-        target_seq_cols = [str(c) for c in range(train_seq_len - 1, -1, -1)]
-
+        input_seq_cols = columns_from_slice(
+            self.resolved_view.input_slice, self.folder_layout.stored_context_width
+        )
+        target_seq_cols = columns_from_slice(
+            self.resolved_view.target_slice, self.folder_layout.stored_context_width
+        )
         all_sequences: Dict[str, list[torch.Tensor]] = {
             col: [] for col in config.input_columns
         }
         all_targets: Dict[str, list[torch.Tensor]] = {
             col: [] for col in config.target_columns
         }
+        all_left_pad_lengths: list[torch.Tensor] = []
 
         # Step 1: Eager I/O reduction pass over all chunk allocations
         for file_info in metadata["batch_files"]:
             file_path = os.path.join(self.data_dir, file_info["path"])
             df = pl.read_parquet(file_path)
+
+            left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(df)
+            if left_pad_lengths is not None:
+                all_left_pad_lengths.append(left_pad_lengths)
 
             for col in all_sequences.keys():
                 feature_df = df.filter(pl.col("inputCol") == col)
@@ -99,12 +118,15 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
             for col, tensors in all_targets.items()
             if tensors
         }
+        self.left_pad_lengths = torch.cat(all_left_pad_lengths)
 
         # Step 3: Prevent serialization duplications across worker forks via shared memory flags
         for tensor in self.sequences.values():
             tensor.share_memory_()
         for tensor in self.targets.values():
             tensor.share_memory_()
+        if self.left_pad_lengths is not None:
+            self.left_pad_lengths.share_memory_()
 
         self.target_samples = self._get_target_samples()
         self.total_batches = self._calculate_total_batches(self.target_samples)
@@ -126,75 +148,99 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         return total_batches
 
     def set_epoch(self, epoch: int):
-        """Allows the training loop to synchronize seed steps for shuffling."""
-        self.epoch = epoch
+        """Set the shuffle epoch."""
+        write_shared_int(self._epoch_state, epoch)
+
+    def set_start_batch(self, start_batch: int):
+        """Set the first global batch to yield on the next iteration."""
+        write_shared_int(self._start_batch_state, start_batch)
 
     def _get_target_samples(self) -> int:
-        """Calculates precise sample counts per rank to manage FSDP layer allocations."""
+        """Return the padded per-rank sample count for aligned distributed steps."""
         world_size = dist.get_world_size() if dist.is_initialized() else 1
-        rank = dist.get_rank() if dist.is_initialized() else 0
 
         samples_per_rank = [
             len(range(r, self.n_samples, world_size)) for r in range(world_size)
         ]
-
-        if self.sampling_strategy == "exact":
-            return samples_per_rank[rank]
-        elif self.sampling_strategy == "oversampling":
-            return max(samples_per_rank)
-        elif self.sampling_strategy == "undersampling":
-            return min(samples_per_rank)
-        return samples_per_rank[rank]
+        return max(samples_per_rank)
 
     def __len__(self) -> int:
         return self.total_batches
 
     def __iter__(
         self,
-    ) -> Iterator[
-        Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]
-    ]:
+    ) -> Iterator[SequifierBatch]:
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_initialized() else 0
 
         worker_info = get_worker_info()
-        worker_id = worker_info.id if worker_info is not None else 0
+        physical_worker_id = worker_info.id if worker_info is not None else 0
         num_workers = worker_info.num_workers if worker_info is not None else 1
+        epoch = read_shared_int(self._epoch_state)
+        start_batch = read_shared_int(self._start_batch_state)
 
-        # 1. Coordinate global shuffling masks
         indices = torch.arange(self.n_samples)
         if self.shuffle:
             g = torch.Generator()
-            g.manual_seed(self.config.seed + self.epoch)
+            g.manual_seed(self.config.seed + epoch)
             indices = indices[torch.randperm(self.n_samples, generator=g)]
 
-        # 2. Slice metrics based on GPU distribution metrics
         indices_for_rank = indices[rank::world_size].tolist()
+        sample_is_real = [True] * len(indices_for_rank)
 
-        # 3. Synchronize cross-device oversampling/undersampling rules
-        if self.sampling_strategy == "oversampling":
+        real_count = len(indices_for_rank)
+        if real_count == 0:
+            fallback_indices = indices.tolist()
+            n = min(len(fallback_indices), self.target_samples)
+            indices_for_rank.extend(fallback_indices[:n])
+            sample_is_real.extend([False] * n)
+        else:
             while len(indices_for_rank) < self.target_samples:
-                indices_for_rank.extend(
-                    indices_for_rank[: self.target_samples - len(indices_for_rank)]
-                )
-        elif self.sampling_strategy == "undersampling":
-            indices_for_rank = indices_for_rank[: self.target_samples]
+                n = min(real_count, self.target_samples - len(indices_for_rank))
+                indices_for_rank.extend(indices_for_rank[:n])
+                sample_is_real.extend([False] * n)
 
-        # 4. Map worker task splits
+        worker_batch_counts = [
+            math.ceil(len(indices_for_rank[i::num_workers]) / self.batch_size)
+            for i in range(num_workers)
+        ]
+        worker_id, skip_batches = resolve_resume_worker(
+            start_batch,
+            physical_worker_id,
+            num_workers,
+            worker_batch_counts,
+        )
+
         indices_for_worker = indices_for_rank[worker_id::num_workers]
+        sample_is_real_for_worker = sample_is_real[worker_id::num_workers]
+        skipped_samples = skip_samples_for_batches(
+            skip_batches, self.batch_size, len(indices_for_worker)
+        )
+        indices_for_worker = indices_for_worker[skipped_samples:]
+        sample_is_real_for_worker = sample_is_real_for_worker[skipped_samples:]
 
-        # 5. Extract and pass unified data frames
-        train_seq_len = self.config.seq_length
         for i in range(0, len(indices_for_worker), self.batch_size):
             batch_indices = indices_for_worker[i : i + self.batch_size]
+            batch_sample_is_real = sample_is_real_for_worker[i : i + self.batch_size]
 
             data_batch = {
-                key: tensor[batch_indices, -train_seq_len:]
-                for key, tensor in self.sequences.items()
+                key: tensor[batch_indices] for key, tensor in self.sequences.items()
             }
             targets_batch = {
-                key: tensor[batch_indices, -train_seq_len:]
-                for key, tensor in self.targets.items()
+                key: tensor[batch_indices] for key, tensor in self.targets.items()
             }
 
-            yield data_batch, targets_batch, None, None, None
+            metadata_batch = {}
+            if self.left_pad_lengths is not None:
+                metadata_batch = self.resolved_view.build_masks(
+                    self.left_pad_lengths[batch_indices]
+                )
+            metadata_batch["sample_valid_mask"] = torch.tensor(
+                batch_sample_is_real, dtype=torch.bool
+            )
+
+            yield SequifierBatch(
+                inputs=data_batch,
+                targets=targets_batch,
+                metadata=metadata_batch,
+            )
