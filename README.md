@@ -30,55 +30,6 @@ This gives us a number of benefits:
 The only requirement is having sequifier installed, and having input data in the right format.
 
 
-
-### v2 vs v1 Summary
-
-| Area | v1 (`main` branch) | v2 |
-| :--- | :--- | :--- |
-| Training objectives | Causal next-step sequence modeling. | Adds objective-aware training for `causal`, `bert`, `final_value`, and `next_occurrence`. |
-| Preprocessing windows | Uses a single `seq_length` window tied directly to the training view. | Stores a wider `stored_context_width` plus `max_target_offset`; training and inference resolve `context_length` and `target_offset` from that stored layout. |
-| Validity and masking | Handles padding and targets for the causal workflow. | Carries explicit `leftPadLength`, attention validity, target validity, BERT corruption masks, and distributed sample validity through the pipeline. |
-| Special tokens | Reserves IDs for `[unknown]` and `[other]`; ordinary categorical IDs start at 2. | Adds `[mask]` for BERT-style training; ordinary categorical IDs start at 3. |
-| Inference | Supports predictions, probabilities, embeddings, and causal autoregression. | Makes inference objective-aware across causal, BERT, final-value, and next-occurrence models while preserving supported generative and embedding outputs. |
-| Distributed validation | Validated for multi-GPU and multi-node training. | Validated for single-node multi-GPU training; multi-node validation remains outstanding. |
-
-
-
-### Implementation Properties
-
-At the process level, Sequifier is designed around a few formal properties that make training and inference reliable across objectives, hardware setups, and exported models.
-
-**Preprocessing**
-
-1.  **The dataset is transformed into fixed-width, traceable sequence windows.** Each training example is a window with `sequenceId`, `subsequenceId`, `startItemPosition`, `leftPadLength`, and per-feature rows. Short sequences are left-padded, and padding is made explicit rather than implicit.
-2.  **A single stored preprocessing layout can support multiple objective-specific training views.** Preprocessing stores a wider v2 window layout, while training and inference resolve objective-specific input and target slices from that layout. This is the core property behind causal, BERT, final_value, and next_occurrence training sharing the same preprocessed data.
-3.  **Padding validity is carried through the whole pipeline.** `leftPadLength` is converted into `attention_valid_mask` and `target_valid_mask`, and batches carry both masks.
-4.  **Data splits are reproducible and sequence-aware.** Splits are either within-sequence by contiguous bounds or between-sequence by deterministic hash assignment; batch construction avoids crossing sequence boundaries unless explicitly allowed.
-5.  **Categorical IDs, special tokens, real-value normalization, and masks are persistent preprocessing semantics.** Sequifier establishes stable reserved token IDs, user IDs after reserved IDs, real-column statistics, optional input masking, and metadata export so training and inference use the same encoding contract.
-
-**Training**
-
-1.  **The model should not attend to forbidden information.** Causal, final_value, and next_occurrence objectives use a causal future mask; BERT uses bidirectional attention. In all cases, padded keys are masked and padded query positions are zeroed through the stack.
-2.  **Loss is defined only over valid target positions.** The effective loss mask combines target validity, BERT mask positions, and artificial distributed sample validity. Raw per-token losses are summed under this mask and normalized by the valid-token count.
-3.  **Each objective has its own target semantics.** 'causal' predicts the next sequence value. 'bert' predicts only corrupted valid spans; 'final_value' training uses the final target value across the sequence; 'next_occurrence' training projects targets to the next configured occurrence and excludes positions without such an occurrence.
-4.  **Distributed training is intended to be metric-equivalent to a single global loss over real valid tokens.** Dataset loaders shard by rank and worker, pad ranks to aligned step counts when needed, mark synthetic samples invalid, and reduce loss sums and counts across ranks.
-5.  **Training stochasticity is reproducible and resumable.** Seeds are applied across Python, NumPy, Torch, and CUDA; shuffling is epoch-seeded; checkpoints capture RNG and DataLoader generator state.
-6.  **Checkpoint resume continues the same training process, not merely the same weights.** Checkpoints include model, optimizer, scheduler, scaler, best-model state, epoch and batch position, RNG, loader state, and a resume-critical configuration fingerprint.
-7.  **Validation, baseline loss, class-share logging, and training loss use the same validity semantics.** Validation runs under `eval`, no grad, the same masks, distributed reductions, and the same objective-specific target transformations.
-8.  **Exported models preserve the trained prediction interface.** Training exports last and best generative and/or embedding models from rank 0, with an explicit `attention_valid_mask` input for ONNX/PT inference.
-
-**Inference**
-
-1.  **Inference uses the same metadata-defined window view as training.** It loads v2 preprocessing metadata, validates special tokens, resolves the same objective-specific window view, and rebuilds masks from `leftPadLength`.
-2.  **Inference outputs correspond only to valid, non-padding prediction positions.** Predictions, probabilities, embeddings, sequence IDs, and item positions are filtered through the flattened validity mask.
-3.  **Output positions are absolute and objective-aware.** BERT positions are anchored inside the input window; causal, final_value, and next_occurrence predictions are anchored to future positions after the context.
-4.  **Inference postprocessing inverts preprocessing semantics.** Categorical predictions can be mapped back through ID maps; real predictions are un-normalized using stored statistics; categorical probabilities are normalized or sampled under probability constraints.
-5.  **Autoregressive inference is sequentially coherent.** It requires sorted sequence/subsequence order, repeatedly shifts predicted values into the input window, advances masks and item positions, and emits one sequence of future steps per source sequence.
-
-The big themes are: no leakage, explicit validity masking, objective-consistent target alignment, reproducible and resumable training, distributed equivalence over real tokens, and inference/training semantic consistency.
-
-
-
 ### The Six Commands
 
 There are six standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, and `visualize-training`.
@@ -234,6 +185,19 @@ For the full guide on how to configure a distributed run, check the [multi-GPU t
 Tiny transformer models on little data can be trained on CPU. Bigger ones require an Nvidia GPU with a compatible cuda version installed.
 
 Sequifier currently runs on MacOS and Ubuntu.
+
+
+
+### v2 vs v1 Summary
+
+| Area | v1 (`main` branch) | v2 |
+| :--- | :--- | :--- |
+| Training objectives | Causal next-step sequence modeling. | Adds objective-aware training for `causal`, `bert`, `final_value`, and `next_occurrence`. |
+| Preprocessing windows | Uses a single `seq_length` window tied directly to the training view. | Stores a wider `stored_context_width` plus `max_target_offset`; training and inference resolve `context_length` and `target_offset` from that stored layout. |
+| Validity and masking | Handles padding and targets for the causal workflow. | Carries explicit `leftPadLength`, attention validity, target validity, BERT corruption masks, and distributed sample validity through the pipeline. |
+| Special tokens | Reserves IDs for `[unknown]` and `[other]`; ordinary categorical IDs start at 2. | Adds `[mask]` for BERT-style training; ordinary categorical IDs start at 3. |
+| Inference | Supports predictions, probabilities, embeddings, and causal autoregression. | Makes inference objective-aware across causal, BERT, final-value, and next-occurrence models while preserving supported generative and embedding outputs. |
+| Distributed validation | Validated for multi-GPU and multi-node training. | Validated for single-node multi-GPU training; multi-node validation remains outstanding. |
 
 
 
