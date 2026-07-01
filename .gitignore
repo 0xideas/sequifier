@@ -9,6 +9,8 @@ project_folder/
 *\~
 *.DS_Store
 
+uv.lock
+
 tests/sequifier-make-test-project
 .env.sh
 pyright-output.txt
