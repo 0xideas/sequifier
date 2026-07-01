@@ -186,21 +186,6 @@ Tiny transformer models on little data can be trained on CPU. Bigger ones requir
 
 Sequifier currently runs on MacOS and Ubuntu.
 
-
-
-### v2 vs v1 Summary
-
-| Area | v1 (`main` branch) | v2 |
-| :--- | :--- | :--- |
-| Training objectives | Causal next-step sequence modeling. | Adds objective-aware training for `causal`, `bert`, `final_value`, and `next_occurrence`. |
-| Preprocessing windows | Uses a single `seq_length` window tied directly to the training view. | Stores a wider `stored_context_width` plus `max_target_offset`; training and inference resolve `context_length` and `target_offset` from that stored layout. |
-| Validity and masking | Handles padding and targets for the causal workflow. | Carries explicit `leftPadLength`, attention validity, target validity, BERT corruption masks, and distributed sample validity through the pipeline. |
-| Special tokens | Reserves IDs for `[unknown]` and `[other]`; ordinary categorical IDs start at 2. | Adds `[mask]` for BERT-style training; ordinary categorical IDs start at 3. |
-| Inference | Supports predictions, probabilities, embeddings, and causal autoregression. | Makes inference objective-aware across causal, BERT, final-value, and next-occurrence models while preserving supported generative and embedding outputs. |
-| Distributed validation | Validated for multi-GPU and multi-node training. | Validated for single-node multi-GPU training; multi-node validation remains outstanding. |
-
-
-
 ## Citation
 
 Please cite with:
