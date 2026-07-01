@@ -70,7 +70,6 @@ WIDE_UNSIGNED_EMBEDDING_INDEX_DTYPES = (torch.uint32, torch.uint64)
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
-    apply_bert_masking,
     conditional_beartype,
     configure_determinism,
     configure_logger,
@@ -95,8 +94,8 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
     SequifierDatasetFromFolderPtLazy,
 )
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
+from sequifier.objectives import create_objective  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS  # noqa: E402
 
 
 def cleanup():
@@ -773,15 +772,6 @@ class TransformerModel(nn.Module):
         self.index_maps = construct_index_maps(
             hparams.id_maps, self.class_share_log_columns, True
         )
-        self.next_occurrence_column = None
-        self.next_occurrence_target_ids: list[int] = []
-        next_occurrence_config = hparams.training_spec.next_occurrence_config
-        if next_occurrence_config is not None:
-            self.next_occurrence_column = next_occurrence_config.column_name
-            id_map = hparams.id_maps[self.next_occurrence_column]
-            self.next_occurrence_target_ids = [
-                id_map[value] for value in next_occurrence_config.target_values
-            ]
         self.export_embedding_model = hparams.export_embedding_model
         self.export_generative_model = hparams.export_generative_model
         self.export_onnx = hparams.export_onnx
@@ -789,6 +779,7 @@ class TransformerModel(nn.Module):
         self.export_with_dropout = hparams.export_with_dropout
         self.early_stopping_epochs = hparams.training_spec.early_stopping_epochs
         self.hparams = hparams
+        self.objective = create_objective(hparams)
         self.drop = nn.Dropout(hparams.training_spec.dropout)
         self.encoder = ModuleDict()
         self.dim_model = self.hparams.model_spec.dim_model
@@ -902,24 +893,11 @@ class TransformerModel(nn.Module):
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
 
-        if hparams.training_spec.training_objective in [
-            "causal",
-            "final_value",
-            "next_occurrence",
-        ]:
-            self.register_buffer(
-                "src_mask",
-                self._generate_square_subsequent_mask(self.context_length),
-                persistent=False,  # Optional: prevents the mask from being saved in your checkpoints
-            )
-        elif hparams.training_spec.training_objective == "bert":
-            self.register_buffer(
-                "src_mask",
-                torch.zeros(self.context_length, self.context_length),
-                persistent=False,
-            )
-        else:
-            pass
+        self.register_buffer(
+            "src_mask",
+            self.objective.build_attention_mask_policy(self.context_length),
+            persistent=False,
+        )
 
         self._init_weights()
 
@@ -1843,10 +1821,9 @@ class TransformerModel(nn.Module):
                 metadata = {
                     k: v.to(self.device, non_blocking=True) for k, v in metadata.items()
                 }
-                if self.hparams.training_spec.training_objective == "bert":
-                    data, targets, metadata = apply_bert_masking(
-                        data, targets, metadata, self.hparams
-                    )
+                data, targets, metadata = self.objective.prepare_batch(
+                    data, targets, metadata
+                )
 
                 # Only use standard torch.autocast if FSDP MixedPrecision is NOT handling it natively
                 if (
@@ -2072,55 +2049,6 @@ class TransformerModel(nn.Module):
         return loss, backward_components
 
     @beartype
-    def _prepare_next_occurrence_loss_targets(
-        self,
-        targets: dict[str, Tensor],
-        valid_mask: Tensor,
-    ) -> tuple[dict[str, Tensor], Tensor]:
-        """Project event-position target values backward for next_occurrence loss."""
-        if self.hparams.training_spec.training_objective != "next_occurrence":
-            return targets, valid_mask
-
-        trigger_column = cast(str, self.next_occurrence_column)
-        trigger_values = targets[trigger_column]
-
-        target_ids = torch.tensor(
-            self.next_occurrence_target_ids,
-            device=trigger_values.device,
-            dtype=trigger_values.dtype,
-        )
-        occurrence_mask = (
-            trigger_values.unsqueeze(-1) == target_ids.view(1, 1, -1)
-        ).any(dim=-1) & valid_mask.bool()
-
-        batch_size, seq_len = occurrence_mask.shape
-        position_ids = torch.arange(
-            seq_len, device=trigger_values.device, dtype=torch.int64
-        ).unsqueeze(0)
-        position_ids = position_ids.expand(batch_size, seq_len)
-        sentinel_positions = torch.full(
-            (batch_size, seq_len),
-            seq_len,
-            device=trigger_values.device,
-            dtype=torch.int64,
-        )
-        occurrence_positions = torch.where(
-            occurrence_mask, position_ids, sentinel_positions
-        )
-        next_positions = torch.cummin(
-            occurrence_positions.flip(dims=[1]), dim=1
-        ).values.flip(dims=[1])
-        has_next_occurrence = next_positions < seq_len
-        next_occurrence_mask = valid_mask.bool() & has_next_occurrence
-        gather_indices = next_positions.clamp_max(seq_len - 1)
-
-        projected_targets = {}
-        for target_column, target_tensor in targets.items():
-            projected_targets[target_column] = target_tensor.gather(1, gather_indices)
-
-        return projected_targets, next_occurrence_mask
-
-    @beartype
     def _calculate_training_loss(
         self,
         output: dict[str, Tensor],
@@ -2132,8 +2060,8 @@ class TransformerModel(nn.Module):
         if not target_names:
             raise RuntimeError("Loss calculation failed; no target columns were found.")
 
-        valid_mask = _get_evaluation_loss_mask(metadata)
-        targets, valid_mask = self._prepare_next_occurrence_loss_targets(
+        valid_mask = self.objective.build_loss_mask(metadata)
+        targets, valid_mask = self.objective.transform_targets_for_loss(
             targets, valid_mask
         )
 
@@ -2229,9 +2157,7 @@ class TransformerModel(nn.Module):
         self, target_column: str, targets: dict[str, Tensor]
     ) -> Tensor:
         """Return flattened targets for the configured training objective."""
-        target_values = targets[target_column]
-        if self.hparams.training_spec.training_objective == "final_value":
-            target_values = target_values[:, -1:].expand_as(target_values)
+        target_values = self.objective.target_values_for_loss(target_column, targets)
         target_tensor = target_values.T.contiguous().reshape(-1)
         if self.target_column_types[target_column] == "categorical":
             target_tensor = _class_index_tensor(target_tensor)
@@ -2245,7 +2171,7 @@ class TransformerModel(nn.Module):
         valid_mask: Tensor,
     ) -> tuple[dict[str, Tensor], Tensor]:
         """Return detached local loss sums and one shared token count for metrics."""
-        targets, valid_mask = self._prepare_next_occurrence_loss_targets(
+        targets, valid_mask = self.objective.transform_targets_for_loss(
             targets, valid_mask
         )
         loss_sums, token_count = self._calculate_local_loss_components(
@@ -2475,16 +2401,14 @@ class TransformerModel(nn.Module):
                         k: v.to(self.device, non_blocking=True)
                         for k, v in metadata.items()
                     }
-                    if self.hparams.training_spec.training_objective == "bert":
-                        data, targets, metadata = apply_bert_masking(
-                            data,
-                            targets,
-                            metadata,
-                            self.hparams,
-                            eval_seed=self.hparams.seed + batch_idx,
-                        )
+                    data, targets, metadata = self.objective.prepare_batch(
+                        data,
+                        targets,
+                        metadata,
+                        eval_seed=self.hparams.seed + batch_idx,
+                    )
 
-                    valid_mask = _get_evaluation_loss_mask(metadata)
+                    valid_mask = self.objective.build_loss_mask(metadata)
 
                     if (
                         self.hparams.training_spec.layer_autocast
@@ -2570,58 +2494,31 @@ class TransformerModel(nn.Module):
                             for k, v in metadata.items()
                         }
 
-                        if self.hparams.training_spec.training_objective == "bert":
-                            _, _, metadata = apply_bert_masking(
-                                data,
-                                targets,
-                                metadata,
-                                self.hparams,
-                                eval_seed=self.hparams.seed + batch_idx,
-                            )
+                        _, _, metadata = self.objective.prepare_batch(
+                            data,
+                            targets,
+                            metadata,
+                            eval_seed=self.hparams.seed + batch_idx,
+                        )
 
-                        valid_mask = _get_evaluation_loss_mask(metadata)
+                        valid_mask = self.objective.build_loss_mask(metadata)
 
                         pseudo_output = {}
                         targets_for_baseline = {}
                         for col in self.target_columns:
                             if col in targets:
-                                if self.hparams.training_spec.training_objective in [
-                                    "causal",
-                                    "final_value",
-                                    "next_occurrence",
-                                ]:
-                                    pseudo_output[col] = self._transform_val(
-                                        col, data[col].transpose(0, 1)
-                                    )
-                                elif (
-                                    self.hparams.training_spec.training_objective
-                                    == "bert"
-                                ):
-                                    shifted_targets = torch.roll(
-                                        targets[col], shifts=1, dims=1
-                                    )
-
-                                    if self.target_column_types[col] == "categorical":
-                                        shifted_targets[:, 0] = (
-                                            SPECIAL_TOKEN_IDS.unknown
-                                        )
-                                    else:
-                                        shifted_targets[:, 0] = 0.0
-                                    pseudo_output[col] = self._transform_val(
-                                        col, shifted_targets.transpose(0, 1)
-                                    )
-                                else:
-                                    raise ValueError("Impossible")
-
-                                target_val = targets[col]
-                                if (
-                                    self.hparams.training_spec.training_objective
-                                    == "final_value"
-                                ):
-                                    target_val = target_val[:, -1:].expand_as(
-                                        target_val
-                                    )
-                                targets_for_baseline[col] = target_val
+                                pseudo_output[col] = self._transform_val(
+                                    col,
+                                    self.objective.baseline_prediction_values(
+                                        col,
+                                        data,
+                                        targets,
+                                        self.target_column_types[col],
+                                    ),
+                                )
+                                targets_for_baseline[col] = (
+                                    self.objective.baseline_target_values(col, targets)
+                                )
 
                         if len(pseudo_output) > 0:
                             loss_sums, token_counts = self._calculate_loss_components(

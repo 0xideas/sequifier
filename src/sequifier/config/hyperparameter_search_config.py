@@ -26,6 +26,15 @@ from sequifier.helpers import (
     stored_window_layout_from_metadata,
     try_catch_excess_keys,
 )
+from sequifier.objectives import (
+    ALLOWED_OBJECTIVE_NAMES,
+    OBJECTIVE_NAME_MESSAGE,
+    BERTObjective,
+    NextOccurrenceObjective,
+    forward_objective_names,
+    get_objective_class,
+    target_offset_for_objective,
+)
 from sequifier.special_tokens import validate_special_token_ids
 
 
@@ -285,31 +294,38 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     @field_validator("training_objective")
     @classmethod
     def validate_training_objective(cls, v):
-        allowed = {"causal", "bert", "final_value", "next_occurrence"}
-        invalid = set(v).difference(allowed)
+        invalid = set(v).difference(ALLOWED_OBJECTIVE_NAMES)
         if invalid:
             raise ValueError(
-                "Only 'causal', 'bert', 'final_value', and 'next_occurrence' are allowed, "
-                f"found {invalid}"
+                f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {invalid}"
             )
         return v
 
     @model_validator(mode="after")
     def validate_objective_specific_config(self):
-        if "bert" in self.training_objective and self.bert_spec is None:
+        objective_classes = [
+            get_objective_class(objective_name)
+            for objective_name in self.training_objective
+        ]
+        has_bert_objective = any(
+            issubclass(objective_class, BERTObjective)
+            for objective_class in objective_classes
+        )
+        has_next_occurrence_objective = any(
+            issubclass(objective_class, NextOccurrenceObjective)
+            for objective_class in objective_classes
+        )
+        if has_bert_objective and self.bert_spec is None:
             raise ValueError(
                 "If 'bert' is in training_objective, bert_spec must be configured."
             )
-        if (
-            "next_occurrence" in self.training_objective
-            and self.next_occurrence_config is None
-        ):
+        if has_next_occurrence_objective and self.next_occurrence_config is None:
             raise ValueError(
                 "If 'next_occurrence' is in training_objective, "
                 "next_occurrence_config must be configured."
             )
         if (
-            "next_occurrence" not in self.training_objective
+            not has_next_occurrence_objective
             and self.next_occurrence_config is not None
         ):
             raise ValueError(
@@ -394,14 +410,18 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         training_objective = trial.suggest_categorical(
             "training_objective", self.training_objective
         )
+        objective_class = get_objective_class(training_objective)
         bert_spec = (
             self.bert_spec.sample_trial(trial)
-            if training_objective == "bert" and self.bert_spec is not None
+            if (
+                issubclass(objective_class, BERTObjective)
+                and self.bert_spec is not None
+            )
             else None
         )
         next_occurrence_config = (
             self.next_occurrence_config
-            if training_objective == "next_occurrence"
+            if issubclass(objective_class, NextOccurrenceObjective)
             else None
         )
 
@@ -636,7 +656,7 @@ class HyperparameterSearchConfig(BaseModel):
                     f"({self.storage_layout.max_target_offset}) > stored_context_width ({self.storage_layout.stored_context_width}). "
                     "Model inputs cannot exceed the preprocessed sequence length."
                 )
-        forward_objectives = {"causal", "final_value", "next_occurrence"}
+        forward_objectives = forward_objective_names()
         if (
             set(self.training_hyperparameter_sampling.training_objective)
             & forward_objectives
@@ -745,7 +765,8 @@ class HyperparameterSearchConfig(BaseModel):
             "context_length", self.context_length
         )
         training_spec = self.training_hyperparameter_sampling.sample_trial(trial)
-        if training_spec.training_objective == "bert":
+        objective_class = get_objective_class(training_spec.training_objective)
+        if not objective_class.forward_looking:
             model_spec = model_spec.model_copy(
                 update={"prediction_length": context_length}
             )
@@ -753,7 +774,10 @@ class HyperparameterSearchConfig(BaseModel):
         window_view = ModelWindowView(
             context_length=context_length,
             objective=training_spec.training_objective,
-            target_offset=0 if training_spec.training_objective == "bert" else 1,
+            target_offset=target_offset_for_objective(
+                training_spec.training_objective,
+                1,
+            ),
         )
         resolve_window_view(self.storage_layout, window_view)
 
