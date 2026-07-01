@@ -296,6 +296,12 @@
     <span class="n">stored_window_layout_from_metadata</span><span class="p">,</span>
     <span class="n">try_catch_excess_keys</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.objectives</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">ALLOWED_OBJECTIVE_NAMES</span><span class="p">,</span>
+    <span class="n">OBJECTIVE_NAME_MESSAGE</span><span class="p">,</span>
+    <span class="n">get_objective_class</span><span class="p">,</span>
+    <span class="n">target_offset_for_objective</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">validate_special_token_ids</span>
 
 
@@ -329,10 +335,9 @@
                 <span class="sa">f</span><span class="s2">&quot;got </span><span class="si">{</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">version</span><span class="si">}</span><span class="s2">.&quot;</span>
             <span class="p">)</span>
         <span class="n">training_objective</span> <span class="o">=</span> <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;training_objective&quot;</span><span class="p">]</span>
-        <span class="n">target_offset</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="mi">0</span>
-            <span class="k">if</span> <span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span>
-            <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">config_values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;target_offset&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+        <span class="n">target_offset</span> <span class="o">=</span> <span class="n">target_offset_for_objective</span><span class="p">(</span>
+            <span class="n">training_objective</span><span class="p">,</span>
+            <span class="nb">int</span><span class="p">(</span><span class="n">config_values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;target_offset&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)),</span>
         <span class="p">)</span>
         <span class="n">window_view</span> <span class="o">=</span> <span class="n">ModelWindowView</span><span class="p">(</span>
             <span class="n">context_length</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">config_values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;context_length&quot;</span><span class="p">)),</span>
@@ -432,30 +437,25 @@
                 <span class="s2">&quot;window_view objective must match training_objective &quot;</span>
                 <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">objective</span><span class="si">}</span><span class="s2"> != </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span><span class="si">}</span><span class="s2">).&quot;</span>
             <span class="p">)</span>
+        <span class="n">objective_class</span> <span class="o">=</span> <span class="n">get_objective_class</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span><span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">=</span> <span class="n">objective_class</span><span class="o">.</span><span class="n">default_prediction_length</span><span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span>
-                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span>
-                <span class="k">else</span> <span class="mi">1</span>
             <span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span><span class="p">:</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;For BERT inference, prediction_length must be equal to context_length &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;(got prediction_length=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">, context_length=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="si">}</span><span class="s2">).&quot;</span>
-                <span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
+        <span class="n">objective_class</span><span class="o">.</span><span class="n">validate_prediction_length</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span>
+            <span class="n">usage</span><span class="o">=</span><span class="s2">&quot;inference&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">objective_class</span><span class="o">.</span><span class="n">forward_looking</span><span class="p">:</span>
             <span class="n">resolve_window_view</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="p">)</span>
         <span class="k">return</span> <span class="bp">self</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_training_objective</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;causal&quot;</span><span class="p">,</span> <span class="s2">&quot;bert&quot;</span><span class="p">,</span> <span class="s2">&quot;final_value&quot;</span><span class="p">,</span> <span class="s2">&quot;next_occurrence&quot;</span><span class="p">]:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;Only &#39;causal&#39;, &#39;bert&#39;, &#39;final_value&#39;, and &#39;next_occurrence&#39; &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;are allowed, found </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="p">)</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">ALLOWED_OBJECTIVE_NAMES</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Only </span><span class="si">{</span><span class="n">OBJECTIVE_NAME_MESSAGE</span><span class="si">}</span><span class="s2"> are allowed, found </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;model_type&quot;</span><span class="p">)</span>
@@ -537,7 +537,9 @@
         <span class="k">if</span> <span class="p">(</span>
             <span class="n">v</span>
             <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span>
+            <span class="ow">and</span> <span class="ow">not</span> <span class="n">get_objective_class</span><span class="p">(</span>
+                <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span>
+            <span class="p">)</span><span class="o">.</span><span class="n">forward_looking</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="s2">&quot;Autoregressive inference is not possible with BERT-style models.&quot;</span>

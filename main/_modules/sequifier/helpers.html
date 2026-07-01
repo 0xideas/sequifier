@@ -273,14 +273,13 @@
           <h1>Source code for sequifier.helpers</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">glob</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">hashlib</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">polars</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pl</span>
@@ -290,6 +289,11 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">ValidationError</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.objectives</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">ALLOWED_OBJECTIVE_NAMES</span><span class="p">,</span>
+    <span class="n">OBJECTIVE_NAME_MESSAGE</span><span class="p">,</span>
+    <span class="n">get_objective_class</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">SPECIAL_TOKEN_IDS</span>
 
 <span class="n">PANDAS_TO_TORCH_TYPES</span> <span class="o">=</span> <span class="p">{</span>
@@ -510,22 +514,15 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;context_length must be a positive integer&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">objective</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;causal&quot;</span><span class="p">,</span> <span class="s2">&quot;bert&quot;</span><span class="p">,</span> <span class="s2">&quot;final_value&quot;</span><span class="p">,</span> <span class="s2">&quot;next_occurrence&quot;</span><span class="p">}:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">objective</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">ALLOWED_OBJECTIVE_NAMES</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;Only &#39;causal&#39;, &#39;bert&#39;, &#39;final_value&#39;, and &#39;next_occurrence&#39; are allowed, &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;found </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">objective</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;Only </span><span class="si">{</span><span class="n">OBJECTIVE_NAME_MESSAGE</span><span class="si">}</span><span class="s2"> are allowed, found </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">objective</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_offset</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;target_offset must be non-negative&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_offset</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;BERT views require target_offset=0&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">objective</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;causal&quot;</span><span class="p">,</span> <span class="s2">&quot;final_value&quot;</span><span class="p">,</span> <span class="s2">&quot;next_occurrence&quot;</span><span class="p">}</span>
-            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_offset</span> <span class="o">&lt;</span> <span class="mi">1</span>
-        <span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;Causal, final_value, and next_occurrence views require target_offset &gt;= 1&quot;</span>
-            <span class="p">)</span></div>
+        <span class="n">get_objective_class</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">objective</span><span class="p">)</span><span class="o">.</span><span class="n">validate_window_view</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_offset</span>
+        <span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="ResolvedWindowView"><a class="viewcode-back" href="../../api.html#sequifier.helpers.ResolvedWindowView">[docs]</a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
@@ -935,205 +932,6 @@
     <span class="n">t1</span><span class="p">,</span> <span class="n">t2</span> <span class="o">=</span> <span class="n">timestamps</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="n">timestamps</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
 
     <span class="k">return</span> <span class="p">(</span><span class="n">t2</span> <span class="o">-</span> <span class="n">t1</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span></div>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">_build_bert_span_mask</span><span class="p">(</span>
-    <span class="n">valid_mask</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
-    <span class="n">masking_probability</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-    <span class="n">span_distribution</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
-    <span class="o">*</span><span class="p">,</span>
-    <span class="n">generator</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Construct exact-budget, non-overlapping BERT span masks.&quot;&quot;&quot;</span>
-    <span class="n">valid_mask</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">bool</span><span class="p">()</span>
-    <span class="n">batch_size</span><span class="p">,</span> <span class="n">seq_len</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">shape</span>
-    <span class="n">device</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">device</span>
-
-    <span class="n">valid_lengths</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">)</span>
-    <span class="n">budgets</span> <span class="o">=</span> <span class="p">(</span><span class="n">valid_lengths</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span> <span class="o">*</span> <span class="n">masking_probability</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">)</span>
-
-    <span class="n">max_spans</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">math</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="n">seq_len</span> <span class="o">*</span> <span class="n">masking_probability</span><span class="p">)</span> <span class="o">+</span> <span class="mi">10</span><span class="p">)</span>
-    <span class="n">sampled_lengths</span> <span class="o">=</span> <span class="n">span_distribution</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span>
-        <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">max_spans</span><span class="p">),</span>
-        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
-        <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">,</span>
-    <span class="p">)</span>
-    <span class="n">sampled_lengths</span> <span class="o">=</span> <span class="n">sampled_lengths</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">)</span><span class="o">.</span><span class="n">clamp_min_</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
-
-    <span class="n">used_before</span> <span class="o">=</span> <span class="n">sampled_lengths</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="o">-</span> <span class="n">sampled_lengths</span>
-    <span class="n">remaining</span> <span class="o">=</span> <span class="p">(</span><span class="n">budgets</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">-</span> <span class="n">used_before</span><span class="p">)</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">span_lengths</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="n">sampled_lengths</span><span class="p">,</span> <span class="n">remaining</span><span class="p">)</span>
-
-    <span class="n">n_spans</span> <span class="o">=</span> <span class="p">(</span><span class="n">span_lengths</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-    <span class="n">total_gap_length</span> <span class="o">=</span> <span class="n">valid_lengths</span> <span class="o">-</span> <span class="n">budgets</span>
-
-    <span class="n">gap_slot</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">max_spans</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-    <span class="n">active_gap_slot</span> <span class="o">=</span> <span class="n">gap_slot</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;=</span> <span class="n">n_spans</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
-
-    <span class="n">uniform</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span>
-        <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">max_spans</span> <span class="o">+</span> <span class="mi">1</span><span class="p">),</span>
-        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
-        <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-        <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">,</span>
-    <span class="p">)</span>
-    <span class="n">uniform</span> <span class="o">=</span> <span class="n">uniform</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">uniform</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">tiny</span><span class="p">)</span>
-
-    <span class="n">gap_weights</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">where</span><span class="p">(</span>
-        <span class="n">active_gap_slot</span><span class="p">,</span>
-        <span class="o">-</span><span class="n">torch</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">uniform</span><span class="p">),</span>
-        <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">uniform</span><span class="p">),</span>
-    <span class="p">)</span>
-    <span class="n">cumulative_weights</span> <span class="o">=</span> <span class="n">gap_weights</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-    <span class="n">weight_totals</span> <span class="o">=</span> <span class="n">cumulative_weights</span><span class="p">[:,</span> <span class="o">-</span><span class="mi">1</span><span class="p">:]</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span>
-        <span class="n">torch</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">gap_weights</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">tiny</span>
-    <span class="p">)</span>
-
-    <span class="n">gap_edges</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span>
-        <span class="n">cumulative_weights</span>
-        <span class="o">/</span> <span class="n">weight_totals</span>
-        <span class="o">*</span> <span class="n">total_gap_length</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">gap_weights</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
-    <span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">)</span>
-    <span class="n">gap_edges</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">where</span><span class="p">(</span>
-        <span class="n">gap_slot</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&gt;=</span> <span class="n">n_spans</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">],</span>
-        <span class="n">total_gap_length</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">],</span>
-        <span class="n">gap_edges</span><span class="p">,</span>
-    <span class="p">)</span>
-
-    <span class="n">gaps</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">diff</span><span class="p">(</span>
-        <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
-            <span class="p">[</span>
-                <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">batch_size</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
-                <span class="n">gap_edges</span><span class="p">,</span>
-            <span class="p">],</span>
-            <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
-        <span class="p">),</span>
-        <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
-    <span class="p">)</span>
-
-    <span class="n">lengths_before</span> <span class="o">=</span> <span class="n">span_lengths</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="o">-</span> <span class="n">span_lengths</span>
-    <span class="n">gaps_through_current</span> <span class="o">=</span> <span class="n">gaps</span><span class="p">[:,</span> <span class="p">:</span><span class="n">max_spans</span><span class="p">]</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-
-    <span class="n">span_starts</span> <span class="o">=</span> <span class="n">lengths_before</span> <span class="o">+</span> <span class="n">gaps_through_current</span>
-    <span class="n">span_ends</span> <span class="o">=</span> <span class="n">span_starts</span> <span class="o">+</span> <span class="n">span_lengths</span>
-
-    <span class="n">compact_position</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">)</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
-    <span class="n">compact_position</span> <span class="o">=</span> <span class="n">compact_position</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-
-    <span class="n">started_spans</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span>
-        <span class="n">span_starts</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">compact_position</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">right</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-    <span class="p">)</span>
-    <span class="n">ended_spans</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span>
-        <span class="n">span_ends</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">compact_position</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
-        <span class="n">right</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-    <span class="p">)</span>
-
-    <span class="k">return</span> <span class="n">valid_mask</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">started_spans</span> <span class="o">&gt;</span> <span class="n">ended_spans</span><span class="p">)</span>
-
-
-<div class="viewcode-block" id="apply_bert_masking"><a class="viewcode-back" href="../../api.html#sequifier.helpers.apply_bert_masking">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">apply_bert_masking</span><span class="p">(</span>
-    <span class="n">data_batch</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
-    <span class="n">targets_batch</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
-    <span class="n">metadata_batch</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]],</span>
-    <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>  <span class="c1"># TrainConfig</span>
-    <span class="n">eval_seed</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply BERT span corruption and attach prediction masks.&quot;&quot;&quot;</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">metadata_batch</span> <span class="ow">or</span> <span class="s2">&quot;attention_valid_mask&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">metadata_batch</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;BERT masking requires metadata[&#39;attention_valid_mask&#39;]&quot;</span><span class="p">)</span>
-
-    <span class="n">valid_mask</span> <span class="o">=</span> <span class="n">metadata_batch</span><span class="p">[</span><span class="s2">&quot;attention_valid_mask&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">bool</span><span class="p">()</span>
-    <span class="n">batch_size</span><span class="p">,</span> <span class="n">seq_len</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">shape</span>
-    <span class="n">device</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">device</span>
-
-    <span class="k">for</span> <span class="n">target_name</span><span class="p">,</span> <span class="n">target</span> <span class="ow">in</span> <span class="n">targets_batch</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-        <span class="k">if</span> <span class="n">target</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;BERT target </span><span class="si">{</span><span class="n">target_name</span><span class="si">!r}</span><span class="s2"> has shape </span><span class="si">{</span><span class="n">target</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">; &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;expected </span><span class="si">{</span><span class="n">valid_mask</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="p">)</span>
-
-    <span class="n">generator</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="k">if</span> <span class="n">eval_seed</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">seeded_generator</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-        <span class="n">seeded_generator</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="n">eval_seed</span><span class="p">)</span>
-        <span class="n">generator</span> <span class="o">=</span> <span class="n">seeded_generator</span>
-
-    <span class="n">bert_spec</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">bert_spec</span>
-    <span class="k">if</span> <span class="n">bert_spec</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;bert_spec must be configured for BERT training&quot;</span><span class="p">)</span>
-
-    <span class="n">bert_mask</span> <span class="o">=</span> <span class="n">_build_bert_span_mask</span><span class="p">(</span>
-        <span class="n">valid_mask</span><span class="p">,</span>
-        <span class="n">bert_spec</span><span class="o">.</span><span class="n">masking_probability</span><span class="p">,</span>
-        <span class="n">bert_spec</span><span class="o">.</span><span class="n">span_masking</span><span class="p">,</span>
-        <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">,</span>
-    <span class="p">)</span>
-
-    <span class="n">replacement</span> <span class="o">=</span> <span class="n">bert_spec</span><span class="o">.</span><span class="n">replacement_distribution</span>
-    <span class="n">p_masked</span> <span class="o">=</span> <span class="n">replacement</span><span class="o">.</span><span class="n">masked</span>
-    <span class="n">p_random</span> <span class="o">=</span> <span class="n">replacement</span><span class="o">.</span><span class="n">random</span>
-
-    <span class="n">replacement_probs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span>
-        <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">seq_len</span><span class="p">),</span>
-        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
-        <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">,</span>
-    <span class="p">)</span>
-
-    <span class="n">mask_token_mask</span> <span class="o">=</span> <span class="n">bert_mask</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">replacement_probs</span> <span class="o">&lt;</span> <span class="n">p_masked</span><span class="p">)</span>
-    <span class="n">random_token_mask</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="n">bert_mask</span>
-        <span class="o">&amp;</span> <span class="p">(</span><span class="n">replacement_probs</span> <span class="o">&gt;=</span> <span class="n">p_masked</span><span class="p">)</span>
-        <span class="o">&amp;</span> <span class="p">(</span><span class="n">replacement_probs</span> <span class="o">&lt;</span> <span class="p">(</span><span class="n">p_masked</span> <span class="o">+</span> <span class="n">p_random</span><span class="p">))</span>
-    <span class="p">)</span>
-
-    <span class="n">masked_data</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">data_batch</span><span class="p">)</span>
-
-    <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">data_batch</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-        <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">:</span>
-            <span class="n">output</span> <span class="o">=</span> <span class="n">tensor</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
-
-            <span class="k">if</span> <span class="n">p_masked</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">:</span>
-                <span class="n">output</span><span class="o">.</span><span class="n">masked_fill_</span><span class="p">(</span><span class="n">mask_token_mask</span><span class="p">,</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">mask</span><span class="p">)</span>
-
-            <span class="k">if</span> <span class="n">p_random</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">:</span>
-                <span class="n">random_tokens</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span>
-                    <span class="n">low</span><span class="o">=</span><span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">user_start</span><span class="p">,</span>
-                    <span class="n">high</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">col</span><span class="p">],</span>
-                    <span class="n">size</span><span class="o">=</span><span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
-                    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
-                    <span class="n">dtype</span><span class="o">=</span><span class="n">tensor</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
-                    <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">,</span>
-                <span class="p">)</span>
-                <span class="n">output</span><span class="p">[</span><span class="n">random_token_mask</span><span class="p">]</span> <span class="o">=</span> <span class="n">random_tokens</span><span class="p">[</span><span class="n">random_token_mask</span><span class="p">]</span>
-
-            <span class="n">masked_data</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">output</span>
-
-        <span class="k">elif</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">real_columns</span><span class="p">:</span>
-            <span class="n">output</span> <span class="o">=</span> <span class="n">tensor</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
-
-            <span class="k">if</span> <span class="n">p_masked</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">:</span>
-                <span class="n">output</span><span class="o">.</span><span class="n">masked_fill_</span><span class="p">(</span><span class="n">mask_token_mask</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
-
-            <span class="k">if</span> <span class="n">p_random</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">:</span>
-                <span class="n">random_noise</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span>
-                    <span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
-                    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
-                    <span class="n">dtype</span><span class="o">=</span><span class="n">tensor</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
-                    <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">,</span>
-                <span class="p">)</span>
-                <span class="n">output</span><span class="p">[</span><span class="n">random_token_mask</span><span class="p">]</span> <span class="o">=</span> <span class="n">random_noise</span><span class="p">[</span><span class="n">random_token_mask</span><span class="p">]</span>
-
-            <span class="n">masked_data</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">output</span>
-
-    <span class="n">detached_targets</span> <span class="o">=</span> <span class="p">{</span><span class="n">col</span><span class="p">:</span> <span class="n">tensor</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span> <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">targets_batch</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
-    <span class="n">output_metadata</span> <span class="o">=</span> <span class="p">{</span><span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span> <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">metadata_batch</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
-    <span class="n">output_metadata</span><span class="p">[</span><span class="s2">&quot;bert_mask&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">bert_mask</span>
-    <span class="n">output_metadata</span><span class="p">[</span><span class="s2">&quot;attention_valid_mask&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">valid_mask</span>
-
-    <span class="k">return</span> <span class="n">masked_data</span><span class="p">,</span> <span class="n">detached_targets</span><span class="p">,</span> <span class="n">output_metadata</span></div>
 </pre></div>
         </article>
       </div>

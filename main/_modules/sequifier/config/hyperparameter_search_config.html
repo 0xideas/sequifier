@@ -299,6 +299,15 @@
     <span class="n">stored_window_layout_from_metadata</span><span class="p">,</span>
     <span class="n">try_catch_excess_keys</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.objectives</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">ALLOWED_OBJECTIVE_NAMES</span><span class="p">,</span>
+    <span class="n">OBJECTIVE_NAME_MESSAGE</span><span class="p">,</span>
+    <span class="n">BERTObjective</span><span class="p">,</span>
+    <span class="n">NextOccurrenceObjective</span><span class="p">,</span>
+    <span class="n">forward_objective_names</span><span class="p">,</span>
+    <span class="n">get_objective_class</span><span class="p">,</span>
+    <span class="n">target_offset_for_objective</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">validate_special_token_ids</span>
 
 
@@ -558,31 +567,38 @@
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_training_objective</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
-        <span class="n">allowed</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;causal&quot;</span><span class="p">,</span> <span class="s2">&quot;bert&quot;</span><span class="p">,</span> <span class="s2">&quot;final_value&quot;</span><span class="p">,</span> <span class="s2">&quot;next_occurrence&quot;</span><span class="p">}</span>
-        <span class="n">invalid</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">v</span><span class="p">)</span><span class="o">.</span><span class="n">difference</span><span class="p">(</span><span class="n">allowed</span><span class="p">)</span>
+        <span class="n">invalid</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">v</span><span class="p">)</span><span class="o">.</span><span class="n">difference</span><span class="p">(</span><span class="n">ALLOWED_OBJECTIVE_NAMES</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">invalid</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;Only &#39;causal&#39;, &#39;bert&#39;, &#39;final_value&#39;, and &#39;next_occurrence&#39; are allowed, &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;found </span><span class="si">{</span><span class="n">invalid</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;Only </span><span class="si">{</span><span class="n">OBJECTIVE_NAME_MESSAGE</span><span class="si">}</span><span class="s2"> are allowed, found </span><span class="si">{</span><span class="n">invalid</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
     <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_objective_specific_config</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">if</span> <span class="s2">&quot;bert&quot;</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">bert_spec</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">objective_classes</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">get_objective_class</span><span class="p">(</span><span class="n">objective_name</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">objective_name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span>
+        <span class="p">]</span>
+        <span class="n">has_bert_objective</span> <span class="o">=</span> <span class="nb">any</span><span class="p">(</span>
+            <span class="nb">issubclass</span><span class="p">(</span><span class="n">objective_class</span><span class="p">,</span> <span class="n">BERTObjective</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">objective_class</span> <span class="ow">in</span> <span class="n">objective_classes</span>
+        <span class="p">)</span>
+        <span class="n">has_next_occurrence_objective</span> <span class="o">=</span> <span class="nb">any</span><span class="p">(</span>
+            <span class="nb">issubclass</span><span class="p">(</span><span class="n">objective_class</span><span class="p">,</span> <span class="n">NextOccurrenceObjective</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">objective_class</span> <span class="ow">in</span> <span class="n">objective_classes</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">has_bert_objective</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">bert_spec</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="s2">&quot;If &#39;bert&#39; is in training_objective, bert_spec must be configured.&quot;</span>
             <span class="p">)</span>
-        <span class="k">if</span> <span class="p">(</span>
-            <span class="s2">&quot;next_occurrence&quot;</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span>
-            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">next_occurrence_config</span> <span class="ow">is</span> <span class="kc">None</span>
-        <span class="p">):</span>
+        <span class="k">if</span> <span class="n">has_next_occurrence_objective</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">next_occurrence_config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="s2">&quot;If &#39;next_occurrence&#39; is in training_objective, &quot;</span>
                 <span class="s2">&quot;next_occurrence_config must be configured.&quot;</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="p">(</span>
-            <span class="s2">&quot;next_occurrence&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span>
+            <span class="ow">not</span> <span class="n">has_next_occurrence_objective</span>
             <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">next_occurrence_config</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -667,14 +683,18 @@
         <span class="n">training_objective</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span>
             <span class="s2">&quot;training_objective&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span>
         <span class="p">)</span>
+        <span class="n">objective_class</span> <span class="o">=</span> <span class="n">get_objective_class</span><span class="p">(</span><span class="n">training_objective</span><span class="p">)</span>
         <span class="n">bert_spec</span> <span class="o">=</span> <span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">bert_spec</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
-            <span class="k">if</span> <span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">bert_spec</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">if</span> <span class="p">(</span>
+                <span class="nb">issubclass</span><span class="p">(</span><span class="n">objective_class</span><span class="p">,</span> <span class="n">BERTObjective</span><span class="p">)</span>
+                <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">bert_spec</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="p">)</span>
             <span class="k">else</span> <span class="kc">None</span>
         <span class="p">)</span>
         <span class="n">next_occurrence_config</span> <span class="o">=</span> <span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">next_occurrence_config</span>
-            <span class="k">if</span> <span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;next_occurrence&quot;</span>
+            <span class="k">if</span> <span class="nb">issubclass</span><span class="p">(</span><span class="n">objective_class</span><span class="p">,</span> <span class="n">NextOccurrenceObjective</span><span class="p">)</span>
             <span class="k">else</span> <span class="kc">None</span>
         <span class="p">)</span>
 
@@ -909,7 +929,7 @@
                     <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">max_target_offset</span><span class="si">}</span><span class="s2">) &gt; stored_context_width (</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">stored_context_width</span><span class="si">}</span><span class="s2">). &quot;</span>
                     <span class="s2">&quot;Model inputs cannot exceed the preprocessed sequence length.&quot;</span>
                 <span class="p">)</span>
-        <span class="n">forward_objectives</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;causal&quot;</span><span class="p">,</span> <span class="s2">&quot;final_value&quot;</span><span class="p">,</span> <span class="s2">&quot;next_occurrence&quot;</span><span class="p">}</span>
+        <span class="n">forward_objectives</span> <span class="o">=</span> <span class="n">forward_objective_names</span><span class="p">()</span>
         <span class="k">if</span> <span class="p">(</span>
             <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">training_hyperparameter_sampling</span><span class="o">.</span><span class="n">training_objective</span><span class="p">)</span>
             <span class="o">&amp;</span> <span class="n">forward_objectives</span>
@@ -1018,7 +1038,8 @@
             <span class="s2">&quot;context_length&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span>
         <span class="p">)</span>
         <span class="n">training_spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_hyperparameter_sampling</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">training_spec</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span><span class="p">:</span>
+        <span class="n">objective_class</span> <span class="o">=</span> <span class="n">get_objective_class</span><span class="p">(</span><span class="n">training_spec</span><span class="o">.</span><span class="n">training_objective</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">objective_class</span><span class="o">.</span><span class="n">forward_looking</span><span class="p">:</span>
             <span class="n">model_spec</span> <span class="o">=</span> <span class="n">model_spec</span><span class="o">.</span><span class="n">model_copy</span><span class="p">(</span>
                 <span class="n">update</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;prediction_length&quot;</span><span class="p">:</span> <span class="n">context_length</span><span class="p">}</span>
             <span class="p">)</span>
@@ -1026,7 +1047,10 @@
         <span class="n">window_view</span> <span class="o">=</span> <span class="n">ModelWindowView</span><span class="p">(</span>
             <span class="n">context_length</span><span class="o">=</span><span class="n">context_length</span><span class="p">,</span>
             <span class="n">objective</span><span class="o">=</span><span class="n">training_spec</span><span class="o">.</span><span class="n">training_objective</span><span class="p">,</span>
-            <span class="n">target_offset</span><span class="o">=</span><span class="mi">0</span> <span class="k">if</span> <span class="n">training_spec</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span> <span class="k">else</span> <span class="mi">1</span><span class="p">,</span>
+            <span class="n">target_offset</span><span class="o">=</span><span class="n">target_offset_for_objective</span><span class="p">(</span>
+                <span class="n">training_spec</span><span class="o">.</span><span class="n">training_objective</span><span class="p">,</span>
+                <span class="mi">1</span><span class="p">,</span>
+            <span class="p">),</span>
         <span class="p">)</span>
         <span class="n">resolve_window_view</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span> <span class="n">window_view</span><span class="p">)</span>
 

@@ -298,6 +298,7 @@
     <span class="n">validate_stored_window_width</span><span class="p">,</span>
     <span class="n">write_data</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.objectives</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_objective_class</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">validate_special_token_ids</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.train</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">infer_with_embedding_model</span><span class="p">,</span>
@@ -509,16 +510,13 @@
                 <span class="sa">f</span><span class="s2">&quot;Unsupported input type or read format: </span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">read_format</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="p">)</span>
 
-        <span class="n">default_prediction_length</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="s2">&quot;causal&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
-            <span class="s2">&quot;final_value&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
-            <span class="s2">&quot;next_occurrence&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
-            <span class="s2">&quot;bert&quot;</span><span class="p">:</span> <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span>
-        <span class="p">}</span>
+        <span class="n">objective_class</span> <span class="o">=</span> <span class="n">get_objective_class</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">training_objective</span><span class="p">)</span>
         <span class="n">prediction_length</span> <span class="o">=</span> <span class="p">(</span>
             <span class="n">config</span><span class="o">.</span><span class="n">prediction_length</span>
             <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">prediction_length</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="k">else</span> <span class="n">default_prediction_length</span><span class="p">[</span><span class="n">config</span><span class="o">.</span><span class="n">training_objective</span><span class="p">]</span>
+            <span class="k">else</span> <span class="n">objective_class</span><span class="o">.</span><span class="n">default_prediction_length</span><span class="p">(</span>
+                <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span>
+            <span class="p">)</span>
         <span class="p">)</span>
 
         <span class="n">inferer</span> <span class="o">=</span> <span class="n">Inferer</span><span class="p">(</span>
@@ -564,23 +562,11 @@
     <span class="n">training_objective</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Return flattened absolute item positions for inference outputs.&quot;&quot;&quot;</span>
-    <span class="k">if</span> <span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span><span class="p">:</span>
-        <span class="c1"># Anchor positions to the start of the input sequence and tile forwards</span>
-        <span class="n">base_positions</span> <span class="o">=</span> <span class="n">start_positions</span>
-        <span class="n">position_offsets</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">prediction_length</span><span class="p">)</span>
-    <span class="k">elif</span> <span class="n">training_objective</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;causal&quot;</span><span class="p">,</span> <span class="s2">&quot;final_value&quot;</span><span class="p">,</span> <span class="s2">&quot;next_occurrence&quot;</span><span class="p">]:</span>
-        <span class="c1"># Anchor positions to the future token step and tile backwards</span>
-        <span class="n">base_positions</span> <span class="o">=</span> <span class="n">start_positions</span> <span class="o">+</span> <span class="n">context_length</span>
-        <span class="n">position_offsets</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="o">-</span><span class="n">prediction_length</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown objective </span><span class="si">{</span><span class="n">training_objective</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-
-    <span class="c1"># Repeat base anchors to match the number of predictions per sequence window</span>
-    <span class="n">repeated_bases</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">base_positions</span><span class="p">,</span> <span class="n">prediction_length</span><span class="p">)</span>
-    <span class="c1"># Tile the relative step offsets across all sequences in the batch chunk</span>
-    <span class="n">tiled_offsets</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">tile</span><span class="p">(</span><span class="n">position_offsets</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">start_positions</span><span class="p">))</span>
-
-    <span class="k">return</span> <span class="n">repeated_bases</span> <span class="o">+</span> <span class="n">tiled_offsets</span></div>
+    <span class="k">return</span> <span class="n">get_objective_class</span><span class="p">(</span><span class="n">training_objective</span><span class="p">)</span><span class="o">.</span><span class="n">item_positions</span><span class="p">(</span>
+        <span class="n">start_positions</span><span class="p">,</span>
+        <span class="n">context_length</span><span class="p">,</span>
+        <span class="n">prediction_length</span><span class="p">,</span>
+    <span class="p">)</span></div>
 
 
 <span class="nd">@beartype</span>
