@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/config/infer_config.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.config.infer_config - sequifier v1.2.0.0 documentation</title>
+        <title>sequifier.config.infer_config - sequifier v2.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v1.2.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.2.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -278,26 +278,32 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">yaml</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">beartype</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span><span class="p">,</span> <span class="n">ConfigDict</span><span class="p">,</span> <span class="n">Field</span><span class="p">,</span> <span class="n">ValidationInfo</span><span class="p">,</span> <span class="n">field_validator</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">BaseModel</span><span class="p">,</span>
+    <span class="n">ConfigDict</span><span class="p">,</span>
+    <span class="n">Field</span><span class="p">,</span>
+    <span class="n">ValidationInfo</span><span class="p">,</span>
+    <span class="n">field_validator</span><span class="p">,</span>
+    <span class="n">model_validator</span><span class="p">,</span>
+<span class="p">)</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">normalize_path</span><span class="p">,</span> <span class="n">try_catch_excess_keys</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">ModelWindowView</span><span class="p">,</span>
+    <span class="n">StoredWindowLayout</span><span class="p">,</span>
+    <span class="n">canonicalize_polars_dtype_name</span><span class="p">,</span>
+    <span class="n">normalize_path</span><span class="p">,</span>
+    <span class="n">resolve_window_view</span><span class="p">,</span>
+    <span class="n">stored_window_layout_from_metadata</span><span class="p">,</span>
+    <span class="n">try_catch_excess_keys</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">validate_special_token_ids</span>
 
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">load_inferer_config</span><span class="p">(</span>
     <span class="n">config_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">args_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">skip_metadata</span><span class="p">:</span> <span class="nb">bool</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;InfererModel&quot;</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Load inferer configuration from a YAML file and update it with args_config.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        config_path: Path to the YAML configuration file.</span>
-<span class="sd">        args_config: Dictionary containing additional configuration arguments.</span>
-<span class="sd">        skip_metadata: Flag indicating whether to process the configuration or not.</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        InfererModel instance with loaded configuration.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load inference YAML plus CLI overrides and optional metadata fields.&quot;&quot;&quot;</span>
     <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
         <span class="n">config_values</span> <span class="o">=</span> <span class="n">yaml</span><span class="o">.</span><span class="n">safe_load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
     <span class="n">config_values</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">args_config</span><span class="p">)</span>
@@ -312,6 +318,38 @@
         <span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
             <span class="n">metadata_config</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
 
+        <span class="n">validate_special_token_ids</span><span class="p">(</span>
+            <span class="n">metadata_config</span><span class="p">[</span><span class="s2">&quot;special_token_ids&quot;</span><span class="p">],</span>
+            <span class="n">source</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;metadata config &#39;</span><span class="si">{</span><span class="n">metadata_config_path</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">storage_layout</span> <span class="o">=</span> <span class="n">stored_window_layout_from_metadata</span><span class="p">(</span><span class="n">metadata_config</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">version</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Inference requires metadata stored_window_layout_version=2, &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;got </span><span class="si">{</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">version</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="p">)</span>
+        <span class="n">training_objective</span> <span class="o">=</span> <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;training_objective&quot;</span><span class="p">]</span>
+        <span class="n">target_offset</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="mi">0</span>
+            <span class="k">if</span> <span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span>
+            <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">config_values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;target_offset&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+        <span class="p">)</span>
+        <span class="n">window_view</span> <span class="o">=</span> <span class="n">ModelWindowView</span><span class="p">(</span>
+            <span class="n">context_length</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">config_values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;context_length&quot;</span><span class="p">)),</span>
+            <span class="n">objective</span><span class="o">=</span><span class="n">training_objective</span><span class="p">,</span>
+            <span class="n">target_offset</span><span class="o">=</span><span class="n">target_offset</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">resolve_window_view</span><span class="p">(</span><span class="n">storage_layout</span><span class="p">,</span> <span class="n">window_view</span><span class="p">)</span>
+        <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;storage_layout&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">storage_layout</span>
+        <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;window_view&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span>
+        <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">(</span>
+            <span class="s2">&quot;target_offset&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;stored_context_width&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;max_target_offset&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;stored_window_layout_version&quot;</span><span class="p">,</span>
+        <span class="p">):</span>
+            <span class="n">config_values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
         <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;column_types&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">config_values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
             <span class="s2">&quot;column_types&quot;</span><span class="p">,</span> <span class="n">metadata_config</span><span class="p">[</span><span class="s2">&quot;column_types&quot;</span><span class="p">]</span>
         <span class="p">)</span>
@@ -319,14 +357,16 @@
         <span class="k">if</span> <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;input_columns&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;input_columns&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;column_types&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
 
+        <span class="n">configured_column_types</span> <span class="o">=</span> <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;column_types&quot;</span><span class="p">]</span>
+
         <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;categorical_columns&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span>
             <span class="n">col</span>
-            <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">metadata_config</span><span class="p">[</span><span class="s2">&quot;column_types&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">configured_column_types</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
             <span class="k">if</span> <span class="s2">&quot;int&quot;</span> <span class="ow">in</span> <span class="n">type_</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">and</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;input_columns&quot;</span><span class="p">]</span>
         <span class="p">]</span>
         <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;real_columns&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span>
             <span class="n">col</span>
-            <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">metadata_config</span><span class="p">[</span><span class="s2">&quot;column_types&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">configured_column_types</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
             <span class="k">if</span> <span class="s2">&quot;float&quot;</span> <span class="ow">in</span> <span class="n">type_</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">and</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;input_columns&quot;</span><span class="p">]</span>
         <span class="p">]</span>
 
@@ -349,34 +389,7 @@
 
 
 <div class="viewcode-block" id="InfererModel"><a class="viewcode-back" href="../../../api.html#sequifier.config.infer_config.InfererModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">InfererModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Pydantic model for inference configuration.</span>
-
-<span class="sd">    Attributes:</span>
-<span class="sd">        project_root: The path to the sequifier project directory.</span>
-<span class="sd">        metadata_config_path: The path to the data-driven configuration file.</span>
-<span class="sd">        model_path: The path to the trained model file(s).</span>
-<span class="sd">        model_type: The type of model, either &#39;embedding&#39; or &#39;generative&#39;.</span>
-<span class="sd">        data_path: The path to the data to be used for inference.</span>
-<span class="sd">        training_config_path: The path to the training configuration file.</span>
-<span class="sd">        read_format: The file format of the input data (e.g., &#39;csv&#39;, &#39;parquet&#39;).</span>
-<span class="sd">        write_format: The file format for the inference output.</span>
-<span class="sd">        input_columns: The list of input columns used for inference.</span>
-<span class="sd">        categorical_columns: A list of columns that are categorical.</span>
-<span class="sd">        real_columns: A list of columns that are real-valued.</span>
-<span class="sd">        target_columns: The list of target columns for inference.</span>
-<span class="sd">        column_types: A dictionary mapping each column to its numeric type (&#39;int64&#39; or &#39;float64&#39;).</span>
-<span class="sd">        target_column_types: A dictionary mapping target columns to their types (&#39;categorical&#39; or &#39;real&#39;).</span>
-<span class="sd">        output_probabilities: If True, outputs the probability distributions for categorical target columns.</span>
-<span class="sd">        map_to_id: If True, maps categorical output values back to their original IDs.</span>
-<span class="sd">        seed: The random seed for reproducibility.</span>
-<span class="sd">        device: The device to run inference on (e.g., &#39;cuda&#39;, &#39;cpu&#39;, &#39;mps&#39;).</span>
-<span class="sd">        seq_length: The sequence length of the model&#39;s input.</span>
-<span class="sd">        inference_batch_size: The batch size for inference.</span>
-<span class="sd">        sample_from_distribution_columns: A list of columns from which to sample from the distribution.</span>
-<span class="sd">        infer_with_dropout: If True, applies dropout during inference.</span>
-<span class="sd">        autoregression: If True, performs autoregressive inference.</span>
-<span class="sd">        autoregression_total_steps: The number of total steps for autoregressive inference.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Top-level inference config.&quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">arbitrary_types_allowed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
 
@@ -384,6 +397,7 @@
     <span class="n">metadata_config_path</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">model_path</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span>
     <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">training_objective</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">training_config_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="s2">&quot;configs/train.yaml&quot;</span><span class="p">)</span>
     <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="s2">&quot;parquet&quot;</span><span class="p">)</span>
@@ -401,14 +415,48 @@
     <span class="n">map_to_id</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
     <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span>
     <span class="n">device</span><span class="p">:</span> <span class="nb">str</span>
-    <span class="n">seq_length</span><span class="p">:</span> <span class="nb">int</span>
-    <span class="n">prediction_length</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">storage_layout</span><span class="p">:</span> <span class="n">StoredWindowLayout</span>
+    <span class="n">window_view</span><span class="p">:</span> <span class="n">ModelWindowView</span>
+    <span class="n">prediction_length</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">inference_batch_size</span><span class="p">:</span> <span class="nb">int</span>
 
     <span class="n">sample_from_distribution_columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
     <span class="n">infer_with_dropout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
     <span class="n">autoregression</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
     <span class="n">autoregression_total_steps</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">normalize_prediction_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">objective</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;window_view objective must match training_objective &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">objective</span><span class="si">}</span><span class="s2"> != </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span><span class="si">}</span><span class="s2">).&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span>
+                <span class="k">else</span> <span class="mi">1</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;For BERT inference, prediction_length must be equal to context_length &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;(got prediction_length=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">, context_length=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="si">}</span><span class="s2">).&quot;</span>
+                <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">resolve_window_view</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_training_objective</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;causal&quot;</span><span class="p">,</span> <span class="s2">&quot;bert&quot;</span><span class="p">,</span> <span class="s2">&quot;final_value&quot;</span><span class="p">,</span> <span class="s2">&quot;next_occurrence&quot;</span><span class="p">]:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Only &#39;causal&#39;, &#39;bert&#39;, &#39;final_value&#39;, and &#39;next_occurrence&#39; &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;are allowed, found </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;model_type&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
@@ -470,7 +518,11 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_autoregression</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;model_type&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;embedding&quot;</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Autoregression is not possible for embedding models&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;prediction_length&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">v</span>
+            <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;prediction_length&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;prediction_length&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span>
+        <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="s2">&quot;Autoregressive inference is not possible for models with prediction_length &gt; 1&quot;</span>
             <span class="p">)</span>
@@ -480,6 +532,15 @@
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="s2">&quot;Autoregressive inference with non-identical &#39;input_columns&#39; and &#39;target_columns&#39; is possible but should not be performed&quot;</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">v</span>
+            <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Autoregressive inference is not possible with BERT-style models.&quot;</span>
             <span class="p">)</span>
 
         <span class="k">return</span> <span class="n">v</span>
@@ -517,6 +578,23 @@
                 <span class="s2">&quot;target_columns and target_column_types must contain the same keys in the same order&quot;</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;column_types&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_column_types</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+        <span class="n">normalized</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">column</span><span class="p">:</span> <span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span> <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">dtype</span> <span class="ow">in</span> <span class="n">v</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="p">}</span>
+        <span class="n">input_columns</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;input_columns&quot;</span><span class="p">,</span> <span class="p">[])</span>
+        <span class="n">missing_input_columns</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">input_columns</span> <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">normalized</span>
+        <span class="p">]</span>
+        <span class="k">if</span> <span class="n">missing_input_columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;column_types must include every input column. &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;Missing: </span><span class="si">{</span><span class="n">missing_input_columns</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">normalized</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;map_to_id&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
@@ -570,7 +648,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=30bbdf9c"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=21e5ee03"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/io/sequifier_dataset_from_file.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.io.sequifier_dataset_from_file - sequifier v1.2.0.0 documentation</title>
+        <title>sequifier.io.sequifier_dataset_from_file - sequifier v2.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v1.2.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.2.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -272,7 +272,7 @@
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.io.sequifier_dataset_from_file</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Iterator</span><span class="p">,</span> <span class="n">Tuple</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Iterator</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch.distributed</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">dist</span>
@@ -280,27 +280,33 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch.utils.data</span><span class="w"> </span><span class="kn">import</span> <span class="n">IterableDataset</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModel</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">,</span> <span class="n">numpy_to_pytorch</span><span class="p">,</span> <span class="n">read_data</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">,</span>
+    <span class="n">numpy_to_pytorch</span><span class="p">,</span>
+    <span class="n">read_data</span><span class="p">,</span>
+    <span class="n">resolve_window_view</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.batch</span><span class="w"> </span><span class="kn">import</span> <span class="n">SequifierBatch</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.iteration_state</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">read_shared_int</span><span class="p">,</span>
+    <span class="n">resolve_resume_worker</span><span class="p">,</span>
+    <span class="n">shared_int</span><span class="p">,</span>
+    <span class="n">skip_samples_for_batches</span><span class="p">,</span>
+    <span class="n">write_shared_int</span><span class="p">,</span>
+<span class="p">)</span>
 
 
 <div class="viewcode-block" id="SequifierDatasetFromFile"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">SequifierDatasetFromFile</span><span class="p">(</span><span class="n">IterableDataset</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    An iterable-style dataset that pre-loads all data into CPU RAM and yields</span>
-<span class="sd">    pre-collated batches.</span>
-
-<span class="sd">    This is the idiomatic PyTorch solution for implementing custom &#39;en block&#39;</span>
-<span class="sd">    batching. The __iter__ method handles shuffling and batch slicing, ensuring</span>
-<span class="sd">    maximum performance.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eager single-file dataset yielding pre-collated batches.&quot;&quot;&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">,</span> <span class="n">shuffle</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">config</span> <span class="o">=</span> <span class="n">config</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">batch_size</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span> <span class="o">=</span> <span class="n">shuffle</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_epoch_state</span> <span class="o">=</span> <span class="n">shared_int</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_start_batch_state</span> <span class="o">=</span> <span class="n">shared_int</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
-        <span class="c1"># Create a unified list of all columns the model might need</span>
         <span class="n">all_columns</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">)))</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
@@ -313,12 +319,12 @@
             <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">column_types</span>
         <span class="p">}</span>
 
-        <span class="c1"># self.all_tensors now holds both inputs and targets</span>
-        <span class="n">all_tensors</span> <span class="o">=</span> <span class="n">numpy_to_pytorch</span><span class="p">(</span>
+        <span class="n">resolved_view</span> <span class="o">=</span> <span class="n">resolve_window_view</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="p">)</span>
+        <span class="n">all_tensors</span><span class="p">,</span> <span class="n">metadata_tensors</span> <span class="o">=</span> <span class="n">numpy_to_pytorch</span><span class="p">(</span>
             <span class="n">data</span><span class="o">=</span><span class="n">data_df</span><span class="p">,</span>
             <span class="n">column_types</span><span class="o">=</span><span class="n">column_types</span><span class="p">,</span>
             <span class="n">all_columns</span><span class="o">=</span><span class="n">all_columns</span><span class="p">,</span>
-            <span class="n">seq_length</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">seq_length</span><span class="p">,</span>
+            <span class="n">resolved_view</span><span class="o">=</span><span class="n">resolved_view</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">=</span> <span class="n">all_tensors</span><span class="p">[</span><span class="n">all_columns</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
 
@@ -330,6 +336,7 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span> <span class="o">=</span> <span class="p">{</span>
             <span class="n">key</span><span class="p">:</span> <span class="n">all_tensors</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">key</span><span class="si">}</span><span class="s2">_target&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">target_columns</span>
         <span class="p">}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">metadata_tensors</span> <span class="o">=</span> <span class="n">metadata_tensors</span>
         <span class="k">del</span> <span class="n">all_tensors</span>
 
         <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">):</span>
@@ -337,58 +344,64 @@
                 <span class="bp">self</span><span class="o">.</span><span class="n">sequence_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequence_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span><span class="o">.</span><span class="n">pin_memory</span><span class="p">()</span>
             <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span><span class="o">.</span><span class="n">pin_memory</span><span class="p">()</span>
+            <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata_tensors</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">metadata_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span><span class="o">.</span><span class="n">pin_memory</span><span class="p">()</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] Dataset loaded with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2"> samples.&quot;</span><span class="p">)</span>
 
 <div class="viewcode-block" id="SequifierDatasetFromFile.set_epoch"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.set_epoch">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">epoch</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Allows the training loop to set the epoch for deterministic shuffling.&quot;&quot;&quot;</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span> <span class="o">=</span> <span class="n">epoch</span></div>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Set the shuffle epoch.&quot;&quot;&quot;</span>
+        <span class="n">write_shared_int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_epoch_state</span><span class="p">,</span> <span class="n">epoch</span><span class="p">)</span></div>
 
-<div class="viewcode-block" id="SequifierDatasetFromFile.__len__"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__len__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Returns the total number of samples in the dataset.&quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span></div>
+<div class="viewcode-block" id="SequifierDatasetFromFile.set_start_batch"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.set_start_batch">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_start_batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">start_batch</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Set the first global batch to yield on the next iteration.&quot;&quot;&quot;</span>
+        <span class="n">write_shared_int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_start_batch_state</span><span class="p">,</span> <span class="n">start_batch</span><span class="p">)</span></div>
 
-<div class="viewcode-block" id="SequifierDatasetFromFile.__iter__"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__iter__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__iter__</span><span class="p">(</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__iter__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span>
-        <span class="n">Tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
-    <span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Yields batches of data.</span>
-
-<span class="sd">        Handles shuffling (if enabled) and slicing data based on distributed</span>
-<span class="sd">        rank and worker ID.</span>
-
-<span class="sd">        Yields:</span>
-<span class="sd">            Iterator[Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], None, None, None]]:</span>
-<span class="sd">            An iterator where each item is a tuple containing:</span>
-<span class="sd">                - data_batch (dict): Dictionary of feature tensors for the batch.</span>
-<span class="sd">                - targets_batch (dict): Dictionary of target tensors for the batch.</span>
-<span class="sd">                - None: Placeholder for sequence_id (not used in this dataset type).</span>
-<span class="sd">                - None: Placeholder for subsequence_id (not used in this dataset type).</span>
-<span class="sd">                - None: Placeholder for start_position (not used in this dataset type).</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">SequifierBatch</span><span class="p">]:</span>
         <span class="n">worker_info</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get_worker_info</span><span class="p">()</span>
         <span class="n">world_size</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_world_size</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">1</span>
         <span class="n">rank</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_rank</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">0</span>
 
         <span class="k">if</span> <span class="n">worker_info</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="c1"># Single-process data loading</span>
-            <span class="n">worker_id</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="n">physical_worker_id</span> <span class="o">=</span> <span class="mi">0</span>
             <span class="n">num_workers</span> <span class="o">=</span> <span class="mi">1</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="c1"># Multi-process data loading</span>
-            <span class="n">worker_id</span> <span class="o">=</span> <span class="n">worker_info</span><span class="o">.</span><span class="n">id</span>
+            <span class="n">physical_worker_id</span> <span class="o">=</span> <span class="n">worker_info</span><span class="o">.</span><span class="n">id</span>
             <span class="n">num_workers</span> <span class="o">=</span> <span class="n">worker_info</span><span class="o">.</span><span class="n">num_workers</span>
+        <span class="n">epoch</span> <span class="o">=</span> <span class="n">read_shared_int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_epoch_state</span><span class="p">)</span>
+        <span class="n">start_batch</span> <span class="o">=</span> <span class="n">read_shared_int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_start_batch_state</span><span class="p">)</span>
 
         <span class="n">indices</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span><span class="p">:</span>
             <span class="n">g</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">()</span>
             <span class="c1"># Use epoch and seed for a different but deterministic shuffle each epoch</span>
-            <span class="n">g</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">seed</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span><span class="p">)</span>
+            <span class="n">g</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">seed</span> <span class="o">+</span> <span class="n">epoch</span><span class="p">)</span>
             <span class="n">indices</span> <span class="o">=</span> <span class="n">indices</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="p">,</span> <span class="n">generator</span><span class="o">=</span><span class="n">g</span><span class="p">)]</span>
 
         <span class="n">indices_for_rank</span> <span class="o">=</span> <span class="n">indices</span><span class="p">[</span><span class="n">rank</span><span class="p">::</span><span class="n">world_size</span><span class="p">]</span>
+        <span class="n">worker_batch_counts</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">indices_for_rank</span><span class="p">[</span><span class="n">i</span><span class="p">::</span><span class="n">num_workers</span><span class="p">])</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_workers</span><span class="p">)</span>
+        <span class="p">]</span>
+        <span class="n">worker_id</span><span class="p">,</span> <span class="n">skip_batches</span> <span class="o">=</span> <span class="n">resolve_resume_worker</span><span class="p">(</span>
+            <span class="n">start_batch</span><span class="p">,</span>
+            <span class="n">physical_worker_id</span><span class="p">,</span>
+            <span class="n">num_workers</span><span class="p">,</span>
+            <span class="n">worker_batch_counts</span><span class="p">,</span>
+        <span class="p">)</span>
+
         <span class="n">indices_for_worker</span> <span class="o">=</span> <span class="n">indices_for_rank</span><span class="p">[</span><span class="n">worker_id</span><span class="p">::</span><span class="n">num_workers</span><span class="p">]</span>
+        <span class="n">skipped_samples</span> <span class="o">=</span> <span class="n">skip_samples_for_batches</span><span class="p">(</span>
+            <span class="n">skip_batches</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices_for_worker</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">indices_for_worker</span> <span class="o">=</span> <span class="n">indices_for_worker</span><span class="p">[</span><span class="n">skipped_samples</span><span class="p">:]</span>
 
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices_for_worker</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">):</span>
             <span class="n">batch_end</span> <span class="o">=</span> <span class="n">i</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span>
@@ -405,8 +418,16 @@
                 <span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">batch_indices</span><span class="p">]</span>
                 <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
             <span class="p">}</span>
+            <span class="n">metadata_batch</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">batch_indices</span><span class="p">]</span>
+                <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata_tensors</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="p">}</span>
 
-            <span class="k">yield</span> <span class="n">data_batch</span><span class="p">,</span> <span class="n">targets_batch</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span></div></div>
+            <span class="k">yield</span> <span class="n">SequifierBatch</span><span class="p">(</span>
+                <span class="n">inputs</span><span class="o">=</span><span class="n">data_batch</span><span class="p">,</span>
+                <span class="n">targets</span><span class="o">=</span><span class="n">targets_batch</span><span class="p">,</span>
+                <span class="n">metadata</span><span class="o">=</span><span class="n">metadata_batch</span><span class="p">,</span>
+            <span class="p">)</span></div>
 </pre></div>
         </article>
       </div>
@@ -439,7 +460,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=30bbdf9c"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=21e5ee03"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

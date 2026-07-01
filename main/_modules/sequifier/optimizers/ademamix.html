@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/optimizers/ademamix.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.optimizers.ademamix - sequifier v1.2.0.0 documentation</title>
+        <title>sequifier.optimizers.ademamix - sequifier v2.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v1.2.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.2.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -282,26 +282,7 @@
 
 
 <div class="viewcode-block" id="AdEMAMix"><a class="viewcode-back" href="../../../api.html#sequifier.optimizers.ademamix.AdEMAMix">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">AdEMAMix</span><span class="p">(</span><span class="n">Optimizer</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Implements the AdEMAMix optimizer.</span>
-
-<span class="sd">    This optimizer is based on the paper &quot;AdEMAMix: A Novel Adaptive Optimizer for</span>
-<span class="sd">    Deep Learning&quot;. It combines the advantages of Adam and EMA, and introduces a</span>
-<span class="sd">    mixing term to further improve performance.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        params (iterable): Iterable of parameters to optimize or dicts defining</span>
-<span class="sd">            parameter groups.</span>
-<span class="sd">        learning_rate (float, optional): Learning rate (default: 1e-3).</span>
-<span class="sd">        betas (Tuple[float, float, float], optional): Coefficients used for</span>
-<span class="sd">            computing running averages of gradient and its square</span>
-<span class="sd">            (default: (0.9, 0.999, 0.9999)).</span>
-<span class="sd">        eps (float, optional): Term added to the denominator to improve</span>
-<span class="sd">            numerical stability (default: 1e-8).</span>
-<span class="sd">        weight_decay (float, optional): Weight decay (L2 penalty) (default: 0).</span>
-<span class="sd">        alpha (float, optional): Mixing coefficient (default: 5.0).</span>
-<span class="sd">        T_alpha_beta3 (int, optional): Time period for alpha and beta3 scheduling</span>
-<span class="sd">            (default: None).</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;AdEMAMix optimizer.&quot;&quot;&quot;</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -334,25 +315,12 @@
         <span class="p">)</span>
         <span class="nb">super</span><span class="p">(</span><span class="n">AdEMAMix</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">defaults</span><span class="p">)</span>
 
-<div class="viewcode-block" id="AdEMAMix.__setstate__"><a class="viewcode-back" href="../../../api.html#sequifier.optimizers.ademamix.AdEMAMix.__setstate__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">__setstate__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Set the state of the optimizer.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            state (dict): The state of the optimizer.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="nb">super</span><span class="p">(</span><span class="n">AdEMAMix</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__setstate__</span><span class="p">(</span><span class="n">state</span><span class="p">)</span></div>
+    <span class="k">def</span><span class="w"> </span><span class="nf">__setstate__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">AdEMAMix</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__setstate__</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
 
 <div class="viewcode-block" id="AdEMAMix.step"><a class="viewcode-back" href="../../../api.html#sequifier.optimizers.ademamix.AdEMAMix.step">[docs]</a>    <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">step</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">closure</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform a single optimization step.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            closure (callable, optional): A closure that reevaluates the model</span>
-<span class="sd">                and returns the loss. (default: None)</span>
-
-<span class="sd">        Returns:</span>
-<span class="sd">            The loss, if the closure is provided. Otherwise, returns None.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Run one optimizer step.&quot;&quot;&quot;</span>
         <span class="n">loss</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">if</span> <span class="n">closure</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">with</span> <span class="n">torch</span><span class="o">.</span><span class="n">enable_grad</span><span class="p">():</span>
@@ -436,27 +404,7 @@
         <span class="n">weight_decay</span><span class="p">,</span>
         <span class="n">eps</span><span class="p">,</span>
     <span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform the AdEMAMix update for a single parameter group.</span>
-
-<span class="sd">        Args:</span>
-<span class="sd">            params (list[torch.Tensor]): List of parameters to update.</span>
-<span class="sd">            grads (list[torch.Tensor]): List of gradients for each parameter.</span>
-<span class="sd">            exp_avgs (list[torch.Tensor]): List of exponential moving averages of</span>
-<span class="sd">                gradients.</span>
-<span class="sd">            exp_avg_sqs (list[torch.Tensor]): List of exponential moving averages</span>
-<span class="sd">                of squared gradients.</span>
-<span class="sd">            exp_avg_slow (list[torch.Tensor]): List of slow exponential moving</span>
-<span class="sd">                averages of gradients.</span>
-<span class="sd">            state_steps (list[int]): List of steps for each parameter.</span>
-<span class="sd">            beta1 (float): Coefficient for the first moment estimate.</span>
-<span class="sd">            beta2 (float): Coefficient for the second moment estimate.</span>
-<span class="sd">            beta3 (float): Coefficient for the slow moment estimate.</span>
-<span class="sd">            alpha (float): Mixing coefficient.</span>
-<span class="sd">            T_alpha_beta3 (int): Time period for alpha and beta3 scheduling.</span>
-<span class="sd">            learning_rate (float): Learning rate.</span>
-<span class="sd">            weight_decay (float): Weight decay.</span>
-<span class="sd">            eps (float): Epsilon term for numerical stability.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Update one parameter group in place.&quot;&quot;&quot;</span>
         <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">param</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
             <span class="n">grad</span> <span class="o">=</span> <span class="n">grads</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
             <span class="n">exp_avg</span> <span class="o">=</span> <span class="n">exp_avgs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
@@ -484,7 +432,6 @@
                 <span class="n">alpha_t</span> <span class="o">=</span> <span class="n">alpha</span>
                 <span class="n">beta3_t</span> <span class="o">=</span> <span class="n">beta3</span>
 
-            <span class="c1"># Decay the first and second moment running average coefficient</span>
             <span class="n">exp_avg</span><span class="o">.</span><span class="n">mul_</span><span class="p">(</span><span class="n">beta1</span><span class="p">)</span><span class="o">.</span><span class="n">add_</span><span class="p">(</span><span class="n">grad</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">1</span> <span class="o">-</span> <span class="n">beta1</span><span class="p">)</span>
             <span class="n">exp_avg_sq</span><span class="o">.</span><span class="n">mul_</span><span class="p">(</span><span class="n">beta2</span><span class="p">)</span><span class="o">.</span><span class="n">addcmul_</span><span class="p">(</span><span class="n">grad</span><span class="p">,</span> <span class="n">grad</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="mi">1</span> <span class="o">-</span> <span class="n">beta2</span><span class="p">)</span>
             <span class="n">exp_avg_slow_i</span><span class="o">.</span><span class="n">mul_</span><span class="p">(</span><span class="n">beta3_t</span><span class="p">)</span><span class="o">.</span><span class="n">add_</span><span class="p">(</span><span class="n">grad</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mi">1</span> <span class="o">-</span> <span class="n">beta3_t</span><span class="p">)</span>
@@ -529,7 +476,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=30bbdf9c"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=21e5ee03"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

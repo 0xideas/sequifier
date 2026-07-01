@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/config/train_config.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.config.train_config - sequifier v1.2.0.0 documentation</title>
+        <title>sequifier.config.train_config - sequifier v2.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v1.2.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.2.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -273,6 +273,7 @@
           <h1>Source code for sequifier.config.train_config</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">copy</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
@@ -283,29 +284,58 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">yaml</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">beartype</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span><span class="p">,</span> <span class="n">ConfigDict</span><span class="p">,</span> <span class="n">Field</span><span class="p">,</span> <span class="n">field_validator</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">BaseModel</span><span class="p">,</span>
+    <span class="n">ConfigDict</span><span class="p">,</span>
+    <span class="n">Field</span><span class="p">,</span>
+    <span class="n">StrictInt</span><span class="p">,</span>
+    <span class="n">StrictStr</span><span class="p">,</span>
+    <span class="n">field_serializer</span><span class="p">,</span>
+    <span class="n">field_validator</span><span class="p">,</span>
+    <span class="n">model_validator</span><span class="p">,</span>
+<span class="p">)</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">sequifier</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">normalize_path</span><span class="p">,</span> <span class="n">try_catch_excess_keys</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.probabilities</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProbabilityDistribution</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">ModelWindowView</span><span class="p">,</span>
+    <span class="n">StoredWindowLayout</span><span class="p">,</span>
+    <span class="n">normalize_path</span><span class="p">,</span>
+    <span class="n">resolve_window_view</span><span class="p">,</span>
+    <span class="n">stored_window_layout_from_metadata</span><span class="p">,</span>
+    <span class="n">try_catch_excess_keys</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="p">,</span> <span class="n">validate_special_token_ids</span>
 
 <span class="n">AnyType</span> <span class="o">=</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">float</span>
+<span class="n">NextOccurrenceTargetValue</span> <span class="o">=</span> <span class="n">StrictInt</span> <span class="o">|</span> <span class="n">StrictStr</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_validate_class_share_log_columns</span><span class="p">(</span><span class="n">config_values</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">training_spec</span> <span class="o">=</span> <span class="n">config_values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;training_spec&quot;</span><span class="p">,</span> <span class="p">{})</span>
+
+    <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">training_spec</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;class_share_log_columns&quot;</span><span class="p">,</span> <span class="p">[]):</span>
+        <span class="k">if</span> <span class="n">col</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;target_columns&quot;</span><span class="p">]:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Class-share column </span><span class="si">{</span><span class="n">col</span><span class="si">!r}</span><span class="s2"> must be a target column.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;target_column_types&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">col</span><span class="p">)</span> <span class="o">!=</span> <span class="s2">&quot;categorical&quot;</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Class-share column </span><span class="si">{</span><span class="n">col</span><span class="si">!r}</span><span class="s2"> must be a categorical target column.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="n">col</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;n_classes&quot;</span><span class="p">]:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Class-share column </span><span class="si">{</span><span class="n">col</span><span class="si">!r}</span><span class="s2"> has no configured class count.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="n">col</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;id_maps&quot;</span><span class="p">]:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Class-share column </span><span class="si">{</span><span class="n">col</span><span class="si">!r}</span><span class="s2"> has no index map for logging.&quot;</span>
+            <span class="p">)</span>
 
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">load_train_config</span><span class="p">(</span>
     <span class="n">config_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">args_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">skip_metadata</span><span class="p">:</span> <span class="nb">bool</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;TrainModel&quot;</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Load training configuration from a YAML file and update it with args_config.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        config_path: Path to the YAML configuration file.</span>
-<span class="sd">        args_config: Dictionary containing additional configuration arguments.</span>
-<span class="sd">        skip_metadata: Flag indicating whether to process the configuration or not.</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        TrainModel instance with loaded configuration.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load train YAML plus CLI overrides and optional metadata-derived fields.&quot;&quot;&quot;</span>
     <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
         <span class="n">config_values</span> <span class="o">=</span> <span class="n">yaml</span><span class="o">.</span><span class="n">safe_load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
 
@@ -320,6 +350,42 @@
             <span class="n">normalize_path</span><span class="p">(</span><span class="n">metadata_config_path</span><span class="p">,</span> <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;project_root&quot;</span><span class="p">]),</span> <span class="s2">&quot;r&quot;</span>
         <span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
             <span class="n">metadata_config</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">())</span>
+
+        <span class="n">storage_layout</span> <span class="o">=</span> <span class="n">stored_window_layout_from_metadata</span><span class="p">(</span><span class="n">metadata_config</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">version</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Training requires metadata stored_window_layout_version=2, &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;got </span><span class="si">{</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">version</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="p">)</span>
+        <span class="n">training_objective</span> <span class="o">=</span> <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;training_spec&quot;</span><span class="p">][</span><span class="s2">&quot;training_objective&quot;</span><span class="p">]</span>
+        <span class="n">target_offset</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="mi">0</span>
+            <span class="k">if</span> <span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span>
+            <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">config_values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;target_offset&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+        <span class="p">)</span>
+        <span class="n">window_view</span> <span class="o">=</span> <span class="n">ModelWindowView</span><span class="p">(</span>
+            <span class="n">context_length</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">config_values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s2">&quot;context_length&quot;</span><span class="p">)),</span>
+            <span class="n">objective</span><span class="o">=</span><span class="n">training_objective</span><span class="p">,</span>
+            <span class="n">target_offset</span><span class="o">=</span><span class="n">target_offset</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">resolve_window_view</span><span class="p">(</span><span class="n">storage_layout</span><span class="p">,</span> <span class="n">window_view</span><span class="p">)</span>
+        <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;storage_layout&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">storage_layout</span>
+        <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;window_view&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span>
+        <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">(</span>
+            <span class="s2">&quot;stored_context_width&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;max_target_offset&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;stored_window_layout_version&quot;</span><span class="p">,</span>
+        <span class="p">):</span>
+            <span class="n">config_values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">(</span>
+            <span class="s2">&quot;target_offset&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;stored_context_width&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;max_target_offset&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;stored_window_layout_version&quot;</span><span class="p">,</span>
+        <span class="p">):</span>
+            <span class="n">config_values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;target_offset&quot;</span><span class="p">,</span> <span class="s2">&quot;stored_context_width&quot;</span><span class="p">,</span> <span class="s2">&quot;max_target_offset&quot;</span><span class="p">):</span>
+            <span class="n">config_values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;training_spec&quot;</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
 
         <span class="n">split_paths</span> <span class="o">=</span> <span class="n">metadata_config</span><span class="p">[</span><span class="s2">&quot;split_paths&quot;</span><span class="p">]</span>
 
@@ -361,6 +427,15 @@
         <span class="p">)</span>
 
         <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;id_maps&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">metadata_config</span><span class="p">[</span><span class="s2">&quot;id_maps&quot;</span><span class="p">]</span>
+        <span class="n">config_values</span><span class="p">[</span><span class="s2">&quot;special_token_ids&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">validate_special_token_ids</span><span class="p">(</span>
+            <span class="n">metadata_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+                <span class="s2">&quot;special_token_ids&quot;</span><span class="p">,</span>
+                <span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">ids_by_label</span><span class="p">,</span>
+            <span class="p">),</span>
+            <span class="n">source</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;metadata config &#39;</span><span class="si">{</span><span class="n">metadata_config_path</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="n">_validate_class_share_log_columns</span><span class="p">(</span><span class="n">config_values</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="n">try_catch_excess_keys</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">TrainModel</span><span class="p">,</span> <span class="n">config_values</span><span class="p">)</span>
 
@@ -382,46 +457,38 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
 
 
-<div class="viewcode-block" id="TrainingSpecModel"><a class="viewcode-back" href="../../../api.html#sequifier.config.train_config.TrainingSpecModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TrainingSpecModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Pydantic model for training specifications.</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ReplacementDistribution</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">masked</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">le</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+    <span class="n">random</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">le</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+    <span class="n">identical</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">le</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
 
-<span class="sd">    Attributes:</span>
-<span class="sd">        device: The torch.device to train the model on (e.g., &#39;cuda&#39;, &#39;cpu&#39;, &#39;mps&#39;).</span>
-<span class="sd">        device_max_concat_length: Maximum sequence length for concatenation on device.</span>
-<span class="sd">        epochs: The total number of epochs to train for.</span>
-<span class="sd">        log_interval: The interval in batches for logging.</span>
-<span class="sd">        class_share_log_columns: A list of column names for which to log the class share of predictions.</span>
-<span class="sd">        early_stopping_epochs: Number of epochs to wait for validation loss improvement before stopping.</span>
-<span class="sd">        save_interval_epochs: The interval in epochs for checkpointing the model.</span>
-<span class="sd">        save_latest_interval_minutes: the time interval in which a checkpoint is written to the &quot;latest&quot; checkpoint path</span>
-<span class="sd">        save_batch_interval_minutes: the time interval in which a checkpoint is written to a unique checkpoint path</span>
-<span class="sd">        save_batch_interval_minutes_val_loss: calculate val loss at the moment of batch interval saving</span>
-<span class="sd">        calculate_validation_loss_on_initialization: calculate val loss on weight initialization</span>
-<span class="sd">        batch_size: The training batch size.</span>
-<span class="sd">        learning_rate: The learning rate.</span>
-<span class="sd">        criterion: A dictionary mapping each target column to a loss function.</span>
-<span class="sd">        class_weights: A dictionary mapping categorical target columns to a list of class weights.</span>
-<span class="sd">        accumulation_steps: The number of gradient accumulation steps.</span>
-<span class="sd">        dropout: The dropout value for the transformer model.</span>
-<span class="sd">        loss_weights: A dictionary mapping columns to specific loss weights.</span>
-<span class="sd">        optimizer: The optimizer configuration.</span>
-<span class="sd">        scheduler: The learning rate scheduler configuration.</span>
-<span class="sd">        scheduler_step_on: The time of the .step() call on the scheduler, either &#39;epoch&#39; or &#39;batch&#39;</span>
-<span class="sd">        continue_training: If True, continue training from the latest checkpoint.</span>
-<span class="sd">        distributed: If True, enables distributed training.</span>
-<span class="sd">        load_full_data_to_ram: If True, loads the entire dataset into RAM.</span>
-<span class="sd">        world_size: The number of processes for distributed training.</span>
-<span class="sd">        num_workers: The number of worker threads for data loading.</span>
-<span class="sd">        backend: The distributed training backend (e.g., &#39;nccl&#39;).</span>
-<span class="sd">        layer_type_dtypes: Dictionary mapping layer types (linear, embedding, norm) to dtypes (bfloat16, float8_e4m3fn).</span>
-<span class="sd">        layer_autocast: Whether to use autocast</span>
-<span class="sd">        sampling_strategy: how to equalize data between GPUs</span>
-<span class="sd">        torch_compile: compile entire model (&#39;outer&#39;) or transformer layers (&#39;inner&#39;) with torch.compile, alternatively &#39;none&#39;</span>
-<span class="sd">        float32_matmul_precision: precision level of float32 computations. One of &#39;highest&#39;, &#39;high&#39; and &#39;medium&#39;</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_sum</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">total</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">masked</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">random</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">identical</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">math</span><span class="o">.</span><span class="n">isclose</span><span class="p">(</span><span class="n">total</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="n">abs_tol</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Replacement distribution probabilities must sum to 1.0, got </span><span class="si">{</span><span class="n">total</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">BERTSpecModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">masking_probability</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">le</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+    <span class="n">replacement_distribution</span><span class="p">:</span> <span class="n">ReplacementDistribution</span>
+    <span class="n">span_masking</span><span class="p">:</span> <span class="n">ProbabilityDistribution</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">NextOccurrenceConfigModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">column_name</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">target_values</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">NextOccurrenceTargetValue</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="TrainingSpecModel"><a class="viewcode-back" href="../../../api.html#sequifier.config.train_config.TrainingSpecModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TrainingSpecModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Training loop, optimization, precision, and distribution settings.&quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">arbitrary_types_allowed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
 
+    <span class="n">training_objective</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">device</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">device_max_concat_length</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span>
     <span class="n">epochs</span><span class="p">:</span> <span class="nb">int</span>
@@ -430,8 +497,9 @@
     <span class="n">early_stopping_epochs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">save_interval_epochs</span><span class="p">:</span> <span class="nb">int</span>
     <span class="n">save_latest_interval_minutes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">save_batch_interval_minutes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">save_batch_interval_minutes_val_loss</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">save_interval_minutes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">save_interval_batches</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">save_interval_val_loss</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">calculate_validation_loss_on_initialization</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span>
     <span class="n">learning_rate</span><span class="p">:</span> <span class="nb">float</span>
@@ -447,6 +515,9 @@
         <span class="p">)</span>
     <span class="p">)</span>
     <span class="n">scheduler_step_on</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;epoch&quot;</span>
+    <span class="n">bert_spec</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BERTSpecModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">next_occurrence_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">NextOccurrenceConfigModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+
     <span class="n">continue_training</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">enforce_determinism</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">distributed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
@@ -457,7 +528,6 @@
     <span class="n">backend</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;nccl&quot;</span>
     <span class="n">layer_type_dtypes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">layer_autocast</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
-    <span class="n">sampling_strategy</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;exact&quot;</span>
     <span class="n">data_parallelism</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">fsdp_cpu_offload</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">torch_compile</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;outer&quot;</span>
@@ -472,6 +542,10 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span> <span class="o">=</span> <span class="n">DotDict</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;optimizer&quot;</span><span class="p">])</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">validate_scheduler_config</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;scheduler&quot;</span><span class="p">],</span> <span class="n">kwargs</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span> <span class="o">=</span> <span class="n">DotDict</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;scheduler&quot;</span><span class="p">])</span>
+
+    <span class="nd">@field_serializer</span><span class="p">(</span><span class="s2">&quot;optimizer&quot;</span><span class="p">,</span> <span class="s2">&quot;scheduler&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">serialize_dotdict</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">DotDict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="nb">dict</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;layer_type_dtypes&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
@@ -564,14 +638,41 @@
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;sampling_strategy&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_sampling_strategy</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;exact&quot;</span><span class="p">,</span> <span class="s2">&quot;oversampling&quot;</span><span class="p">,</span> <span class="s2">&quot;undersampling&quot;</span><span class="p">]:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_training_objective</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;causal&quot;</span><span class="p">,</span> <span class="s2">&quot;bert&quot;</span><span class="p">,</span> <span class="s2">&quot;final_value&quot;</span><span class="p">,</span> <span class="s2">&quot;next_occurrence&quot;</span><span class="p">]:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;sampling_strategy must be &#39;exact&#39;, &#39;oversampling&#39;, or &#39;undersampling&#39;, got &#39;</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&#39;&quot;</span>
+                <span class="s2">&quot;Only &#39;causal&#39;, &#39;bert&#39;, &#39;final_value&#39;, and &#39;next_occurrence&#39; &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;are allowed, found </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_objective_specific_config</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">bert_spec</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">!=</span> <span class="s2">&quot;bert&quot;</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;The BERT hyperparameters should only be configured if the training objective is &#39;bert&#39;&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">bert_spec</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;If the training_objective is &#39;bert&#39;, the BERT hyperparameters must be set&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">next_occurrence_config</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">!=</span> <span class="s2">&quot;next_occurrence&quot;</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;next_occurrence_config should only be configured if the training objective is &#39;next_occurrence&#39;&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">next_occurrence_config</span> <span class="ow">is</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;next_occurrence&quot;</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;If the training_objective is &#39;next_occurrence&#39;, next_occurrence_config must be set&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;data_parallelism&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
@@ -584,16 +685,7 @@
 
 
 <div class="viewcode-block" id="ModelSpecModel"><a class="viewcode-back" href="../../../api.html#sequifier.config.train_config.ModelSpecModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">ModelSpecModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Pydantic model for model specifications.</span>
-
-<span class="sd">    Attributes:</span>
-<span class="sd">        initial_embedding_dim: The size of the input embedding. Must be equal to dim_model if joint_embedding_dim is None.</span>
-<span class="sd">        feature_embedding_dims: The embedding dimensions for each input column. Must sum to initial_embedding_dim.</span>
-<span class="sd">        joint_embedding_dim: Joint embedding layer after initial embedding. Must be equal to dim_model if specified.</span>
-<span class="sd">        n_head: The number of heads in the multi-head attention models.</span>
-<span class="sd">        dim_feedforward: The dimension of the feedforward network model.</span>
-<span class="sd">        num_layers: The number of layers in the transformer model.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Transformer architecture settings.&quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">arbitrary_types_allowed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
 
@@ -716,34 +808,7 @@
 
 
 <div class="viewcode-block" id="TrainModel"><a class="viewcode-back" href="../../../api.html#sequifier.config.train_config.TrainModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TrainModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Pydantic model for training configuration.</span>
-
-<span class="sd">    Attributes:</span>
-<span class="sd">        project_root: The path to the sequifier project directory.</span>
-<span class="sd">        metadata_config_path: The path to the data-driven configuration file.</span>
-<span class="sd">        model_name: The name of the model being trained.</span>
-<span class="sd">        training_data_path: The path to the training data.</span>
-<span class="sd">        validation_data_path: The path to the validation data.</span>
-<span class="sd">        read_format: The file format of the input data (e.g., &#39;csv&#39;, &#39;parquet&#39;).</span>
-<span class="sd">        input_columns: The list of input columns to be used for training.</span>
-<span class="sd">        column_types: A dictionary mapping each column to its numeric type (&#39;int64&#39; or &#39;float64&#39;).</span>
-<span class="sd">        categorical_columns: A list of columns that are categorical.</span>
-<span class="sd">        real_columns: A list of columns that are real-valued.</span>
-<span class="sd">        target_columns: The list of target columns for model training.</span>
-<span class="sd">        target_column_types: A dictionary mapping target columns to their types (&#39;categorical&#39; or &#39;real&#39;).</span>
-<span class="sd">        id_maps: For each categorical column, a map from distinct values to their indexed representation.</span>
-<span class="sd">        seq_length: The sequence length of the model&#39;s input.</span>
-<span class="sd">        n_classes: The number of classes for each categorical column.</span>
-<span class="sd">        inference_batch_size: The batch size to be used for inference after model export.</span>
-<span class="sd">        seed: The random seed for numpy and PyTorch.</span>
-<span class="sd">        export_generative_model: If True, exports the generative model.</span>
-<span class="sd">        export_embedding_model: If True, exports the embedding model.</span>
-<span class="sd">        export_onnx: If True, exports the model in ONNX format.</span>
-<span class="sd">        export_pt: If True, exports the model using torch.save.</span>
-<span class="sd">        export_with_dropout: If True, exports the model with dropout enabled.</span>
-<span class="sd">        model_spec: The specification of the transformer model architecture.</span>
-<span class="sd">        training_spec: The specification of the training run configuration.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Top-level training config.&quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">arbitrary_types_allowed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
 
@@ -761,8 +826,12 @@
     <span class="n">target_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
     <span class="n">target_column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span>
     <span class="n">id_maps</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span>
+    <span class="n">special_token_ids</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
+        <span class="n">default_factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">ids_by_label</span>
+    <span class="p">)</span>
 
-    <span class="n">seq_length</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">storage_layout</span><span class="p">:</span> <span class="n">StoredWindowLayout</span>
+    <span class="n">window_view</span><span class="p">:</span> <span class="n">ModelWindowView</span>
     <span class="n">n_classes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>
     <span class="n">inference_batch_size</span><span class="p">:</span> <span class="nb">int</span>
     <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span>
@@ -775,6 +844,67 @@
 
     <span class="n">model_spec</span><span class="p">:</span> <span class="n">ModelSpecModel</span>
     <span class="n">training_spec</span><span class="p">:</span> <span class="n">TrainingSpecModel</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;special_token_ids&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_special_token_ids_match_runtime</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">validate_special_token_ids</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">&quot;TrainModel&quot;</span><span class="p">)</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_bert_prediction_length_matches_context_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">objective</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">training_objective</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;window_view objective must match training_spec.training_objective &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">objective</span><span class="si">}</span><span class="s2"> != </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">training_objective</span><span class="si">}</span><span class="s2">).&quot;</span>
+            <span class="p">)</span>
+        <span class="n">resolve_window_view</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span>
+            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;For BERT training, model_spec.prediction_length must be equal to context_length &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;(got prediction_length=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">, context_length=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="si">}</span><span class="s2">).&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_next_occurrence_config_matches_targets</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">==</span> <span class="s2">&quot;next_occurrence&quot;</span><span class="p">:</span>
+            <span class="n">next_occurrence_config</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">next_occurrence_config</span>
+            <span class="k">if</span> <span class="n">next_occurrence_config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;next_occurrence_config must be set for next_occurrence training.&quot;</span>
+                <span class="p">)</span>
+
+            <span class="n">column_name</span> <span class="o">=</span> <span class="n">next_occurrence_config</span><span class="o">.</span><span class="n">column_name</span>
+            <span class="k">if</span> <span class="n">column_name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;next_occurrence_config.column_name must be one of target_columns, &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;got </span><span class="si">{</span><span class="n">column_name</span><span class="si">!r}</span><span class="s2">.&quot;</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">column_name</span><span class="p">)</span> <span class="o">!=</span> <span class="s2">&quot;categorical&quot;</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;next_occurrence_config.column_name must refer to a categorical target column.&quot;</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="n">column_name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">id_maps</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;next_occurrence_config.column_name must have a preprocessing id_map, &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;got </span><span class="si">{</span><span class="n">column_name</span><span class="si">!r}</span><span class="s2">.&quot;</span>
+                <span class="p">)</span>
+
+            <span class="n">id_map</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">id_maps</span><span class="p">[</span><span class="n">column_name</span><span class="p">]</span>
+            <span class="n">missing_values</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">value</span>
+                <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">next_occurrence_config</span><span class="o">.</span><span class="n">target_values</span>
+                <span class="k">if</span> <span class="n">value</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">id_map</span>
+            <span class="p">]</span>
+            <span class="k">if</span> <span class="n">missing_values</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;next_occurrence_config.target_values must match keys in &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;id_maps[</span><span class="si">{</span><span class="n">column_name</span><span class="si">!r}</span><span class="s2">] exactly, missing </span><span class="si">{</span><span class="n">missing_values</span><span class="si">!r}</span><span class="s2">.&quot;</span>
+                <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;model_name&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
@@ -833,16 +963,35 @@
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;save_latest_interval_minutes must be larger than 0&quot;</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="p">(</span>
-            <span class="n">v</span><span class="o">.</span><span class="n">save_batch_interval_minutes</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="n">v</span><span class="o">.</span><span class="n">save_interval_minutes</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
             <span class="ow">and</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;SEQUIFIER_TESTING&quot;</span><span class="p">,</span> <span class="s2">&quot;0&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span>
-            <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">save_batch_interval_minutes</span> <span class="o">==</span> <span class="mi">0</span>
+            <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">save_interval_minutes</span> <span class="o">==</span> <span class="mi">0</span>
         <span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;save_batch_interval_minutes must be larger than 0&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;save_interval_minutes must be larger than 0&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">v</span><span class="o">.</span><span class="n">save_interval_batches</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;SEQUIFIER_TESTING&quot;</span><span class="p">,</span> <span class="s2">&quot;0&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span>
+            <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">save_interval_batches</span> <span class="o">==</span> <span class="mi">0</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;save_interval_batches must be larger than 0&quot;</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">torch_compile</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;outer&quot;</span><span class="p">,</span> <span class="s2">&quot;inner&quot;</span><span class="p">,</span> <span class="s2">&quot;none&quot;</span><span class="p">]:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="sa">f</span><span class="s1">&#39;torch_compile </span><span class="si">{</span><span class="n">v</span><span class="o">.</span><span class="n">torch_compile</span><span class="si">}</span><span class="s1"> invalid, must be one of [&quot;outer&quot;, &quot;inner&quot;, &quot;none&quot;]&#39;</span>
             <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">==</span> <span class="s2">&quot;FSDP&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">layer_type_dtypes</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;FSDP does not support manual layer pre-casting. Please set &quot;</span>
+                    <span class="s2">&quot;&#39;layer_type_dtypes&#39; to null when using FSDP, and rely on &quot;</span>
+                    <span class="s2">&quot;&#39;layer_autocast&#39; (MixedPrecisionPolicy) instead.&quot;</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">fsdp_cpu_offload</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;If data_parallelism == &#39;FSDP&#39;, fsdp_cpu_offload cannot be None&quot;</span>
+                <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">==</span> <span class="s2">&quot;FSDP&quot;</span> <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">torch_compile</span> <span class="o">==</span> <span class="s2">&quot;outer&quot;</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -853,22 +1002,6 @@
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="s2">&quot;If data_parallelism is set to &#39;DDP&#39; then torch_compile must be one of &#39;none&#39; and &#39;outer&#39;&quot;</span>
             <span class="p">)</span>
-
-        <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;oversampling&quot;</span><span class="p">,</span> <span class="s2">&quot;undersampling&quot;</span><span class="p">]:</span>
-            <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">world_size</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;sampling_strategy &#39;</span><span class="si">{</span><span class="n">v</span><span class="o">.</span><span class="n">sampling_strategy</span><span class="si">}</span><span class="s2">&#39; is only admissible if world_size &gt; 1&quot;</span>
-                <span class="p">)</span>
-            <span class="k">if</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;read_format&quot;</span><span class="p">)</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;pt&quot;</span><span class="p">,</span> <span class="s2">&quot;parquet&quot;</span><span class="p">]:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;sampling_strategy &#39;</span><span class="si">{</span><span class="n">v</span><span class="o">.</span><span class="n">sampling_strategy</span><span class="si">}</span><span class="s2">&#39; is only admissible if training data is a folder (read_format=&#39;pt&#39; or &#39;parquet&#39;)&quot;</span>
-                <span class="p">)</span>
-
-        <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">world_size</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;exact&quot;</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;read_format&quot;</span><span class="p">)</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;pt&quot;</span><span class="p">,</span> <span class="s2">&quot;parquet&quot;</span><span class="p">]:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;If world_size &gt; 1 and sampling_strategy == &#39;exact&#39;, the input data must be a folder (read_format=&#39;pt&#39; or &#39;parquet&#39;).&quot;</span>
-                <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">v</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">!=</span> <span class="s2">&quot;FSDP&quot;</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">fsdp_cpu_offload</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
@@ -884,6 +1017,17 @@
         <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">distributed</span> <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="s2">&quot;If &#39;distributed&#39; is True, data_parallelism cannot be &#39;None&#39;&quot;</span>
+            <span class="p">)</span>
+
+        <span class="n">export_generative_model</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;export_generative_model&quot;</span><span class="p">)</span>
+        <span class="n">export_embedding_model</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;export_embedding_model&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="ow">not</span> <span class="n">export_generative_model</span>
+            <span class="ow">and</span> <span class="ow">not</span> <span class="n">export_embedding_model</span>
+            <span class="ow">and</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;SEQUIFIER_PREVENT_EXPORT&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;At least one of &#39;export_generative_model&#39; and &#39;export_embedding_model&#39; must be true. If you want to override this, set the env variable &#39;SEQUIFIER_PREVENT_EXPORT&#39; to any value&quot;</span>
             <span class="p">)</span>
 
         <span class="k">return</span> <span class="n">v</span>
@@ -972,7 +1116,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=30bbdf9c"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=21e5ee03"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/hyperparameter_search.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.hyperparameter_search - sequifier v1.2.0.0 documentation</title>
+        <title>sequifier.hyperparameter_search - sequifier v2.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v1.2.0.0 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.2.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -279,7 +279,7 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Union</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Union</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">optuna</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch._dynamo</span>
@@ -297,42 +297,44 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.yaml</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModelDumper</span>  <span class="c1"># noqa: E402</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">create_sampler</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">BaseSampler</span><span class="p">:</span>
+    <span class="n">strategy</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">&quot;search_strategy&quot;</span><span class="p">,</span> <span class="s2">&quot;bayesian&quot;</span><span class="p">)</span>
+    <span class="n">seed</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">&quot;seed&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">strategy</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;sample&quot;</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">RandomSampler</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">strategy</span> <span class="o">==</span> <span class="s2">&quot;grid&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="p">,</span> <span class="s2">&quot;BruteForceSampler&quot;</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">BruteForceSampler</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Grid search requires Optuna &gt;= 3.1 for BruteForceSampler.&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">TPESampler</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">)</span>
+
+
 <div class="viewcode-block" id="set_pdeathsig"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.set_pdeathsig">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">set_pdeathsig</span><span class="p">():</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Binds child process lifecycle to the parent orchestrator via Linux prctl.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Ask Linux to SIGTERM children when this parent dies.&quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="n">sys</span><span class="o">.</span><span class="n">platform</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;linux&quot;</span><span class="p">):</span>
         <span class="n">libc</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">CDLL</span><span class="p">(</span><span class="s2">&quot;libc.so.6&quot;</span><span class="p">)</span>
         <span class="n">libc</span><span class="o">.</span><span class="n">prctl</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">signal</span><span class="o">.</span><span class="n">SIGTERM</span><span class="p">)</span>  <span class="c1"># PR_SET_PDEATHSIG = 1</span></div>
 
 
 <div class="viewcode-block" id="objective"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.objective">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">objective</span><span class="p">(</span><span class="n">trial</span><span class="p">:</span> <span class="n">optuna</span><span class="o">.</span><span class="n">Trial</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;The central objective engine bridging Optuna to pure CLI execution.</span>
-
-<span class="sd">    This function handles generating the YAML configuration for the specific</span>
-<span class="sd">    trial, dynamically allocating a port for distributed training, launching the</span>
-<span class="sd">    training subprocess, asynchronously polling the validation metrics, and reporting</span>
-<span class="sd">    them back to Optuna for potential pruning.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        trial (optuna.Trial): The Optuna trial object managing the current hyperparameter combination.</span>
-<span class="sd">        config (HyperparameterSearchConfig): The parsed hyperparameter search configuration.</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        float: The best validation loss achieved during the trial.</span>
-
-<span class="sd">    Raises:</span>
-<span class="sd">        optuna.TrialPruned: If the trial is pruned by the Optuna orchestrator.</span>
-<span class="sd">        RuntimeError: If the training subprocess fails or is externally preempted.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Run one Optuna trial through the CLI trainer and metrics JSONL.&quot;&quot;&quot;</span>
     <span class="n">run_config</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">trial</span><span class="o">.</span><span class="n">number</span><span class="p">)</span>
     <span class="n">run_name</span> <span class="o">=</span> <span class="n">run_config</span><span class="o">.</span><span class="n">model_name</span>
 
-    <span class="c1"># 1. YAML Generation</span>
     <span class="n">config_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
         <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">model_config_write_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">.yaml&quot;</span>
     <span class="p">)</span>
     <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">config_path</span><span class="p">),</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="n">run_config_dict</span> <span class="o">=</span> <span class="n">run_config</span><span class="o">.</span><span class="n">model_dump</span><span class="p">()</span>
+    <span class="n">run_config_dict</span><span class="p">[</span><span class="s2">&quot;context_length&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">run_config_dict</span><span class="p">[</span><span class="s2">&quot;window_view&quot;</span><span class="p">][</span><span class="s2">&quot;context_length&quot;</span><span class="p">]</span>
+    <span class="n">run_config_dict</span><span class="p">[</span><span class="s2">&quot;target_offset&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">run_config_dict</span><span class="p">[</span><span class="s2">&quot;window_view&quot;</span><span class="p">][</span><span class="s2">&quot;target_offset&quot;</span><span class="p">]</span>
+
+    <span class="k">del</span> <span class="n">run_config_dict</span><span class="p">[</span><span class="s2">&quot;window_view&quot;</span><span class="p">]</span>
+    <span class="k">del</span> <span class="n">run_config_dict</span><span class="p">[</span><span class="s2">&quot;storage_layout&quot;</span><span class="p">]</span>
+
     <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-        <span class="n">yaml</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">run_config</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="n">Dumper</span><span class="o">=</span><span class="n">TrainModelDumper</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">yaml</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">run_config_dict</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="n">Dumper</span><span class="o">=</span><span class="n">TrainModelDumper</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 
     <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;SEQUIFIER_HYPERPARAMETER_SEARCH_RUN&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
 
@@ -355,7 +357,7 @@
     <span class="n">best_val_loss</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">consume_metrics</span><span class="p">(</span><span class="n">last_read_pos</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Helper closure to read written metrics and evaluate pruning.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Read complete metric lines; report/prune single-objective trials.&quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">metrics_path</span><span class="p">):</span>
             <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">metrics_path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
                 <span class="n">f</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="n">last_read_pos</span><span class="p">)</span>
@@ -369,7 +371,6 @@
                         <span class="n">global_step</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;global_step&quot;</span><span class="p">)</span>
 
                         <span class="k">if</span> <span class="n">global_step</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">val_loss</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-                            <span class="c1"># 5. Cooperative Pruning Evaluation</span>
                             <span class="n">is_multi_objective</span> <span class="o">=</span> <span class="p">(</span>
                                 <span class="n">config</span><span class="o">.</span><span class="n">evaluation_metrics</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
                                 <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">evaluation_metrics</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span>
@@ -389,11 +390,11 @@
                                             <span class="p">)</span>
                                             <span class="n">timeout_val</span> <span class="o">=</span> <span class="p">(</span><span class="n">timedelta</span> <span class="o">*</span> <span class="mi">2</span><span class="p">)</span> <span class="o">+</span> <span class="mi">30</span>
                                         <span class="k">except</span> <span class="p">(</span><span class="ne">ValueError</span><span class="p">,</span> <span class="ne">FileNotFoundError</span><span class="p">):</span>
-                                            <span class="n">timeout_val</span> <span class="o">=</span> <span class="mf">60.0</span>  <span class="c1"># Safe default fallback</span>
+                                            <span class="n">timeout_val</span> <span class="o">=</span> <span class="mf">60.0</span>
 
                                         <span class="n">process</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="n">timeout_val</span><span class="p">)</span>
                                     <span class="k">except</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">TimeoutExpired</span><span class="p">:</span>
-                                        <span class="n">process</span><span class="o">.</span><span class="n">kill</span><span class="p">()</span>  <span class="c1"># Escalation</span>
+                                        <span class="n">process</span><span class="o">.</span><span class="n">kill</span><span class="p">()</span>
                                     <span class="k">raise</span> <span class="n">optuna</span><span class="o">.</span><span class="n">TrialPruned</span><span class="p">()</span>
 
                         <span class="n">last_read_pos</span> <span class="o">=</span> <span class="n">f</span><span class="o">.</span><span class="n">tell</span><span class="p">()</span>
@@ -402,7 +403,6 @@
                         <span class="k">break</span>
         <span class="k">return</span> <span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span>
 
-    <span class="c1"># 4. Asynchronous Polling &amp; Caching Mitigation</span>
     <span class="k">while</span> <span class="n">process</span><span class="o">.</span><span class="n">poll</span><span class="p">()</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span> <span class="o">=</span> <span class="n">consume_metrics</span><span class="p">(</span><span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">)</span>
         <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
@@ -481,7 +481,8 @@
                 <span class="k">raise</span> <span class="ne">KeyError</span><span class="p">(</span>
                     <span class="sa">f</span><span class="s2">&quot;Metric &#39;</span><span class="si">{</span><span class="n">metric</span><span class="si">}</span><span class="s2">&#39; missing in </span><span class="si">{</span><span class="n">eval_json_path</span><span class="si">}</span><span class="s2">. Found keys: </span><span class="si">{</span><span class="nb">list</span><span class="p">(</span><span class="n">eval_results</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span><span class="si">}</span><span class="s2">&quot;</span>
                 <span class="p">)</span>
-            <span class="n">metrics</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">eval_results</span><span class="p">[</span><span class="n">metric</span><span class="p">]))</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="n">eval_results</span><span class="p">[</span><span class="n">metric</span><span class="p">]</span>
+            <span class="n">metrics</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="n">value</span><span class="p">))</span>
 
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">metrics</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">metrics</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
@@ -493,34 +494,11 @@
 
 <div class="viewcode-block" id="hyperparameter_search"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.hyperparameter_search">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">hyperparameter_search</span><span class="p">(</span><span class="n">config_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">skip_metadata</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Main function for initiating an Optuna-based hyperparameter search process.</span>
-
-<span class="sd">    This function loads the configuration, initializes the Optuna study with a</span>
-<span class="sd">    minimization direction, and kicks off the optimization loop. Once the configured</span>
-<span class="sd">    number of trials is complete, it prints out the best trial&#39;s value and hyperparameters.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        config_path (str): Path to the hyperparameter search YAML configuration file.</span>
-<span class="sd">        skip_metadata (bool): Flag indicating whether to skip loading/processing data metadata.</span>
-
-<span class="sd">    Raises:</span>
-<span class="sd">        ValueError: If `n_trials` is not defined in the configuration.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load config, create Optuna study, and optimize trials.&quot;&quot;&quot;</span>
     <span class="n">config</span> <span class="o">=</span> <span class="n">load_hyperparameter_search_config</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">skip_metadata</span><span class="p">)</span>
 
     <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;state&quot;</span><span class="p">,</span> <span class="s2">&quot;optuna&quot;</span><span class="p">),</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-    <span class="n">strategy</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">&quot;search_strategy&quot;</span><span class="p">,</span> <span class="s2">&quot;bayesian&quot;</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">strategy</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;sample&quot;</span><span class="p">]:</span>
-        <span class="n">sampler</span> <span class="o">=</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">RandomSampler</span><span class="p">()</span>
-    <span class="k">elif</span> <span class="n">strategy</span> <span class="o">==</span> <span class="s2">&quot;grid&quot;</span><span class="p">:</span>
-        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="p">,</span> <span class="s2">&quot;BruteForceSampler&quot;</span><span class="p">):</span>
-            <span class="n">sampler</span> <span class="o">=</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">BruteForceSampler</span><span class="p">()</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
-                <span class="s2">&quot;Grid search requires Optuna &gt;= 3.1 for BruteForceSampler.&quot;</span>
-            <span class="p">)</span>
-    <span class="k">else</span><span class="p">:</span>  <span class="c1"># &quot;bayesian&quot;</span>
-        <span class="n">sampler</span> <span class="o">=</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">TPESampler</span><span class="p">()</span>
+    <span class="n">sampler</span> <span class="o">=</span> <span class="n">create_sampler</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
 
     <span class="n">storage_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
         <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;state&quot;</span><span class="p">,</span> <span class="s2">&quot;optuna&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">hp_search_name</span><span class="si">}</span><span class="s2">.db&quot;</span>
@@ -609,7 +587,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=30bbdf9c"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=21e5ee03"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
     <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>

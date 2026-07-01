@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/helpers.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.helpers - sequifier v1.2.0.0 documentation</title>
+        <title>sequifier.helpers - sequifier v2.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v1.2.0.0 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v1.2.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -272,12 +272,15 @@
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.helpers</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">glob</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">hashlib</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">polars</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pl</span>
@@ -287,9 +290,11 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">ValidationError</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">SPECIAL_TOKEN_IDS</span>
+
 <span class="n">PANDAS_TO_TORCH_TYPES</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;Float64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
-    <span class="s2">&quot;float64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+    <span class="s2">&quot;Float64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span>
+    <span class="s2">&quot;float64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span>
     <span class="s2">&quot;Float32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
     <span class="s2">&quot;float32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
     <span class="s2">&quot;Float16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span>
@@ -302,15 +307,302 @@
     <span class="s2">&quot;int16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int16</span><span class="p">,</span>
     <span class="s2">&quot;Int8&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int8</span><span class="p">,</span>
     <span class="s2">&quot;int8&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int8</span><span class="p">,</span>
-    <span class="s2">&quot;UInt64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
-    <span class="s2">&quot;uint64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
-    <span class="s2">&quot;UInt32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
-    <span class="s2">&quot;uint32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
-    <span class="s2">&quot;UInt16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span>
-    <span class="s2">&quot;uint16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span>
-    <span class="s2">&quot;UInt8&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int16</span><span class="p">,</span>
-    <span class="s2">&quot;uint8&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">int16</span><span class="p">,</span>
+    <span class="s2">&quot;UInt64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">uint64</span><span class="p">,</span>
+    <span class="s2">&quot;uint64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">uint64</span><span class="p">,</span>
+    <span class="s2">&quot;UInt32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">uint32</span><span class="p">,</span>
+    <span class="s2">&quot;uint32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">uint32</span><span class="p">,</span>
+    <span class="s2">&quot;UInt16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">uint16</span><span class="p">,</span>
+    <span class="s2">&quot;uint16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">uint16</span><span class="p">,</span>
+    <span class="s2">&quot;UInt8&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">uint8</span><span class="p">,</span>
+    <span class="s2">&quot;uint8&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">uint8</span><span class="p">,</span>
 <span class="p">}</span>
+
+<span class="n">POLARS_NUMERIC_DTYPES</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;Float64&quot;</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">Float64</span><span class="p">,</span>
+    <span class="s2">&quot;Float32&quot;</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">Float32</span><span class="p">,</span>
+    <span class="s2">&quot;Float16&quot;</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">Float16</span><span class="p">,</span>
+    <span class="s2">&quot;Int64&quot;</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">Int64</span><span class="p">,</span>
+    <span class="s2">&quot;Int32&quot;</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">Int32</span><span class="p">,</span>
+    <span class="s2">&quot;Int16&quot;</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">Int16</span><span class="p">,</span>
+    <span class="s2">&quot;Int8&quot;</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">Int8</span><span class="p">,</span>
+    <span class="s2">&quot;UInt64&quot;</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">UInt64</span><span class="p">,</span>
+    <span class="s2">&quot;UInt32&quot;</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">UInt32</span><span class="p">,</span>
+    <span class="s2">&quot;UInt16&quot;</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">UInt16</span><span class="p">,</span>
+    <span class="s2">&quot;UInt8&quot;</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">UInt8</span><span class="p">,</span>
+<span class="p">}</span>
+
+<span class="n">POLARS_NUMERIC_DTYPE_ALIASES</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">alias</span><span class="p">:</span> <span class="n">canonical</span>
+    <span class="k">for</span> <span class="n">canonical</span> <span class="ow">in</span> <span class="n">POLARS_NUMERIC_DTYPES</span>
+    <span class="k">for</span> <span class="n">alias</span> <span class="ow">in</span> <span class="p">(</span><span class="n">canonical</span><span class="p">,</span> <span class="n">canonical</span><span class="o">.</span><span class="n">lower</span><span class="p">())</span>
+<span class="p">}</span>
+
+<span class="n">FLOAT_TYPE_ORDER</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;Float16&quot;</span><span class="p">,</span> <span class="s2">&quot;Float32&quot;</span><span class="p">,</span> <span class="s2">&quot;Float64&quot;</span><span class="p">)</span>
+<span class="n">INTEGER_TYPE_ORDER</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">&quot;Int8&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;UInt8&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;Int16&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;UInt16&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;Int32&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;UInt32&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;Int64&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;UInt64&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">INTEGER_TYPE_INFO</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;Int8&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">iinfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int8</span><span class="p">),</span>
+    <span class="s2">&quot;Int16&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">iinfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int16</span><span class="p">),</span>
+    <span class="s2">&quot;Int32&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">iinfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">),</span>
+    <span class="s2">&quot;Int64&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">iinfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">),</span>
+    <span class="s2">&quot;UInt8&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">iinfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">),</span>
+    <span class="s2">&quot;UInt16&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">iinfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint16</span><span class="p">),</span>
+    <span class="s2">&quot;UInt32&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">iinfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint32</span><span class="p">),</span>
+    <span class="s2">&quot;UInt64&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">iinfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint64</span><span class="p">),</span>
+<span class="p">}</span>
+<span class="n">FLOAT_TYPE_INFO</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;Float16&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float16</span><span class="p">),</span>
+    <span class="s2">&quot;Float32&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+    <span class="s2">&quot;Float64&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">),</span>
+<span class="p">}</span>
+<span class="n">FLOAT_EXACT_INTEGER_LIMITS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;Float16&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="o">**</span><span class="mi">11</span><span class="p">,</span>
+    <span class="s2">&quot;Float32&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="o">**</span><span class="mi">24</span><span class="p">,</span>
+    <span class="s2">&quot;Float64&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="o">**</span><span class="mi">53</span><span class="p">,</span>
+<span class="p">}</span>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">canonicalize_polars_dtype_name</span><span class="p">(</span><span class="n">dtype_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="n">dtype_name</span> <span class="o">=</span> <span class="n">dtype_name</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">dtype_name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">POLARS_NUMERIC_DTYPE_ALIASES</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Unsupported column type &#39;</span><span class="si">{</span><span class="n">dtype_name</span><span class="si">}</span><span class="s2">&#39;. &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;Supported types are: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">POLARS_NUMERIC_DTYPES</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">)</span>
+    <span class="k">return</span> <span class="n">POLARS_NUMERIC_DTYPE_ALIASES</span><span class="p">[</span><span class="n">dtype_name</span><span class="p">]</span>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">polars_dtype_from_name</span><span class="p">(</span><span class="n">dtype_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">POLARS_NUMERIC_DTYPES</span><span class="p">[</span><span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span><span class="n">dtype_name</span><span class="p">)]</span>
+
+
+<div class="viewcode-block" id="assign_sequence_to_split"><a class="viewcode-back" href="../../api.html#sequifier.helpers.assign_sequence_to_split">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">assign_sequence_to_split</span><span class="p">(</span>
+    <span class="n">sequence_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">split_ratios</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">],</span> <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Deterministically assign one sequenceId to a split index.&quot;&quot;&quot;</span>
+    <span class="n">digest</span> <span class="o">=</span> <span class="n">hashlib</span><span class="o">.</span><span class="n">sha256</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">seed</span><span class="si">}</span><span class="s2">:</span><span class="si">{</span><span class="n">sequence_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">digest</span><span class="p">()</span>
+    <span class="n">hash_value</span> <span class="o">=</span> <span class="nb">int</span><span class="o">.</span><span class="n">from_bytes</span><span class="p">(</span><span class="n">digest</span><span class="p">[:</span><span class="mi">8</span><span class="p">],</span> <span class="n">byteorder</span><span class="o">=</span><span class="s2">&quot;big&quot;</span><span class="p">,</span> <span class="n">signed</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">/</span> <span class="mi">2</span><span class="o">**</span><span class="mi">64</span>
+    <span class="n">split_index</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">split_ratios</span><span class="p">),</span> <span class="n">hash_value</span><span class="p">,</span> <span class="n">side</span><span class="o">=</span><span class="s2">&quot;right&quot;</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="nb">min</span><span class="p">(</span><span class="n">split_index</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">split_ratios</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span></div>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">is_float_dtype_name</span><span class="p">(</span><span class="n">dtype_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span><span class="n">dtype_name</span><span class="p">)</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;Float&quot;</span><span class="p">)</span>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">is_integer_dtype_name</span><span class="p">(</span><span class="n">dtype_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="n">canonical</span> <span class="o">=</span> <span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span><span class="n">dtype_name</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">canonical</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;Int&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="n">canonical</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;UInt&quot;</span><span class="p">)</span>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_highest_ranked_type</span><span class="p">(</span><span class="n">types</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">order</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="n">types</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">type_</span><span class="p">:</span> <span class="n">order</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">type_</span><span class="p">))</span>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_smallest_float_covering_integer_range</span><span class="p">(</span><span class="n">integer_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="n">integer_info</span> <span class="o">=</span> <span class="n">INTEGER_TYPE_INFO</span><span class="p">[</span><span class="n">integer_type</span><span class="p">]</span>
+    <span class="n">largest_magnitude</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">abs</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">integer_info</span><span class="o">.</span><span class="n">min</span><span class="p">)),</span> <span class="nb">int</span><span class="p">(</span><span class="n">integer_info</span><span class="o">.</span><span class="n">max</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">float_type</span> <span class="ow">in</span> <span class="n">FLOAT_TYPE_ORDER</span><span class="p">:</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">largest_magnitude</span> <span class="o">&lt;=</span> <span class="nb">float</span><span class="p">(</span><span class="n">FLOAT_TYPE_INFO</span><span class="p">[</span><span class="n">float_type</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">)</span>
+            <span class="ow">and</span> <span class="n">largest_magnitude</span> <span class="o">&lt;=</span> <span class="n">FLOAT_EXACT_INTEGER_LIMITS</span><span class="p">[</span><span class="n">float_type</span><span class="p">]</span>
+        <span class="p">):</span>
+            <span class="k">return</span> <span class="n">float_type</span>
+    <span class="k">return</span> <span class="s2">&quot;Float64&quot;</span>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_resolve_integer_sequence_type</span><span class="p">(</span><span class="n">integer_types</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">integer_types</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Cannot resolve an integer sequence type without integers&quot;</span><span class="p">)</span>
+
+    <span class="n">min_value</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">INTEGER_TYPE_INFO</span><span class="p">[</span><span class="n">type_</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">)</span> <span class="k">for</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">integer_types</span><span class="p">)</span>
+    <span class="n">max_value</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">INTEGER_TYPE_INFO</span><span class="p">[</span><span class="n">type_</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">)</span> <span class="k">for</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">integer_types</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">min_value</span> <span class="o">&gt;=</span> <span class="mi">0</span> <span class="ow">and</span> <span class="nb">all</span><span class="p">(</span><span class="n">type_</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;UInt&quot;</span><span class="p">)</span> <span class="k">for</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">integer_types</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">dtype_name</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;UInt8&quot;</span><span class="p">,</span> <span class="s2">&quot;UInt16&quot;</span><span class="p">,</span> <span class="s2">&quot;UInt32&quot;</span><span class="p">,</span> <span class="s2">&quot;UInt64&quot;</span><span class="p">):</span>
+            <span class="n">info</span> <span class="o">=</span> <span class="n">INTEGER_TYPE_INFO</span><span class="p">[</span><span class="n">dtype_name</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">max_value</span> <span class="o">&lt;=</span> <span class="nb">int</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">max</span><span class="p">):</span>
+                <span class="k">return</span> <span class="n">polars_dtype_from_name</span><span class="p">(</span><span class="n">dtype_name</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">dtype_name</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;Int8&quot;</span><span class="p">,</span> <span class="s2">&quot;Int16&quot;</span><span class="p">,</span> <span class="s2">&quot;Int32&quot;</span><span class="p">,</span> <span class="s2">&quot;Int64&quot;</span><span class="p">):</span>
+        <span class="n">info</span> <span class="o">=</span> <span class="n">INTEGER_TYPE_INFO</span><span class="p">[</span><span class="n">dtype_name</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">min_value</span> <span class="o">&gt;=</span> <span class="nb">int</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">min</span><span class="p">)</span> <span class="ow">and</span> <span class="n">max_value</span> <span class="o">&lt;=</span> <span class="nb">int</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">max</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">polars_dtype_from_name</span><span class="p">(</span><span class="n">dtype_name</span><span class="p">)</span>
+
+    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Cannot resolve a safe integer dtype for </span><span class="si">{</span><span class="n">integer_types</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="resolve_unified_polars_numeric_dtype"><a class="viewcode-back" href="../../api.html#sequifier.helpers.resolve_unified_polars_numeric_dtype">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">resolve_unified_polars_numeric_dtype</span><span class="p">(</span><span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Resolve one Polars dtype for long-format numeric sequence columns.&quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">column_types</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;column_types cannot be empty&quot;</span><span class="p">)</span>
+
+    <span class="n">normalized_types</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span><span class="n">type_</span><span class="p">)</span> <span class="k">for</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">column_types</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+    <span class="p">]</span>
+    <span class="n">float_types</span> <span class="o">=</span> <span class="p">[</span><span class="n">type_</span> <span class="k">for</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">normalized_types</span> <span class="k">if</span> <span class="n">is_float_dtype_name</span><span class="p">(</span><span class="n">type_</span><span class="p">)]</span>
+    <span class="n">integer_types</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">type_</span> <span class="k">for</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">normalized_types</span> <span class="k">if</span> <span class="n">is_integer_dtype_name</span><span class="p">(</span><span class="n">type_</span><span class="p">)</span>
+    <span class="p">]</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">float_types</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_resolve_integer_sequence_type</span><span class="p">(</span><span class="n">integer_types</span><span class="p">)</span>
+
+    <span class="n">resolved_float</span> <span class="o">=</span> <span class="n">_highest_ranked_type</span><span class="p">(</span><span class="n">float_types</span><span class="p">,</span> <span class="n">FLOAT_TYPE_ORDER</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">integer_types</span><span class="p">:</span>
+        <span class="n">required_float</span> <span class="o">=</span> <span class="n">_highest_ranked_type</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="n">_smallest_float_covering_integer_range</span><span class="p">(</span><span class="n">integer_type</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">integer_type</span> <span class="ow">in</span> <span class="n">integer_types</span>
+            <span class="p">],</span>
+            <span class="n">FLOAT_TYPE_ORDER</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">FLOAT_TYPE_ORDER</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">required_float</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">FLOAT_TYPE_ORDER</span><span class="o">.</span><span class="n">index</span><span class="p">(</span>
+            <span class="n">resolved_float</span>
+        <span class="p">):</span>
+            <span class="n">resolved_float</span> <span class="o">=</span> <span class="n">required_float</span>
+
+    <span class="k">return</span> <span class="n">polars_dtype_from_name</span><span class="p">(</span><span class="n">resolved_float</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="StoredWindowLayout"><a class="viewcode-back" href="../../api.html#sequifier.helpers.StoredWindowLayout">[docs]</a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">StoredWindowLayout</span><span class="p">:</span>
+    <span class="n">stored_context_width</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">max_target_offset</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">version</span><span class="p">:</span> <span class="nb">int</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">stored_context_width</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;stored_context_width must be a positive integer&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_target_offset</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;max_target_offset must be non-negative&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_target_offset</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;max_target_offset must be smaller than stored_context_width&quot;</span>
+            <span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ModelWindowView"><a class="viewcode-back" href="../../api.html#sequifier.helpers.ModelWindowView">[docs]</a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ModelWindowView</span><span class="p">:</span>
+    <span class="n">context_length</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">objective</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">target_offset</span><span class="p">:</span> <span class="nb">int</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;context_length must be a positive integer&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">objective</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;causal&quot;</span><span class="p">,</span> <span class="s2">&quot;bert&quot;</span><span class="p">,</span> <span class="s2">&quot;final_value&quot;</span><span class="p">,</span> <span class="s2">&quot;next_occurrence&quot;</span><span class="p">}:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Only &#39;causal&#39;, &#39;bert&#39;, &#39;final_value&#39;, and &#39;next_occurrence&#39; are allowed, &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;found </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">objective</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_offset</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;target_offset must be non-negative&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">objective</span> <span class="o">==</span> <span class="s2">&quot;bert&quot;</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_offset</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;BERT views require target_offset=0&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">objective</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;causal&quot;</span><span class="p">,</span> <span class="s2">&quot;final_value&quot;</span><span class="p">,</span> <span class="s2">&quot;next_occurrence&quot;</span><span class="p">}</span>
+            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_offset</span> <span class="o">&lt;</span> <span class="mi">1</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Causal, final_value, and next_occurrence views require target_offset &gt;= 1&quot;</span>
+            <span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ResolvedWindowView"><a class="viewcode-back" href="../../api.html#sequifier.helpers.ResolvedWindowView">[docs]</a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ResolvedWindowView</span><span class="p">:</span>
+    <span class="n">storage</span><span class="p">:</span> <span class="n">StoredWindowLayout</span>
+    <span class="n">view</span><span class="p">:</span> <span class="n">ModelWindowView</span>
+    <span class="n">required_width</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">input_slice</span><span class="p">:</span> <span class="nb">slice</span>
+    <span class="n">target_slice</span><span class="p">:</span> <span class="nb">slice</span>
+
+<div class="viewcode-block" id="ResolvedWindowView.build_masks"><a class="viewcode-back" href="../../api.html#sequifier.helpers.ResolvedWindowView.build_masks">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">build_masks</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">left_pad_lengths</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Build explicit input-attention and target-validity masks for this view.&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="s2">&quot;attention_valid_mask&quot;</span><span class="p">:</span> <span class="n">build_valid_mask</span><span class="p">(</span>
+                <span class="n">left_pad_lengths</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">input_slice</span>
+            <span class="p">),</span>
+            <span class="s2">&quot;target_valid_mask&quot;</span><span class="p">:</span> <span class="n">build_valid_mask</span><span class="p">(</span>
+                <span class="n">left_pad_lengths</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_slice</span>
+            <span class="p">),</span>
+        <span class="p">}</span></div></div>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_right_aligned_slice</span><span class="p">(</span><span class="n">width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">offset</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">slice</span><span class="p">:</span>
+    <span class="n">start</span> <span class="o">=</span> <span class="n">width</span> <span class="o">-</span> <span class="p">(</span><span class="n">length</span> <span class="o">+</span> <span class="n">offset</span><span class="p">)</span>
+    <span class="n">stop</span> <span class="o">=</span> <span class="n">width</span> <span class="o">-</span> <span class="n">offset</span>
+    <span class="k">return</span> <span class="nb">slice</span><span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">stop</span><span class="p">)</span>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">resolve_window_view</span><span class="p">(</span>
+    <span class="n">storage</span><span class="p">:</span> <span class="n">StoredWindowLayout</span><span class="p">,</span> <span class="n">view</span><span class="p">:</span> <span class="n">ModelWindowView</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ResolvedWindowView</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">view</span><span class="o">.</span><span class="n">target_offset</span> <span class="o">&gt;</span> <span class="n">storage</span><span class="o">.</span><span class="n">max_target_offset</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Model target_offset=</span><span class="si">{</span><span class="n">view</span><span class="o">.</span><span class="n">target_offset</span><span class="si">}</span><span class="s2"> exceeds stored &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;max_target_offset=</span><span class="si">{</span><span class="n">storage</span><span class="o">.</span><span class="n">max_target_offset</span><span class="si">}</span><span class="s2">.&quot;</span>
+        <span class="p">)</span>
+
+    <span class="n">input_offset</span> <span class="o">=</span> <span class="n">storage</span><span class="o">.</span><span class="n">max_target_offset</span>
+    <span class="n">target_offset</span> <span class="o">=</span> <span class="n">storage</span><span class="o">.</span><span class="n">max_target_offset</span> <span class="o">-</span> <span class="n">view</span><span class="o">.</span><span class="n">target_offset</span>
+    <span class="n">required_width</span> <span class="o">=</span> <span class="n">view</span><span class="o">.</span><span class="n">context_length</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="n">input_offset</span><span class="p">,</span> <span class="n">target_offset</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">required_width</span> <span class="o">&gt;</span> <span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Model view requires width </span><span class="si">{</span><span class="n">required_width</span><span class="si">}</span><span class="s2">, but storage only has &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;stored_context_width=</span><span class="si">{</span><span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span><span class="si">}</span><span class="s2">.&quot;</span>
+        <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">ResolvedWindowView</span><span class="p">(</span>
+        <span class="n">storage</span><span class="o">=</span><span class="n">storage</span><span class="p">,</span>
+        <span class="n">view</span><span class="o">=</span><span class="n">view</span><span class="p">,</span>
+        <span class="n">required_width</span><span class="o">=</span><span class="n">required_width</span><span class="p">,</span>
+        <span class="n">input_slice</span><span class="o">=</span><span class="n">_right_aligned_slice</span><span class="p">(</span>
+            <span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span> <span class="n">view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="n">input_offset</span>
+        <span class="p">),</span>
+        <span class="n">target_slice</span><span class="o">=</span><span class="n">_right_aligned_slice</span><span class="p">(</span>
+            <span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span> <span class="n">view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="n">target_offset</span>
+        <span class="p">),</span>
+    <span class="p">)</span>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">validate_stored_window_width</span><span class="p">(</span><span class="n">tensor</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">stored_context_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="n">stored_context_width</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Stored window width </span><span class="si">{</span><span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> does not match &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;metadata stored_context_width=</span><span class="si">{</span><span class="n">stored_context_width</span><span class="si">}</span><span class="s2">.&quot;</span>
+        <span class="p">)</span>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">stored_window_layout_from_metadata</span><span class="p">(</span><span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StoredWindowLayout</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">StoredWindowLayout</span><span class="p">(</span>
+        <span class="n">stored_context_width</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;stored_context_width&quot;</span><span class="p">]),</span>
+        <span class="n">max_target_offset</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;max_target_offset&quot;</span><span class="p">]),</span>
+        <span class="n">version</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;stored_window_layout_version&quot;</span><span class="p">]),</span>
+    <span class="p">)</span>
 
 
 <span class="c1"># Check an environment variable to see if we are in a testing context</span>
@@ -350,39 +642,7 @@
     <span class="n">target_columns_index_map</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
     <span class="n">map_to_id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Constructs reverse index maps (int index to original ID).</span>
-
-<span class="sd">    This function creates reverse mappings from the integer indices back to</span>
-<span class="sd">    the original string or integer identifiers. It only performs this</span>
-<span class="sd">    operation if `map_to_id` is True and `id_maps` is provided.</span>
-
-<span class="sd">    A special mapping for index 0 is added:</span>
-<span class="sd">    - If original IDs are strings, 0 maps to &quot;unknown&quot;.</span>
-<span class="sd">    - If original IDs are strings, 1 maps to &quot;other&quot;.</span>
-<span class="sd">    - If original IDs are integers, 0 maps to (minimum original ID) - 2.</span>
-<span class="sd">    - If original IDs are integers, 1 maps to (minimum original ID) - 1.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        id_maps: A nested dictionary mapping column names to their</span>
-<span class="sd">            respective ID-to-index maps (e.g.,</span>
-<span class="sd">            `{&#39;col_name&#39;: {&#39;original_id&#39;: 1, ...}}`). Expected to be</span>
-<span class="sd">            provided if `map_to_id` is True.</span>
-<span class="sd">        target_columns_index_map: A list of column names for which to</span>
-<span class="sd">            construct the reverse maps.</span>
-<span class="sd">        map_to_id: A boolean flag. If True, the reverse maps are</span>
-<span class="sd">            constructed. If False or None, an empty dictionary is returned.</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        A dictionary where keys are column names from</span>
-<span class="sd">        `target_columns_index_map` and values are the reverse maps</span>
-<span class="sd">        (index-to-original-ID). Returns an empty dict if `map_to_id`</span>
-<span class="sd">        is not True.</span>
-
-<span class="sd">    Raises:</span>
-<span class="sd">        AssertionError: If `map_to_id` is True but `id_maps` is None.</span>
-<span class="sd">        AssertionError: If the values of a map are not consistently</span>
-<span class="sd">            string or integer (excluding the added &#39;0&#39; key).</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Build index-to-ID maps, including reserved token labels.&quot;&quot;&quot;</span>
     <span class="n">index_map</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="k">if</span> <span class="n">map_to_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">map_to_id</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">id_maps</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -390,15 +650,11 @@
         <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">target_columns_index_map</span><span class="p">:</span>
             <span class="n">map_</span> <span class="o">=</span> <span class="p">{</span><span class="n">v</span><span class="p">:</span> <span class="n">k</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">id_maps</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
             <span class="n">val</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">map_</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
-            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
-                <span class="n">map_</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;unknown&quot;</span>
-                <span class="n">map_</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;other&quot;</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
-                    <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Expected integer ID in map, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">val</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-                <span class="n">min_id</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">map_</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
-                <span class="n">map_</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">min_id</span> <span class="o">-</span> <span class="mi">2</span>  <span class="c1"># type: ignore</span>
-                <span class="n">map_</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">min_id</span> <span class="o">-</span> <span class="mi">1</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">)):</span>
+                <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Expected string or integer ID in map, got </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">val</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+            <span class="n">map_</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">labels_by_id</span><span class="p">)</span>
             <span class="n">index_map</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">map_</span>
     <span class="k">return</span> <span class="n">index_map</span></div>
 
@@ -407,21 +663,7 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">read_data</span><span class="p">(</span>
     <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Reads data from a CSV or Parquet file into a Polars DataFrame.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        path: The file path to read from.</span>
-<span class="sd">        read_format: The format of the file. Supported formats are</span>
-<span class="sd">            &quot;csv&quot; and &quot;parquet&quot;.</span>
-<span class="sd">        columns: An optional list of column names to read. This argument</span>
-<span class="sd">            is only used when `read_format` is &quot;parquet&quot;.</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        A Polars DataFrame containing the data from the file.</span>
-
-<span class="sd">    Raises:</span>
-<span class="sd">        ValueError: If `read_format` is not &quot;csv&quot; or &quot;parquet&quot;.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Read CSV/Parquet into Polars.&quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;csv&quot;</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">pl</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">separator</span><span class="o">=</span><span class="s2">&quot;,&quot;</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span><span class="p">:</span>
@@ -431,32 +673,7 @@
 
 <div class="viewcode-block" id="write_data"><a class="viewcode-back" href="../../api.html#sequifier.helpers.write_data">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">write_data</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">write_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Writes a Polars (or Pandas) DataFrame to a CSV or Parquet file.</span>
-
-<span class="sd">    This function detects the type of the input DataFrame.</span>
-<span class="sd">    - For Polars DataFrames, it uses `.write_csv()` or `.write_parquet()`.</span>
-<span class="sd">    - For other DataFrame types (presumably Pandas), it uses `.to_csv()`</span>
-<span class="sd">      or `.to_parquet()`.</span>
-
-<span class="sd">    Note: The type hint specifies `pl.DataFrame`, but the implementation</span>
-<span class="sd">    includes a fallback path that suggests compatibility with Pandas</span>
-<span class="sd">    DataFrames.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        data: The Polars (or Pandas) DataFrame to write.</span>
-<span class="sd">        path: The destination file path.</span>
-<span class="sd">        write_format: The format to write. Supported formats are</span>
-<span class="sd">            &quot;csv&quot; and &quot;parquet&quot;.</span>
-<span class="sd">        **kwargs: Additional keyword arguments passed to the underlying</span>
-<span class="sd">            write function (e.g., `write_csv` for Polars, `to_csv` for</span>
-<span class="sd">            Pandas).</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        None.</span>
-
-<span class="sd">    Raises:</span>
-<span class="sd">        ValueError: If `write_format` is not &quot;csv&quot; or &quot;parquet&quot;.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Write Polars/Pandas data as CSV or Parquet.&quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">write_format</span> <span class="o">==</span> <span class="s2">&quot;csv&quot;</span><span class="p">:</span>
             <span class="n">data</span><span class="o">.</span><span class="n">write_csv</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
@@ -480,27 +697,7 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">subset_to_input_columns</span><span class="p">(</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">LazyFrame</span><span class="p">],</span> <span class="n">input_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">LazyFrame</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Filters a DataFrame to rows where &#39;inputCol&#39; is in a list of column_names.</span>
-
-<span class="sd">    This function supports both Polars (DataFrame, LazyFrame) and Pandas</span>
-<span class="sd">    DataFrames, dispatching to the appropriate filtering method.</span>
-
-<span class="sd">    - For Polars objects, it uses `data.filter(pl.col(&quot;inputCol&quot;).is_in(...))`.</span>
-<span class="sd">    - For other objects (presumably Pandas), it builds a numpy boolean</span>
-<span class="sd">      mask and filters using `data.loc[...]`.</span>
-
-<span class="sd">    Note: The type hint only specifies Polars objects, but the</span>
-<span class="sd">    implementation includes a fallback path for Pandas-like objects.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        data: The Polars (DataFrame, LazyFrame) or Pandas DataFrame to</span>
-<span class="sd">            filter. It must contain a column named &quot;inputCol&quot;.</span>
-<span class="sd">        input_columns: A list of values. Rows will be kept if their</span>
-<span class="sd">            value in &quot;inputCol&quot; is present in this list.</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        A filtered DataFrame or LazyFrame of the same type as the input.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Keep long-format rows whose inputCol is selected.&quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">LazyFrame</span><span class="p">)):</span>
         <span class="k">return</span> <span class="n">data</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_in</span><span class="p">(</span><span class="n">input_columns</span><span class="p">))</span>
 
@@ -516,48 +713,19 @@
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
     <span class="n">all_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
-    <span class="n">seq_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Converts a long-format Polars DataFrame to a dict of sequence tensors.</span>
+    <span class="n">resolved_view</span><span class="p">:</span> <span class="n">ResolvedWindowView</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Convert long-format Polars windows to tensors plus masks.&quot;&quot;&quot;</span>
+    <span class="n">input_seq_cols</span> <span class="o">=</span> <span class="n">columns_from_slice</span><span class="p">(</span>
+        <span class="n">resolved_view</span><span class="o">.</span><span class="n">input_slice</span><span class="p">,</span> <span class="n">resolved_view</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span>
+    <span class="p">)</span>
+    <span class="n">target_seq_cols</span> <span class="o">=</span> <span class="n">columns_from_slice</span><span class="p">(</span>
+        <span class="n">resolved_view</span><span class="o">.</span><span class="n">target_slice</span><span class="p">,</span> <span class="n">resolved_view</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span>
+    <span class="p">)</span>
 
-<span class="sd">    This function assumes the input DataFrame `data` is in a long format</span>
-<span class="sd">    where each row represents a sequence for a specific feature. It expects</span>
-<span class="sd">    a column named &quot;inputCol&quot; that contains the feature name (e.g.,</span>
-<span class="sd">    &#39;price&#39;, &#39;volume&#39;) and other columns representing time steps (e.g.,</span>
-<span class="sd">    &quot;0&quot;, &quot;1&quot;, ..., &quot;L&quot;).</span>
-
-<span class="sd">    It generates two tensors for each column in `all_columns`:</span>
-<span class="sd">    1.  An &quot;input&quot; tensor (from time steps L down to 1).</span>
-<span class="sd">    2.  A &quot;target&quot; tensor (from time steps L-1 down to 0).</span>
-
-<span class="sd">    Example:</span>
-<span class="sd">        For `seq_length = 3` and `all_columns = [&#39;price&#39;]`, it will create:</span>
-<span class="sd">        - &#39;price&#39;: Tensor from columns [&quot;3&quot;, &quot;2&quot;, &quot;1&quot;]</span>
-<span class="sd">        - &#39;price_target&#39;: Tensor from columns [&quot;2&quot;, &quot;1&quot;, &quot;0&quot;]</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        data: The long-format Polars DataFrame. Must contain &quot;inputCol&quot;</span>
-<span class="sd">            and columns named as strings of integers for time steps.</span>
-<span class="sd">        column_types: A dictionary mapping feature names (from &quot;inputCol&quot;)</span>
-<span class="sd">            to their desired `torch.dtype`.</span>
-<span class="sd">        all_columns: A list of all feature names (from &quot;inputCol&quot;) to</span>
-<span class="sd">            be processed and converted into tensors.</span>
-<span class="sd">        seq_length: The total sequence length (L). This determines the</span>
-<span class="sd">            column names for time steps (e.g., &quot;0&quot; to &quot;L&quot;).</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        A dictionary mapping feature names to their corresponding PyTorch</span>
-<span class="sd">        tensors. Target tensors are stored with a `_target` suffix</span>
-<span class="sd">        (e.g., `{&#39;price&#39;: &lt;tensor&gt;, &#39;price_target&#39;: &lt;tensor&gt;}`).</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">input_seq_cols</span> <span class="o">=</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">seq_length</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)]</span>
-    <span class="n">target_seq_cols</span> <span class="o">=</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">seq_length</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)]</span>
-
-    <span class="c1"># We will create a unified dictionary</span>
     <span class="n">unified_tensors</span> <span class="o">=</span> <span class="p">{}</span>
 
     <span class="k">for</span> <span class="n">col_name</span> <span class="ow">in</span> <span class="n">all_columns</span><span class="p">:</span>
-        <span class="c1"># Create the input sequence tensor (e.g., from t=1 to t=L)</span>
         <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
             <span class="n">data</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">col_name</span><span class="p">)</span>
             <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">input_seq_cols</span><span class="p">)</span>
@@ -566,8 +734,6 @@
         <span class="p">)</span>
         <span class="n">unified_tensors</span><span class="p">[</span><span class="n">col_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">input_tensor</span>
 
-        <span class="c1"># Create the target sequence tensor (e.g., from t=0 to t=L-1)</span>
-        <span class="c1"># We&#39;ll store it with a &quot;_target&quot; suffix to distinguish it</span>
         <span class="n">target_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
             <span class="n">data</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">col_name</span><span class="p">)</span>
             <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">target_seq_cols</span><span class="p">)</span>
@@ -576,29 +742,61 @@
         <span class="p">)</span>
         <span class="n">unified_tensors</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">col_name</span><span class="si">}</span><span class="s2">_target&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">target_tensor</span>
 
-    <span class="k">return</span> <span class="n">unified_tensors</span></div>
+    <span class="n">left_pad_lengths</span> <span class="o">=</span> <span class="n">get_left_pad_lengths_from_preprocessed_data</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+    <span class="n">metadata</span> <span class="o">=</span> <span class="n">resolved_view</span><span class="o">.</span><span class="n">build_masks</span><span class="p">(</span><span class="n">left_pad_lengths</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">unified_tensors</span><span class="p">,</span> <span class="n">metadata</span></div>
+
+
+<div class="viewcode-block" id="build_valid_mask"><a class="viewcode-back" href="../../api.html#sequifier.helpers.build_valid_mask">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">build_valid_mask</span><span class="p">(</span>
+    <span class="n">left_pad_lengths</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">full_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">view_slice</span><span class="p">:</span> <span class="nb">slice</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Boolean mask from left-padding metadata.&quot;&quot;&quot;</span>
+
+    <span class="n">full_positions</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span>
+        <span class="n">full_length</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">left_pad_lengths</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">left_pad_lengths</span><span class="o">.</span><span class="n">dtype</span>
+    <span class="p">)</span>
+    <span class="n">full_valid</span> <span class="o">=</span> <span class="n">full_positions</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&gt;=</span> <span class="n">left_pad_lengths</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
+
+    <span class="k">return</span> <span class="n">full_valid</span><span class="p">[:,</span> <span class="n">view_slice</span><span class="p">]</span></div>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">columns_from_slice</span><span class="p">(</span><span class="n">view_slice</span><span class="p">:</span> <span class="nb">slice</span><span class="p">,</span> <span class="n">stored_context_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+    <span class="k">if</span> <span class="n">view_slice</span><span class="o">.</span><span class="n">start</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">view_slice</span><span class="o">.</span><span class="n">stop</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Resolved window slices must have concrete bounds&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">[</span>
+        <span class="nb">str</span><span class="p">(</span><span class="n">stored_context_width</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">i</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">view_slice</span><span class="o">.</span><span class="n">start</span><span class="p">,</span> <span class="n">view_slice</span><span class="o">.</span><span class="n">stop</span><span class="p">)</span>
+    <span class="p">]</span>
+
+
+<div class="viewcode-block" id="get_left_pad_lengths_from_preprocessed_data"><a class="viewcode-back" href="../../api.html#sequifier.helpers.get_left_pad_lengths_from_preprocessed_data">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_left_pad_lengths_from_preprocessed_data</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;One leftPadLength per long-format subsequence.&quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="s2">&quot;leftPadLength&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">&quot;Dataset layout v1 does not contain explicit padding metadata. &quot;</span>
+            <span class="s2">&quot;Please re-run preprocessing.&quot;</span>
+        <span class="p">)</span>
+    <span class="k">assert</span> <span class="p">{</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="s2">&quot;subsequenceId&quot;</span><span class="p">}</span><span class="o">.</span><span class="n">issubset</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span>
+
+    <span class="n">lengths</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">data</span><span class="o">.</span><span class="n">group_by</span><span class="p">([</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="s2">&quot;subsequenceId&quot;</span><span class="p">],</span> <span class="n">maintain_order</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;leftPadLength&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;leftPadLength&quot;</span><span class="p">))</span>
+        <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="s2">&quot;subsequenceId&quot;</span><span class="p">])</span>
+        <span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;leftPadLength&quot;</span><span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">lengths</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="normalize_path"><a class="viewcode-back" href="../../api.html#sequifier.helpers.normalize_path">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">normalize_path</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Normalizes a path to be relative to a project path, then joins them.</span>
-
-<span class="sd">    This function ensures that a given `path` is correctly expressed as</span>
-<span class="sd">    an absolute path rooted at `project_root`. It does this by first</span>
-<span class="sd">    removing the `project_root` prefix from `path` (if it exists)</span>
-<span class="sd">    and then joining the result back to `project_root`.</span>
-
-<span class="sd">    This is useful for handling paths that might be provided as either</span>
-<span class="sd">    relative (e.g., &quot;data/file.txt&quot;) or absolute</span>
-<span class="sd">    (e.g., &quot;/abs/path/to/project/data/file.txt&quot;).</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        path: The path to normalize.</span>
-<span class="sd">        project_root: The absolute path to the project&#39;s root directory.</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        A normalized, absolute path.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return path rooted under project_root.&quot;&quot;&quot;</span>
     <span class="n">project_root_normalized</span> <span class="o">=</span> <span class="p">(</span><span class="n">project_root</span> <span class="o">+</span> <span class="n">os</span><span class="o">.</span><span class="n">sep</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">sep</span> <span class="o">+</span> <span class="n">os</span><span class="o">.</span><span class="n">sep</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">sep</span><span class="p">)</span>
     <span class="n">path2</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">project_root</span><span class="p">,</span> <span class="n">path</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">project_root_normalized</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
     <span class="k">return</span> <span class="n">path2</span></div>
@@ -606,18 +804,9 @@
 
 <div class="viewcode-block" id="configure_logger"><a class="viewcode-back" href="../../api.html#sequifier.helpers.configure_logger">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">configure_logger</span><span class="p">(</span><span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">rank</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Configures Loguru to replicate the legacy LogFile behavior.</span>
-
-<span class="sd">    Legacy Behavior Mapping:</span>
-<span class="sd">    1. Console: Only Rank 0 prints high-level info.</span>
-<span class="sd">    2. File 2 (Detailed): Captures ALL logs (equivalent to old level 2).</span>
-<span class="sd">    3. File 3 (Summary): Captures only HIGH importance logs (equivalent to old level 3).</span>
-<span class="sd">    4. Formatting: Files contain raw messages only (no timestamp prefix).</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="c1"># Clear default handler</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Configure console plus rank-scoped debug/info log files.&quot;&quot;&quot;</span>
     <span class="n">logger</span><span class="o">.</span><span class="n">remove</span><span class="p">()</span>
 
-    <span class="c1"># 1. Console Handler (Rank 0 only, INFO/Level 3 and up)</span>
     <span class="k">if</span> <span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">rank</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">logger</span><span class="o">.</span><span class="n">add</span><span class="p">(</span>
             <span class="n">sys</span><span class="o">.</span><span class="n">stderr</span><span class="p">,</span>
@@ -625,15 +814,11 @@
             <span class="n">level</span><span class="o">=</span><span class="s2">&quot;INFO&quot;</span><span class="p">,</span>
         <span class="p">)</span>
 
-    <span class="c1"># Determine paths</span>
     <span class="n">log_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;logs&quot;</span><span class="p">)</span>
     <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">log_dir</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
     <span class="n">rank_str</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;rank</span><span class="si">{</span><span class="n">rank</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">rank</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="s2">&quot;rank0&quot;</span>
 
-    <span class="c1"># 2. File 2 (Detailed/Debug) - Equivalent to old &#39;level=2&#39;</span>
-    <span class="c1"># Captures everything from DEBUG up.</span>
-    <span class="c1"># Format is just {message} to match f.write(f&quot;{string}\n&quot;)</span>
     <span class="n">file_2_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">log_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;sequifier-</span><span class="si">{</span><span class="n">model_name</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">rank_str</span><span class="si">}</span><span class="s2">-2.txt&quot;</span><span class="p">)</span>
     <span class="n">logger</span><span class="o">.</span><span class="n">add</span><span class="p">(</span>
         <span class="n">file_2_path</span><span class="p">,</span>
@@ -643,7 +828,6 @@
         <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;a&quot;</span><span class="p">,</span>
     <span class="p">)</span>
 
-    <span class="c1"># 3. File 3 (Summary/Info)</span>
     <span class="n">file_3_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">log_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;sequifier-</span><span class="si">{</span><span class="n">model_name</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">rank_str</span><span class="si">}</span><span class="s2">-3.txt&quot;</span><span class="p">)</span>
     <span class="n">logger</span><span class="o">.</span><span class="n">add</span><span class="p">(</span>
         <span class="n">file_3_path</span><span class="p">,</span>
@@ -658,28 +842,22 @@
 <div class="viewcode-block" id="configure_determinism"><a class="viewcode-back" href="../../api.html#sequifier.helpers.configure_determinism">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">configure_determinism</span><span class="p">(</span><span class="n">seed</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">strict</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Enforces deterministic execution for reproducibility.&quot;&quot;&quot;</span>
-    <span class="c1"># 1. Set standard seeds</span>
     <span class="n">random</span><span class="o">.</span><span class="n">seed</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>
     <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">seed</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">manual_seed_all</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span>
 
-    <span class="c1"># 2. Ensure deterministic behavior in CUDA/CuDNN</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">backends</span><span class="o">.</span><span class="n">cudnn</span><span class="o">.</span><span class="n">benchmark</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">backends</span><span class="o">.</span><span class="n">cudnn</span><span class="o">.</span><span class="n">deterministic</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="k">if</span> <span class="n">strict</span><span class="p">:</span>
-        <span class="c1"># 3. Enforce deterministic algorithms in PyTorch (crucial for SDPA/FlashAttention)</span>
-        <span class="c1"># This forces PyTorch to error out if a non-deterministic operation is used,</span>
-        <span class="c1"># or select the deterministic version of a kernel (e.g. for Flash Attn).</span>
         <span class="n">torch</span><span class="o">.</span><span class="n">use_deterministic_algorithms</span><span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="n">warn_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
-        <span class="c1"># 4. Set CuBLAS workspace (Required for deterministic algorithms with CUDA &gt;= 10.2)</span>
         <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;CUBLAS_WORKSPACE_CONFIG&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;:4096:8&quot;</span></div>
 
 
 <div class="viewcode-block" id="get_torch_dtype"><a class="viewcode-back" href="../../api.html#sequifier.helpers.get_torch_dtype">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_torch_dtype</span><span class="p">(</span><span class="n">dtype_str</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Converts a string to a torch dtype, supporting bfloat16 and fp8.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;String-to-torch dtype mapping.&quot;&quot;&quot;</span>
     <span class="n">dtype_map</span> <span class="o">=</span> <span class="p">{</span>
         <span class="s2">&quot;float32&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
         <span class="s2">&quot;float16&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span>
@@ -704,22 +882,7 @@
 <div class="viewcode-block" id="get_best_model_path"><a class="viewcode-back" href="../../api.html#sequifier.helpers.get_best_model_path">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">get_best_model_path</span><span class="p">(</span>
     <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">run_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Searches for the exported &#39;best&#39; model file for a given run and returns its path and epoch.</span>
-
-<span class="sd">    Args:</span>
-<span class="sd">        project_root: The root directory of the project.</span>
-<span class="sd">        run_name: The unique identifier for the hyperparameter search run.</span>
-<span class="sd">        model_type: The extension of the exported model (e.g., &#39;onnx&#39; or &#39;pt&#39;).</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        A tuple containing:</span>
-<span class="sd">            - The file path to the best model (str).</span>
-<span class="sd">            - The actual epoch at which this model was saved (int).</span>
-
-<span class="sd">    Raises:</span>
-<span class="sd">        FileNotFoundError: If no matching model files are found.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return the highest-epoch exported best model path.&quot;&quot;&quot;</span>
     <span class="n">search_pattern</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
         <span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;models&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;sequifier-</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">-best-*.</span><span class="si">{</span><span class="n">model_type</span><span class="si">}</span><span class="s2">&quot;</span>
     <span class="p">)</span>
@@ -731,7 +894,6 @@
             <span class="sa">f</span><span class="s2">&quot;Could not find an exported &#39;best&#39; model matching: </span><span class="si">{</span><span class="n">search_pattern</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="p">)</span>
 
-    <span class="c1"># Find the file with the highest epoch number in its name</span>
     <span class="n">best_model_path</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span>
         <span class="n">matching_models</span><span class="p">,</span>
         <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">p</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">basename</span><span class="p">(</span><span class="n">p</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;-&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]),</span>
@@ -743,11 +905,7 @@
 <div class="viewcode-block" id="get_last_training_batch_timedelta"><a class="viewcode-back" href="../../api.html#sequifier.helpers.get_last_training_batch_timedelta">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">get_last_training_batch_timedelta</span><span class="p">(</span>
     <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">rank</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;.&quot;</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Reads the level 2 log file, finds the last two mid-epoch training logs,</span>
-<span class="sd">    and returns the timedelta between them in seconds.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="c1"># Construct the path to the level 2 log file based on configure_logger()</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return seconds between the last two mid-epoch train log entries.&quot;&quot;&quot;</span>
     <span class="n">log_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
         <span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;logs&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;sequifier-</span><span class="si">{</span><span class="n">model_name</span><span class="si">}</span><span class="s2">-rank</span><span class="si">{</span><span class="n">rank</span><span class="si">}</span><span class="s2">-2.txt&quot;</span>
     <span class="p">)</span>
@@ -755,8 +913,6 @@
     <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">log_path</span><span class="p">):</span>
         <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Log file not found: </span><span class="si">{</span><span class="n">log_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
-    <span class="c1"># Regex to capture the timestamp of mid-epoch training batch logs</span>
-    <span class="c1"># Matches lines like: &quot;2026-05-26 15:15:39 | INFO | [INFO] Epoch   1 | Batch   10/... | Loss: ...&quot;</span>
     <span class="n">train_log_pattern</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span>
         <span class="sa">r</span><span class="s2">&quot;^(\d</span><span class="si">{4}</span><span class="s2">-\d</span><span class="si">{2}</span><span class="s2">-\d</span><span class="si">{2}</span><span class="s2"> \d</span><span class="si">{2}</span><span class="s2">:\d</span><span class="si">{2}</span><span class="s2">:\d</span><span class="si">{2}</span><span class="s2">)\s+\|.*?\[INFO\] Epoch.*?Batch&quot;</span>
     <span class="p">)</span>
@@ -776,10 +932,208 @@
             <span class="s2">&quot;Not enough mid-epoch training logs found in the file to calculate a timedelta.&quot;</span>
         <span class="p">)</span>
 
-    <span class="c1"># Get the last two chronologically recorded batch timestamps</span>
     <span class="n">t1</span><span class="p">,</span> <span class="n">t2</span> <span class="o">=</span> <span class="n">timestamps</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="n">timestamps</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
 
     <span class="k">return</span> <span class="p">(</span><span class="n">t2</span> <span class="o">-</span> <span class="n">t1</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span></div>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_build_bert_span_mask</span><span class="p">(</span>
+    <span class="n">valid_mask</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
+    <span class="n">masking_probability</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">span_distribution</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">generator</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Construct exact-budget, non-overlapping BERT span masks.&quot;&quot;&quot;</span>
+    <span class="n">valid_mask</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">bool</span><span class="p">()</span>
+    <span class="n">batch_size</span><span class="p">,</span> <span class="n">seq_len</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">device</span>
+
+    <span class="n">valid_lengths</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">)</span>
+    <span class="n">budgets</span> <span class="o">=</span> <span class="p">(</span><span class="n">valid_lengths</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span> <span class="o">*</span> <span class="n">masking_probability</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">)</span>
+
+    <span class="n">max_spans</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">math</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="n">seq_len</span> <span class="o">*</span> <span class="n">masking_probability</span><span class="p">)</span> <span class="o">+</span> <span class="mi">10</span><span class="p">)</span>
+    <span class="n">sampled_lengths</span> <span class="o">=</span> <span class="n">span_distribution</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span>
+        <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">max_spans</span><span class="p">),</span>
+        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+        <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">sampled_lengths</span> <span class="o">=</span> <span class="n">sampled_lengths</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">)</span><span class="o">.</span><span class="n">clamp_min_</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">used_before</span> <span class="o">=</span> <span class="n">sampled_lengths</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="o">-</span> <span class="n">sampled_lengths</span>
+    <span class="n">remaining</span> <span class="o">=</span> <span class="p">(</span><span class="n">budgets</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> <span class="o">-</span> <span class="n">used_before</span><span class="p">)</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">span_lengths</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="n">sampled_lengths</span><span class="p">,</span> <span class="n">remaining</span><span class="p">)</span>
+
+    <span class="n">n_spans</span> <span class="o">=</span> <span class="p">(</span><span class="n">span_lengths</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">total_gap_length</span> <span class="o">=</span> <span class="n">valid_lengths</span> <span class="o">-</span> <span class="n">budgets</span>
+
+    <span class="n">gap_slot</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">max_spans</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+    <span class="n">active_gap_slot</span> <span class="o">=</span> <span class="n">gap_slot</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&lt;=</span> <span class="n">n_spans</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
+
+    <span class="n">uniform</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span>
+        <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">max_spans</span> <span class="o">+</span> <span class="mi">1</span><span class="p">),</span>
+        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+        <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span>
+        <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">uniform</span> <span class="o">=</span> <span class="n">uniform</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">uniform</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">tiny</span><span class="p">)</span>
+
+    <span class="n">gap_weights</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">where</span><span class="p">(</span>
+        <span class="n">active_gap_slot</span><span class="p">,</span>
+        <span class="o">-</span><span class="n">torch</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">uniform</span><span class="p">),</span>
+        <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">uniform</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="n">cumulative_weights</span> <span class="o">=</span> <span class="n">gap_weights</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">weight_totals</span> <span class="o">=</span> <span class="n">cumulative_weights</span><span class="p">[:,</span> <span class="o">-</span><span class="mi">1</span><span class="p">:]</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span>
+        <span class="n">torch</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">gap_weights</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">tiny</span>
+    <span class="p">)</span>
+
+    <span class="n">gap_edges</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span>
+        <span class="n">cumulative_weights</span>
+        <span class="o">/</span> <span class="n">weight_totals</span>
+        <span class="o">*</span> <span class="n">total_gap_length</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">gap_weights</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">)</span>
+    <span class="n">gap_edges</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">where</span><span class="p">(</span>
+        <span class="n">gap_slot</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span> <span class="o">&gt;=</span> <span class="n">n_spans</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">],</span>
+        <span class="n">total_gap_length</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">],</span>
+        <span class="n">gap_edges</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">gaps</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">diff</span><span class="p">(</span>
+        <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">batch_size</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">),</span>
+                <span class="n">gap_edges</span><span class="p">,</span>
+            <span class="p">],</span>
+            <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="p">),</span>
+        <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">lengths_before</span> <span class="o">=</span> <span class="n">span_lengths</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="o">-</span> <span class="n">span_lengths</span>
+    <span class="n">gaps_through_current</span> <span class="o">=</span> <span class="n">gaps</span><span class="p">[:,</span> <span class="p">:</span><span class="n">max_spans</span><span class="p">]</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">span_starts</span> <span class="o">=</span> <span class="n">lengths_before</span> <span class="o">+</span> <span class="n">gaps_through_current</span>
+    <span class="n">span_ends</span> <span class="o">=</span> <span class="n">span_starts</span> <span class="o">+</span> <span class="n">span_lengths</span>
+
+    <span class="n">compact_position</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">)</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
+    <span class="n">compact_position</span> <span class="o">=</span> <span class="n">compact_position</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="n">started_spans</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span>
+        <span class="n">span_starts</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">compact_position</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">right</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">ended_spans</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span>
+        <span class="n">span_ends</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">compact_position</span><span class="o">.</span><span class="n">contiguous</span><span class="p">(),</span>
+        <span class="n">right</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">valid_mask</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">started_spans</span> <span class="o">&gt;</span> <span class="n">ended_spans</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="apply_bert_masking"><a class="viewcode-back" href="../../api.html#sequifier.helpers.apply_bert_masking">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">apply_bert_masking</span><span class="p">(</span>
+    <span class="n">data_batch</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
+    <span class="n">targets_batch</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
+    <span class="n">metadata_batch</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]],</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>  <span class="c1"># TrainConfig</span>
+    <span class="n">eval_seed</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply BERT span corruption and attach prediction masks.&quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">metadata_batch</span> <span class="ow">or</span> <span class="s2">&quot;attention_valid_mask&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">metadata_batch</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;BERT masking requires metadata[&#39;attention_valid_mask&#39;]&quot;</span><span class="p">)</span>
+
+    <span class="n">valid_mask</span> <span class="o">=</span> <span class="n">metadata_batch</span><span class="p">[</span><span class="s2">&quot;attention_valid_mask&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">bool</span><span class="p">()</span>
+    <span class="n">batch_size</span><span class="p">,</span> <span class="n">seq_len</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">device</span>
+
+    <span class="k">for</span> <span class="n">target_name</span><span class="p">,</span> <span class="n">target</span> <span class="ow">in</span> <span class="n">targets_batch</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="k">if</span> <span class="n">target</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;BERT target </span><span class="si">{</span><span class="n">target_name</span><span class="si">!r}</span><span class="s2"> has shape </span><span class="si">{</span><span class="n">target</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">; &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;expected </span><span class="si">{</span><span class="n">valid_mask</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+
+    <span class="n">generator</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">if</span> <span class="n">eval_seed</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">seeded_generator</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">seeded_generator</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="n">eval_seed</span><span class="p">)</span>
+        <span class="n">generator</span> <span class="o">=</span> <span class="n">seeded_generator</span>
+
+    <span class="n">bert_spec</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">bert_spec</span>
+    <span class="k">if</span> <span class="n">bert_spec</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;bert_spec must be configured for BERT training&quot;</span><span class="p">)</span>
+
+    <span class="n">bert_mask</span> <span class="o">=</span> <span class="n">_build_bert_span_mask</span><span class="p">(</span>
+        <span class="n">valid_mask</span><span class="p">,</span>
+        <span class="n">bert_spec</span><span class="o">.</span><span class="n">masking_probability</span><span class="p">,</span>
+        <span class="n">bert_spec</span><span class="o">.</span><span class="n">span_masking</span><span class="p">,</span>
+        <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">replacement</span> <span class="o">=</span> <span class="n">bert_spec</span><span class="o">.</span><span class="n">replacement_distribution</span>
+    <span class="n">p_masked</span> <span class="o">=</span> <span class="n">replacement</span><span class="o">.</span><span class="n">masked</span>
+    <span class="n">p_random</span> <span class="o">=</span> <span class="n">replacement</span><span class="o">.</span><span class="n">random</span>
+
+    <span class="n">replacement_probs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span>
+        <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">seq_len</span><span class="p">),</span>
+        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+        <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="n">mask_token_mask</span> <span class="o">=</span> <span class="n">bert_mask</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">replacement_probs</span> <span class="o">&lt;</span> <span class="n">p_masked</span><span class="p">)</span>
+    <span class="n">random_token_mask</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">bert_mask</span>
+        <span class="o">&amp;</span> <span class="p">(</span><span class="n">replacement_probs</span> <span class="o">&gt;=</span> <span class="n">p_masked</span><span class="p">)</span>
+        <span class="o">&amp;</span> <span class="p">(</span><span class="n">replacement_probs</span> <span class="o">&lt;</span> <span class="p">(</span><span class="n">p_masked</span> <span class="o">+</span> <span class="n">p_random</span><span class="p">))</span>
+    <span class="p">)</span>
+
+    <span class="n">masked_data</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">data_batch</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">data_batch</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">:</span>
+            <span class="n">output</span> <span class="o">=</span> <span class="n">tensor</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
+
+            <span class="k">if</span> <span class="n">p_masked</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">:</span>
+                <span class="n">output</span><span class="o">.</span><span class="n">masked_fill_</span><span class="p">(</span><span class="n">mask_token_mask</span><span class="p">,</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">mask</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">p_random</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">:</span>
+                <span class="n">random_tokens</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span>
+                    <span class="n">low</span><span class="o">=</span><span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">user_start</span><span class="p">,</span>
+                    <span class="n">high</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">col</span><span class="p">],</span>
+                    <span class="n">size</span><span class="o">=</span><span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+                    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+                    <span class="n">dtype</span><span class="o">=</span><span class="n">tensor</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
+                    <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="n">output</span><span class="p">[</span><span class="n">random_token_mask</span><span class="p">]</span> <span class="o">=</span> <span class="n">random_tokens</span><span class="p">[</span><span class="n">random_token_mask</span><span class="p">]</span>
+
+            <span class="n">masked_data</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">output</span>
+
+        <span class="k">elif</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">real_columns</span><span class="p">:</span>
+            <span class="n">output</span> <span class="o">=</span> <span class="n">tensor</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
+
+            <span class="k">if</span> <span class="n">p_masked</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">:</span>
+                <span class="n">output</span><span class="o">.</span><span class="n">masked_fill_</span><span class="p">(</span><span class="n">mask_token_mask</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">p_random</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">:</span>
+                <span class="n">random_noise</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span>
+                    <span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+                    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+                    <span class="n">dtype</span><span class="o">=</span><span class="n">tensor</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
+                    <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="n">output</span><span class="p">[</span><span class="n">random_token_mask</span><span class="p">]</span> <span class="o">=</span> <span class="n">random_noise</span><span class="p">[</span><span class="n">random_token_mask</span><span class="p">]</span>
+
+            <span class="n">masked_data</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">output</span>
+
+    <span class="n">detached_targets</span> <span class="o">=</span> <span class="p">{</span><span class="n">col</span><span class="p">:</span> <span class="n">tensor</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span> <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">targets_batch</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+    <span class="n">output_metadata</span> <span class="o">=</span> <span class="p">{</span><span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span> <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">metadata_batch</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+    <span class="n">output_metadata</span><span class="p">[</span><span class="s2">&quot;bert_mask&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">bert_mask</span>
+    <span class="n">output_metadata</span><span class="p">[</span><span class="s2">&quot;attention_valid_mask&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">valid_mask</span>
+
+    <span class="k">return</span> <span class="n">masked_data</span><span class="p">,</span> <span class="n">detached_targets</span><span class="p">,</span> <span class="n">output_metadata</span></div>
 </pre></div>
         </article>
       </div>
@@ -812,7 +1166,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=30bbdf9c"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=21e5ee03"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
     <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
