@@ -2077,7 +2077,7 @@ class TransformerModel(nn.Module):
         targets: dict[str, Tensor],
         valid_mask: Tensor,
     ) -> tuple[dict[str, Tensor], Tensor]:
-        """Project event-position target values backward for next-occurrence loss."""
+        """Project event-position target values backward for next_occurrence loss."""
         if self.hparams.training_spec.training_objective != "next_occurrence":
             return targets, valid_mask
 
