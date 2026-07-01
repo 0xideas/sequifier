@@ -2,40 +2,42 @@
 
 Sequifier natively supports multi-GPU and multi-node training using PyTorch's `DistributedDataParallel` (DDP) and `FullyShardedDataParallel` (FSDP).
 
-## 1. Prerequisites: Preprocessing for Distributed training
+## 1. Prerequisites: Preprocessing for Distributed Training
 
 To use distributed training, your data must be sharded into multiple files so that different GPUs can read different chunks simultaneously without memory bottlenecks.
 
-In your `preprocess.yaml`, you **must** set the following:
+In your `preprocess.yaml`, you **must** write sharded output:
 
 ```yaml
 merge_output: false
 ```
 
-you also need to set
+For production multi-GPU training, use PyTorch tensor shards:
 
 ```yaml
 write_format: pt
 ```
 
-*Note: Distributed training is not supported if your data is kept as a single `csv` or `parquet` file. You must use merge_output: false to generate a folder of sharded files.*
+*Note: Distributed training is not supported if your data is kept as a single `csv` or `parquet` file. You must use `merge_output: false` to generate a folder of sharded files.*
 
-> **⚠️ Beta Notice for Parquet in Distributed Training:**
+> **Beta Notice for Parquet in Distributed Training:**
 > While `write_format: parquet` is supported for distributed training, it is currently considered **Beta**. Because Parquet chunk reading relies on Polars' multi-threading, using it alongside PyTorch's multiprocess `DataLoader` in heavy multi-GPU environments can lead to CPU thread contention, high RAM usage, or NCCL timeouts.
 > **Recommendation:** For production multi-GPU runs, use `write_format: pt`. It relies on native PyTorch serialization and is significantly more stable under heavy hardware loads.
 
 
 ## 2. Configuration: `train.yaml`
 
-Once your data is preprocessed into `.pt` shards, you need to tell the Sequifier training engine to expect a distributed environment.
+Once your data is preprocessed into `.pt` shards, or beta `.parquet` shards, you need to tell the Sequifier training engine to expect a distributed environment.
 
-In your `train.yaml`, update the `training_spec` block:
+In your `train.yaml`, set the top-level `read_format` to match the preprocessing output and update the `training_spec` block:
 
 ```yaml
+read_format: pt # or parquet for beta sharded Parquet loading
+
 training_spec:
   distributed: true
-  data_parallelism: 'FSDP' # or 'DDP'   # Set to true to shard model weights/gradients across GPUs
-  fsdp_cpu_offload: false   # omit if using 'DDP', set to true to offload parameters to CPU RAM
+  data_parallelism: 'FSDP' # or 'DDP'
+  fsdp_cpu_offload: false   # omit if using 'DDP'; set true to offload FSDP parameters to CPU RAM
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)
   backend: nccl        # 'nccl' is the standard and most efficient backend for NVIDIA GPUs
 
@@ -83,4 +85,4 @@ srun torchrun \
 
 * **Batch Size:** The `batch_size` in your `train.yaml` is the **per-GPU** batch size. If your `batch_size` is 100, and your `world_size` is 32, your effective global batch size is 3,200.
 * **Learning Rate:** You may need to scale your `learning_rate` up if you drastically increase your global batch size via distributed training.
-* **Data Access:** All nodes must have access to the same shared filesystem (e.g., NFS, GPFS) where the `project_root` and the `.pt` data shards are stored.
+* **Data Access:** All nodes must have access to the same shared filesystem (e.g., NFS, GPFS) where the `project_root` and the sharded preprocessing output are stored.

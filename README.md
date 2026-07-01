@@ -3,7 +3,7 @@
 
 ## What is sequifier?
 
-Sequifier makes training and inference of powerful causal transformer models fast and trustworthy.
+Sequifier makes training and inference of powerful transformer sequence models fast and trustworthy.
 
 The process looks like this:
 
@@ -25,9 +25,44 @@ This gives us a number of benefits:
 - native multi-core preprocessing
 - scales to datasets larger than RAM
 - hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
-- can be used for prediction, generation and embeddding on/of arbitrary sequences
+- can be used for prediction, generation and embedding on/of arbitrary sequences
 
 The only requirement is having sequifier installed, and having input data in the right format.
+
+
+
+### Implementation Properties
+
+At the process level, Sequifier is designed around a few formal properties that make training and inference reliable across objectives, hardware setups, and exported models.
+
+**Preprocessing**
+
+1.  **The dataset is transformed into fixed-width, traceable sequence windows.** Each training example is a window with `sequenceId`, `subsequenceId`, `startItemPosition`, `leftPadLength`, and per-feature rows. Short sequences are left-padded, and padding is made explicit rather than implicit.
+2.  **A single stored preprocessing layout can support multiple objective-specific training views.** Preprocessing stores a wider v2 window layout, while training and inference resolve objective-specific input and target slices from that layout. This is the core property behind causal, BERT, final-value, and next-occurrence training sharing the same preprocessed data.
+3.  **Padding validity is carried through the whole pipeline.** `leftPadLength` is converted into `attention_valid_mask` and `target_valid_mask`, and batches carry both masks.
+4.  **Data splits are reproducible and sequence-aware.** Splits are either within-sequence by contiguous bounds or between-sequence by deterministic hash assignment; batch construction avoids crossing sequence boundaries unless explicitly allowed.
+5.  **Categorical IDs, special tokens, real-value normalization, and masks are persistent preprocessing semantics.** Sequifier establishes stable reserved token IDs, user IDs after reserved IDs, real-column statistics, optional input masking, and metadata export so training and inference use the same encoding contract.
+
+**Training**
+
+1.  **The model should not attend to forbidden information.** Causal, final-value, and next-occurrence objectives use a causal future mask; BERT uses bidirectional attention. In all cases, padded keys are masked and padded query positions are zeroed through the stack.
+2.  **Loss is defined only over valid target positions.** The effective loss mask combines target validity, BERT mask positions, and artificial distributed sample validity. Raw per-token losses are summed under this mask and normalized by the valid-token count.
+3.  **Each objective has its own target semantics.** BERT predicts only corrupted valid spans; final-value training uses the final target value across the sequence; next-occurrence training projects targets to the next configured occurrence and excludes positions without such an occurrence.
+4.  **Distributed training is intended to be metric-equivalent to a single global loss over real valid tokens.** Dataset loaders shard by rank and worker, pad ranks to aligned step counts when needed, mark synthetic samples invalid, and reduce loss sums and counts across ranks.
+5.  **Training stochasticity is reproducible and resumable.** Seeds are applied across Python, NumPy, Torch, and CUDA; shuffling is epoch-seeded; checkpoints capture RNG and DataLoader generator state.
+6.  **Checkpoint resume continues the same training process, not merely the same weights.** Checkpoints include model, optimizer, scheduler, scaler, best-model state, epoch and batch position, RNG, loader state, and a resume-critical configuration fingerprint.
+7.  **Validation, baseline loss, class-share logging, and training loss use the same validity semantics.** Validation runs under `eval`, no grad, the same masks, distributed reductions, and the same objective-specific target transformations.
+8.  **Exported models preserve the trained prediction interface.** Training exports last and best generative and/or embedding models from rank 0, with an explicit `attention_valid_mask` input for ONNX/PT inference.
+
+**Inference**
+
+1.  **Inference uses the same metadata-defined window view as training.** It loads v2 preprocessing metadata, validates special tokens, resolves the same objective-specific window view, and rebuilds masks from `leftPadLength`.
+2.  **Inference outputs correspond only to valid, non-padding prediction positions.** Predictions, probabilities, embeddings, sequence IDs, and item positions are filtered through the flattened validity mask.
+3.  **Output positions are absolute and objective-aware.** BERT positions are anchored inside the input window; causal, final-value, and next-occurrence predictions are anchored to future positions after the context.
+4.  **Inference postprocessing inverts preprocessing semantics.** Categorical predictions can be mapped back through ID maps; real predictions are un-normalized using stored statistics; categorical probabilities are normalized or sampled under probability constraints.
+5.  **Autoregressive inference is sequentially coherent.** It requires sorted sequence/subsequence order, repeatedly shifts predicted values into the input window, advances masks and item positions, and emits one sequence of future steps per source sequence.
+
+The big themes are: no leakage, explicit validity masking, objective-consistent target alignment, reproducible and resumable training, distributed equivalence over real tokens, and inference/training semantic consistency.
 
 
 
@@ -35,7 +70,7 @@ The only requirement is having sequifier installed, and having input data in the
 
 There are six standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, and `visualize-training`.
 
-`make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates outputs from data in the preprocessed format and outputs it in the initial input format, `hyperparameter-search` executes multiple training runs using Optuna to find optimal configurations, and `visualize-training` parses training logs to generate interactive HTML plots of your loss curves.
+`make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates predictions, probabilities, or embeddings from data in the preprocessed format, `hyperparameter-search` executes multiple training runs using Optuna to find optimal configurations, and `visualize-training` parses training logs to generate interactive HTML plots of your loss curves.
 
 There are documentation pages for each command, except make:
 
@@ -159,7 +194,7 @@ sequifier train
 sequifier infer
 ```
 
-9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/sequifier-default-best-10-predictions.csv`
+9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/[EXPORTED_MODEL_BASENAME]-predictions.[FORMAT]`, for example `outputs/predictions/sequifier-your-model-best-10-predictions.csv`
 
 
 ## Other Features
@@ -177,9 +212,9 @@ Technical Details: The generated embedding has dimensionality `dim_model` and co
 
 ### Distributed Training
 
-Sequifier supports distributed training using torch `DistributedDataParallel` and `FullyShardedDataParallel`. To make use of multi gpu support, the write format of the preprocessing step must be set to 'pt' and `merge_output` must be set to `false` in the preprocessing config.
+Sequifier supports distributed training using torch `DistributedDataParallel` and `FullyShardedDataParallel`. To make use of multi gpu support, the preprocessing step must write sharded output with `merge_output: false`. `write_format: pt` is the recommended production format; sharded `parquet` is also supported but currently considered beta for distributed training.
 
-For the full guide on how to configure a distributed run, check the [training config README](https://www.google.com/search?q=./documentation/training/multi-gpu-training.md)
+For the full guide on how to configure a distributed run, check the [multi-GPU training guide](./documentation/training/multi-gpu-training.md).
 
 ### System Requirements
 
