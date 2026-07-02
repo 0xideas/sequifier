@@ -410,7 +410,7 @@ These fields determine the size and complexity of the Transformer.
 | `joint_embedding_dim` | `int` | No | `null` | If set, projects concatenated inputs to this dim before the transformer. If set, must equal `dim_model`. |
 | `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
 | `feature_embedding_dims`| `dict` | No | `null` | Manual map of column names to embedding sizes. If `null`, sizes are auto-calculated. This works only if there are *only* real or *only* categorical variables, and `initial_embedding_dim` is divisible by the number of variables |
-| `frontend` | `dict` | No | `{type: flat}` | Feature frontend specification. `flat` reproduces the classic per-column embedding path. `composite` can merge branches such as flat, feature-token, grouped, siamese, structured, conv, or patch frontends. |
+| `frontend` | `dict` | No | `{type: flat}` | Feature frontend specification. `flat` reproduces the classic per-column embedding path. `composite` can merge branches such as flat, feature-token, grouped, siamese, structured, or conv frontends. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
 | `n_kv_heads` | `int` | No | `null` | Number of Key/Value heads for GQA/MQA. If `null`, defaults to `n_head` (standard MHA). |

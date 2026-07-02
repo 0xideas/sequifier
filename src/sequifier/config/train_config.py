@@ -228,18 +228,6 @@ class ConvFrontendSpec(BaseModel):
     output_dim: int = Field(..., gt=0)
 
 
-class PatchFrontendSpec(BaseModel):
-    """Structured frontend variant with time-local patch projection."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["patch"]
-    layout: str
-    output_dim: int = Field(..., gt=0)
-    patch_size: int = Field(1, gt=0)
-    stride: int = Field(1, gt=0)
-
-
 BranchFrontendSpec = Annotated[
     Union[
         FlatFrontendSpec,
@@ -248,7 +236,6 @@ BranchFrontendSpec = Annotated[
         SiameseFrontendSpec,
         StructuredFrontendSpec,
         ConvFrontendSpec,
-        PatchFrontendSpec,
     ],
     Field(discriminator="type"),
 ]
@@ -1156,22 +1143,11 @@ class TrainModel(BaseModel):
                 self._validate_structured_processing_blocks(branch.frontend, layout)
             if isinstance(branch.frontend, ConvFrontendSpec):
                 self._layout_for_branch(branch.frontend)
-            if isinstance(branch.frontend, PatchFrontendSpec):
-                self._layout_for_branch(branch.frontend)
-                if branch.frontend.patch_size > self.window_view.context_length:
-                    raise ValueError(
-                        "patch frontend patch_size cannot exceed context_length"
-                    )
-                if branch.frontend.stride != 1 or branch.frontend.patch_size % 2 == 0:
-                    raise ValueError(
-                        "patch frontend requires stride=1 and an odd patch_size"
-                    )
-
         return self
 
     def _layout_for_branch(
         self,
-        frontend: StructuredFrontendSpec | ConvFrontendSpec | PatchFrontendSpec,
+        frontend: StructuredFrontendSpec | ConvFrontendSpec,
     ) -> DenseAxesLayoutModel:
         if self.feature_layout is None:
             raise ValueError(
@@ -1228,7 +1204,7 @@ class TrainModel(BaseModel):
         frontend = branch.frontend
         if isinstance(
             frontend,
-            (StructuredFrontendSpec, ConvFrontendSpec, PatchFrontendSpec),
+            (StructuredFrontendSpec, ConvFrontendSpec),
         ):
             layout = self._layout_for_branch(frontend)
             layout_columns = list(layout.columns)

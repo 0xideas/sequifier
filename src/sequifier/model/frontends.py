@@ -831,28 +831,6 @@ class ConvFeatureFrontend(StructuredFeatureFrontend):
         return self._with_position(output)
 
 
-class PatchFeatureFrontend(StructuredFeatureFrontend):
-    """Apply a same-length temporal patch projection to structured features."""
-
-    def __init__(self, *, patch_size: int, stride: int, **kwargs: Any):
-        super().__init__(**kwargs)
-        self.patch_size = patch_size
-        self.stride = stride
-        self.patch_projection = nn.Conv1d(
-            self.output_dim,
-            self.output_dim,
-            kernel_size=self.patch_size,
-            stride=self.stride,
-            padding=self.patch_size // 2,
-        )
-
-    def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
-        output = super().forward(src, metadata)
-        patch_input = output.transpose(1, 2)
-        patch_output = self.patch_projection(patch_input).transpose(1, 2)
-        return patch_output[:, : output.shape[1], :]
-
-
 class FrontendMerge(nn.Module):
     def __init__(self, merge_type: str, branch_dims: dict[str, int], output_dim: int):
         super().__init__()
@@ -1049,7 +1027,7 @@ def _build_branch_frontend(
     device_max_concat_length: int,
 ) -> BaseFeatureFrontend:
     frontend = branch_spec.frontend
-    if frontend.type in {"structured", "conv", "patch"}:
+    if frontend.type in {"structured", "conv"}:
         columns = _layout_columns(hparams, frontend.layout)
     elif frontend.type == "grouped":
         columns = [
@@ -1121,10 +1099,4 @@ def _build_branch_frontend(
             **common_kwargs,
         )
 
-    return PatchFeatureFrontend(
-        layout=layout,
-        output_dim=frontend.output_dim,
-        patch_size=frontend.patch_size,
-        stride=frontend.stride,
-        **common_kwargs,
-    )
+    raise ValueError(f"Unknown frontend type: {frontend.type}")
