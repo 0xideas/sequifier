@@ -3,7 +3,8 @@ import json
 import math
 import os
 import warnings
-from typing import Any, Optional, Union
+from itertools import product
+from typing import Annotated, Any, Literal, Optional, Union
 
 import numpy as np
 import torch
@@ -44,6 +45,183 @@ from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_i
 
 AnyType = str | int | float
 NextOccurrenceTargetValue = StrictInt | StrictStr
+
+
+class DenseAxesLayoutModel(BaseModel):
+    """Reusable coordinate annotation for flat feature columns."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["dense_axes"]
+    axis_order: list[str]
+    axes: dict[str, list[AnyType]]
+    columns: dict[str, dict[str, AnyType]]
+
+    @model_validator(mode="after")
+    def validate_dense_axes(self):
+        if self.axis_order != list(self.axes.keys()):
+            raise ValueError("axis_order must exactly match axes keys")
+
+        coordinate_tuples = set()
+        for column_name, coordinates in self.columns.items():
+            if set(coordinates) != set(self.axis_order):
+                raise ValueError(
+                    f"Layout column {column_name!r} must define every axis"
+                )
+
+            coordinate_tuple = tuple(coordinates[axis] for axis in self.axis_order)
+            if coordinate_tuple in coordinate_tuples:
+                raise ValueError(
+                    f"Duplicate dense_axes coordinate tuple: {coordinate_tuple!r}"
+                )
+            coordinate_tuples.add(coordinate_tuple)
+
+            for axis, value in coordinates.items():
+                if value not in self.axes[axis]:
+                    raise ValueError(
+                        f"Layout column {column_name!r} has value {value!r} "
+                        f"outside axis {axis!r}"
+                    )
+
+        expected_tuples = set(product(*(self.axes[axis] for axis in self.axis_order)))
+        if coordinate_tuples != expected_tuples:
+            raise ValueError("dense_axes layouts must contain every coordinate")
+
+        return self
+
+
+class FeatureLayoutRegistryModel(BaseModel):
+    """Top-level registry of reusable feature layouts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = 1
+    layouts: dict[str, DenseAxesLayoutModel]
+
+    @field_validator("version")
+    @classmethod
+    def validate_version(cls, v):
+        if v != 1:
+            raise ValueError("Only feature_layout version 1 is supported")
+        return v
+
+
+class FlatFrontendSpec(BaseModel):
+    """Use the existing flat-column embedding path."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["flat"] = "flat"
+    output_dim: Optional[int] = Field(default=None, gt=0)
+
+
+class FeatureTokenFrontendSpec(BaseModel):
+    """Encode columns as feature tokens before pooling to one time token."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["feature_token"]
+    output_dim: int = Field(..., gt=0)
+
+
+class GroupedFrontendSpec(BaseModel):
+    """Encode configured column groups and merge them within one branch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["grouped"]
+    output_dim: int = Field(..., gt=0)
+    groups: dict[str, list[str]] = Field(..., min_length=1)
+
+
+class SiameseFrontendSpec(BaseModel):
+    """Apply one shared scalar encoder across the branch columns."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["siamese"]
+    output_dim: int = Field(..., gt=0)
+
+
+class StructuredFrontendSpec(BaseModel):
+    """Consume a top-level dense_axes layout."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["structured"]
+    layout: str
+    output_dim: int = Field(..., gt=0)
+
+
+class ConvFrontendSpec(BaseModel):
+    """Structured frontend variant with a convolutional projection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["conv"]
+    layout: str
+    output_dim: int = Field(..., gt=0)
+
+
+class PatchFrontendSpec(BaseModel):
+    """Structured frontend variant with time-local patch projection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["patch"]
+    layout: str
+    output_dim: int = Field(..., gt=0)
+    patch_size: int = Field(1, gt=0)
+    stride: int = Field(1, gt=0)
+
+
+BranchFrontendSpec = Annotated[
+    Union[
+        FlatFrontendSpec,
+        FeatureTokenFrontendSpec,
+        GroupedFrontendSpec,
+        SiameseFrontendSpec,
+        StructuredFrontendSpec,
+        ConvFrontendSpec,
+        PatchFrontendSpec,
+    ],
+    Field(discriminator="type"),
+]
+
+
+class FrontendBranchSpec(BaseModel):
+    """One branch of a composite frontend."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    columns: Optional[list[str]] = None
+    frontend: BranchFrontendSpec
+
+
+class FrontendMergeModel(BaseModel):
+    """How composite branch outputs are merged."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["concat", "sum", "gated", "attention"] = "concat"
+    output_dim: int = Field(..., gt=0)
+
+
+class CompositeFrontendSpec(BaseModel):
+    """Multi-branch frontend specification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["composite"]
+    branches: dict[str, FrontendBranchSpec] = Field(..., min_length=1)
+    merge: FrontendMergeModel
+    allow_shared_columns: bool = False
+
+
+FrontendSpec = Annotated[
+    Union[FlatFrontendSpec, CompositeFrontendSpec],
+    Field(discriminator="type"),
+]
 
 
 def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
@@ -423,6 +601,7 @@ class ModelSpecModel(BaseModel):
     initial_embedding_dim: int
     feature_embedding_dims: Optional[dict[str, int]] = None
     joint_embedding_dim: Optional[int] = None
+    frontend: FrontendSpec = Field(default_factory=FlatFrontendSpec)
     dim_model: int
     n_head: int
     dim_feedforward: int
@@ -446,7 +625,14 @@ class ModelSpecModel(BaseModel):
     def validate_dim_model(cls, v, info):
         initial_embedding_dim = info.data.get("initial_embedding_dim")
         joint_embedding_dim = info.data.get("joint_embedding_dim")
+        frontend = info.data.get("frontend")
         dim_model = v
+
+        if isinstance(frontend, CompositeFrontendSpec):
+            return v
+
+        if isinstance(frontend, FlatFrontendSpec) and frontend.output_dim is not None:
+            return v
 
         if joint_embedding_dim is None:
             if not v == initial_embedding_dim:
@@ -460,6 +646,22 @@ class ModelSpecModel(BaseModel):
                 )
 
         return v
+
+    @model_validator(mode="after")
+    def validate_frontend_output_dim(self):
+        if isinstance(self.frontend, CompositeFrontendSpec):
+            if self.frontend.merge.output_dim != self.dim_model:
+                raise ValueError(
+                    "model_spec.frontend.merge.output_dim must equal dim_model"
+                )
+        elif (
+            isinstance(self.frontend, FlatFrontendSpec)
+            and self.frontend.output_dim is not None
+            and self.frontend.output_dim != self.dim_model
+        ):
+            raise ValueError("model_spec.frontend.output_dim must equal dim_model")
+
+        return self
 
     @field_validator("activation_fn")
     @classmethod
@@ -573,6 +775,7 @@ class TrainModel(BaseModel):
     export_pt: bool = False
     export_with_dropout: bool = False
 
+    feature_layout: Optional[FeatureLayoutRegistryModel] = None
     model_spec: ModelSpecModel
     training_spec: TrainingSpecModel
 
@@ -776,42 +979,167 @@ class TrainModel(BaseModel):
     @field_validator("model_spec")
     @classmethod
     def validate_model_spec(cls, v, info):
-        # Original validation: consistent columns
+        input_columns = info.data.get("input_columns")
+        categorical_columns = info.data.get("categorical_columns", [])
+        real_columns = info.data.get("real_columns", [])
+        categorical_set = set(categorical_columns)
+        real_set = set(real_columns)
+
         if not (
-            info.data.get("input_columns") is None
+            input_columns is None
             or (v.feature_embedding_dims is None)
             or np.all(
                 np.array(list(v.feature_embedding_dims.keys()))
-                == np.array(list(info.data.get("input_columns")))
+                == np.array(list(input_columns))
             )
         ):
             raise ValueError(
                 "If feature_embedding_dims is not None, dimensions must be specified for all input columns"
             )
 
-        # Additional validation based on constraints in src/sequifier/train.py
-        categorical_columns = info.data.get("categorical_columns", [])
-        real_columns = info.data.get("real_columns", [])
-        n_categorical = len(categorical_columns)
-        n_real = len(real_columns)
+        flat_column_groups: list[tuple[list[str], int]] = []
+        if isinstance(v.frontend, FlatFrontendSpec):
+            flat_column_groups.append((input_columns or [], v.initial_embedding_dim))
+        elif isinstance(v.frontend, CompositeFrontendSpec):
+            for branch in v.frontend.branches.values():
+                if isinstance(branch.frontend, FlatFrontendSpec):
+                    if branch.columns is None:
+                        raise ValueError(
+                            "Composite flat frontend branches must specify columns"
+                        )
+                    flat_column_groups.append(
+                        (
+                            branch.columns,
+                            branch.frontend.output_dim or v.initial_embedding_dim,
+                        )
+                    )
 
-        # Constraint 1: Mixed Data Types
-        # If both real and categorical variables are present, feature_embedding_dims must be set.
-        if n_categorical > 0 and n_real > 0:
-            if v.feature_embedding_dims is None:
+        for flat_columns, embedding_size in flat_column_groups:
+            n_categorical = len([col for col in flat_columns if col in categorical_set])
+            n_real = len([col for col in flat_columns if col in real_set])
+
+            if n_categorical > 0 and n_real > 0 and v.feature_embedding_dims is None:
                 raise ValueError(
                     "If both real and categorical variables are present, 'feature_embedding_dims' in 'model_spec' must be set explicitly."
                 )
 
-        # Constraint 2: Categorical Divisibility
-        # If only categorical variables are included and auto-calculation is used,
-        # max(dim_model, n_head) must be divisible by the number of categorical variables.
-        if n_categorical > 0 and n_real == 0 and v.feature_embedding_dims is None:
-            embedding_size = v.initial_embedding_dim
-            if embedding_size % n_categorical != 0:
-                raise ValueError(
-                    f"If only categorical variables are included and feature_embedding_dims is not set, "
-                    f"initial_embedding_dim ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical}: {categorical_columns})."
-                )
+            if n_real > 0 and n_categorical == 0 and v.feature_embedding_dims is None:
+                if embedding_size < n_real:
+                    raise ValueError(
+                        f"initial_embedding_dim ({embedding_size}) must be at least the number of real variables ({n_real})."
+                    )
+
+            if n_categorical > 0 and n_real == 0 and v.feature_embedding_dims is None:
+                if embedding_size % n_categorical != 0:
+                    raise ValueError(
+                        f"If only categorical variables are included and feature_embedding_dims is not set, "
+                        f"initial_embedding_dim ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical}: {categorical_columns})."
+                    )
 
         return v
+
+    @model_validator(mode="after")
+    def validate_feature_layout_columns(self):
+        if self.feature_layout is None:
+            return self
+
+        allowed_columns = set(self.input_columns) | set(self.column_types)
+        for layout_name, layout in self.feature_layout.layouts.items():
+            missing_columns = set(layout.columns) - allowed_columns
+            if missing_columns:
+                raise ValueError(
+                    f"feature_layout {layout_name!r} references unknown columns: "
+                    f"{sorted(missing_columns)}"
+                )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_frontend_branches(self):
+        frontend = self.model_spec.frontend
+        if isinstance(frontend, FlatFrontendSpec):
+            return self
+
+        if frontend.merge.output_dim != self.model_spec.dim_model:
+            raise ValueError("Composite frontend merge output_dim must equal dim_model")
+
+        used_columns: dict[str, str] = {}
+        for branch_name, branch in frontend.branches.items():
+            columns = self._branch_columns(branch)
+            missing_columns = set(columns) - set(self.input_columns)
+            if missing_columns:
+                raise ValueError(
+                    f"Composite frontend branch {branch_name!r} references unknown "
+                    f"input columns: {sorted(missing_columns)}"
+                )
+
+            if not frontend.allow_shared_columns:
+                overlapping_columns = [
+                    column for column in columns if column in used_columns
+                ]
+                if overlapping_columns:
+                    raise ValueError(
+                        "Composite frontend branches cannot share columns unless "
+                        "allow_shared_columns is true: "
+                        f"{sorted(overlapping_columns)}"
+                    )
+                for column in columns:
+                    used_columns[column] = branch_name
+
+            if isinstance(branch.frontend, (StructuredFrontendSpec, ConvFrontendSpec)):
+                self._layout_for_branch(branch.frontend)
+            if isinstance(branch.frontend, PatchFrontendSpec):
+                self._layout_for_branch(branch.frontend)
+                if branch.frontend.patch_size > self.window_view.context_length:
+                    raise ValueError(
+                        "patch frontend patch_size cannot exceed context_length"
+                    )
+                if branch.frontend.stride != 1 or branch.frontend.patch_size % 2 == 0:
+                    raise ValueError(
+                        "patch frontend requires stride=1 and an odd patch_size"
+                    )
+
+        return self
+
+    def _layout_for_branch(
+        self,
+        frontend: StructuredFrontendSpec | ConvFrontendSpec | PatchFrontendSpec,
+    ) -> DenseAxesLayoutModel:
+        if self.feature_layout is None:
+            raise ValueError(
+                f"Frontend layout {frontend.layout!r} requires top-level feature_layout"
+            )
+        if frontend.layout not in self.feature_layout.layouts:
+            raise ValueError(f"Unknown feature_layout {frontend.layout!r}")
+        return self.feature_layout.layouts[frontend.layout]
+
+    def _branch_columns(self, branch: FrontendBranchSpec) -> list[str]:
+        frontend = branch.frontend
+        if isinstance(
+            frontend,
+            (StructuredFrontendSpec, ConvFrontendSpec, PatchFrontendSpec),
+        ):
+            layout = self._layout_for_branch(frontend)
+            layout_columns = list(layout.columns)
+            if branch.columns is not None and branch.columns != layout_columns:
+                raise ValueError(
+                    "Structured frontend branch columns must match the referenced layout"
+                )
+            return layout_columns
+
+        if isinstance(frontend, GroupedFrontendSpec):
+            grouped_columns = [
+                column
+                for group_columns in frontend.groups.values()
+                for column in group_columns
+            ]
+            if branch.columns is not None and branch.columns != grouped_columns:
+                raise ValueError(
+                    "Grouped frontend branch columns must match grouped columns"
+                )
+            return grouped_columns
+
+        if branch.columns is None:
+            raise ValueError("Composite frontend branch columns must be configured")
+
+        return branch.columns

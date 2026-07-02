@@ -93,6 +93,10 @@ from sequifier.io.sequifier_dataset_from_folder_pt import (  # noqa: E402
 from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
     SequifierDatasetFromFolderPtLazy,
 )
+from sequifier.model.frontends import (  # noqa: E402
+    build_feature_frontend,
+    get_feature_embedding_dims,
+)
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.objectives import create_objective  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
@@ -112,14 +116,6 @@ def _smallest_embedding_safe_dtype(dtype: torch.dtype) -> torch.dtype:
     if dtype in WIDE_UNSIGNED_EMBEDDING_INDEX_DTYPES:
         return torch.int64
     raise TypeError(f"Embedding indices must use an integer dtype, got {dtype}.")
-
-
-@beartype
-def _embedding_safe_indices(indices: Tensor) -> Tensor:
-    target_dtype = _smallest_embedding_safe_dtype(indices.dtype)
-    if indices.dtype == target_dtype:
-        return indices
-    return indices.to(dtype=target_dtype)
 
 
 @beartype
@@ -780,59 +776,25 @@ class TransformerModel(nn.Module):
         self.early_stopping_epochs = hparams.training_spec.early_stopping_epochs
         self.hparams = hparams
         self.objective = create_objective(hparams)
-        self.drop = nn.Dropout(hparams.training_spec.dropout)
-        self.encoder = ModuleDict()
         self.dim_model = self.hparams.model_spec.dim_model
         self.initial_embedding_dim = self.hparams.model_spec.initial_embedding_dim
         self.joint_embedding_dim = hparams.model_spec.joint_embedding_dim
 
-        if self.joint_embedding_dim is not None:
-            self.joint_embedding_layer = nn.Linear(
-                self.initial_embedding_dim, self.joint_embedding_dim
-            )
-        else:
-            self.joint_embedding_layer = None
-
         self.use_rope = hparams.model_spec.positional_encoding == "rope"
         if hparams.model_spec.feature_embedding_dims is not None:
             self.feature_embedding_dims = hparams.model_spec.feature_embedding_dims
-        else:
-            self.feature_embedding_dims = self._get_feature_embedding_dims(
+        elif hparams.model_spec.frontend.type == "flat":
+            self.feature_embedding_dims = get_feature_embedding_dims(
                 self.initial_embedding_dim, self.categorical_columns, self.real_columns
             )
-
-        self.real_columns_with_embedding = []
-        self.real_columns_direct = []
-        for col in self.real_columns:
-            if self.feature_embedding_dims[col] > 1:
-                self.encoder[col] = nn.Linear(1, self.feature_embedding_dims[col])
-                self.real_columns_with_embedding.append(col)
-            else:
-                if self.feature_embedding_dims[col] != 1:
-                    raise ValueError(
-                        f"Real column {col} without embedding must have feature_embedding_dims=1"
-                    )
-                self.real_columns_direct.append(col)
-
-        for col, n_classes in self.n_classes.items():
-            if col in self.categorical_columns:
-                self.encoder[col] = nn.Embedding(
-                    n_classes, self.feature_embedding_dims[col]
-                )
-
-        if not self.use_rope:
-            self.pos_encoder = ModuleDict()
-            for col in self.real_columns:
-                self.pos_encoder[col] = nn.Embedding(
-                    self.context_length, self.feature_embedding_dims[col]
-                )
-            for col, n_classes in self.n_classes.items():
-                if col in self.categorical_columns:
-                    self.pos_encoder[col] = nn.Embedding(
-                        self.context_length, self.feature_embedding_dims[col]
-                    )
         else:
-            self.pos_encoder = None
+            self.feature_embedding_dims = {}
+
+        self.frontend = build_feature_frontend(
+            hparams=hparams,
+            direct_real_dtype_provider=self._frontend_direct_real_dtype,
+            device_max_concat_length=hparams.training_spec.device_max_concat_length,
+        )
 
         self.layers = nn.ModuleList(
             [
@@ -929,6 +891,25 @@ class TransformerModel(nn.Module):
 
         self.to(self.device)
 
+    @property
+    def encoder(self) -> ModuleDict:
+        return getattr(self.frontend, "encoder", ModuleDict())
+
+    @property
+    def pos_encoder(self):
+        return getattr(self.frontend, "pos_encoder", None)
+
+    @property
+    def real_columns_direct(self) -> list[str]:
+        return getattr(self.frontend, "real_columns_direct", [])
+
+    @property
+    def joint_embedding_layer(self):
+        return getattr(self.frontend, "joint_embedding_layer", None)
+
+    def _frontend_direct_real_dtype(self) -> torch.dtype:
+        return self.layers[0].ff.get_first_layer_dtype()
+
     @beartype
     def initialize_optimizer(self, params: Any = None) -> None:
         """Create optimizer and scheduler from training config."""
@@ -1009,49 +990,9 @@ class TransformerModel(nn.Module):
         real_columns: list[str],
     ) -> dict[str, int]:
         """Allocate embedding dimensions across homogeneous input columns."""
-        if not (len(categorical_columns) + len(real_columns)) > 0:
-            raise ValueError("No columns found")
-
-        if len(categorical_columns) == 0 and len(real_columns) > 0:
-            if embedding_size < len(real_columns):
-                raise ValueError(
-                    f"initial_embedding_dim ({embedding_size}) is smaller than the number of real input columns ({len(real_columns)}). "
-                    "Cannot allocate at least 1 dimension per column."
-                )
-
-            feature_embedding_dims = {col: 1 for col in real_columns}
-            column_index = dict(enumerate(real_columns))
-
-            remaining_dims = embedding_size - len(real_columns)
-            for i in range(remaining_dims):
-                j = i % len(real_columns)
-                feature_embedding_dims[column_index[j]] += 1
-
-            if sum(feature_embedding_dims.values()) != embedding_size:
-                raise ValueError(
-                    f"Auto-calculated embedding dimensions ({sum(feature_embedding_dims.values())}) do not sum to initial_embedding_dim ({embedding_size})."
-                )
-        elif len(real_columns) == 0 and len(categorical_columns) > 0:
-            if embedding_size < len(categorical_columns):
-                raise ValueError(
-                    f"initial_embedding_dim ({embedding_size}) is smaller than the number of categorical columns ({len(categorical_columns)}). "
-                    "Resulting embedding dimension would be 0."
-                )
-
-            if (embedding_size % len(categorical_columns)) != 0:
-                raise ValueError(
-                    f"initial_embedding_dim ({embedding_size}) must be divisible by n_categorical ({len(categorical_columns)})"
-                )
-            dim_model_comp = embedding_size // len(categorical_columns)
-            feature_embedding_dims = {
-                col: dim_model_comp for col in categorical_columns
-            }
-        else:
-            raise ValueError(
-                "If both real and categorical variables are present, feature_embedding_dims config value must be set"
-            )
-
-        return feature_embedding_dims
+        return get_feature_embedding_dims(
+            embedding_size, categorical_columns, real_columns
+        )
 
     @staticmethod
     def _generate_square_subsequent_mask(sz: int) -> Tensor:
@@ -1067,21 +1008,11 @@ class TransformerModel(nn.Module):
     def _init_weights(self) -> None:
         """Initialize trainable weights with the model default."""
         init_std = 0.02
-        for col in self.categorical_columns:
-            self.encoder[col].weight.data.normal_(mean=0.0, std=init_std)
+        self.frontend.initialize_weights()
 
         for target_column in self.target_columns:
             self.decoder[target_column].bias.data.zero_()
             self.decoder[target_column].weight.data.normal_(mean=0.0, std=init_std)
-
-        if self.pos_encoder is not None:
-            for col_name in self.pos_encoder:
-                self.pos_encoder[col_name].weight.data.normal_(mean=0.0, std=init_std)
-
-        if self.joint_embedding_layer is not None:
-            self.joint_embedding_layer.weight.data.normal_(mean=0.0, std=init_std)
-            if self.joint_embedding_layer.bias is not None:
-                self.joint_embedding_layer.bias.data.zero_()
 
     @conditional_beartype
     def _recursive_concat(self, srcs: list[Tensor]):
@@ -1140,60 +1071,7 @@ class TransformerModel(nn.Module):
         self, src: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> Tensor:
         """Encode inputs into contextual hidden states."""
-        srcs = []
-        for col in self.categorical_columns:
-            src_t = self.encoder[col](_embedding_safe_indices(src[col]).T) * math.sqrt(
-                self.initial_embedding_dim
-            )
-
-            if not self.use_rope:
-                pos = (
-                    torch.arange(
-                        0, self.context_length, dtype=torch.long, device=src_t.device
-                    )
-                    .repeat(src_t.shape[1], 1)
-                    .T
-                )
-                src_p = self.pos_encoder[col](pos)  # type: ignore
-
-                src_c = self.drop(src_t + src_p)
-            else:
-                src_c = self.drop(src_t)
-
-            srcs.append(src_c)
-
-        for col in self.real_columns:
-            if col in self.real_columns_direct:
-                target_dtype = self.layers[0].ff.get_first_layer_dtype()
-                src_t = src[col].T.unsqueeze(2).to(dtype=target_dtype) * math.sqrt(
-                    self.initial_embedding_dim
-                )
-            else:
-                assert col in self.real_columns_with_embedding
-                layer = self.encoder[col]
-                inp = src[col].T[:, :, None].to(dtype=layer.weight.dtype)
-                src_t = layer(inp) * math.sqrt(self.initial_embedding_dim)
-
-            if not self.use_rope:
-                pos = (
-                    torch.arange(
-                        0, self.context_length, dtype=torch.long, device=src_t.device
-                    )
-                    .repeat(src_t.shape[1], 1)
-                    .T
-                )
-                src_p = self.pos_encoder[col](pos)  # type: ignore
-                src_c = self.drop(src_t + src_p)
-            else:
-                src_c = self.drop(src_t)
-
-            srcs.append(src_c)
-
-        src2 = self._recursive_concat(srcs)
-        src2 = src2.transpose(0, 1)
-
-        if self.joint_embedding_layer is not None:
-            src2 = self.joint_embedding_layer(src2)
+        src2 = self.frontend(src, metadata)
 
         valid_mask = metadata["attention_valid_mask"].bool()  # type: ignore
         if valid_mask.shape != src2.shape[:2]:
@@ -1380,6 +1258,11 @@ class TransformerModel(nn.Module):
             "n_classes": self.n_classes,
             "id_maps": self.hparams.id_maps,
             "special_token_ids": self.hparams.special_token_ids,
+            "feature_layout": (
+                self.hparams.feature_layout.model_dump(mode="json")
+                if self.hparams.feature_layout is not None
+                else None
+            ),
             "model_spec": self.hparams.model_spec.model_dump(mode="json"),
         }
         provenance = {

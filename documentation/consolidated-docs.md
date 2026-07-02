@@ -372,7 +372,7 @@ sequifier train --config-path configs/train.yaml
 
 ## Configuration Fields
 
-The configuration is defined in a YAML file (e.g., `train.yaml`). The file is structured into root-level fields (mostly data/paths) and two subsections: `model_spec` (architecture) and `training_spec` (hyperparameters).
+The configuration is defined in a YAML file (e.g., `train.yaml`). The file is structured into root-level fields (mostly data/paths), an optional `feature_layout` annotation section, and two subsections: `model_spec` (architecture) and `training_spec` (hyperparameters).
 
 ### 1\. File System & Inputs
 
@@ -392,6 +392,7 @@ The configuration is defined in a YAML file (e.g., `train.yaml`). The file is st
 | `target_columns` | `list[str]`| **Yes** | - | The specific column(s) the model should learn to predict. |
 | `target_column_types`| `dict` | **Yes** | - | Map of target columns to their type: `'categorical'` or `'real'`. The key order in target_column_types must exactly match the list order in target_columns |
 | `input_columns` | `list[str]` or `null`| **Yes** | `null` | Subset of columns to use as input features. Set to `null` to use all columns available in metadata. |
+| `feature_layout` | `dict` or `null` | No | `null` | Optional annotation registry for structured flat input columns. It does not change preprocessing output or stored files. |
 | `context_length` | `int` | **Yes** | - | Model input context length. It must fit inside the metadata `stored_context_width` with the stored `max_target_offset`. |
 | `target_offset` | `int` | No | `1` | Future offset used for forward-looking objectives. BERT-style training forces this to `0`. |
 
@@ -409,6 +410,7 @@ These fields determine the size and complexity of the Transformer.
 | `joint_embedding_dim` | `int` | No | `null` | If set, projects concatenated inputs to this dim before the transformer. If set, must equal `dim_model`. |
 | `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
 | `feature_embedding_dims`| `dict` | No | `null` | Manual map of column names to embedding sizes. If `null`, sizes are auto-calculated. This works only if there are *only* real or *only* categorical variables, and `initial_embedding_dim` is divisible by the number of variables |
+| `frontend` | `dict` | No | `{type: flat}` | Feature frontend specification. `flat` reproduces the classic per-column embedding path. `composite` can merge branches such as flat, feature-token, grouped, siamese, structured, conv, or patch frontends. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
 | `n_kv_heads` | `int` | No | `null` | Number of Key/Value heads for GQA/MQA. If `null`, defaults to `n_head` (standard MHA). |
@@ -416,6 +418,46 @@ These fields determine the size and complexity of the Transformer.
 | `rope_theta` | `float` | No | `10000.0` | The base frequency for RoPE. Increase for long-context extrapolation. |
 | `normalization` | `str` | No | `rmsnorm`| `rmsnorm` or `layer_norm`. |
 | `norm_first` | `bool` | No | `true` | If `true` (Pre-LN), applies normalization before attention/FFN. More stable. |
+
+#### Feature Layout And Frontends
+
+`feature_layout` describes reusable structure for existing flat columns. `model_spec.frontend` chooses how the model consumes those columns. Preprocessing, datasets, and exported ONNX inputs remain flat-column based.
+
+```yaml
+feature_layout:
+  version: 1
+  layouts:
+    order_book:
+      type: dense_axes
+      axis_order: [side, level, field]
+      axes:
+        side: [a, b]
+        level: [1]
+        field: [price, size]
+      columns:
+        a_1_price: {side: a, level: 1, field: price}
+        a_1_size:  {side: a, level: 1, field: size}
+        b_1_price: {side: b, level: 1, field: price}
+        b_1_size:  {side: b, level: 1, field: size}
+
+model_spec:
+  frontend:
+    type: composite
+    branches:
+      book:
+        frontend:
+          type: structured
+          layout: order_book
+          output_dim: 128
+      context:
+        columns: [spread, volatility]
+        frontend:
+          type: feature_token
+          output_dim: 64
+    merge:
+      type: concat
+      output_dim: 256
+```
 
 ### 4\. Training Hyperparameters (`training_spec`)
 
