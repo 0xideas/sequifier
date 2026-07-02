@@ -97,6 +97,33 @@ model_spec:
       output_dim: 256
 ```
 
+Structured frontends can optionally process dense axes before pooling. `cell_dim`
+sets the per-cell encoder size and defaults to `output_dim`. `processing_blocks`
+are compiled at model initialization. `axis_projection` flattens configured axes
+plus the channel dimension and removes those axes, `axis_conv` applies a
+same-size 1D/2D/3D convolution while preserving axes, and `axis_pool` reduces
+axes with `mean`, `sum`, or `max`. Parametric blocks can set `unshared_axes` to
+use separate parameters for coordinates on non-swept axes.
+
+```yaml
+frontend:
+  type: structured
+  layout: order_book
+  cell_dim: 32
+  output_dim: 128
+  processing_blocks:
+    - type: axis_conv
+      axes: [level]
+      output_dim: 32
+      unshared_axes: [side]
+    - type: axis_projection
+      axes: [field]
+      output_dim: 128
+    - type: axis_pool
+      axes: [side]
+      mode: mean
+```
+
 ### 4\. Training Hyperparameters (`training_spec`)
 
 | Field | Type | Mandatory | Default | Description |

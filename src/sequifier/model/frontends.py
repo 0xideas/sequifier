@@ -429,6 +429,265 @@ class SiameseFeatureFrontend(BaseFeatureFrontend):
         return self._with_position(torch.stack(encoded, dim=2).mean(dim=2))
 
 
+def _product(values: list[int]) -> int:
+    result = 1
+    for value in values:
+        result *= value
+    return result
+
+
+def _module_key(indices: tuple[int, ...]) -> str:
+    if not indices:
+        return "shared"
+    return "_".join(str(index) for index in indices)
+
+
+class _AxisProjectionBlock(nn.Module):
+    """Project one or more dense axes into the channel dimension."""
+
+    def __init__(
+        self,
+        *,
+        axes: list[str],
+        unshared_axes: list[str],
+        output_dim: int,
+        active_axes: list[str],
+        axis_sizes: dict[str, int],
+        input_dim: int,
+    ):
+        super().__init__()
+        self.axes = axes
+        self.unshared_axes = unshared_axes
+        self.output_dim = output_dim
+        self.active_axes = active_axes
+        self.output_axes = [axis for axis in active_axes if axis not in axes]
+        self.axis_sizes = axis_sizes
+        self.input_dim = input_dim
+
+        input_features = (
+            _product([axis_sizes[axis] for axis in self.axes]) * self.input_dim
+        )
+        self.unshared_indices = list(
+            product(*(range(axis_sizes[axis]) for axis in self.unshared_axes))
+        ) or [()]
+        self.layers = ModuleDict(
+            {
+                _module_key(indices): nn.Linear(input_features, self.output_dim)
+                for indices in self.unshared_indices
+            }
+        )
+
+    def _apply_shared(
+        self,
+        x: Tensor,
+        active_axes: list[str],
+        layer: nn.Linear,
+    ) -> Tensor:
+        keep_axes = [axis for axis in active_axes if axis not in self.axes]
+        permute_dims = (
+            [0, 1]
+            + [2 + active_axes.index(axis) for axis in keep_axes]
+            + [2 + active_axes.index(axis) for axis in self.axes]
+            + [x.ndim - 1]
+        )
+        x = x.permute(*permute_dims)
+        leading_shape = x.shape[: 2 + len(keep_axes)]
+        x = x.reshape(-1, layer.in_features)
+        x = layer(x)
+        return x.reshape(*leading_shape, self.output_dim)
+
+    def forward(self, x: Tensor) -> Tensor:
+        if not self.unshared_axes:
+            return self._apply_shared(
+                x,
+                self.active_axes,
+                self.layers["shared"],
+            )
+
+        output_shape = (
+            list(x.shape[:2])
+            + [self.axis_sizes[axis] for axis in self.output_axes]
+            + [self.output_dim]
+        )
+        output = x.new_zeros(output_shape)
+        remaining_axes = [
+            axis for axis in self.active_axes if axis not in self.unshared_axes
+        ]
+
+        for indices in self.unshared_indices:
+            index_by_axis = dict(zip(self.unshared_axes, indices))
+            input_index = (
+                [slice(None), slice(None)]
+                + [
+                    index_by_axis[axis] if axis in index_by_axis else slice(None)
+                    for axis in self.active_axes
+                ]
+                + [slice(None)]
+            )
+            output_index = (
+                [slice(None), slice(None)]
+                + [
+                    index_by_axis[axis] if axis in index_by_axis else slice(None)
+                    for axis in self.output_axes
+                ]
+                + [slice(None)]
+            )
+            output[tuple(output_index)] = self._apply_shared(
+                x[tuple(input_index)],
+                remaining_axes,
+                self.layers[_module_key(indices)],
+            )
+
+        return output
+
+
+class _AxisConvBlock(nn.Module):
+    """Apply a native convolution over one to three dense axes."""
+
+    CONV_CLASSES = {
+        1: nn.Conv1d,
+        2: nn.Conv2d,
+        3: nn.Conv3d,
+    }
+
+    def __init__(
+        self,
+        *,
+        axes: list[str],
+        unshared_axes: list[str],
+        output_dim: int,
+        kernel_size: int,
+        active_axes: list[str],
+        axis_sizes: dict[str, int],
+        input_dim: int,
+    ):
+        super().__init__()
+        self.axes = axes
+        self.unshared_axes = unshared_axes
+        self.output_dim = output_dim
+        self.kernel_size = kernel_size
+        self.active_axes = active_axes
+        self.output_axes = list(active_axes)
+        self.axis_sizes = axis_sizes
+        self.input_dim = input_dim
+
+        conv_class = self.CONV_CLASSES[len(self.axes)]
+        self.unshared_indices = list(
+            product(*(range(axis_sizes[axis]) for axis in self.unshared_axes))
+        ) or [()]
+        self.layers = ModuleDict(
+            {
+                _module_key(indices): conv_class(
+                    self.input_dim,
+                    self.output_dim,
+                    kernel_size=self.kernel_size,
+                    padding=self.kernel_size // 2,
+                )
+                for indices in self.unshared_indices
+            }
+        )
+
+    def _apply_shared(
+        self,
+        x: Tensor,
+        active_axes: list[str],
+        layer: nn.Module,
+    ) -> Tensor:
+        other_axes = [axis for axis in active_axes if axis not in self.axes]
+        sweep_axes = [axis for axis in active_axes if axis in self.axes]
+        permute_dims = (
+            [0, 1]
+            + [2 + active_axes.index(axis) for axis in other_axes]
+            + [x.ndim - 1]
+            + [2 + active_axes.index(axis) for axis in sweep_axes]
+        )
+        x = x.permute(*permute_dims)
+        leading_shape = x.shape[: 2 + len(other_axes)]
+        sweep_shape = [self.axis_sizes[axis] for axis in sweep_axes]
+        x = x.reshape(-1, self.input_dim, *sweep_shape)
+        x = layer(x)
+        x = x.reshape(*leading_shape, self.output_dim, *sweep_shape)
+
+        axis_to_dim = {axis: 2 + index for index, axis in enumerate(other_axes)} | {
+            axis: 2 + len(other_axes) + 1 + index
+            for index, axis in enumerate(sweep_axes)
+        }
+        channel_dim = 2 + len(other_axes)
+        permute_back = (
+            [0, 1] + [axis_to_dim[axis] for axis in active_axes] + [channel_dim]
+        )
+        return x.permute(*permute_back)
+
+    def forward(self, x: Tensor) -> Tensor:
+        if not self.unshared_axes:
+            return self._apply_shared(
+                x,
+                self.active_axes,
+                self.layers["shared"],
+            )
+
+        output_shape = (
+            list(x.shape[:2])
+            + [self.axis_sizes[axis] for axis in self.output_axes]
+            + [self.output_dim]
+        )
+        output = x.new_zeros(output_shape)
+        remaining_axes = [
+            axis for axis in self.active_axes if axis not in self.unshared_axes
+        ]
+
+        for indices in self.unshared_indices:
+            index_by_axis = dict(zip(self.unshared_axes, indices))
+            input_index = (
+                [slice(None), slice(None)]
+                + [
+                    index_by_axis[axis] if axis in index_by_axis else slice(None)
+                    for axis in self.active_axes
+                ]
+                + [slice(None)]
+            )
+            output_index = (
+                [slice(None), slice(None)]
+                + [
+                    index_by_axis[axis] if axis in index_by_axis else slice(None)
+                    for axis in self.output_axes
+                ]
+                + [slice(None)]
+            )
+            output[tuple(output_index)] = self._apply_shared(
+                x[tuple(input_index)],
+                remaining_axes,
+                self.layers[_module_key(indices)],
+            )
+
+        return output
+
+
+class _AxisPoolBlock(nn.Module):
+    """Reduce one or more dense axes."""
+
+    def __init__(
+        self,
+        *,
+        axes: list[str],
+        mode: str,
+        active_axes: list[str],
+    ):
+        super().__init__()
+        self.axes = axes
+        self.mode = mode
+        self.active_axes = active_axes
+        self.output_axes = [axis for axis in active_axes if axis not in axes]
+
+    def forward(self, x: Tensor) -> Tensor:
+        dims = tuple(2 + self.active_axes.index(axis) for axis in self.axes)
+        if self.mode == "mean":
+            return x.mean(dim=dims)
+        if self.mode == "sum":
+            return x.sum(dim=dims)
+        return torch.amax(x, dim=dims)
+
+
 class StructuredFeatureFrontend(_ColumnTokenFrontend):
     """Compile a dense_axes layout into an ordered cell tensor."""
 
@@ -443,11 +702,18 @@ class StructuredFeatureFrontend(_ColumnTokenFrontend):
         output_dim: int,
         use_rope: bool,
         dropout: float,
+        cell_dim: Optional[int] = None,
+        processing_blocks: Optional[list[Any]] = None,
     ):
         self.layout = layout
         self.axis_order = layout.axis_order
+        self.axis_size_by_name = {
+            axis: len(layout.axes[axis]) for axis in self.axis_order
+        }
         self.axis_sizes = [len(layout.axes[axis]) for axis in self.axis_order]
         self.expected_dense_shape = tuple(self.axis_sizes)
+        self.cell_dim = cell_dim or output_dim
+        self.processing_blocks = processing_blocks or []
         self.coordinate_to_index = {
             tuple(coordinates): index
             for index, coordinates in enumerate(
@@ -468,10 +734,51 @@ class StructuredFeatureFrontend(_ColumnTokenFrontend):
             real_columns=real_columns,
             n_classes=n_classes,
             context_length=context_length,
-            output_dim=output_dim,
+            output_dim=self.cell_dim,
             use_rope=use_rope,
             dropout=dropout,
         )
+        self.output_dim = output_dim
+        if not self.use_rope:
+            self.pos_encoder = nn.Embedding(self.context_length, self.output_dim)
+
+        self.axis_blocks = nn.ModuleList()
+        active_axes = list(self.axis_order)
+        channel_dim = self.cell_dim
+        for block in self.processing_blocks:
+            if block.type == "axis_projection":
+                compiled_block = _AxisProjectionBlock(
+                    axes=block.axes,
+                    unshared_axes=block.unshared_axes,
+                    output_dim=block.output_dim,
+                    active_axes=list(active_axes),
+                    axis_sizes=self.axis_size_by_name,
+                    input_dim=channel_dim,
+                )
+                active_axes = compiled_block.output_axes
+                channel_dim = block.output_dim
+            elif block.type == "axis_conv":
+                compiled_block = _AxisConvBlock(
+                    axes=block.axes,
+                    unshared_axes=block.unshared_axes,
+                    output_dim=block.output_dim,
+                    kernel_size=block.kernel_size,
+                    active_axes=list(active_axes),
+                    axis_sizes=self.axis_size_by_name,
+                    input_dim=channel_dim,
+                )
+                channel_dim = block.output_dim
+            else:
+                compiled_block = _AxisPoolBlock(
+                    axes=block.axes,
+                    mode=block.mode,
+                    active_axes=list(active_axes),
+                )
+                active_axes = compiled_block.output_axes
+
+            self.axis_blocks.append(compiled_block)
+
+        self.active_axes_after_blocks = active_axes
 
     def _dense_cells(self, src: dict[str, Tensor]) -> Tensor:
         encoded = [self._encode_column(col, src) for col in self.ordered_columns]
@@ -480,13 +787,24 @@ class StructuredFeatureFrontend(_ColumnTokenFrontend):
             cells.shape[0],
             cells.shape[1],
             *self.expected_dense_shape,
-            self.output_dim,
+            self.cell_dim,
         )
 
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         dense_cells = self._dense_cells(src)
-        axis_dims = tuple(range(2, 2 + len(self.axis_sizes)))
-        return self._with_position(dense_cells.mean(dim=axis_dims))
+        if not self.axis_blocks:
+            axis_dims = tuple(range(2, 2 + len(self.axis_sizes)))
+            return self._with_position(dense_cells.mean(dim=axis_dims))
+
+        output = dense_cells
+        for block in self.axis_blocks:
+            output = block(output)
+
+        if self.active_axes_after_blocks:
+            axis_dims = tuple(range(2, 2 + len(self.active_axes_after_blocks)))
+            output = output.mean(dim=axis_dims)
+
+        return self._with_position(output)
 
 
 class ConvFeatureFrontend(StructuredFeatureFrontend):
@@ -791,6 +1109,8 @@ def _build_branch_frontend(
         return StructuredFeatureFrontend(
             layout=layout,
             output_dim=frontend.output_dim,
+            cell_dim=frontend.cell_dim,
+            processing_blocks=frontend.processing_blocks,
             **common_kwargs,
         )
 

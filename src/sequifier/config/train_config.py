@@ -143,6 +143,69 @@ class SiameseFrontendSpec(BaseModel):
     output_dim: int = Field(..., gt=0)
 
 
+class AxisProjectionBlockModel(BaseModel):
+    """Flatten configured dense axes and project them with a linear layer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["axis_projection"]
+    axes: list[str] = Field(..., min_length=1)
+    output_dim: int = Field(..., gt=0)
+    unshared_axes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_axes_unique(self):
+        _validate_axis_list_unique(self.axes, "axes")
+        _validate_axis_list_unique(self.unshared_axes, "unshared_axes")
+        return self
+
+
+class AxisConvBlockModel(BaseModel):
+    """Sweep a native 1D/2D/3D convolution over configured dense axes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["axis_conv"]
+    axes: list[str] = Field(..., min_length=1, max_length=3)
+    output_dim: int = Field(..., gt=0)
+    kernel_size: int = Field(3, gt=0)
+    unshared_axes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_axes_unique(self):
+        _validate_axis_list_unique(self.axes, "axes")
+        _validate_axis_list_unique(self.unshared_axes, "unshared_axes")
+        if self.kernel_size % 2 == 0:
+            raise ValueError("axis_conv kernel_size must be odd to preserve axis sizes")
+        return self
+
+
+class AxisPoolBlockModel(BaseModel):
+    """Reduce configured dense axes without changing the channel dimension."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["axis_pool"]
+    axes: list[str] = Field(..., min_length=1)
+    mode: Literal["mean", "sum", "max"] = "mean"
+
+    @model_validator(mode="after")
+    def validate_axes_unique(self):
+        _validate_axis_list_unique(self.axes, "axes")
+        return self
+
+
+StructuredProcessingBlock = Annotated[
+    Union[AxisProjectionBlockModel, AxisConvBlockModel, AxisPoolBlockModel],
+    Field(discriminator="type"),
+]
+
+
+def _validate_axis_list_unique(axes: list[str], field_name: str) -> None:
+    if len(axes) != len(set(axes)):
+        raise ValueError(f"{field_name} cannot contain duplicate axes")
+
+
 class StructuredFrontendSpec(BaseModel):
     """Consume a top-level dense_axes layout."""
 
@@ -151,6 +214,8 @@ class StructuredFrontendSpec(BaseModel):
     type: Literal["structured"]
     layout: str
     output_dim: int = Field(..., gt=0)
+    cell_dim: Optional[int] = Field(default=None, gt=0)
+    processing_blocks: list[StructuredProcessingBlock] = Field(default_factory=list)
 
 
 class ConvFrontendSpec(BaseModel):
@@ -1086,7 +1151,10 @@ class TrainModel(BaseModel):
                 for column in columns:
                     used_columns[column] = branch_name
 
-            if isinstance(branch.frontend, (StructuredFrontendSpec, ConvFrontendSpec)):
+            if isinstance(branch.frontend, StructuredFrontendSpec):
+                layout = self._layout_for_branch(branch.frontend)
+                self._validate_structured_processing_blocks(branch.frontend, layout)
+            if isinstance(branch.frontend, ConvFrontendSpec):
                 self._layout_for_branch(branch.frontend)
             if isinstance(branch.frontend, PatchFrontendSpec):
                 self._layout_for_branch(branch.frontend)
@@ -1112,6 +1180,49 @@ class TrainModel(BaseModel):
         if frontend.layout not in self.feature_layout.layouts:
             raise ValueError(f"Unknown feature_layout {frontend.layout!r}")
         return self.feature_layout.layouts[frontend.layout]
+
+    def _validate_structured_processing_blocks(
+        self,
+        frontend: StructuredFrontendSpec,
+        layout: DenseAxesLayoutModel,
+    ) -> None:
+        active_axes = list(layout.axis_order)
+        channel_dim = frontend.cell_dim or frontend.output_dim
+
+        for block in frontend.processing_blocks:
+            unknown_axes = [axis for axis in block.axes if axis not in active_axes]
+            if unknown_axes:
+                raise ValueError(
+                    f"Structured frontend block references unavailable axes: "
+                    f"{unknown_axes}"
+                )
+
+            if isinstance(block, (AxisProjectionBlockModel, AxisConvBlockModel)):
+                available_unshared_axes = [
+                    axis for axis in active_axes if axis not in block.axes
+                ]
+                invalid_unshared_axes = [
+                    axis
+                    for axis in block.unshared_axes
+                    if axis not in available_unshared_axes
+                ]
+                if invalid_unshared_axes:
+                    raise ValueError(
+                        "Structured frontend block unshared_axes must be a subset "
+                        "of non-swept active axes: "
+                        f"{invalid_unshared_axes}"
+                    )
+
+                channel_dim = block.output_dim
+
+            if isinstance(block, (AxisProjectionBlockModel, AxisPoolBlockModel)):
+                active_axes = [axis for axis in active_axes if axis not in block.axes]
+
+        if channel_dim != frontend.output_dim:
+            raise ValueError(
+                "Structured frontend processing_blocks must produce output_dim "
+                f"{frontend.output_dim}, got {channel_dim}"
+            )
 
     def _branch_columns(self, branch: FrontendBranchSpec) -> list[str]:
         frontend = branch.frontend
