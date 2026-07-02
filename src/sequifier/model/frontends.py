@@ -442,6 +442,11 @@ def _module_key(indices: tuple[int, ...]) -> str:
     return "_".join(str(index) for index in indices)
 
 
+def _rotate_half_last_dim(x: Tensor) -> Tensor:
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)
+
+
 class _AxisProjectionBlock(nn.Module):
     """Project one or more dense axes into the channel dimension."""
 
@@ -703,6 +708,7 @@ class StructuredFeatureFrontend(_ColumnTokenFrontend):
         use_rope: bool,
         dropout: float,
         cell_dim: Optional[int] = None,
+        axis_embeddings: Optional[Any] = None,
         processing_blocks: Optional[list[Any]] = None,
     ):
         self.layout = layout
@@ -713,6 +719,7 @@ class StructuredFeatureFrontend(_ColumnTokenFrontend):
         self.axis_sizes = [len(layout.axes[axis]) for axis in self.axis_order]
         self.expected_dense_shape = tuple(self.axis_sizes)
         self.cell_dim = cell_dim or output_dim
+        self.axis_embeddings_config = axis_embeddings
         self.processing_blocks = processing_blocks or []
         self.coordinate_to_index = {
             tuple(coordinates): index
@@ -741,6 +748,31 @@ class StructuredFeatureFrontend(_ColumnTokenFrontend):
         self.output_dim = output_dim
         if not self.use_rope:
             self.pos_encoder = nn.Embedding(self.context_length, self.output_dim)
+
+        self.axis_embedding_type = (
+            "none"
+            if self.axis_embeddings_config is None
+            else self.axis_embeddings_config.type
+        )
+        self.axis_embedding_axes = (
+            []
+            if self.axis_embeddings_config is None
+            else list(self.axis_embeddings_config.axes)
+        )
+        self.axis_embedding_theta = (
+            10000.0
+            if self.axis_embeddings_config is None
+            else self.axis_embeddings_config.rope_theta
+        )
+        if self.axis_embedding_type == "rope" and self.cell_dim % 2 != 0:
+            raise ValueError("Axis RoPE requires an even cell_dim")
+
+        self.axis_embedding_layers = nn.ModuleList()
+        if self.axis_embedding_type == "learned":
+            for axis in self.axis_embedding_axes:
+                self.axis_embedding_layers.append(
+                    nn.Embedding(self.axis_size_by_name[axis], self.cell_dim)
+                )
 
         self.axis_blocks = nn.ModuleList()
         active_axes = list(self.axis_order)
@@ -780,6 +812,11 @@ class StructuredFeatureFrontend(_ColumnTokenFrontend):
 
         self.active_axes_after_blocks = active_axes
 
+    def initialize_weights(self) -> None:
+        super().initialize_weights()
+        for layer in self.axis_embedding_layers:
+            layer.weight.data.normal_(mean=0.0, std=self.INIT_STD)
+
     def _dense_cells(self, src: dict[str, Tensor]) -> Tensor:
         encoded = [self._encode_column(col, src) for col in self.ordered_columns]
         cells = torch.stack(encoded, dim=2)
@@ -790,8 +827,63 @@ class StructuredFeatureFrontend(_ColumnTokenFrontend):
             self.cell_dim,
         )
 
+    def _axis_broadcast_shape(self, x: Tensor, axis_name: str) -> list[int]:
+        axis_idx = self.axis_order.index(axis_name)
+        target_dim = axis_idx + 2
+        axis_size = self.axis_size_by_name[axis_name]
+        broadcast_shape = [1] * (x.ndim - 1) + [self.cell_dim]
+        broadcast_shape[target_dim] = axis_size
+        return broadcast_shape
+
+    def _apply_learned_axis_embeddings(self, dense_cells: Tensor) -> Tensor:
+        output = dense_cells
+        for axis_name, embedding_layer in zip(
+            self.axis_embedding_axes, self.axis_embedding_layers
+        ):
+            axis_size = self.axis_size_by_name[axis_name]
+            indices = torch.arange(axis_size, device=output.device)
+            embeddings = embedding_layer(indices).to(dtype=output.dtype)
+            output = output + embeddings.view(
+                *self._axis_broadcast_shape(output, axis_name)
+            )
+        return output
+
+    def _axis_rope_cos_sin(self, x: Tensor, axis_name: str) -> tuple[Tensor, Tensor]:
+        axis_size = self.axis_size_by_name[axis_name]
+        compute_dtype = torch.float32
+        positions = torch.arange(axis_size, device=x.device, dtype=compute_dtype)
+        inv_freq = 1.0 / (
+            self.axis_embedding_theta
+            ** (
+                torch.arange(0, self.cell_dim, 2, device=x.device, dtype=compute_dtype)
+                / self.cell_dim
+            )
+        )
+        freqs = torch.outer(positions, inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        broadcast_shape = self._axis_broadcast_shape(x, axis_name)
+        cos = emb.cos().to(dtype=x.dtype).view(*broadcast_shape)
+        sin = emb.sin().to(dtype=x.dtype).view(*broadcast_shape)
+        return cos, sin
+
+    def _apply_rope_axis_embeddings(self, dense_cells: Tensor) -> Tensor:
+        output = dense_cells
+        for axis_name in self.axis_embedding_axes:
+            cos, sin = self._axis_rope_cos_sin(output, axis_name)
+            output = (output * cos) + (_rotate_half_last_dim(output) * sin)
+        return output
+
+    def _apply_axis_embeddings(self, dense_cells: Tensor) -> Tensor:
+        if self.axis_embedding_type == "none":
+            return dense_cells
+        if self.axis_embedding_type == "learned":
+            return self._apply_learned_axis_embeddings(dense_cells)
+        if self.axis_embedding_type == "rope":
+            return self._apply_rope_axis_embeddings(dense_cells)
+        raise ValueError(f"Unknown axis embedding type: {self.axis_embedding_type}")
+
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
-        dense_cells = self._dense_cells(src)
+        dense_cells = self._apply_axis_embeddings(self._dense_cells(src))
         if not self.axis_blocks:
             axis_dims = tuple(range(2, 2 + len(self.axis_sizes)))
             return self._with_position(dense_cells.mean(dim=axis_dims))
@@ -1088,6 +1180,7 @@ def _build_branch_frontend(
             layout=layout,
             output_dim=frontend.output_dim,
             cell_dim=frontend.cell_dim,
+            axis_embeddings=frontend.axis_embeddings,
             processing_blocks=frontend.processing_blocks,
             **common_kwargs,
         )

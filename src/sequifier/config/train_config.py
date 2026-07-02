@@ -206,6 +206,36 @@ def _validate_axis_list_unique(axes: list[str], field_name: str) -> None:
         raise ValueError(f"{field_name} cannot contain duplicate axes")
 
 
+class AxisEmbeddingModel(BaseModel):
+    """Optional positional encoding for dense layout axes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["none", "learned", "rope"] = "none"
+    axes: list[str] = Field(default_factory=list)
+    rope_theta: float = Field(10000.0, gt=0.0)
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, v):
+        if v is None:
+            return "none"
+        if isinstance(v, str):
+            return v.lower()
+        return v
+
+    @model_validator(mode="after")
+    def validate_axes(self):
+        _validate_axis_list_unique(self.axes, "axis_embeddings.axes")
+        if self.type == "none" and self.axes:
+            raise ValueError("axis_embeddings.axes must be empty when type is 'none'")
+        if self.type != "none" and not self.axes:
+            raise ValueError(
+                "axis_embeddings.axes must contain at least one axis unless type is 'none'"
+            )
+        return self
+
+
 class StructuredFrontendSpec(BaseModel):
     """Consume a top-level dense_axes layout."""
 
@@ -215,7 +245,17 @@ class StructuredFrontendSpec(BaseModel):
     layout: str
     output_dim: int = Field(..., gt=0)
     cell_dim: Optional[int] = Field(default=None, gt=0)
+    axis_embeddings: AxisEmbeddingModel = Field(default_factory=AxisEmbeddingModel)
     processing_blocks: list[StructuredProcessingBlock] = Field(default_factory=list)
+
+    @field_validator("axis_embeddings", mode="before")
+    @classmethod
+    def normalize_axis_embeddings(cls, v):
+        if v is None:
+            return {"type": "none", "axes": []}
+        if isinstance(v, list):
+            return {"type": "learned", "axes": v}
+        return v
 
 
 class ConvFrontendSpec(BaseModel):
@@ -1140,6 +1180,7 @@ class TrainModel(BaseModel):
 
             if isinstance(branch.frontend, StructuredFrontendSpec):
                 layout = self._layout_for_branch(branch.frontend)
+                self._validate_structured_axis_embeddings(branch.frontend, layout)
                 self._validate_structured_processing_blocks(branch.frontend, layout)
             if isinstance(branch.frontend, ConvFrontendSpec):
                 self._layout_for_branch(branch.frontend)
@@ -1156,6 +1197,31 @@ class TrainModel(BaseModel):
         if frontend.layout not in self.feature_layout.layouts:
             raise ValueError(f"Unknown feature_layout {frontend.layout!r}")
         return self.feature_layout.layouts[frontend.layout]
+
+    def _validate_structured_axis_embeddings(
+        self,
+        frontend: StructuredFrontendSpec,
+        layout: DenseAxesLayoutModel,
+    ) -> None:
+        unknown_axes = [
+            axis
+            for axis in frontend.axis_embeddings.axes
+            if axis not in layout.axis_order
+        ]
+        if unknown_axes:
+            raise ValueError(
+                "Structured frontend axis_embeddings references unavailable axes: "
+                f"{unknown_axes}"
+            )
+
+        if (
+            frontend.axis_embeddings.type == "rope"
+            and (frontend.cell_dim or frontend.output_dim) % 2 != 0
+        ):
+            raise ValueError(
+                "Structured frontend axis_embeddings type 'rope' requires an even "
+                "cell_dim/output_dim"
+            )
 
     def _validate_structured_processing_blocks(
         self,

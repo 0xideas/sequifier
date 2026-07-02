@@ -105,12 +105,22 @@ same-size 1D/2D/3D convolution while preserving axes, and `axis_pool` reduces
 axes with `mean`, `sum`, or `max`. Parametric blocks can set `unshared_axes` to
 use separate parameters for coordinates on non-swept axes.
 
+Structured frontends can also add axis-local positional information before any
+axis processing blocks run. `axis_embeddings.type` defaults to `none`; set it to
+`learned` to add learned coordinate embeddings or `rope` to apply rotary
+coordinate encoding over the cell channel dimension. `axis_embeddings.axes`
+selects layout axes by name. For backward-compatible shorthand, a plain list is
+treated as learned axis embeddings.
+
 ```yaml
 frontend:
   type: structured
   layout: order_book
   cell_dim: 32
   output_dim: 128
+  axis_embeddings:
+    type: learned
+    axes: [side, level]
   processing_blocks:
     - type: axis_conv
       axes: [level]
