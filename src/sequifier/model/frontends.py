@@ -4,6 +4,7 @@ from itertools import product
 from typing import Any, Optional
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn import ModuleDict
 
@@ -235,6 +236,74 @@ class FlatFeatureFrontend(BaseFeatureFrontend):
         output = self._recursive_concat(srcs)
         if self.joint_embedding_layer is not None:
             output = self.joint_embedding_layer(output)
+        return output
+
+
+class TemporalConvFeatureFrontend(BaseFeatureFrontend):
+    """Apply Conv1D over time after flat-column encoding."""
+
+    def __init__(
+        self,
+        *,
+        base_frontend: FlatFeatureFrontend,
+        output_dim: int,
+        kernel_size: int,
+        dilation: int,
+        num_layers: int,
+        causal: bool,
+        activation_fn: str,
+        dropout: float,
+    ):
+        super().__init__()
+        self.base_frontend = base_frontend
+        self.output_dim = output_dim
+        if self.base_frontend.output_dim != self.output_dim:
+            raise ValueError(
+                "temporal_conv base frontend output_dim must match output_dim"
+            )
+        self.kernel_size = kernel_size
+        self.dilation = dilation
+        self.causal = causal
+        self.layers = nn.ModuleList(
+            [
+                nn.Conv1d(
+                    self.output_dim,
+                    self.output_dim,
+                    kernel_size=self.kernel_size,
+                    dilation=self.dilation,
+                )
+                for _ in range(num_layers)
+            ]
+        )
+        self.activation = self._activation(activation_fn)
+        self.drop = nn.Dropout(dropout)
+
+    def initialize_weights(self) -> None:
+        self.base_frontend.initialize_weights()
+
+    @staticmethod
+    def _activation(name: str) -> nn.Module:
+        if name == "relu":
+            return nn.ReLU()
+        if name == "gelu":
+            return nn.GELU()
+        if name == "silu":
+            return nn.SiLU()
+        raise ValueError(f"Unknown temporal_conv activation_fn: {name}")
+
+    def _temporal_padding(self) -> tuple[int, int]:
+        padding = (self.kernel_size - 1) * self.dilation
+        if self.causal:
+            return padding, 0
+        return padding // 2, padding // 2
+
+    def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
+        output = self.base_frontend(src, metadata)
+        for layer in self.layers:
+            conv_input = output.transpose(1, 2)
+            conv_input = F.pad(conv_input, self._temporal_padding())
+            output = layer(conv_input).transpose(1, 2)
+            output = self.drop(self.activation(output))
         return output
 
 
@@ -668,6 +737,149 @@ class _AxisConvBlock(nn.Module):
         return output
 
 
+class _AxisAttentionLayer(nn.Module):
+    def __init__(
+        self,
+        *,
+        input_dim: int,
+        output_dim: int,
+        n_head: int,
+        dropout: float,
+    ):
+        super().__init__()
+        self.input_projection = (
+            nn.Linear(input_dim, output_dim)
+            if input_dim != output_dim
+            else nn.Identity()
+        )
+        self.attention = nn.MultiheadAttention(
+            embed_dim=output_dim,
+            num_heads=n_head,
+            dropout=dropout,
+            batch_first=True,
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.input_projection(x)
+        output, _ = self.attention(x, x, x, need_weights=False)
+        return output
+
+
+class _AxisAttentionBlock(nn.Module):
+    """Apply self-attention over one or more dense axes."""
+
+    def __init__(
+        self,
+        *,
+        axes: list[str],
+        unshared_axes: list[str],
+        output_dim: int,
+        n_head: int,
+        dropout: float,
+        active_axes: list[str],
+        axis_sizes: dict[str, int],
+        input_dim: int,
+    ):
+        super().__init__()
+        self.axes = axes
+        self.unshared_axes = unshared_axes
+        self.output_dim = output_dim
+        self.n_head = n_head
+        self.active_axes = active_axes
+        self.output_axes = list(active_axes)
+        self.axis_sizes = axis_sizes
+        self.input_dim = input_dim
+
+        self.unshared_indices = list(
+            product(*(range(axis_sizes[axis]) for axis in self.unshared_axes))
+        ) or [()]
+        self.layers = ModuleDict(
+            {
+                _module_key(indices): _AxisAttentionLayer(
+                    input_dim=self.input_dim,
+                    output_dim=self.output_dim,
+                    n_head=self.n_head,
+                    dropout=dropout,
+                )
+                for indices in self.unshared_indices
+            }
+        )
+
+    def _apply_shared(
+        self,
+        x: Tensor,
+        active_axes: list[str],
+        layer: nn.Module,
+    ) -> Tensor:
+        other_axes = [axis for axis in active_axes if axis not in self.axes]
+        attend_axes = [axis for axis in active_axes if axis in self.axes]
+        permute_dims = (
+            [0, 1]
+            + [2 + active_axes.index(axis) for axis in other_axes]
+            + [2 + active_axes.index(axis) for axis in attend_axes]
+            + [x.ndim - 1]
+        )
+        x = x.permute(*permute_dims)
+        leading_shape = x.shape[: 2 + len(other_axes)]
+        attend_shape = [self.axis_sizes[axis] for axis in attend_axes]
+        x = x.reshape(-1, _product(attend_shape), self.input_dim)
+        x = layer(x)
+        x = x.reshape(*leading_shape, *attend_shape, self.output_dim)
+
+        axis_to_dim = {axis: 2 + index for index, axis in enumerate(other_axes)} | {
+            axis: 2 + len(other_axes) + index for index, axis in enumerate(attend_axes)
+        }
+        channel_dim = x.ndim - 1
+        permute_back = (
+            [0, 1] + [axis_to_dim[axis] for axis in active_axes] + [channel_dim]
+        )
+        return x.permute(*permute_back)
+
+    def forward(self, x: Tensor) -> Tensor:
+        if not self.unshared_axes:
+            return self._apply_shared(
+                x,
+                self.active_axes,
+                self.layers["shared"],
+            )
+
+        output_shape = (
+            list(x.shape[:2])
+            + [self.axis_sizes[axis] for axis in self.output_axes]
+            + [self.output_dim]
+        )
+        output = x.new_zeros(output_shape)
+        remaining_axes = [
+            axis for axis in self.active_axes if axis not in self.unshared_axes
+        ]
+
+        for indices in self.unshared_indices:
+            index_by_axis = dict(zip(self.unshared_axes, indices))
+            input_index = (
+                [slice(None), slice(None)]
+                + [
+                    index_by_axis[axis] if axis in index_by_axis else slice(None)
+                    for axis in self.active_axes
+                ]
+                + [slice(None)]
+            )
+            output_index = (
+                [slice(None), slice(None)]
+                + [
+                    index_by_axis[axis] if axis in index_by_axis else slice(None)
+                    for axis in self.output_axes
+                ]
+                + [slice(None)]
+            )
+            output[tuple(output_index)] = self._apply_shared(
+                x[tuple(input_index)],
+                remaining_axes,
+                self.layers[_module_key(indices)],
+            )
+
+        return output
+
+
 class _AxisPoolBlock(nn.Module):
     """Reduce one or more dense axes."""
 
@@ -795,6 +1007,18 @@ class StructuredFeatureFrontend(_ColumnTokenFrontend):
                     unshared_axes=block.unshared_axes,
                     output_dim=block.output_dim,
                     kernel_size=block.kernel_size,
+                    active_axes=list(active_axes),
+                    axis_sizes=self.axis_size_by_name,
+                    input_dim=channel_dim,
+                )
+                channel_dim = block.output_dim
+            elif block.type == "axis_attention":
+                compiled_block = _AxisAttentionBlock(
+                    axes=block.axes,
+                    unshared_axes=block.unshared_axes,
+                    output_dim=block.output_dim,
+                    n_head=block.n_head,
+                    dropout=block.dropout,
                     active_axes=list(active_axes),
                     axis_sizes=self.axis_size_by_name,
                     input_dim=channel_dim,
@@ -1151,6 +1375,26 @@ def _build_branch_frontend(
             use_top_level_joint=False,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
+        )
+
+    if frontend.type == "temporal_conv":
+        base_frontend = _build_flat_frontend(
+            hparams=hparams,
+            columns=columns,
+            frontend_spec=frontend,
+            use_top_level_joint=False,
+            direct_real_dtype_provider=direct_real_dtype_provider,
+            device_max_concat_length=device_max_concat_length,
+        )
+        return TemporalConvFeatureFrontend(
+            base_frontend=base_frontend,
+            output_dim=frontend.output_dim,
+            kernel_size=frontend.kernel_size,
+            dilation=frontend.dilation,
+            num_layers=frontend.num_layers,
+            causal=frontend.causal,
+            activation_fn=frontend.activation_fn,
+            dropout=frontend.dropout,
         )
 
     if frontend.type == "feature_token":

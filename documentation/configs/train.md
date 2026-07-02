@@ -48,7 +48,7 @@ These fields determine the size and complexity of the Transformer.
 | `joint_embedding_dim` | `int` | No | `null` | If set, projects concatenated inputs to this dim before the transformer. If set, must equal `dim_model`. |
 | `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
 | `feature_embedding_dims`| `dict` | No | `null` | Manual map of column names to embedding sizes. If `null`, sizes are auto-calculated. This works only if there are *only* real or *only* categorical variables, and `initial_embedding_dim` is divisible by the number of variables |
-| `frontend` | `dict` | No | `{type: flat}` | Feature frontend specification. `flat` reproduces the classic per-column embedding path. `composite` can merge branches such as flat, feature-token, grouped, siamese, structured, or conv frontends. |
+| `frontend` | `dict` | No | `{type: flat}` | Feature frontend specification. `flat` reproduces the classic per-column embedding path. `composite` can merge branches such as flat, temporal-conv, feature-token, grouped, siamese, structured, or conv frontends. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
 | `n_kv_heads` | `int` | No | `null` | Number of Key/Value heads for GQA/MQA. If `null`, defaults to `n_head` (standard MHA). |
@@ -97,13 +97,33 @@ model_spec:
       output_dim: 256
 ```
 
+Use `temporal_conv` inside a composite branch when local Conv1D filters should
+run across timesteps before the global transformer consumes the sequence. The
+branch first uses the same flat column encoder as `flat`, then applies one or
+more same-width Conv1D layers. `causal` defaults to `true`; non-causal temporal
+convolution requires an odd `kernel_size` so the sequence length is preserved.
+
+```yaml
+branches:
+  tape_context:
+    columns: [spread, imbalance, volatility]
+    frontend:
+      type: temporal_conv
+      output_dim: 128
+      kernel_size: 5
+      dilation: 1
+      num_layers: 2
+      causal: true
+```
+
 Structured frontends can optionally process dense axes before pooling. `cell_dim`
 sets the per-cell encoder size and defaults to `output_dim`. `processing_blocks`
 are compiled at model initialization. `axis_projection` flattens configured axes
 plus the channel dimension and removes those axes, `axis_conv` applies a
-same-size 1D/2D/3D convolution while preserving axes, and `axis_pool` reduces
-axes with `mean`, `sum`, or `max`. Parametric blocks can set `unshared_axes` to
-use separate parameters for coordinates on non-swept axes.
+same-size 1D/2D/3D convolution while preserving axes, `axis_attention` applies
+self-attention over one or more axes while preserving axes, and `axis_pool`
+reduces axes with `mean`, `sum`, or `max`. Parametric blocks can set
+`unshared_axes` to use separate parameters for coordinates on non-swept axes.
 
 Structured frontends can also add axis-local positional information before any
 axis processing blocks run. `axis_embeddings.type` defaults to `none`; set it to
@@ -126,6 +146,10 @@ frontend:
       axes: [level]
       output_dim: 32
       unshared_axes: [side]
+    - type: axis_attention
+      axes: [level, field]
+      output_dim: 64
+      n_head: 4
     - type: axis_projection
       axes: [field]
       output_dim: 128

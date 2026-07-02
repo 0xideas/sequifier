@@ -143,6 +143,29 @@ class SiameseFrontendSpec(BaseModel):
     output_dim: int = Field(..., gt=0)
 
 
+class TemporalConvFrontendSpec(BaseModel):
+    """Encode columns, then apply Conv1D over the time axis."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["temporal_conv"]
+    output_dim: int = Field(..., gt=0)
+    kernel_size: int = Field(3, gt=0)
+    dilation: int = Field(1, gt=0)
+    num_layers: int = Field(1, gt=0)
+    causal: bool = True
+    activation_fn: Literal["relu", "gelu", "silu"] = "gelu"
+    dropout: float = Field(0.0, ge=0.0, lt=1.0)
+
+    @model_validator(mode="after")
+    def validate_temporal_conv(self):
+        if not self.causal and self.kernel_size % 2 == 0:
+            raise ValueError(
+                "temporal_conv kernel_size must be odd when causal is false"
+            )
+        return self
+
+
 class AxisProjectionBlockModel(BaseModel):
     """Flatten configured dense axes and project them with a linear layer."""
 
@@ -180,6 +203,27 @@ class AxisConvBlockModel(BaseModel):
         return self
 
 
+class AxisAttentionBlockModel(BaseModel):
+    """Apply self-attention over one or more configured dense axes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["axis_attention"]
+    axes: list[str] = Field(..., min_length=1)
+    output_dim: int = Field(..., gt=0)
+    n_head: int = Field(1, gt=0)
+    dropout: float = Field(0.0, ge=0.0, lt=1.0)
+    unshared_axes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_axes_unique(self):
+        _validate_axis_list_unique(self.axes, "axes")
+        _validate_axis_list_unique(self.unshared_axes, "unshared_axes")
+        if self.output_dim % self.n_head != 0:
+            raise ValueError("axis_attention output_dim must be divisible by n_head")
+        return self
+
+
 class AxisPoolBlockModel(BaseModel):
     """Reduce configured dense axes without changing the channel dimension."""
 
@@ -196,7 +240,12 @@ class AxisPoolBlockModel(BaseModel):
 
 
 StructuredProcessingBlock = Annotated[
-    Union[AxisProjectionBlockModel, AxisConvBlockModel, AxisPoolBlockModel],
+    Union[
+        AxisProjectionBlockModel,
+        AxisConvBlockModel,
+        AxisAttentionBlockModel,
+        AxisPoolBlockModel,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -274,6 +323,7 @@ BranchFrontendSpec = Annotated[
         FeatureTokenFrontendSpec,
         GroupedFrontendSpec,
         SiameseFrontendSpec,
+        TemporalConvFrontendSpec,
         StructuredFrontendSpec,
         ConvFrontendSpec,
     ],
@@ -1094,10 +1144,14 @@ class TrainModel(BaseModel):
             flat_column_groups.append((input_columns or [], v.initial_embedding_dim))
         elif isinstance(v.frontend, CompositeFrontendSpec):
             for branch in v.frontend.branches.values():
-                if isinstance(branch.frontend, FlatFrontendSpec):
+                if isinstance(
+                    branch.frontend,
+                    (FlatFrontendSpec, TemporalConvFrontendSpec),
+                ):
                     if branch.columns is None:
                         raise ValueError(
-                            "Composite flat frontend branches must specify columns"
+                            "Composite flat/temporal_conv frontend branches must "
+                            "specify columns"
                         )
                     flat_column_groups.append(
                         (
@@ -1239,7 +1293,14 @@ class TrainModel(BaseModel):
                     f"{unknown_axes}"
                 )
 
-            if isinstance(block, (AxisProjectionBlockModel, AxisConvBlockModel)):
+            if isinstance(
+                block,
+                (
+                    AxisProjectionBlockModel,
+                    AxisConvBlockModel,
+                    AxisAttentionBlockModel,
+                ),
+            ):
                 available_unshared_axes = [
                     axis for axis in active_axes if axis not in block.axes
                 ]
