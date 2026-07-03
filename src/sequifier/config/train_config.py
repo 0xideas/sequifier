@@ -47,18 +47,18 @@ AnyType = str | int | float
 NextOccurrenceTargetValue = StrictInt | StrictStr
 
 
-class DenseAxesLayoutModel(BaseModel):
+class CartesianLayoutModel(BaseModel):
     """Reusable coordinate annotation for flat feature columns."""
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["dense_axes"]
+    type: Literal["cartesian"]
     axis_order: list[str]
     axes: dict[str, list[AnyType]]
     columns: dict[str, dict[str, AnyType]]
 
     @model_validator(mode="after")
-    def validate_dense_axes(self):
+    def validate_cartesian(self):
         if self.axis_order != list(self.axes.keys()):
             raise ValueError("axis_order must exactly match axes keys")
 
@@ -72,7 +72,7 @@ class DenseAxesLayoutModel(BaseModel):
             coordinate_tuple = tuple(coordinates[axis] for axis in self.axis_order)
             if coordinate_tuple in coordinate_tuples:
                 raise ValueError(
-                    f"Duplicate dense_axes coordinate tuple: {coordinate_tuple!r}"
+                    f"Duplicate cartesian coordinate tuple: {coordinate_tuple!r}"
                 )
             coordinate_tuples.add(coordinate_tuple)
 
@@ -85,7 +85,7 @@ class DenseAxesLayoutModel(BaseModel):
 
         expected_tuples = set(product(*(self.axes[axis] for axis in self.axis_order)))
         if coordinate_tuples != expected_tuples:
-            raise ValueError("dense_axes layouts must contain every coordinate")
+            raise ValueError("cartesian layouts must contain every coordinate")
 
         return self
 
@@ -96,7 +96,7 @@ class FeatureLayoutRegistryModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: int = 1
-    layouts: dict[str, DenseAxesLayoutModel]
+    layouts: dict[str, CartesianLayoutModel]
 
     @field_validator("version")
     @classmethod
@@ -106,25 +106,34 @@ class FeatureLayoutRegistryModel(BaseModel):
         return v
 
 
-class FlatFrontendSpec(BaseModel):
+class DirectEmbedIngestionSpec(BaseModel):
     """Use the existing flat-column embedding path."""
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["flat"] = "flat"
+    type: Literal["direct_embed"] = "direct_embed"
     output_dim: Optional[int] = Field(default=None, gt=0)
 
 
-class FeatureTokenFrontendSpec(BaseModel):
+class PassThroughIngestionSpec(BaseModel):
+    """Pass real-valued columns through without per-feature encoders."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["pass_through"]
+    output_dim: Optional[int] = Field(default=None, gt=0)
+
+
+class FeaturePoolIngestionSpec(BaseModel):
     """Encode columns as feature tokens before pooling to one time token."""
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["feature_token"]
+    type: Literal["feature_pool"]
     output_dim: int = Field(..., gt=0)
 
 
-class GroupedFrontendSpec(BaseModel):
+class GroupedIngestionSpec(BaseModel):
     """Encode configured column groups and merge them within one branch."""
 
     model_config = ConfigDict(extra="forbid")
@@ -134,7 +143,7 @@ class GroupedFrontendSpec(BaseModel):
     groups: dict[str, list[str]] = Field(..., min_length=1)
 
 
-class SiameseFrontendSpec(BaseModel):
+class SiameseIngestionSpec(BaseModel):
     """Apply one shared scalar encoder across the branch columns."""
 
     model_config = ConfigDict(extra="forbid")
@@ -143,7 +152,7 @@ class SiameseFrontendSpec(BaseModel):
     output_dim: int = Field(..., gt=0)
 
 
-class TemporalConvFrontendSpec(BaseModel):
+class TemporalConvIngestionSpec(BaseModel):
     """Encode columns, then apply Conv1D over the time axis."""
 
     model_config = ConfigDict(extra="forbid")
@@ -167,7 +176,7 @@ class TemporalConvFrontendSpec(BaseModel):
 
 
 class AxisProjectionBlockModel(BaseModel):
-    """Flatten configured dense axes and project them with a linear layer."""
+    """Flatten configured cartesian axes and project them with a linear layer."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -184,7 +193,7 @@ class AxisProjectionBlockModel(BaseModel):
 
 
 class AxisConvBlockModel(BaseModel):
-    """Sweep a native 1D/2D/3D convolution over configured dense axes."""
+    """Sweep a native 1D/2D/3D convolution over configured cartesian axes."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -204,7 +213,7 @@ class AxisConvBlockModel(BaseModel):
 
 
 class AxisAttentionBlockModel(BaseModel):
-    """Apply self-attention over one or more configured dense axes."""
+    """Apply self-attention over one or more configured cartesian axes."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -225,7 +234,7 @@ class AxisAttentionBlockModel(BaseModel):
 
 
 class AxisPoolBlockModel(BaseModel):
-    """Reduce configured dense axes without changing the channel dimension."""
+    """Reduce configured cartesian axes without changing the channel dimension."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -256,7 +265,7 @@ def _validate_axis_list_unique(axes: list[str], field_name: str) -> None:
 
 
 class AxisEmbeddingModel(BaseModel):
-    """Optional positional encoding for dense layout axes."""
+    """Optional positional encoding for cartesian layout axes."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -285,8 +294,8 @@ class AxisEmbeddingModel(BaseModel):
         return self
 
 
-class StructuredFrontendSpec(BaseModel):
-    """Consume a top-level dense_axes layout."""
+class StructuredIngestionSpec(BaseModel):
+    """Consume a top-level cartesian layout."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -307,29 +316,30 @@ class StructuredFrontendSpec(BaseModel):
         return v
 
 
-BranchFrontendSpec = Annotated[
+BranchIngestionSpec = Annotated[
     Union[
-        FlatFrontendSpec,
-        FeatureTokenFrontendSpec,
-        GroupedFrontendSpec,
-        SiameseFrontendSpec,
-        TemporalConvFrontendSpec,
-        StructuredFrontendSpec,
+        DirectEmbedIngestionSpec,
+        PassThroughIngestionSpec,
+        FeaturePoolIngestionSpec,
+        GroupedIngestionSpec,
+        SiameseIngestionSpec,
+        TemporalConvIngestionSpec,
+        StructuredIngestionSpec,
     ],
     Field(discriminator="type"),
 ]
 
 
-class FrontendBranchSpec(BaseModel):
-    """One branch of a composite frontend."""
+class IngestionBranchSpec(BaseModel):
+    """One branch of a composite ingestion layer."""
 
     model_config = ConfigDict(extra="forbid")
 
     columns: Optional[list[str]] = None
-    frontend: BranchFrontendSpec
+    ingestion: BranchIngestionSpec
 
 
-class FrontendMergeModel(BaseModel):
+class IngestionMergeModel(BaseModel):
     """How composite branch outputs are merged."""
 
     model_config = ConfigDict(extra="forbid")
@@ -338,19 +348,23 @@ class FrontendMergeModel(BaseModel):
     output_dim: int = Field(..., gt=0)
 
 
-class CompositeFrontendSpec(BaseModel):
-    """Multi-branch frontend specification."""
+class CompositeIngestionLayerSpec(BaseModel):
+    """Multi-branch ingestion layer specification."""
 
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["composite"]
-    branches: dict[str, FrontendBranchSpec] = Field(..., min_length=1)
-    merge: FrontendMergeModel
+    branches: dict[str, IngestionBranchSpec] = Field(..., min_length=1)
+    merge: IngestionMergeModel
     allow_shared_columns: bool = False
 
 
-FrontendSpec = Annotated[
-    Union[FlatFrontendSpec, CompositeFrontendSpec],
+IngestionLayerSpec = Annotated[
+    Union[
+        DirectEmbedIngestionSpec,
+        PassThroughIngestionSpec,
+        CompositeIngestionLayerSpec,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -732,7 +746,9 @@ class ModelSpecModel(BaseModel):
     initial_embedding_dim: int
     feature_embedding_dims: Optional[dict[str, int]] = None
     joint_embedding_dim: Optional[int] = None
-    frontend: FrontendSpec = Field(default_factory=FlatFrontendSpec)
+    ingestion_layer_spec: IngestionLayerSpec = Field(
+        default_factory=DirectEmbedIngestionSpec
+    )
     dim_model: int
     n_head: int
     dim_feedforward: int
@@ -756,13 +772,22 @@ class ModelSpecModel(BaseModel):
     def validate_dim_model(cls, v, info):
         initial_embedding_dim = info.data.get("initial_embedding_dim")
         joint_embedding_dim = info.data.get("joint_embedding_dim")
-        frontend = info.data.get("frontend")
+        ingestion_layer_spec = info.data.get("ingestion_layer_spec")
         dim_model = v
 
-        if isinstance(frontend, CompositeFrontendSpec):
+        if isinstance(ingestion_layer_spec, CompositeIngestionLayerSpec):
             return v
 
-        if isinstance(frontend, FlatFrontendSpec) and frontend.output_dim is not None:
+        if (
+            isinstance(
+                ingestion_layer_spec,
+                (DirectEmbedIngestionSpec, PassThroughIngestionSpec),
+            )
+            and ingestion_layer_spec.output_dim is not None
+        ):
+            return v
+
+        if isinstance(ingestion_layer_spec, PassThroughIngestionSpec):
             return v
 
         if joint_embedding_dim is None:
@@ -779,18 +804,23 @@ class ModelSpecModel(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_frontend_output_dim(self):
-        if isinstance(self.frontend, CompositeFrontendSpec):
-            if self.frontend.merge.output_dim != self.dim_model:
+    def validate_ingestion_layer_output_dim(self):
+        if isinstance(self.ingestion_layer_spec, CompositeIngestionLayerSpec):
+            if self.ingestion_layer_spec.merge.output_dim != self.dim_model:
                 raise ValueError(
-                    "model_spec.frontend.merge.output_dim must equal dim_model"
+                    "model_spec.ingestion_layer_spec.merge.output_dim must equal dim_model"
                 )
         elif (
-            isinstance(self.frontend, FlatFrontendSpec)
-            and self.frontend.output_dim is not None
-            and self.frontend.output_dim != self.dim_model
+            isinstance(
+                self.ingestion_layer_spec,
+                (DirectEmbedIngestionSpec, PassThroughIngestionSpec),
+            )
+            and self.ingestion_layer_spec.output_dim is not None
+            and self.ingestion_layer_spec.output_dim != self.dim_model
         ):
-            raise ValueError("model_spec.frontend.output_dim must equal dim_model")
+            raise ValueError(
+                "model_spec.ingestion_layer_spec.output_dim must equal dim_model"
+            )
 
         return self
 
@@ -1128,30 +1158,34 @@ class TrainModel(BaseModel):
                 "If feature_embedding_dims is not None, dimensions must be specified for all input columns"
             )
 
-        flat_column_groups: list[tuple[list[str], int]] = []
-        if isinstance(v.frontend, FlatFrontendSpec):
-            flat_column_groups.append((input_columns or [], v.initial_embedding_dim))
-        elif isinstance(v.frontend, CompositeFrontendSpec):
-            for branch in v.frontend.branches.values():
+        direct_embed_column_groups: list[tuple[list[str], int]] = []
+        if isinstance(v.ingestion_layer_spec, DirectEmbedIngestionSpec):
+            direct_embed_column_groups.append(
+                (input_columns or [], v.initial_embedding_dim)
+            )
+        elif isinstance(v.ingestion_layer_spec, CompositeIngestionLayerSpec):
+            for branch in v.ingestion_layer_spec.branches.values():
                 if isinstance(
-                    branch.frontend,
-                    (FlatFrontendSpec, TemporalConvFrontendSpec),
+                    branch.ingestion,
+                    (DirectEmbedIngestionSpec, TemporalConvIngestionSpec),
                 ):
                     if branch.columns is None:
                         raise ValueError(
-                            "Composite flat/temporal_conv frontend branches must "
+                            "Composite direct_embed/temporal_conv ingestion branches must "
                             "specify columns"
                         )
-                    flat_column_groups.append(
+                    direct_embed_column_groups.append(
                         (
                             branch.columns,
-                            branch.frontend.output_dim or v.initial_embedding_dim,
+                            branch.ingestion.output_dim or v.initial_embedding_dim,
                         )
                     )
 
-        for flat_columns, embedding_size in flat_column_groups:
-            n_categorical = len([col for col in flat_columns if col in categorical_set])
-            n_real = len([col for col in flat_columns if col in real_set])
+        for direct_embed_columns, embedding_size in direct_embed_column_groups:
+            n_categorical = len(
+                [col for col in direct_embed_columns if col in categorical_set]
+            )
+            n_real = len([col for col in direct_embed_columns if col in real_set])
 
             if n_categorical > 0 and n_real > 0 and v.feature_embedding_dims is None:
                 raise ValueError(
@@ -1190,93 +1224,113 @@ class TrainModel(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_frontend_branches(self):
-        frontend = self.model_spec.frontend
-        if isinstance(frontend, FlatFrontendSpec):
+    def validate_ingestion_layer_branches(self):
+        ingestion_layer_spec = self.model_spec.ingestion_layer_spec
+        if isinstance(
+            ingestion_layer_spec,
+            (DirectEmbedIngestionSpec, PassThroughIngestionSpec),
+        ):
+            columns = self.input_columns
+            if isinstance(ingestion_layer_spec, PassThroughIngestionSpec):
+                self._validate_pass_through_ingestion(
+                    columns,
+                    ingestion_layer_spec,
+                    usage="model_spec.ingestion_layer_spec",
+                    require_model_width=True,
+                )
             return self
 
-        if frontend.merge.output_dim != self.model_spec.dim_model:
-            raise ValueError("Composite frontend merge output_dim must equal dim_model")
+        if ingestion_layer_spec.merge.output_dim != self.model_spec.dim_model:
+            raise ValueError(
+                "Composite ingestion layer merge output_dim must equal dim_model"
+            )
 
         used_columns: dict[str, str] = {}
-        for branch_name, branch in frontend.branches.items():
+        for branch_name, branch in ingestion_layer_spec.branches.items():
             columns = self._branch_columns(branch)
             missing_columns = set(columns) - set(self.input_columns)
             if missing_columns:
                 raise ValueError(
-                    f"Composite frontend branch {branch_name!r} references unknown "
+                    f"Composite ingestion branch {branch_name!r} references unknown "
                     f"input columns: {sorted(missing_columns)}"
                 )
 
-            if not frontend.allow_shared_columns:
+            if not ingestion_layer_spec.allow_shared_columns:
                 overlapping_columns = [
                     column for column in columns if column in used_columns
                 ]
                 if overlapping_columns:
                     raise ValueError(
-                        "Composite frontend branches cannot share columns unless "
+                        "Composite ingestion branches cannot share columns unless "
                         "allow_shared_columns is true: "
                         f"{sorted(overlapping_columns)}"
                     )
                 for column in columns:
                     used_columns[column] = branch_name
 
-            if isinstance(branch.frontend, StructuredFrontendSpec):
-                layout = self._layout_for_branch(branch.frontend)
-                self._validate_structured_axis_embeddings(branch.frontend, layout)
-                self._validate_structured_processing_blocks(branch.frontend, layout)
+            if isinstance(branch.ingestion, StructuredIngestionSpec):
+                layout = self._layout_for_branch(branch.ingestion)
+                self._validate_structured_axis_embeddings(branch.ingestion, layout)
+                self._validate_structured_processing_blocks(branch.ingestion, layout)
+            if isinstance(branch.ingestion, PassThroughIngestionSpec):
+                self._validate_pass_through_ingestion(
+                    columns,
+                    branch.ingestion,
+                    usage=f"Composite ingestion branch {branch_name!r}",
+                    require_model_width=False,
+                )
         return self
 
     def _layout_for_branch(
         self,
-        frontend: StructuredFrontendSpec,
-    ) -> DenseAxesLayoutModel:
+        ingestion: StructuredIngestionSpec,
+    ) -> CartesianLayoutModel:
         if self.feature_layout is None:
             raise ValueError(
-                f"Frontend layout {frontend.layout!r} requires top-level feature_layout"
+                f"Ingestion layout {ingestion.layout!r} requires top-level feature_layout"
             )
-        if frontend.layout not in self.feature_layout.layouts:
-            raise ValueError(f"Unknown feature_layout {frontend.layout!r}")
-        return self.feature_layout.layouts[frontend.layout]
+        if ingestion.layout not in self.feature_layout.layouts:
+            raise ValueError(f"Unknown feature_layout {ingestion.layout!r}")
+        return self.feature_layout.layouts[ingestion.layout]
 
     def _validate_structured_axis_embeddings(
         self,
-        frontend: StructuredFrontendSpec,
-        layout: DenseAxesLayoutModel,
+        ingestion: StructuredIngestionSpec,
+        layout: CartesianLayoutModel,
     ) -> None:
         unknown_axes = [
             axis
-            for axis in frontend.axis_embeddings.axes
+            for axis in ingestion.axis_embeddings.axes
             if axis not in layout.axis_order
         ]
         if unknown_axes:
             raise ValueError(
-                "Structured frontend axis_embeddings references unavailable axes: "
+                "Structured ingestion axis_embeddings references unavailable axes: "
                 f"{unknown_axes}"
             )
 
         if (
-            frontend.axis_embeddings.type == "rope"
-            and (frontend.cell_dim or frontend.output_dim) % 2 != 0
+            ingestion.axis_embeddings.type == "rope"
+            and (ingestion.cell_dim or ingestion.output_dim) % 2 != 0
         ):
             raise ValueError(
-                "Structured frontend axis_embeddings type 'rope' requires an even "
+                "Structured ingestion axis_embeddings type 'rope' requires an even "
                 "cell_dim/output_dim"
             )
 
     def _validate_structured_processing_blocks(
         self,
-        frontend: StructuredFrontendSpec,
-        layout: DenseAxesLayoutModel,
+        ingestion: StructuredIngestionSpec,
+        layout: CartesianLayoutModel,
     ) -> None:
         active_axes = list(layout.axis_order)
-        channel_dim = frontend.cell_dim or frontend.output_dim
+        channel_dim = ingestion.cell_dim or ingestion.output_dim
 
-        for block in frontend.processing_blocks:
+        for block in ingestion.processing_blocks:
             unknown_axes = [axis for axis in block.axes if axis not in active_axes]
             if unknown_axes:
                 raise ValueError(
-                    f"Structured frontend block references unavailable axes: "
+                    f"Structured ingestion block references unavailable axes: "
                     f"{unknown_axes}"
                 )
 
@@ -1298,7 +1352,7 @@ class TrainModel(BaseModel):
                 ]
                 if invalid_unshared_axes:
                     raise ValueError(
-                        "Structured frontend block unshared_axes must be a subset "
+                        "Structured ingestion block unshared_axes must be a subset "
                         "of non-swept active axes: "
                         f"{invalid_unshared_axes}"
                     )
@@ -1308,36 +1362,63 @@ class TrainModel(BaseModel):
             if isinstance(block, (AxisProjectionBlockModel, AxisPoolBlockModel)):
                 active_axes = [axis for axis in active_axes if axis not in block.axes]
 
-        if channel_dim != frontend.output_dim:
+        if channel_dim != ingestion.output_dim:
             raise ValueError(
-                "Structured frontend processing_blocks must produce output_dim "
-                f"{frontend.output_dim}, got {channel_dim}"
+                "Structured ingestion processing_blocks must produce output_dim "
+                f"{ingestion.output_dim}, got {channel_dim}"
             )
 
-    def _branch_columns(self, branch: FrontendBranchSpec) -> list[str]:
-        frontend = branch.frontend
-        if isinstance(frontend, StructuredFrontendSpec):
-            layout = self._layout_for_branch(frontend)
+    def _branch_columns(self, branch: IngestionBranchSpec) -> list[str]:
+        ingestion = branch.ingestion
+        if isinstance(ingestion, StructuredIngestionSpec):
+            layout = self._layout_for_branch(ingestion)
             layout_columns = list(layout.columns)
             if branch.columns is not None and branch.columns != layout_columns:
                 raise ValueError(
-                    "Structured frontend branch columns must match the referenced layout"
+                    "Structured ingestion branch columns must match the referenced layout"
                 )
             return layout_columns
 
-        if isinstance(frontend, GroupedFrontendSpec):
+        if isinstance(ingestion, GroupedIngestionSpec):
             grouped_columns = [
                 column
-                for group_columns in frontend.groups.values()
+                for group_columns in ingestion.groups.values()
                 for column in group_columns
             ]
             if branch.columns is not None and branch.columns != grouped_columns:
                 raise ValueError(
-                    "Grouped frontend branch columns must match grouped columns"
+                    "Grouped ingestion branch columns must match grouped columns"
                 )
             return grouped_columns
 
         if branch.columns is None:
-            raise ValueError("Composite frontend branch columns must be configured")
+            raise ValueError("Composite ingestion branch columns must be configured")
 
         return branch.columns
+
+    def _validate_pass_through_ingestion(
+        self,
+        columns: list[str],
+        ingestion: PassThroughIngestionSpec,
+        *,
+        usage: str,
+        require_model_width: bool,
+    ) -> None:
+        categorical_columns = [
+            col for col in columns if col in self.categorical_columns
+        ]
+        real_columns = [col for col in columns if col in self.real_columns]
+        if categorical_columns:
+            raise ValueError(
+                f"{usage} type 'pass_through' only supports real columns; "
+                f"got categorical columns {categorical_columns}"
+            )
+        if not real_columns:
+            raise ValueError(f"{usage} type 'pass_through' requires real columns")
+
+        output_dim = ingestion.output_dim or len(real_columns)
+        if require_model_width and output_dim != self.model_spec.dim_model:
+            raise ValueError(
+                f"{usage} output_dim ({output_dim}) must equal dim_model "
+                f"({self.model_spec.dim_model})"
+            )

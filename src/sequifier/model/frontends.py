@@ -100,7 +100,7 @@ class BaseFeatureFrontend(nn.Module):
         return None
 
 
-class FlatFeatureFrontend(BaseFeatureFrontend):
+class DirectEmbedFeatureFrontend(BaseFeatureFrontend):
     """The original sequifier per-column embedding path."""
 
     def __init__(
@@ -115,7 +115,6 @@ class FlatFeatureFrontend(BaseFeatureFrontend):
         use_rope: bool,
         dropout: float,
         output_dim: Optional[int] = None,
-        direct_real_dtype_provider: Optional[Callable[[], torch.dtype]] = None,
         device_max_concat_length: int = 12,
     ):
         super().__init__()
@@ -126,7 +125,6 @@ class FlatFeatureFrontend(BaseFeatureFrontend):
         self.use_rope = use_rope
         self.drop = nn.Dropout(dropout)
         self.device_max_concat_length = device_max_concat_length
-        self.direct_real_dtype_provider = direct_real_dtype_provider
 
         if feature_embedding_dims is not None:
             self.feature_embedding_dims = feature_embedding_dims
@@ -143,16 +141,8 @@ class FlatFeatureFrontend(BaseFeatureFrontend):
         self.real_columns_with_embedding = []
         self.real_columns_direct = []
         for col in self.real_columns:
-            if self.feature_embedding_dims[col] > 1:
-                self.encoder[col] = nn.Linear(1, self.feature_embedding_dims[col])
-                self.real_columns_with_embedding.append(col)
-            else:
-                if self.feature_embedding_dims[col] != 1:
-                    raise ValueError(
-                        f"Real column {col} without embedding must have "
-                        "feature_embedding_dims=1"
-                    )
-                self.real_columns_direct.append(col)
+            self.encoder[col] = nn.Linear(1, self.feature_embedding_dims[col])
+            self.real_columns_with_embedding.append(col)
 
         for col in self.categorical_columns:
             self.encoder[col] = nn.Embedding(
@@ -219,17 +209,9 @@ class FlatFeatureFrontend(BaseFeatureFrontend):
             srcs.append(self._with_position(col, src_t))
 
         for col in self.real_columns:
-            if col in self.real_columns_direct:
-                target_dtype = (
-                    self.direct_real_dtype_provider()
-                    if self.direct_real_dtype_provider is not None
-                    else src[col].dtype
-                )
-                src_t = src[col].unsqueeze(2).to(dtype=target_dtype) * scale
-            else:
-                layer = self.encoder[col]
-                inp = src[col][:, :, None].to(dtype=layer.weight.dtype)
-                src_t = layer(inp) * scale
+            layer = self.encoder[col]
+            inp = src[col][:, :, None].to(dtype=layer.weight.dtype)
+            src_t = layer(inp) * scale
 
             srcs.append(self._with_position(col, src_t))
 
@@ -239,13 +221,112 @@ class FlatFeatureFrontend(BaseFeatureFrontend):
         return output
 
 
+class PassThroughFeatureFrontend(BaseFeatureFrontend):
+    """Pass real-valued columns through without per-feature encoders."""
+
+    def __init__(
+        self,
+        *,
+        real_columns: list[str],
+        context_length: int,
+        use_rope: bool,
+        dropout: float,
+        output_dim: Optional[int] = None,
+        direct_real_dtype_provider: Optional[Callable[[], torch.dtype]] = None,
+        device_max_concat_length: int = 12,
+    ):
+        super().__init__()
+        if not real_columns:
+            raise ValueError("pass_through ingestion requires at least one real column")
+
+        self.real_columns = real_columns
+        self.real_columns_direct = list(real_columns)
+        self.context_length = context_length
+        self.use_rope = use_rope
+        self.drop = nn.Dropout(dropout)
+        self.input_dim = len(real_columns)
+        self.embedding_size = self.input_dim
+        self.output_dim = output_dim or self.input_dim
+        self.direct_real_dtype_provider = direct_real_dtype_provider
+        self.device_max_concat_length = device_max_concat_length
+
+        if not self.use_rope:
+            self.pos_encoder = ModuleDict()
+            for col in self.real_columns:
+                self.pos_encoder[col] = nn.Embedding(self.context_length, 1)
+        else:
+            self.pos_encoder = None
+
+        if self.output_dim != self.input_dim:
+            self.joint_embedding_layer = nn.Linear(self.input_dim, self.output_dim)
+        else:
+            self.joint_embedding_layer = None
+
+    def initialize_weights(self) -> None:
+        if self.pos_encoder is not None:
+            for col_name in self.pos_encoder:
+                self.pos_encoder[col_name].weight.data.normal_(
+                    mean=0.0, std=self.INIT_STD
+                )
+
+        if self.joint_embedding_layer is not None:
+            self.joint_embedding_layer.weight.data.normal_(mean=0.0, std=self.INIT_STD)
+            if self.joint_embedding_layer.bias is not None:
+                self.joint_embedding_layer.bias.data.zero_()
+
+    def _recursive_concat(self, srcs: list[Tensor]) -> Tensor:
+        if len(srcs) <= self.device_max_concat_length:
+            return torch.cat(srcs, 2)
+
+        srcs_inner = []
+        for start in range(0, len(srcs), self.device_max_concat_length):
+            src = self._recursive_concat(
+                srcs[start : start + self.device_max_concat_length]
+            )
+            srcs_inner.append(src)
+        return self._recursive_concat(srcs_inner)
+
+    def _target_dtype(self, src: dict[str, Tensor]) -> torch.dtype:
+        if self.joint_embedding_layer is not None:
+            return self.joint_embedding_layer.weight.dtype
+        if self.direct_real_dtype_provider is not None:
+            return self.direct_real_dtype_provider()
+        return src[self.real_columns[0]].dtype
+
+    def _position_encoding(self, col: str, batch_size: int, device: torch.device):
+        pos = torch.arange(0, self.context_length, dtype=torch.long, device=device)
+        pos = pos.repeat(batch_size, 1)
+        return self.pos_encoder[col](pos)  # type: ignore[index]
+
+    def _with_position(self, col: str, src_t: Tensor) -> Tensor:
+        if self.use_rope:
+            return self.drop(src_t)
+        src_p = self._position_encoding(col, src_t.shape[0], src_t.device)
+        return self.drop(src_t + src_p)
+
+    def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
+        srcs = []
+        scale = math.sqrt(self.embedding_size)
+        target_dtype = self._target_dtype(src)
+        for col in self.real_columns:
+            src_t = src[col].unsqueeze(2).to(dtype=target_dtype) * scale
+            srcs.append(self._with_position(col, src_t))
+
+        output = self._recursive_concat(srcs)
+        if self.joint_embedding_layer is not None:
+            output = self.joint_embedding_layer(
+                output.to(dtype=self.joint_embedding_layer.weight.dtype)
+            )
+        return output
+
+
 class TemporalConvFeatureFrontend(BaseFeatureFrontend):
     """Apply Conv1D over time after flat-column encoding."""
 
     def __init__(
         self,
         *,
-        base_frontend: FlatFeatureFrontend,
+        base_frontend: DirectEmbedFeatureFrontend,
         output_dim: int,
         kernel_size: int,
         dilation: int,
@@ -362,7 +443,7 @@ class _ColumnTokenFrontend(BaseFeatureFrontend):
         return self.drop(x + self.pos_encoder(pos))  # type: ignore[operator]
 
 
-class FeatureTokenFrontend(_ColumnTokenFrontend):
+class FeaturePoolFeatureFrontend(_ColumnTokenFrontend):
     """Encode each feature as a token and pool feature tokens per time step."""
 
     def __init__(self, **kwargs: Any):
@@ -405,7 +486,7 @@ class GroupedFeatureFrontend(BaseFeatureFrontend):
         categorical_set = set(categorical_columns)
         real_set = set(real_columns)
         for group_name, group_columns in self.groups.items():
-            self.group_frontends[group_name] = FeatureTokenFrontend(
+            self.group_frontends[group_name] = FeaturePoolFeatureFrontend(
                 columns=group_columns,
                 categorical_columns=[
                     col for col in group_columns if col in categorical_set
@@ -517,7 +598,7 @@ def _rotate_half_last_dim(x: Tensor) -> Tensor:
 
 
 class _AxisProjectionBlock(nn.Module):
-    """Project one or more dense axes into the channel dimension."""
+    """Project one or more cartesian axes into the channel dimension."""
 
     def __init__(
         self,
@@ -616,7 +697,7 @@ class _AxisProjectionBlock(nn.Module):
 
 
 class _AxisConvBlock(nn.Module):
-    """Apply a native convolution over one to three dense axes."""
+    """Apply a native convolution over one to three cartesian axes."""
 
     CONV_CLASSES = {
         1: nn.Conv1d,
@@ -766,7 +847,7 @@ class _AxisAttentionLayer(nn.Module):
 
 
 class _AxisAttentionBlock(nn.Module):
-    """Apply self-attention over one or more dense axes."""
+    """Apply self-attention over one or more cartesian axes."""
 
     def __init__(
         self,
@@ -881,7 +962,7 @@ class _AxisAttentionBlock(nn.Module):
 
 
 class _AxisPoolBlock(nn.Module):
-    """Reduce one or more dense axes."""
+    """Reduce one or more cartesian axes."""
 
     def __init__(
         self,
@@ -906,7 +987,7 @@ class _AxisPoolBlock(nn.Module):
 
 
 class StructuredFeatureFrontend(_ColumnTokenFrontend):
-    """Compile a dense_axes layout into an ordered cell tensor."""
+    """Compile a cartesian layout into an ordered cell tensor."""
 
     def __init__(
         self,
@@ -1219,21 +1300,29 @@ def build_feature_frontend(
     device_max_concat_length: int,
 ) -> BaseFeatureFrontend:
     model_spec = hparams.model_spec
-    frontend_spec = model_spec.frontend
+    ingestion_layer_spec = model_spec.ingestion_layer_spec
     use_rope = model_spec.positional_encoding == "rope"
 
-    if frontend_spec.type == "flat":
-        return _build_flat_frontend(
+    if ingestion_layer_spec.type == "direct_embed":
+        return _build_direct_embed_frontend(
             hparams=hparams,
             columns=hparams.input_columns,
-            frontend_spec=frontend_spec,
+            ingestion_spec=ingestion_layer_spec,
             use_top_level_joint=True,
+            device_max_concat_length=device_max_concat_length,
+        )
+
+    if ingestion_layer_spec.type == "pass_through":
+        return _build_pass_through_frontend(
+            hparams=hparams,
+            columns=hparams.input_columns,
+            ingestion_spec=ingestion_layer_spec,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
         )
 
     branches = {}
-    for branch_name, branch_spec in frontend_spec.branches.items():
+    for branch_name, branch_spec in ingestion_layer_spec.branches.items():
         branches[branch_name] = _build_branch_frontend(
             hparams=hparams,
             branch_spec=branch_spec,
@@ -1244,8 +1333,8 @@ def build_feature_frontend(
 
     return CompositeFeatureFrontend(
         branches=branches,
-        merge_type=frontend_spec.merge.type,
-        output_dim=frontend_spec.merge.output_dim,
+        merge_type=ingestion_layer_spec.merge.type,
+        output_dim=ingestion_layer_spec.merge.output_dim,
     )
 
 
@@ -1269,29 +1358,28 @@ def _feature_dims_for_columns(
     return {col: feature_embedding_dims[col] for col in columns}
 
 
-def _build_flat_frontend(
+def _build_direct_embed_frontend(
     *,
     hparams: Any,
     columns: list[str],
-    frontend_spec: Any,
+    ingestion_spec: Any,
     use_top_level_joint: bool,
-    direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
-) -> FlatFeatureFrontend:
+) -> DirectEmbedFeatureFrontend:
     categorical_columns, real_columns = _split_columns(
         columns, hparams.categorical_columns, hparams.real_columns
     )
     feature_embedding_dims = _feature_dims_for_columns(hparams, columns)
-    output_dim = frontend_spec.output_dim
+    output_dim = ingestion_spec.output_dim
     if use_top_level_joint and output_dim is None:
         output_dim = hparams.model_spec.joint_embedding_dim
 
     embedding_size = (
         hparams.model_spec.initial_embedding_dim
         if use_top_level_joint
-        else frontend_spec.output_dim or hparams.model_spec.initial_embedding_dim
+        else ingestion_spec.output_dim or hparams.model_spec.initial_embedding_dim
     )
-    return FlatFeatureFrontend(
+    return DirectEmbedFeatureFrontend(
         categorical_columns=categorical_columns,
         real_columns=real_columns,
         n_classes=hparams.n_classes,
@@ -1301,6 +1389,32 @@ def _build_flat_frontend(
         use_rope=hparams.model_spec.positional_encoding == "rope",
         dropout=hparams.training_spec.dropout,
         output_dim=output_dim,
+        device_max_concat_length=device_max_concat_length,
+    )
+
+
+def _build_pass_through_frontend(
+    *,
+    hparams: Any,
+    columns: list[str],
+    ingestion_spec: Any,
+    direct_real_dtype_provider: Callable[[], torch.dtype],
+    device_max_concat_length: int,
+) -> PassThroughFeatureFrontend:
+    categorical_columns, real_columns = _split_columns(
+        columns, hparams.categorical_columns, hparams.real_columns
+    )
+    if categorical_columns:
+        raise ValueError(
+            "pass_through ingestion only supports real columns, "
+            f"got categorical columns: {categorical_columns}"
+        )
+    return PassThroughFeatureFrontend(
+        real_columns=real_columns,
+        context_length=hparams.window_view.context_length,
+        use_rope=hparams.model_spec.positional_encoding == "rope",
+        dropout=hparams.training_spec.dropout,
+        output_dim=ingestion_spec.output_dim,
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
     )
@@ -1318,13 +1432,13 @@ def _build_branch_frontend(
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
 ) -> BaseFeatureFrontend:
-    frontend = branch_spec.frontend
-    if frontend.type == "structured":
-        columns = _layout_columns(hparams, frontend.layout)
-    elif frontend.type == "grouped":
+    ingestion = branch_spec.ingestion
+    if ingestion.type == "structured":
+        columns = _layout_columns(hparams, ingestion.layout)
+    elif ingestion.type == "grouped":
         columns = [
             column
-            for group_columns in frontend.groups.values()
+            for group_columns in ingestion.groups.values()
             for column in group_columns
         ]
     else:
@@ -1343,66 +1457,73 @@ def _build_branch_frontend(
         "dropout": hparams.training_spec.dropout,
     }
 
-    if frontend.type == "flat":
-        return _build_flat_frontend(
+    if ingestion.type == "direct_embed":
+        return _build_direct_embed_frontend(
             hparams=hparams,
             columns=columns,
-            frontend_spec=frontend,
+            ingestion_spec=ingestion,
             use_top_level_joint=False,
+            device_max_concat_length=device_max_concat_length,
+        )
+
+    if ingestion.type == "pass_through":
+        return _build_pass_through_frontend(
+            hparams=hparams,
+            columns=columns,
+            ingestion_spec=ingestion,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
         )
 
-    if frontend.type == "temporal_conv":
-        base_frontend = _build_flat_frontend(
+    if ingestion.type == "temporal_conv":
+        base_frontend = _build_direct_embed_frontend(
             hparams=hparams,
             columns=columns,
-            frontend_spec=frontend,
+            ingestion_spec=ingestion,
             use_top_level_joint=False,
-            direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
         )
         return TemporalConvFeatureFrontend(
             base_frontend=base_frontend,
-            output_dim=frontend.output_dim,
-            kernel_size=frontend.kernel_size,
-            dilation=frontend.dilation,
-            num_layers=frontend.num_layers,
-            causal=frontend.causal,
-            activation_fn=frontend.activation_fn,
-            dropout=frontend.dropout,
+            output_dim=ingestion.output_dim,
+            kernel_size=ingestion.kernel_size,
+            dilation=ingestion.dilation,
+            num_layers=ingestion.num_layers,
+            causal=ingestion.causal,
+            activation_fn=ingestion.activation_fn,
+            dropout=ingestion.dropout,
         )
 
-    if frontend.type == "feature_token":
-        return FeatureTokenFrontend(
+    if ingestion.type == "feature_pool":
+        return FeaturePoolFeatureFrontend(
             columns=columns,
-            output_dim=frontend.output_dim,
+            output_dim=ingestion.output_dim,
             **common_kwargs,
         )
 
-    if frontend.type == "grouped":
+    if ingestion.type == "grouped":
         return GroupedFeatureFrontend(
-            groups=frontend.groups,
-            output_dim=frontend.output_dim,
+            groups=ingestion.groups,
+            output_dim=ingestion.output_dim,
             **common_kwargs,
         )
 
-    if frontend.type == "siamese":
+    if ingestion.type == "siamese":
         return SiameseFeatureFrontend(
             columns=columns,
-            output_dim=frontend.output_dim,
+            output_dim=ingestion.output_dim,
             **common_kwargs,
         )
 
-    if frontend.type == "structured":
-        layout = hparams.feature_layout.layouts[frontend.layout]
+    if ingestion.type == "structured":
+        layout = hparams.feature_layout.layouts[ingestion.layout]
         return StructuredFeatureFrontend(
             layout=layout,
-            output_dim=frontend.output_dim,
-            cell_dim=frontend.cell_dim,
-            axis_embeddings=frontend.axis_embeddings,
-            processing_blocks=frontend.processing_blocks,
+            output_dim=ingestion.output_dim,
+            cell_dim=ingestion.cell_dim,
+            axis_embeddings=ingestion.axis_embeddings,
+            processing_blocks=ingestion.processing_blocks,
             **common_kwargs,
         )
 
-    raise ValueError(f"Unknown frontend type: {frontend.type}")
+    raise ValueError(f"Unknown ingestion type: {ingestion.type}")

@@ -12,6 +12,8 @@ from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.config.train_config import (
     BERTSpecModel,
     DotDict,
+    FeatureLayoutRegistryModel,
+    IngestionLayerSpec,
     ModelSpecModel,
     NextOccurrenceConfigModel,
     ReplacementDistribution,
@@ -485,6 +487,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
     joint_embedding_dim: list[Optional[int]]
     dim_model: list[int]
     feature_embedding_dims: Optional[list[dict[str, int]]]
+    ingestion_layer_spec: Optional[
+        Union[IngestionLayerSpec, list[IngestionLayerSpec]]
+    ] = None
     n_head: list[int]
 
     dim_feedforward: OptunaInt
@@ -512,6 +517,13 @@ class ModelSpecHyperparameterSampling(BaseModel):
             ):
                 raise ValueError(
                     "dim_model and feature_embedding_dims must have the same number of candidate values, that are paired"
+                )
+
+        ingestion_layer_spec = info.data.get("ingestion_layer_spec")
+        if isinstance(ingestion_layer_spec, list):
+            if len(info.data.get("dim_model")) != len(ingestion_layer_spec):
+                raise ValueError(
+                    "dim_model and ingestion_layer_spec must have the same number of candidate values, that are paired"
                 )
 
         if not (len(info.data.get("dim_model")) == len(v)):
@@ -548,6 +560,10 @@ class ModelSpecHyperparameterSampling(BaseModel):
             if self.feature_embedding_dims is None
             else self.feature_embedding_dims[dim_model_idx]
         )
+        if isinstance(self.ingestion_layer_spec, list):
+            ingestion_layer_spec = self.ingestion_layer_spec[dim_model_idx]
+        else:
+            ingestion_layer_spec = self.ingestion_layer_spec
 
         dim_feedforward = sample_param(trial, "dim_feedforward", self.dim_feedforward)
         num_layers = sample_param(trial, "num_layers", self.num_layers)
@@ -581,23 +597,27 @@ class ModelSpecHyperparameterSampling(BaseModel):
             f"{initial_embedding_dim} - {joint_embedding_dim = } - {dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
         )
 
-        return ModelSpecModel(
-            initial_embedding_dim=initial_embedding_dim,
-            feature_embedding_dims=feature_embedding_dims,
-            joint_embedding_dim=joint_embedding_dim,
-            dim_model=dim_model,
-            n_head=n_head,
-            dim_feedforward=dim_feedforward,
-            num_layers=num_layers,
-            activation_fn=activation_fn,
-            normalization=normalization,
-            positional_encoding=positional_encoding,
-            attention_type=attention_type,
-            norm_first=norm_first,
-            n_kv_heads=n_kv_heads,
-            rope_theta=rope_theta,
-            prediction_length=self.prediction_length,
-        )
+        model_spec_kwargs = {
+            "initial_embedding_dim": initial_embedding_dim,
+            "feature_embedding_dims": feature_embedding_dims,
+            "joint_embedding_dim": joint_embedding_dim,
+            "dim_model": dim_model,
+            "n_head": n_head,
+            "dim_feedforward": dim_feedforward,
+            "num_layers": num_layers,
+            "activation_fn": activation_fn,
+            "normalization": normalization,
+            "positional_encoding": positional_encoding,
+            "attention_type": attention_type,
+            "norm_first": norm_first,
+            "n_kv_heads": n_kv_heads,
+            "rope_theta": rope_theta,
+            "prediction_length": self.prediction_length,
+        }
+        if ingestion_layer_spec is not None:
+            model_spec_kwargs["ingestion_layer_spec"] = ingestion_layer_spec
+
+        return ModelSpecModel(**model_spec_kwargs)
 
 
 class HyperparameterSearchConfig(BaseModel):
@@ -633,6 +653,8 @@ class HyperparameterSearchConfig(BaseModel):
     export_onnx: bool = True
     export_pt: bool = False
     export_with_dropout: bool = False
+
+    feature_layout: Optional[FeatureLayoutRegistryModel] = None
 
     evaluation_inference_config: Optional[str] = None
     evaluation_script: Optional[str] = None
@@ -807,6 +829,7 @@ class HyperparameterSearchConfig(BaseModel):
             export_onnx=self.export_onnx,
             export_pt=self.export_pt,
             export_with_dropout=self.export_with_dropout,
+            feature_layout=self.feature_layout,
             model_spec=model_spec,
             training_spec=training_spec,
         )
