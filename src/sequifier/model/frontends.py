@@ -1123,30 +1123,6 @@ class StructuredFeatureFrontend(_ColumnTokenFrontend):
         return self._with_position(output)
 
 
-class ConvFeatureFrontend(StructuredFeatureFrontend):
-    """Apply a lightweight convolution across dense layout cells."""
-
-    def __init__(self, **kwargs: Any):
-        super().__init__(**kwargs)
-        self.cell_conv = nn.Conv1d(
-            self.output_dim, self.output_dim, kernel_size=3, padding=1
-        )
-
-    def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
-        encoded = [self._encode_column(col, src) for col in self.ordered_columns]
-        cells = torch.stack(encoded, dim=2)
-        batch_size, context_length, cell_count, _ = cells.shape
-        conv_input = cells.reshape(
-            batch_size * context_length, cell_count, self.output_dim
-        )
-        conv_input = conv_input.transpose(1, 2)
-        conv_output = self.cell_conv(conv_input).transpose(1, 2)
-        output = conv_output.mean(dim=1).reshape(
-            batch_size, context_length, self.output_dim
-        )
-        return self._with_position(output)
-
-
 class FrontendMerge(nn.Module):
     def __init__(self, merge_type: str, branch_dims: dict[str, int], output_dim: int):
         super().__init__()
@@ -1343,7 +1319,7 @@ def _build_branch_frontend(
     device_max_concat_length: int,
 ) -> BaseFeatureFrontend:
     frontend = branch_spec.frontend
-    if frontend.type in {"structured", "conv"}:
+    if frontend.type == "structured":
         columns = _layout_columns(hparams, frontend.layout)
     elif frontend.type == "grouped":
         columns = [
@@ -1418,21 +1394,14 @@ def _build_branch_frontend(
             **common_kwargs,
         )
 
-    layout = hparams.feature_layout.layouts[frontend.layout]
     if frontend.type == "structured":
+        layout = hparams.feature_layout.layouts[frontend.layout]
         return StructuredFeatureFrontend(
             layout=layout,
             output_dim=frontend.output_dim,
             cell_dim=frontend.cell_dim,
             axis_embeddings=frontend.axis_embeddings,
             processing_blocks=frontend.processing_blocks,
-            **common_kwargs,
-        )
-
-    if frontend.type == "conv":
-        return ConvFeatureFrontend(
-            layout=layout,
-            output_dim=frontend.output_dim,
             **common_kwargs,
         )
 

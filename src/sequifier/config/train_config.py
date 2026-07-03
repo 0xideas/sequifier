@@ -307,16 +307,6 @@ class StructuredFrontendSpec(BaseModel):
         return v
 
 
-class ConvFrontendSpec(BaseModel):
-    """Structured frontend variant with a convolutional projection."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["conv"]
-    layout: str
-    output_dim: int = Field(..., gt=0)
-
-
 BranchFrontendSpec = Annotated[
     Union[
         FlatFrontendSpec,
@@ -325,7 +315,6 @@ BranchFrontendSpec = Annotated[
         SiameseFrontendSpec,
         TemporalConvFrontendSpec,
         StructuredFrontendSpec,
-        ConvFrontendSpec,
     ],
     Field(discriminator="type"),
 ]
@@ -1236,13 +1225,11 @@ class TrainModel(BaseModel):
                 layout = self._layout_for_branch(branch.frontend)
                 self._validate_structured_axis_embeddings(branch.frontend, layout)
                 self._validate_structured_processing_blocks(branch.frontend, layout)
-            if isinstance(branch.frontend, ConvFrontendSpec):
-                self._layout_for_branch(branch.frontend)
         return self
 
     def _layout_for_branch(
         self,
-        frontend: StructuredFrontendSpec | ConvFrontendSpec,
+        frontend: StructuredFrontendSpec,
     ) -> DenseAxesLayoutModel:
         if self.feature_layout is None:
             raise ValueError(
@@ -1329,10 +1316,7 @@ class TrainModel(BaseModel):
 
     def _branch_columns(self, branch: FrontendBranchSpec) -> list[str]:
         frontend = branch.frontend
-        if isinstance(
-            frontend,
-            (StructuredFrontendSpec, ConvFrontendSpec),
-        ):
+        if isinstance(frontend, StructuredFrontendSpec):
             layout = self._layout_for_branch(frontend)
             layout_columns = list(layout.columns)
             if branch.columns is not None and branch.columns != layout_columns:
