@@ -53,14 +53,24 @@ class CartesianLayoutModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["cartesian"]
-    axis_order: list[str]
-    axes: dict[str, list[AnyType]]
-    columns: dict[str, dict[str, AnyType]]
+    axis_order: list[str] = Field(..., min_length=1)
+    axes: dict[str, list[AnyType]] = Field(..., min_length=1)
+    columns: dict[str, dict[str, AnyType]] = Field(..., min_length=1)
 
     @model_validator(mode="after")
     def validate_cartesian(self):
         if self.axis_order != list(self.axes.keys()):
             raise ValueError("axis_order must exactly match axes keys")
+
+        for axis, values in self.axes.items():
+            if not values:
+                raise ValueError(
+                    f"Layout axis {axis!r} must contain at least one value"
+                )
+            if len(values) != len(set(values)):
+                raise ValueError(
+                    f"Layout axis {axis!r} cannot contain duplicate values"
+                )
 
         coordinate_tuples = set()
         for column_name, coordinates in self.columns.items():
@@ -96,7 +106,7 @@ class FeatureLayoutRegistryModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: int = 1
-    layouts: dict[str, CartesianLayoutModel]
+    layouts: dict[str, CartesianLayoutModel] = Field(..., min_length=1)
 
     @field_validator("version")
     @classmethod
@@ -141,6 +151,22 @@ class GroupedIngestionSpec(BaseModel):
     type: Literal["grouped"]
     output_dim: int = Field(..., gt=0)
     groups: dict[str, list[str]] = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def validate_groups(self):
+        grouped_columns = []
+        for group_name, columns in self.groups.items():
+            if not columns:
+                raise ValueError(
+                    f"grouped ingestion group {group_name!r} must contain columns"
+                )
+            _validate_column_list_unique(
+                columns, f"grouped ingestion group {group_name!r}"
+            )
+            grouped_columns.extend(columns)
+
+        _validate_column_list_unique(grouped_columns, "grouped ingestion columns")
+        return self
 
 
 class SiameseIngestionSpec(BaseModel):
@@ -264,6 +290,11 @@ def _validate_axis_list_unique(axes: list[str], field_name: str) -> None:
         raise ValueError(f"{field_name} cannot contain duplicate axes")
 
 
+def _validate_column_list_unique(columns: list[str], field_name: str) -> None:
+    if len(columns) != len(set(columns)):
+        raise ValueError(f"{field_name} cannot contain duplicate columns")
+
+
 class AxisEmbeddingModel(BaseModel):
     """Optional positional encoding for cartesian layout axes."""
 
@@ -335,8 +366,15 @@ class IngestionBranchSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    columns: Optional[list[str]] = None
+    columns: Optional[list[str]] = Field(default=None, min_length=1)
     ingestion: BranchIngestionSpec
+
+    @field_validator("columns")
+    @classmethod
+    def validate_columns(cls, v):
+        if v is not None:
+            _validate_column_list_unique(v, "Composite ingestion branch columns")
+        return v
 
 
 class IngestionMergeModel(BaseModel):
@@ -1248,6 +1286,11 @@ class TrainModel(BaseModel):
         used_columns: dict[str, str] = {}
         for branch_name, branch in ingestion_layer_spec.branches.items():
             columns = self._branch_columns(branch)
+            if not columns:
+                raise ValueError(
+                    f"Composite ingestion branch {branch_name!r} must resolve to at "
+                    "least one input column"
+                )
             missing_columns = set(columns) - set(self.input_columns)
             if missing_columns:
                 raise ValueError(
