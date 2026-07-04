@@ -410,7 +410,7 @@ These fields determine the size and complexity of the Transformer.
 | `joint_embedding_dim` | `int` | No | `null` | If set, projects concatenated inputs to this dim before the transformer. If set, must equal `dim_model`. |
 | `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
 | `feature_embedding_dims`| `dict` | No | `null` | Manual map of column names to embedding sizes. If `null`, sizes are auto-calculated. This works only if there are *only* real or *only* categorical variables, and `initial_embedding_dim` is divisible by the number of variables |
-| `ingestion_layer_spec` | `dict` | No | `{type: direct_embed}` | Feature ingestion layer specification. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. `composite` can merge branches such as `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` ingestion layers. |
+| `ingestion_layer_config` | `dict` | No | `{type: direct_embed}` | Feature ingestion layer configuration. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. `composite` can merge branches such as `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` ingestion layers. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
 | `n_kv_heads` | `int` | No | `null` | Number of Key/Value heads for GQA/MQA. If `null`, defaults to `n_head` (standard MHA). |
@@ -421,7 +421,7 @@ These fields determine the size and complexity of the Transformer.
 
 #### Feature Layout And Ingestion Layers
 
-`feature_layout` describes reusable structure for existing flat columns. `model_spec.ingestion_layer_spec` chooses how the model consumes those columns. Preprocessing, datasets, and exported ONNX inputs remain flat-column based.
+`feature_layout` describes reusable structure for existing flat columns. `model_spec.ingestion_layer_config` chooses how the model consumes those columns. Preprocessing, datasets, and exported ONNX inputs remain flat-column based.
 
 ```yaml
 feature_layout:
@@ -441,7 +441,7 @@ feature_layout:
         b_1_size:  {side: b, level: 1, field: size}
 
 model_spec:
-  ingestion_layer_spec:
+  ingestion_layer_config:
     type: composite
     branches:
       book:
@@ -467,7 +467,7 @@ convolution requires an odd `kernel_size` so the sequence length is preserved.
 
 Use `pass_through` for real-valued columns that should enter the model without
 per-column linear encoders. It can be used as the top-level
-`ingestion_layer_spec` when its output width equals `dim_model`, or inside a
+`ingestion_layer_config` when its output width equals `dim_model`, or inside a
 composite branch where the merge layer handles width projection.
 
 ```yaml
@@ -1023,7 +1023,7 @@ Sequifier allows you to search not just for model parameters, but for the best *
 | `context_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
 | `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
-| `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_layer_spec` references a structured layout. |
+| `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_layer_config` references a structured layout. |
 
 ---
 
@@ -1066,7 +1066,7 @@ dim_feedforward:
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
 | `initial_embedding_dim` | `list[int]` | **Yes** | Feature embedding size. Usually matches `dim_model`. |
 | `feature_embedding_dims` | `list[dict]` or `null` | **Yes** | List of maps for feature embedding dimensions. Use `null` only when auto-calculation is valid. |
-| `ingestion_layer_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion layer spec. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed}`. |
+| `ingestion_layer_config` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion layer config. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed}`. |
 | `joint_embedding_dim` | `list[int or null]` | **Yes** | Joint embedding size. If not null, must match `dim_model`. |
 | `prediction_length` | `int` | **Yes** | Number of steps to predict simultaneously. BERT trials override this to the sampled `context_length`. |
 | `activation_fn` | `list[str]` | **Yes** | E.g., `['swiglu', 'gelu']`. |
@@ -1132,7 +1132,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 | Group | Anchor Field | Linked Fields (Must match index) | Reason for Linkage |
 | :--- | :--- | :--- | :--- |
-| **Model Backbone** | `dim_model` | `n_head`<br>`initial_embedding_dim`<br>`joint_embedding_dim`<br>`feature_embedding_dims`<br>`ingestion_layer_spec` when provided as a list | $d_{model}$ determines embedding sizes and must be divisible by the number of heads. Ingestion specs with explicit output dimensions often need the same pairing. |
+| **Model Backbone** | `dim_model` | `n_head`<br>`initial_embedding_dim`<br>`joint_embedding_dim`<br>`feature_embedding_dims`<br>`ingestion_layer_config` when provided as a list | $d_{model}$ determines embedding sizes and must be divisible by the number of heads. Ingestion configs with explicit output dimensions often need the same pairing. |
 | **Training Schedule** | `learning_rate` | `epochs`<br>`scheduler` | The magnitude of the learning rate often dictates how many epochs are needed. Schedulers often require `T_max` to match `epochs`. |
 | **Data Schema** | `input_columns` | `column_types` | Different subsets of columns require specific data type definitions. |
 

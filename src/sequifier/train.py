@@ -93,8 +93,8 @@ from sequifier.io.sequifier_dataset_from_folder_pt import (  # noqa: E402
 from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
     SequifierDatasetFromFolderPtLazy,
 )
-from sequifier.model.frontends import (  # noqa: E402
-    build_feature_frontend,
+from sequifier.model.ingestions import (  # noqa: E402
+    build_feature_ingestion,
     get_feature_embedding_dims,
 )
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
@@ -783,16 +783,16 @@ class TransformerModel(nn.Module):
         self.use_rope = hparams.model_spec.positional_encoding == "rope"
         if hparams.model_spec.feature_embedding_dims is not None:
             self.feature_embedding_dims = hparams.model_spec.feature_embedding_dims
-        elif hparams.model_spec.ingestion_layer_spec.type == "direct_embed":
+        elif hparams.model_spec.ingestion_layer_config.type == "direct_embed":
             self.feature_embedding_dims = get_feature_embedding_dims(
                 self.initial_embedding_dim, self.categorical_columns, self.real_columns
             )
         else:
             self.feature_embedding_dims = {}
 
-        self.frontend = build_feature_frontend(
+        self.ingestion = build_feature_ingestion(
             hparams=hparams,
-            direct_real_dtype_provider=self._frontend_direct_real_dtype,
+            direct_real_dtype_provider=self._ingestion_direct_real_dtype,
             device_max_concat_length=hparams.training_spec.device_max_concat_length,
         )
 
@@ -893,21 +893,21 @@ class TransformerModel(nn.Module):
 
     @property
     def encoder(self) -> ModuleDict:
-        return getattr(self.frontend, "encoder", ModuleDict())
+        return getattr(self.ingestion, "encoder", ModuleDict())
 
     @property
     def pos_encoder(self):
-        return getattr(self.frontend, "pos_encoder", None)
+        return getattr(self.ingestion, "pos_encoder", None)
 
     @property
     def real_columns_direct(self) -> list[str]:
-        return getattr(self.frontend, "real_columns_direct", [])
+        return getattr(self.ingestion, "real_columns_direct", [])
 
     @property
     def joint_embedding_layer(self):
-        return getattr(self.frontend, "joint_embedding_layer", None)
+        return getattr(self.ingestion, "joint_embedding_layer", None)
 
-    def _frontend_direct_real_dtype(self) -> torch.dtype:
+    def _ingestion_direct_real_dtype(self) -> torch.dtype:
         return self.layers[0].ff.get_first_layer_dtype()
 
     @beartype
@@ -1008,7 +1008,7 @@ class TransformerModel(nn.Module):
     def _init_weights(self) -> None:
         """Initialize trainable weights with the model default."""
         init_std = 0.02
-        self.frontend.initialize_weights()
+        self.ingestion.initialize_weights()
 
         for target_column in self.target_columns:
             self.decoder[target_column].bias.data.zero_()
@@ -1071,7 +1071,7 @@ class TransformerModel(nn.Module):
         self, src: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> Tensor:
         """Encode inputs into contextual hidden states."""
-        src2 = self.frontend(src, metadata)
+        src2 = self.ingestion(src, metadata)
 
         valid_mask = metadata["attention_valid_mask"].bool()  # type: ignore
         if valid_mask.shape != src2.shape[:2]:

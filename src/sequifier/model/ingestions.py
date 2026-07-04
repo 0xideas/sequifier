@@ -89,7 +89,7 @@ def get_feature_embedding_dims(
     return feature_embedding_dims
 
 
-class BaseFeatureFrontend(nn.Module):
+class BaseFeatureIngestion(nn.Module):
     output_dim: int
     INIT_STD = 0.02
 
@@ -100,7 +100,7 @@ class BaseFeatureFrontend(nn.Module):
         return None
 
 
-class DirectEmbedFeatureFrontend(BaseFeatureFrontend):
+class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
     """The original sequifier per-column embedding path."""
 
     def __init__(
@@ -221,7 +221,7 @@ class DirectEmbedFeatureFrontend(BaseFeatureFrontend):
         return output
 
 
-class PassThroughFeatureFrontend(BaseFeatureFrontend):
+class PassThroughFeatureIngestion(BaseFeatureIngestion):
     """Pass real-valued columns through without per-feature encoders."""
 
     def __init__(
@@ -320,13 +320,13 @@ class PassThroughFeatureFrontend(BaseFeatureFrontend):
         return output
 
 
-class TemporalConvFeatureFrontend(BaseFeatureFrontend):
+class TemporalConvFeatureIngestion(BaseFeatureIngestion):
     """Apply Conv1D over time after flat-column encoding."""
 
     def __init__(
         self,
         *,
-        base_frontend: DirectEmbedFeatureFrontend,
+        base_ingestion: DirectEmbedFeatureIngestion,
         output_dim: int,
         kernel_size: int,
         dilation: int,
@@ -336,11 +336,11 @@ class TemporalConvFeatureFrontend(BaseFeatureFrontend):
         dropout: float,
     ):
         super().__init__()
-        self.base_frontend = base_frontend
+        self.base_ingestion = base_ingestion
         self.output_dim = output_dim
-        if self.base_frontend.output_dim != self.output_dim:
+        if self.base_ingestion.output_dim != self.output_dim:
             raise ValueError(
-                "temporal_conv base frontend output_dim must match output_dim"
+                "temporal_conv base ingestion output_dim must match output_dim"
             )
         self.kernel_size = kernel_size
         self.dilation = dilation
@@ -360,7 +360,7 @@ class TemporalConvFeatureFrontend(BaseFeatureFrontend):
         self.drop = nn.Dropout(dropout)
 
     def initialize_weights(self) -> None:
-        self.base_frontend.initialize_weights()
+        self.base_ingestion.initialize_weights()
 
     @staticmethod
     def _activation(name: str) -> nn.Module:
@@ -379,7 +379,7 @@ class TemporalConvFeatureFrontend(BaseFeatureFrontend):
         return padding // 2, padding // 2
 
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
-        output = self.base_frontend(src, metadata)
+        output = self.base_ingestion(src, metadata)
         for layer in self.layers:
             conv_input = output.transpose(1, 2)
             conv_input = F.pad(conv_input, self._temporal_padding())
@@ -388,7 +388,7 @@ class TemporalConvFeatureFrontend(BaseFeatureFrontend):
         return output
 
 
-class _ColumnTokenFrontend(BaseFeatureFrontend):
+class _ColumnTokenIngestion(BaseFeatureIngestion):
     def __init__(
         self,
         *,
@@ -443,7 +443,7 @@ class _ColumnTokenFrontend(BaseFeatureFrontend):
         return self.drop(x + self.pos_encoder(pos))  # type: ignore[operator]
 
 
-class FeaturePoolFeatureFrontend(_ColumnTokenFrontend):
+class FeaturePoolFeatureIngestion(_ColumnTokenIngestion):
     """Encode each feature as a token and pool feature tokens per time step."""
 
     def __init__(self, **kwargs: Any):
@@ -464,7 +464,7 @@ class FeaturePoolFeatureFrontend(_ColumnTokenFrontend):
         return self._with_position(tokens.mean(dim=2))
 
 
-class GroupedFeatureFrontend(BaseFeatureFrontend):
+class GroupedFeatureIngestion(BaseFeatureIngestion):
     """Encode configured column groups and average the group representations."""
 
     def __init__(
@@ -482,11 +482,11 @@ class GroupedFeatureFrontend(BaseFeatureFrontend):
         super().__init__()
         self.groups = groups
         self.output_dim = output_dim
-        self.group_frontends = ModuleDict()
+        self.group_ingestions = ModuleDict()
         categorical_set = set(categorical_columns)
         real_set = set(real_columns)
         for group_name, group_columns in self.groups.items():
-            self.group_frontends[group_name] = FeaturePoolFeatureFrontend(
+            self.group_ingestions[group_name] = FeaturePoolFeatureIngestion(
                 columns=group_columns,
                 categorical_columns=[
                     col for col in group_columns if col in categorical_set
@@ -500,17 +500,17 @@ class GroupedFeatureFrontend(BaseFeatureFrontend):
             )
 
     def initialize_weights(self) -> None:
-        for frontend in self.group_frontends.values():
-            frontend.initialize_weights()
+        for ingestion in self.group_ingestions.values():
+            ingestion.initialize_weights()
 
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         outputs = [
-            frontend(src, metadata) for frontend in self.group_frontends.values()
+            ingestion(src, metadata) for ingestion in self.group_ingestions.values()
         ]
         return torch.stack(outputs, dim=0).mean(dim=0)
 
 
-class SiameseFeatureFrontend(BaseFeatureFrontend):
+class SiameseFeatureIngestion(BaseFeatureIngestion):
     """Apply shared encoders across branch columns and pool their outputs."""
 
     def __init__(
@@ -986,7 +986,7 @@ class _AxisPoolBlock(nn.Module):
         return torch.amax(x, dim=dims)
 
 
-class StructuredFeatureFrontend(_ColumnTokenFrontend):
+class StructuredFeatureIngestion(_ColumnTokenIngestion):
     """Compile a cartesian layout into an ordered cell tensor."""
 
     def __init__(
@@ -1204,7 +1204,7 @@ class StructuredFeatureFrontend(_ColumnTokenFrontend):
         return self._with_position(output)
 
 
-class FrontendMerge(nn.Module):
+class IngestionMerge(nn.Module):
     def __init__(self, merge_type: str, branch_dims: dict[str, int], output_dim: int):
         super().__init__()
         self.merge_type = merge_type
@@ -1265,18 +1265,18 @@ class FrontendMerge(nn.Module):
         return (stacked * weights[:, :, :, None]).sum(dim=2)
 
 
-class CompositeFeatureFrontend(BaseFeatureFrontend):
+class CompositeFeatureIngestion(BaseFeatureIngestion):
     def __init__(
         self,
         *,
-        branches: dict[str, BaseFeatureFrontend],
+        branches: dict[str, BaseFeatureIngestion],
         merge_type: str,
         output_dim: int,
     ):
         super().__init__()
         self.branches = ModuleDict(branches)
         self.output_dim = output_dim
-        self.merge = FrontendMerge(
+        self.merge = IngestionMerge(
             merge_type,
             {name: branch.output_dim for name, branch in branches.items()},
             output_dim,
@@ -1293,48 +1293,48 @@ class CompositeFeatureFrontend(BaseFeatureFrontend):
         return self.merge(branch_outputs)
 
 
-def build_feature_frontend(
+def build_feature_ingestion(
     *,
     hparams: Any,
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
-) -> BaseFeatureFrontend:
+) -> BaseFeatureIngestion:
     model_spec = hparams.model_spec
-    ingestion_layer_spec = model_spec.ingestion_layer_spec
+    ingestion_layer_config = model_spec.ingestion_layer_config
     use_rope = model_spec.positional_encoding == "rope"
 
-    if ingestion_layer_spec.type == "direct_embed":
-        return _build_direct_embed_frontend(
+    if ingestion_layer_config.type == "direct_embed":
+        return _build_direct_embed_ingestion(
             hparams=hparams,
             columns=hparams.input_columns,
-            ingestion_spec=ingestion_layer_spec,
+            ingestion_config=ingestion_layer_config,
             use_top_level_joint=True,
             device_max_concat_length=device_max_concat_length,
         )
 
-    if ingestion_layer_spec.type == "pass_through":
-        return _build_pass_through_frontend(
+    if ingestion_layer_config.type == "pass_through":
+        return _build_pass_through_ingestion(
             hparams=hparams,
             columns=hparams.input_columns,
-            ingestion_spec=ingestion_layer_spec,
+            ingestion_config=ingestion_layer_config,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
         )
 
     branches = {}
-    for branch_name, branch_spec in ingestion_layer_spec.branches.items():
-        branches[branch_name] = _build_branch_frontend(
+    for branch_name, branch_config in ingestion_layer_config.branches.items():
+        branches[branch_name] = _build_branch_ingestion(
             hparams=hparams,
-            branch_spec=branch_spec,
+            branch_config=branch_config,
             use_rope=use_rope,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
         )
 
-    return CompositeFeatureFrontend(
+    return CompositeFeatureIngestion(
         branches=branches,
-        merge_type=ingestion_layer_spec.merge.type,
-        output_dim=ingestion_layer_spec.merge.output_dim,
+        merge_type=ingestion_layer_config.merge.type,
+        output_dim=ingestion_layer_config.merge.output_dim,
     )
 
 
@@ -1358,28 +1358,28 @@ def _feature_dims_for_columns(
     return {col: feature_embedding_dims[col] for col in columns}
 
 
-def _build_direct_embed_frontend(
+def _build_direct_embed_ingestion(
     *,
     hparams: Any,
     columns: list[str],
-    ingestion_spec: Any,
+    ingestion_config: Any,
     use_top_level_joint: bool,
     device_max_concat_length: int,
-) -> DirectEmbedFeatureFrontend:
+) -> DirectEmbedFeatureIngestion:
     categorical_columns, real_columns = _split_columns(
         columns, hparams.categorical_columns, hparams.real_columns
     )
     feature_embedding_dims = _feature_dims_for_columns(hparams, columns)
-    output_dim = ingestion_spec.output_dim
+    output_dim = ingestion_config.output_dim
     if use_top_level_joint and output_dim is None:
         output_dim = hparams.model_spec.joint_embedding_dim
 
     embedding_size = (
         hparams.model_spec.initial_embedding_dim
         if use_top_level_joint
-        else ingestion_spec.output_dim or hparams.model_spec.initial_embedding_dim
+        else ingestion_config.output_dim or hparams.model_spec.initial_embedding_dim
     )
-    return DirectEmbedFeatureFrontend(
+    return DirectEmbedFeatureIngestion(
         categorical_columns=categorical_columns,
         real_columns=real_columns,
         n_classes=hparams.n_classes,
@@ -1393,14 +1393,14 @@ def _build_direct_embed_frontend(
     )
 
 
-def _build_pass_through_frontend(
+def _build_pass_through_ingestion(
     *,
     hparams: Any,
     columns: list[str],
-    ingestion_spec: Any,
+    ingestion_config: Any,
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
-) -> PassThroughFeatureFrontend:
+) -> PassThroughFeatureIngestion:
     categorical_columns, real_columns = _split_columns(
         columns, hparams.categorical_columns, hparams.real_columns
     )
@@ -1409,12 +1409,12 @@ def _build_pass_through_frontend(
             "pass_through ingestion only supports real columns, "
             f"got categorical columns: {categorical_columns}"
         )
-    return PassThroughFeatureFrontend(
+    return PassThroughFeatureIngestion(
         real_columns=real_columns,
         context_length=hparams.window_view.context_length,
         use_rope=hparams.model_spec.positional_encoding == "rope",
         dropout=hparams.training_spec.dropout,
-        output_dim=ingestion_spec.output_dim,
+        output_dim=ingestion_config.output_dim,
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
     )
@@ -1424,15 +1424,15 @@ def _layout_columns(hparams: Any, layout_name: str) -> list[str]:
     return list(hparams.feature_layout.layouts[layout_name].columns)
 
 
-def _build_branch_frontend(
+def _build_branch_ingestion(
     *,
     hparams: Any,
-    branch_spec: Any,
+    branch_config: Any,
     use_rope: bool,
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
-) -> BaseFeatureFrontend:
-    ingestion = branch_spec.ingestion
+) -> BaseFeatureIngestion:
+    ingestion = branch_config.ingestion
     if ingestion.type == "structured":
         columns = _layout_columns(hparams, ingestion.layout)
     elif ingestion.type == "grouped":
@@ -1442,7 +1442,7 @@ def _build_branch_frontend(
             for column in group_columns
         ]
     else:
-        columns = branch_spec.columns
+        columns = branch_config.columns
 
     categorical_columns, real_columns = _split_columns(
         columns, hparams.categorical_columns, hparams.real_columns
@@ -1458,33 +1458,33 @@ def _build_branch_frontend(
     }
 
     if ingestion.type == "direct_embed":
-        return _build_direct_embed_frontend(
+        return _build_direct_embed_ingestion(
             hparams=hparams,
             columns=columns,
-            ingestion_spec=ingestion,
+            ingestion_config=ingestion,
             use_top_level_joint=False,
             device_max_concat_length=device_max_concat_length,
         )
 
     if ingestion.type == "pass_through":
-        return _build_pass_through_frontend(
+        return _build_pass_through_ingestion(
             hparams=hparams,
             columns=columns,
-            ingestion_spec=ingestion,
+            ingestion_config=ingestion,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
         )
 
     if ingestion.type == "temporal_conv":
-        base_frontend = _build_direct_embed_frontend(
+        base_ingestion = _build_direct_embed_ingestion(
             hparams=hparams,
             columns=columns,
-            ingestion_spec=ingestion,
+            ingestion_config=ingestion,
             use_top_level_joint=False,
             device_max_concat_length=device_max_concat_length,
         )
-        return TemporalConvFeatureFrontend(
-            base_frontend=base_frontend,
+        return TemporalConvFeatureIngestion(
+            base_ingestion=base_ingestion,
             output_dim=ingestion.output_dim,
             kernel_size=ingestion.kernel_size,
             dilation=ingestion.dilation,
@@ -1495,21 +1495,21 @@ def _build_branch_frontend(
         )
 
     if ingestion.type == "feature_pool":
-        return FeaturePoolFeatureFrontend(
+        return FeaturePoolFeatureIngestion(
             columns=columns,
             output_dim=ingestion.output_dim,
             **common_kwargs,
         )
 
     if ingestion.type == "grouped":
-        return GroupedFeatureFrontend(
+        return GroupedFeatureIngestion(
             groups=ingestion.groups,
             output_dim=ingestion.output_dim,
             **common_kwargs,
         )
 
     if ingestion.type == "siamese":
-        return SiameseFeatureFrontend(
+        return SiameseFeatureIngestion(
             columns=columns,
             output_dim=ingestion.output_dim,
             **common_kwargs,
@@ -1517,7 +1517,7 @@ def _build_branch_frontend(
 
     if ingestion.type == "structured":
         layout = hparams.feature_layout.layouts[ingestion.layout]
-        return StructuredFeatureFrontend(
+        return StructuredFeatureIngestion(
             layout=layout,
             output_dim=ingestion.output_dim,
             cell_dim=ingestion.cell_dim,

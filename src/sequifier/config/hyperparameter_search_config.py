@@ -13,7 +13,7 @@ from sequifier.config.train_config import (
     BERTSpecModel,
     DotDict,
     FeatureLayoutRegistryModel,
-    IngestionLayerSpec,
+    IngestionLayerConfig,
     ModelSpecModel,
     NextOccurrenceConfigModel,
     ReplacementDistribution,
@@ -487,8 +487,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
     joint_embedding_dim: list[Optional[int]]
     dim_model: list[int]
     feature_embedding_dims: Optional[list[dict[str, int]]]
-    ingestion_layer_spec: Optional[
-        Union[IngestionLayerSpec, list[IngestionLayerSpec]]
+    ingestion_layer_config: Optional[
+        Union[IngestionLayerConfig, list[IngestionLayerConfig]]
     ] = None
     n_head: list[int]
 
@@ -519,11 +519,11 @@ class ModelSpecHyperparameterSampling(BaseModel):
                     "dim_model and feature_embedding_dims must have the same number of candidate values, that are paired"
                 )
 
-        ingestion_layer_spec = info.data.get("ingestion_layer_spec")
-        if isinstance(ingestion_layer_spec, list):
-            if len(info.data.get("dim_model")) != len(ingestion_layer_spec):
+        ingestion_layer_config = info.data.get("ingestion_layer_config")
+        if isinstance(ingestion_layer_config, list):
+            if len(info.data.get("dim_model")) != len(ingestion_layer_config):
                 raise ValueError(
-                    "dim_model and ingestion_layer_spec must have the same number of candidate values, that are paired"
+                    "dim_model and ingestion_layer_config must have the same number of candidate values, that are paired"
                 )
 
         if not (len(info.data.get("dim_model")) == len(v)):
@@ -560,10 +560,10 @@ class ModelSpecHyperparameterSampling(BaseModel):
             if self.feature_embedding_dims is None
             else self.feature_embedding_dims[dim_model_idx]
         )
-        if isinstance(self.ingestion_layer_spec, list):
-            ingestion_layer_spec = self.ingestion_layer_spec[dim_model_idx]
+        if isinstance(self.ingestion_layer_config, list):
+            ingestion_layer_config = self.ingestion_layer_config[dim_model_idx]
         else:
-            ingestion_layer_spec = self.ingestion_layer_spec
+            ingestion_layer_config = self.ingestion_layer_config
 
         dim_feedforward = sample_param(trial, "dim_feedforward", self.dim_feedforward)
         num_layers = sample_param(trial, "num_layers", self.num_layers)
@@ -614,8 +614,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
             "rope_theta": rope_theta,
             "prediction_length": self.prediction_length,
         }
-        if ingestion_layer_spec is not None:
-            model_spec_kwargs["ingestion_layer_spec"] = ingestion_layer_spec
+        if ingestion_layer_config is not None:
+            model_spec_kwargs["ingestion_layer_config"] = ingestion_layer_config
 
         return ModelSpecModel(**model_spec_kwargs)
 

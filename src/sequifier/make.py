@@ -41,7 +41,7 @@ model_spec:
   feature_embedding_dims: # the size of the embedding of individual variables, must sum to dim_model
     EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical
   joint_embedding_dim: null
-  ingestion_layer_spec:
+  ingestion_layer_config:
     type: direct_embed
   dim_model: 128
   n_head: 16
