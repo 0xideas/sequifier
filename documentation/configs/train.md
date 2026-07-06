@@ -44,11 +44,9 @@ These fields determine the size and complexity of the Transformer.
 | `n_head` | `int` | **Yes** | - | Number of attention heads. `dim_model` must be divisible by `n_head`. |
 | `num_layers` | `int` | **Yes** | - | Number of transformer encoder layers. |
 | `dim_feedforward` | `int` | **Yes** | - | Dimension of the feedforward network model ($d_{ff}$). |
-| `initial_embedding_dim`| `int` | **Yes** | - | Size of initial feature embeddings for `direct_embed`. Must equal `dim_model` unless `ingestion_layer_config.output_dim` is configured. |
 | `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
-| `feature_embedding_dims`| `dict` | No | `null` | Manual map of column names to embedding sizes. If `null`, sizes are auto-calculated. This works only if there are *only* real or *only* categorical variables, and `initial_embedding_dim` is divisible by the number of variables |
 | `ingestion_layer_config` | `dict` | No | `{type: direct_embed}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |
-| `ingestion_merge` | `dict` or `null` | No | `null` | Merge strategy for named multi-ingestion configs. Defaults to `{type: concat, output_dim: dim_model}` when omitted. |
+| `ingestion_merge` | `dict` or `null` | No | `null` | Merge strategy for named multi-ingestion configs. Defaults to `{type: concat}` when omitted. Merge output width is always `dim_model`. |
 | `allow_shared_ingestion_columns` | `bool` | No | `false` | Allows the same flat input column to be consumed by more than one named ingestion stream. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
@@ -91,7 +89,20 @@ model_spec:
       output_dim: 64
   ingestion_merge:
     type: concat
-    output_dim: 256
+```
+
+For a single ingestion branch, `output_dim` is optional and defaults to
+`dim_model`. In named multi-ingestion configs, branch `output_dim` is required
+for branches without a natural width. `pass_through` naturally uses the number
+of real columns, and `direct_embed` naturally uses the sum of
+`feature_embedding_dims` when those dimensions are configured.
+
+```yaml
+ingestion_layer_config:
+  type: direct_embed
+  feature_embedding_dims:
+    customer_segment: 16
+    spend_30d: 8
 ```
 
 Use `temporal_conv` inside a composite branch when local Conv1D filters should

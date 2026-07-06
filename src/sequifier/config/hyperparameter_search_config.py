@@ -484,9 +484,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
 class ModelSpecHyperparameterSampling(BaseModel):
     """Model-architecture search space with paired width choices."""
 
-    initial_embedding_dim: list[int]
     dim_model: list[int]
-    feature_embedding_dims: Optional[list[dict[str, int]]]
     ingestion_layer_config: Optional[
         Union[IngestionLayerConfig, list[IngestionLayerConfig]]
     ] = None
@@ -512,17 +510,6 @@ class ModelSpecHyperparameterSampling(BaseModel):
     @field_validator("n_head")
     @classmethod
     def validate_model_spec(cls, v, info):
-        dim_model_len = len(info.data.get("dim_model", []))
-
-        if info.data.get("feature_embedding_dims") is not None:
-            if not (
-                len(info.data.get("dim_model"))
-                == len(info.data.get("feature_embedding_dims"))
-            ):
-                raise ValueError(
-                    "dim_model and feature_embedding_dims must have the same number of candidate values, that are paired"
-                )
-
         ingestion_layer_config = info.data.get("ingestion_layer_config")
         if isinstance(ingestion_layer_config, list):
             if len(info.data.get("dim_model")) != len(ingestion_layer_config):
@@ -542,12 +529,6 @@ class ModelSpecHyperparameterSampling(BaseModel):
                 "dim_model and n_head must have the same number of candidate values, that are paired"
             )
 
-        if "initial_embedding_dim" in info.data:
-            if len(info.data["initial_embedding_dim"]) != dim_model_len:
-                raise ValueError(
-                    "initial_embedding_dim must have the same number of values as dim_model"
-                )
-
         return v
 
     def sample_trial(self, trial: Any) -> ModelSpecModel:
@@ -556,14 +537,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
             "dim_model_idx", list(range(len(self.dim_model)))
         )
 
-        initial_embedding_dim = self.initial_embedding_dim[dim_model_idx]
         dim_model = self.dim_model[dim_model_idx]
         n_head = self.n_head[dim_model_idx]
-        feature_embedding_dims = (
-            None
-            if self.feature_embedding_dims is None
-            else self.feature_embedding_dims[dim_model_idx]
-        )
         if isinstance(self.ingestion_layer_config, list):
             ingestion_layer_config = self.ingestion_layer_config[dim_model_idx]
         else:
@@ -602,12 +577,10 @@ class ModelSpecHyperparameterSampling(BaseModel):
             n_kv_heads = trial.suggest_categorical("n_kv_heads", valid_kv_heads)
 
         logger.info(
-            f"{initial_embedding_dim} - {dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
+            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
         )
 
         model_spec_kwargs = {
-            "initial_embedding_dim": initial_embedding_dim,
-            "feature_embedding_dims": feature_embedding_dims,
             "dim_model": dim_model,
             "n_head": n_head,
             "dim_feedforward": dim_feedforward,

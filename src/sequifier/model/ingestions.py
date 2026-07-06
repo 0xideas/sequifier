@@ -46,7 +46,7 @@ def get_feature_embedding_dims(
     if len(categorical_columns) == 0 and len(real_columns) > 0:
         if embedding_size < len(real_columns):
             raise ValueError(
-                f"initial_embedding_dim ({embedding_size}) is smaller than the "
+                f"embedding_size ({embedding_size}) is smaller than the "
                 f"number of real input columns ({len(real_columns)}). "
                 "Cannot allocate at least 1 dimension per column."
             )
@@ -63,19 +63,19 @@ def get_feature_embedding_dims(
             raise ValueError(
                 "Auto-calculated embedding dimensions "
                 f"({sum(feature_embedding_dims.values())}) do not sum to "
-                f"initial_embedding_dim ({embedding_size})."
+                f"embedding_size ({embedding_size})."
             )
     elif len(real_columns) == 0 and len(categorical_columns) > 0:
         if embedding_size < len(categorical_columns):
             raise ValueError(
-                f"initial_embedding_dim ({embedding_size}) is smaller than the "
+                f"embedding_size ({embedding_size}) is smaller than the "
                 f"number of categorical columns ({len(categorical_columns)}). "
                 "Resulting embedding dimension would be 0."
             )
 
         if (embedding_size % len(categorical_columns)) != 0:
             raise ValueError(
-                f"initial_embedding_dim ({embedding_size}) must be divisible by "
+                f"embedding_size ({embedding_size}) must be divisible by "
                 f"n_categorical ({len(categorical_columns)})"
             )
         dim_model_comp = embedding_size // len(categorical_columns)
@@ -110,7 +110,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         real_columns: list[str],
         n_classes: dict[str, int],
         context_length: int,
-        embedding_size: int,
+        embedding_size: Optional[int],
         feature_embedding_dims: Optional[dict[str, int]],
         use_rope: bool,
         dropout: float,
@@ -129,6 +129,11 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         if feature_embedding_dims is not None:
             self.feature_embedding_dims = feature_embedding_dims
         else:
+            if embedding_size is None:
+                raise ValueError(
+                    "direct_embed ingestion requires output_dim when "
+                    "feature_embedding_dims is not configured"
+                )
             self.feature_embedding_dims = get_feature_embedding_dims(
                 embedding_size, categorical_columns, real_columns
             )
@@ -1309,11 +1314,15 @@ def build_feature_ingestion(
 
     if isinstance(ingestion_layer_config, dict):
         branches = {}
+        branch_default_output_dim = (
+            model_spec.dim_model if len(ingestion_layer_config) == 1 else None
+        )
         for branch_name, branch_config in ingestion_layer_config.items():
             branches[branch_name] = _build_branch_ingestion(
                 hparams=hparams,
                 branch_config=branch_config,
                 use_rope=use_rope,
+                default_output_dim=branch_default_output_dim,
                 direct_real_dtype_provider=direct_real_dtype_provider,
                 device_max_concat_length=device_max_concat_length,
             )
@@ -1325,7 +1334,7 @@ def build_feature_ingestion(
         return CompositeFeatureIngestion(
             branches=branches,
             merge_type=ingestion_merge.type,
-            output_dim=ingestion_merge.output_dim,
+            output_dim=model_spec.dim_model,
         )
 
     if ingestion_layer_config.type == "direct_embed":
@@ -1333,7 +1342,7 @@ def build_feature_ingestion(
             hparams=hparams,
             columns=ingestion_layer_config.columns or hparams.input_columns,
             ingestion_config=ingestion_layer_config,
-            use_top_level_joint=True,
+            default_output_dim=model_spec.dim_model,
             device_max_concat_length=device_max_concat_length,
         )
 
@@ -1342,6 +1351,7 @@ def build_feature_ingestion(
             hparams=hparams,
             columns=ingestion_layer_config.columns or hparams.input_columns,
             ingestion_config=ingestion_layer_config,
+            default_output_dim=model_spec.dim_model,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
         )
@@ -1350,6 +1360,7 @@ def build_feature_ingestion(
         hparams=hparams,
         branch_config=ingestion_layer_config,
         use_rope=use_rope,
+        default_output_dim=model_spec.dim_model,
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
     )
@@ -1367,12 +1378,25 @@ def _split_columns(
 
 
 def _feature_dims_for_columns(
-    hparams: Any, columns: list[str]
+    ingestion_config: Any, columns: list[str]
 ) -> Optional[dict[str, int]]:
-    feature_embedding_dims = hparams.model_spec.feature_embedding_dims
+    feature_embedding_dims = ingestion_config.feature_embedding_dims
     if feature_embedding_dims is None:
         return None
     return {col: feature_embedding_dims[col] for col in columns}
+
+
+def _resolve_required_output_dim(
+    configured_output_dim: Optional[int],
+    default_output_dim: Optional[int],
+    *,
+    usage: str,
+) -> int:
+    if configured_output_dim is not None:
+        return configured_output_dim
+    if default_output_dim is not None:
+        return default_output_dim
+    raise ValueError(f"{usage} must configure output_dim")
 
 
 def _build_direct_embed_ingestion(
@@ -1380,20 +1404,15 @@ def _build_direct_embed_ingestion(
     hparams: Any,
     columns: list[str],
     ingestion_config: Any,
-    use_top_level_joint: bool,
+    default_output_dim: Optional[int],
     device_max_concat_length: int,
 ) -> DirectEmbedFeatureIngestion:
     categorical_columns, real_columns = _split_columns(
         columns, hparams.categorical_columns, hparams.real_columns
     )
-    feature_embedding_dims = _feature_dims_for_columns(hparams, columns)
-    output_dim = ingestion_config.output_dim
-
-    embedding_size = (
-        hparams.model_spec.initial_embedding_dim
-        if use_top_level_joint
-        else ingestion_config.output_dim or hparams.model_spec.initial_embedding_dim
-    )
+    feature_embedding_dims = _feature_dims_for_columns(ingestion_config, columns)
+    output_dim = ingestion_config.output_dim or default_output_dim
+    embedding_size = None if feature_embedding_dims is not None else output_dim
     return DirectEmbedFeatureIngestion(
         categorical_columns=categorical_columns,
         real_columns=real_columns,
@@ -1413,6 +1432,7 @@ def _build_pass_through_ingestion(
     hparams: Any,
     columns: list[str],
     ingestion_config: Any,
+    default_output_dim: Optional[int],
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
 ) -> PassThroughFeatureIngestion:
@@ -1429,7 +1449,7 @@ def _build_pass_through_ingestion(
         context_length=hparams.window_view.context_length,
         use_rope=hparams.model_spec.positional_encoding == "rope",
         dropout=hparams.training_spec.dropout,
-        output_dim=ingestion_config.output_dim,
+        output_dim=ingestion_config.output_dim or default_output_dim,
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
     )
@@ -1444,6 +1464,7 @@ def _build_branch_ingestion(
     hparams: Any,
     branch_config: Any,
     use_rope: bool,
+    default_output_dim: Optional[int],
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
 ) -> BaseFeatureIngestion:
@@ -1476,7 +1497,7 @@ def _build_branch_ingestion(
             hparams=hparams,
             columns=columns,
             ingestion_config=branch_config,
-            use_top_level_joint=False,
+            default_output_dim=default_output_dim,
             device_max_concat_length=device_max_concat_length,
         )
 
@@ -1485,21 +1506,27 @@ def _build_branch_ingestion(
             hparams=hparams,
             columns=columns,
             ingestion_config=branch_config,
+            default_output_dim=default_output_dim,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
         )
 
     if branch_config.type == "temporal_conv":
+        output_dim = _resolve_required_output_dim(
+            branch_config.output_dim,
+            default_output_dim,
+            usage="temporal_conv ingestion",
+        )
         base_ingestion = _build_direct_embed_ingestion(
             hparams=hparams,
             columns=columns,
             ingestion_config=branch_config,
-            use_top_level_joint=False,
+            default_output_dim=output_dim,
             device_max_concat_length=device_max_concat_length,
         )
         return TemporalConvFeatureIngestion(
             base_ingestion=base_ingestion,
-            output_dim=branch_config.output_dim,
+            output_dim=output_dim,
             kernel_size=branch_config.kernel_size,
             dilation=branch_config.dilation,
             num_layers=branch_config.num_layers,
@@ -1509,31 +1536,51 @@ def _build_branch_ingestion(
         )
 
     if branch_config.type == "feature_pool":
+        output_dim = _resolve_required_output_dim(
+            branch_config.output_dim,
+            default_output_dim,
+            usage="feature_pool ingestion",
+        )
         return FeaturePoolFeatureIngestion(
             columns=columns,
-            output_dim=branch_config.output_dim,
+            output_dim=output_dim,
             **common_kwargs,
         )
 
     if branch_config.type == "grouped":
+        output_dim = _resolve_required_output_dim(
+            branch_config.output_dim,
+            default_output_dim,
+            usage="grouped ingestion",
+        )
         return GroupedFeatureIngestion(
             groups=branch_config.groups,
-            output_dim=branch_config.output_dim,
+            output_dim=output_dim,
             **common_kwargs,
         )
 
     if branch_config.type == "siamese":
+        output_dim = _resolve_required_output_dim(
+            branch_config.output_dim,
+            default_output_dim,
+            usage="siamese ingestion",
+        )
         return SiameseFeatureIngestion(
             columns=columns,
-            output_dim=branch_config.output_dim,
+            output_dim=output_dim,
             **common_kwargs,
         )
 
     if branch_config.type == "structured":
         layout = hparams.feature_layout.layouts[branch_config.layout]
+        output_dim = _resolve_required_output_dim(
+            branch_config.output_dim,
+            default_output_dim,
+            usage="structured ingestion",
+        )
         return StructuredFeatureIngestion(
             layout=layout,
-            output_dim=branch_config.output_dim,
+            output_dim=output_dim,
             cell_dim=branch_config.cell_dim,
             axis_embeddings=branch_config.axis_embeddings,
             processing_blocks=branch_config.processing_blocks,

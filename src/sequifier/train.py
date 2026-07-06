@@ -93,10 +93,7 @@ from sequifier.io.sequifier_dataset_from_folder_pt import (  # noqa: E402
 from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
     SequifierDatasetFromFolderPtLazy,
 )
-from sequifier.model.ingestions import (  # noqa: E402
-    build_feature_ingestion,
-    get_feature_embedding_dims,
-)
+from sequifier.model.ingestions import build_feature_ingestion  # noqa: E402
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.objectives import create_objective  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
@@ -777,21 +774,8 @@ class TransformerModel(nn.Module):
         self.hparams = hparams
         self.objective = create_objective(hparams)
         self.dim_model = self.hparams.model_spec.dim_model
-        self.initial_embedding_dim = self.hparams.model_spec.initial_embedding_dim
 
         self.use_rope = hparams.model_spec.positional_encoding == "rope"
-        if hparams.model_spec.feature_embedding_dims is not None:
-            self.feature_embedding_dims = hparams.model_spec.feature_embedding_dims
-        elif (
-            not isinstance(hparams.model_spec.ingestion_layer_config, dict)
-            and hparams.model_spec.ingestion_layer_config.type == "direct_embed"
-        ):
-            self.feature_embedding_dims = get_feature_embedding_dims(
-                self.initial_embedding_dim, self.categorical_columns, self.real_columns
-            )
-        else:
-            self.feature_embedding_dims = {}
-
         self.ingestion = build_feature_ingestion(
             hparams=hparams,
             direct_real_dtype_provider=self._ingestion_direct_real_dtype,
@@ -979,18 +963,6 @@ class TransformerModel(nn.Module):
 
             criterion[target_column] = criterion_class(**criterion_kwargs)
         return criterion
-
-    @beartype
-    def _get_feature_embedding_dims(
-        self,
-        embedding_size: int,
-        categorical_columns: list[str],
-        real_columns: list[str],
-    ) -> dict[str, int]:
-        """Allocate embedding dimensions across homogeneous input columns."""
-        return get_feature_embedding_dims(
-            embedding_size, categorical_columns, real_columns
-        )
 
     @staticmethod
     def _generate_square_subsequent_mask(sz: int) -> Tensor:
