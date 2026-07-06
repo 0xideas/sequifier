@@ -13,8 +13,8 @@ from sequifier.config.train_config import (
     BERTSpecModel,
     DotDict,
     FeatureLayoutRegistryModel,
-    IngestionLayerConfig,
     IngestionMergeConfig,
+    IngestionSpecConfig,
     ModelSpecModel,
     NextOccurrenceConfigModel,
     ReplacementDistribution,
@@ -485,9 +485,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
     """Model-architecture search space with paired width choices."""
 
     dim_model: list[int]
-    ingestion_layer_config: Optional[
-        Union[IngestionLayerConfig, list[IngestionLayerConfig]]
-    ] = None
+    ingestion_spec: Optional[Union[IngestionSpecConfig, list[IngestionSpecConfig]]] = (
+        None
+    )
     ingestion_merge: Optional[
         Union[IngestionMergeConfig, list[IngestionMergeConfig]]
     ] = None
@@ -510,11 +510,11 @@ class ModelSpecHyperparameterSampling(BaseModel):
     @field_validator("n_head")
     @classmethod
     def validate_model_spec(cls, v, info):
-        ingestion_layer_config = info.data.get("ingestion_layer_config")
-        if isinstance(ingestion_layer_config, list):
-            if len(info.data.get("dim_model")) != len(ingestion_layer_config):
+        ingestion_spec = info.data.get("ingestion_spec")
+        if isinstance(ingestion_spec, list):
+            if len(info.data.get("dim_model")) != len(ingestion_spec):
                 raise ValueError(
-                    "dim_model and ingestion_layer_config must have the same number of candidate values, that are paired"
+                    "dim_model and ingestion_spec must have the same number of candidate values, that are paired"
                 )
 
         ingestion_merge = info.data.get("ingestion_merge")
@@ -539,10 +539,10 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
         dim_model = self.dim_model[dim_model_idx]
         n_head = self.n_head[dim_model_idx]
-        if isinstance(self.ingestion_layer_config, list):
-            ingestion_layer_config = self.ingestion_layer_config[dim_model_idx]
+        if isinstance(self.ingestion_spec, list):
+            ingestion_spec = self.ingestion_spec[dim_model_idx]
         else:
-            ingestion_layer_config = self.ingestion_layer_config
+            ingestion_spec = self.ingestion_spec
         if isinstance(self.ingestion_merge, list):
             ingestion_merge = self.ingestion_merge[dim_model_idx]
         else:
@@ -594,8 +594,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
             "rope_theta": rope_theta,
             "prediction_length": self.prediction_length,
         }
-        if ingestion_layer_config is not None:
-            model_spec_kwargs["ingestion_layer_config"] = ingestion_layer_config
+        if ingestion_spec is not None:
+            model_spec_kwargs["ingestion_spec"] = ingestion_spec
         if ingestion_merge is not None:
             model_spec_kwargs["ingestion_merge"] = ingestion_merge
         model_spec_kwargs["allow_shared_ingestion_columns"] = (

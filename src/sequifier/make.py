@@ -37,7 +37,7 @@ export_embedding_model: PLEASE FILL # true or false
 export_onnx: true
 
 model_spec:
-  ingestion_layer_config:
+  ingestion_spec:
     type: direct_embed
     feature_embedding_dims: # optional per-column embedding sizes for direct_embed
       EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical

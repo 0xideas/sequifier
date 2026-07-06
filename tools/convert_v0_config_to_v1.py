@@ -57,10 +57,10 @@ def convert_model_spec(ms, is_hp_search=False):
 
     if "feature_embedding_dims" in ms:
         feature_embedding_dims = ms.pop("feature_embedding_dims")
-        ingestion_layer_config = ms.get("ingestion_layer_config")
-        if ingestion_layer_config is None:
+        ingestion_spec = ms.get("ingestion_spec")
+        if ingestion_spec is None:
             if is_hp_search and isinstance(feature_embedding_dims, list):
-                ms["ingestion_layer_config"] = [
+                ms["ingestion_spec"] = [
                     {
                         "type": "direct_embed",
                         "feature_embedding_dims": dims,
@@ -68,38 +68,30 @@ def convert_model_spec(ms, is_hp_search=False):
                     for dims in feature_embedding_dims
                 ]
             else:
-                ms["ingestion_layer_config"] = {
+                ms["ingestion_spec"] = {
                     "type": "direct_embed",
                     "feature_embedding_dims": feature_embedding_dims,
                 }
-        elif isinstance(ingestion_layer_config, list):
+        elif isinstance(ingestion_spec, list):
             assert isinstance(feature_embedding_dims, list), (
-                "feature_embedding_dims must be a list when ingestion_layer_config "
-                "is a list"
+                "feature_embedding_dims must be a list when ingestion_spec " "is a list"
             )
-            assert len(ingestion_layer_config) == len(feature_embedding_dims), (
-                "feature_embedding_dims and ingestion_layer_config must have the "
+            assert len(ingestion_spec) == len(feature_embedding_dims), (
+                "feature_embedding_dims and ingestion_spec must have the "
                 "same number of candidate values"
             )
-            for ingestion_config, dims in zip(
-                ingestion_layer_config, feature_embedding_dims
-            ):
+            for ingestion_config, dims in zip(ingestion_spec, feature_embedding_dims):
                 assert ingestion_config.get("type", "direct_embed") == "direct_embed", (
                     "feature_embedding_dims can only be migrated automatically to "
                     "direct_embed ingestion configs"
                 )
                 ingestion_config["feature_embedding_dims"] = dims
-        elif (
-            isinstance(ingestion_layer_config, dict)
-            and "type" in ingestion_layer_config
-        ):
-            assert (
-                ingestion_layer_config.get("type", "direct_embed") == "direct_embed"
-            ), (
+        elif isinstance(ingestion_spec, dict) and "type" in ingestion_spec:
+            assert ingestion_spec.get("type", "direct_embed") == "direct_embed", (
                 "feature_embedding_dims can only be migrated automatically to a "
                 "direct_embed ingestion config"
             )
-            ingestion_layer_config["feature_embedding_dims"] = feature_embedding_dims
+            ingestion_spec["feature_embedding_dims"] = feature_embedding_dims
         else:
             raise AssertionError(
                 "feature_embedding_dims cannot be migrated automatically to a "

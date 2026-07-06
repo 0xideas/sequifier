@@ -407,7 +407,7 @@ These fields determine the size and complexity of the Transformer.
 | `num_layers` | `int` | **Yes** | - | Number of transformer encoder layers. |
 | `dim_feedforward` | `int` | **Yes** | - | Dimension of the feedforward network model ($d_{ff}$). |
 | `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
-| `ingestion_layer_config` | `dict` | No | `{type: direct_embed}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |
+| `ingestion_spec` | `dict` | No | `{type: direct_embed}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |
 | `ingestion_merge` | `dict` or `null` | No | `null` | Merge strategy for named multi-ingestion configs. Defaults to `{type: concat}` when omitted. Merge output width is always `dim_model`. |
 | `allow_shared_ingestion_columns` | `bool` | No | `false` | Allows the same flat input column to be consumed by more than one named ingestion stream. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
@@ -420,27 +420,23 @@ These fields determine the size and complexity of the Transformer.
 
 #### Feature Layout And Ingestion Layers
 
-`feature_layout` describes reusable structure for existing flat columns. `model_spec.ingestion_layer_config` chooses how the model consumes those columns. Preprocessing, datasets, and exported ONNX inputs remain flat-column based.
+`feature_layout` describes reusable structure for existing flat columns. `model_spec.ingestion_spec` chooses how the model consumes those columns. Preprocessing, datasets, and exported ONNX inputs remain flat-column based.
 
 ```yaml
 feature_layout:
-  version: 1
-  layouts:
-    order_book:
-      type: cartesian
-      axis_order: [side, level, field]
-      axes:
-        side: [a, b]
-        level: [1]
-        field: [price, size]
-      columns:
-        a_1_price: {side: a, level: 1, field: price}
-        a_1_size:  {side: a, level: 1, field: size}
-        b_1_price: {side: b, level: 1, field: price}
-        b_1_size:  {side: b, level: 1, field: size}
+  order_book:
+    axes:
+      side: [a, b]
+      level: [1]
+      field: [price, size]
+    columns:
+      a_1_price: {side: a, level: 1, field: price}
+      a_1_size:  {side: a, level: 1, field: size}
+      b_1_price: {side: b, level: 1, field: price}
+      b_1_size:  {side: b, level: 1, field: size}
 
 model_spec:
-  ingestion_layer_config:
+  ingestion_spec:
     book:
       type: structured
       layout: order_book
@@ -460,7 +456,7 @@ of real columns, and `direct_embed` naturally uses the sum of
 `feature_embedding_dims` when those dimensions are configured.
 
 ```yaml
-ingestion_layer_config:
+ingestion_spec:
   type: direct_embed
   feature_embedding_dims:
     customer_segment: 16
@@ -475,18 +471,18 @@ convolution requires an odd `kernel_size` so the sequence length is preserved.
 
 Use `pass_through` for real-valued columns that should enter the model without
 per-column linear encoders. It can be used as the top-level
-`ingestion_layer_config` when its output width equals `dim_model`, or inside a
+`ingestion_spec` when its output width equals `dim_model`, or inside a
 composite branch where the merge layer handles width projection.
 
 ```yaml
-ingestion_layer_config:
+ingestion_spec:
   raw_prices:
     type: pass_through
     columns: [mid_price, spread]
 ```
 
 ```yaml
-ingestion_layer_config:
+ingestion_spec:
   tape_context:
     type: temporal_conv
     columns: [spread, imbalance, volatility]
@@ -514,7 +510,7 @@ selects layout axes by name. For backward-compatible shorthand, a plain list is
 treated as learned axis embeddings.
 
 ```yaml
-ingestion_layer_config:
+ingestion_spec:
   book:
     type: structured
     layout: order_book
@@ -1030,7 +1026,7 @@ Sequifier allows you to search not just for model parameters, but for the best *
 | `context_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
 | `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
-| `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_layer_config` references a structured layout. |
+| `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_spec` references a structured layout. |
 
 ---
 
@@ -1071,7 +1067,7 @@ dim_feedforward:
 | `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
-| `ingestion_layer_config` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed}`. |
+| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed}`. |
 | `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. If omitted for multiple ingestions, defaults to `{type: concat}`. Merge output width is always `dim_model`. |
 | `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. |
 | `prediction_length` | `int` | **Yes** | Number of steps to predict simultaneously. BERT trials override this to the sampled `context_length`. |
@@ -1138,7 +1134,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 | Group | Anchor Field | Linked Fields (Must match index) | Reason for Linkage |
 | :--- | :--- | :--- | :--- |
-| **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_layer_config` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion configs with explicit branch output dimensions often need the same pairing. |
+| **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_spec` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion configs with explicit branch output dimensions often need the same pairing. |
 | **Training Schedule** | `learning_rate` | `epochs`<br>`scheduler` | The magnitude of the learning rate often dictates how many epochs are needed. Schedulers often require `T_max` to match `epochs`. |
 | **Data Schema** | `input_columns` | `column_types` | Different subsets of columns require specific data type definitions. |
 

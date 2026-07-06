@@ -1014,11 +1014,11 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         processing_blocks: Optional[list[Any]] = None,
     ):
         self.layout = layout
-        self.axis_order = layout.axis_order
+        self.axis_names = list(layout.axes)
         self.axis_size_by_name = {
-            axis: len(layout.axes[axis]) for axis in self.axis_order
+            axis: len(layout.axes[axis]) for axis in self.axis_names
         }
-        self.axis_sizes = [len(layout.axes[axis]) for axis in self.axis_order]
+        self.axis_sizes = [len(layout.axes[axis]) for axis in self.axis_names]
         self.expected_dense_shape = tuple(self.axis_sizes)
         self.cell_dim = cell_dim or output_dim
         self.axis_embeddings_config = axis_embeddings
@@ -1026,16 +1026,16 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         self.coordinate_to_index = {
             tuple(coordinates): index
             for index, coordinates in enumerate(
-                product(*(layout.axes[axis] for axis in self.axis_order))
+                product(*(layout.axes[axis] for axis in self.axis_names))
             )
         }
         coordinate_to_column = {
-            tuple(coordinates[axis] for axis in self.axis_order): column
+            tuple(coordinates[axis] for axis in self.axis_names): column
             for column, coordinates in layout.columns.items()
         }
         self.ordered_columns = [
             coordinate_to_column[coordinates]
-            for coordinates in product(*(layout.axes[axis] for axis in self.axis_order))
+            for coordinates in product(*(layout.axes[axis] for axis in self.axis_names))
         ]
         super().__init__(
             columns=self.ordered_columns,
@@ -1077,7 +1077,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
                 )
 
         self.axis_blocks = nn.ModuleList()
-        active_axes = list(self.axis_order)
+        active_axes = list(self.axis_names)
         channel_dim = self.cell_dim
         for block in self.processing_blocks:
             if block.type == "axis_projection":
@@ -1142,7 +1142,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         )
 
     def _axis_broadcast_shape(self, x: Tensor, axis_name: str) -> list[int]:
-        axis_idx = self.axis_order.index(axis_name)
+        axis_idx = self.axis_names.index(axis_name)
         target_dim = axis_idx + 2
         axis_size = self.axis_size_by_name[axis_name]
         broadcast_shape = [1] * (x.ndim - 1) + [self.cell_dim]
@@ -1309,15 +1309,15 @@ def build_feature_ingestion(
     device_max_concat_length: int,
 ) -> BaseFeatureIngestion:
     model_spec = hparams.model_spec
-    ingestion_layer_config = model_spec.ingestion_layer_config
+    ingestion_spec = model_spec.ingestion_spec
     use_rope = model_spec.positional_encoding == "rope"
 
-    if isinstance(ingestion_layer_config, dict):
+    if isinstance(ingestion_spec, dict):
         branches = {}
         branch_default_output_dim = (
-            model_spec.dim_model if len(ingestion_layer_config) == 1 else None
+            model_spec.dim_model if len(ingestion_spec) == 1 else None
         )
-        for branch_name, branch_config in ingestion_layer_config.items():
+        for branch_name, branch_config in ingestion_spec.items():
             branches[branch_name] = _build_branch_ingestion(
                 hparams=hparams,
                 branch_config=branch_config,
@@ -1337,20 +1337,20 @@ def build_feature_ingestion(
             output_dim=model_spec.dim_model,
         )
 
-    if ingestion_layer_config.type == "direct_embed":
+    if ingestion_spec.type == "direct_embed":
         return _build_direct_embed_ingestion(
             hparams=hparams,
-            columns=ingestion_layer_config.columns or hparams.input_columns,
-            ingestion_config=ingestion_layer_config,
+            columns=ingestion_spec.columns or hparams.input_columns,
+            ingestion_config=ingestion_spec,
             default_output_dim=model_spec.dim_model,
             device_max_concat_length=device_max_concat_length,
         )
 
-    if ingestion_layer_config.type == "pass_through":
+    if ingestion_spec.type == "pass_through":
         return _build_pass_through_ingestion(
             hparams=hparams,
-            columns=ingestion_layer_config.columns or hparams.input_columns,
-            ingestion_config=ingestion_layer_config,
+            columns=ingestion_spec.columns or hparams.input_columns,
+            ingestion_config=ingestion_spec,
             default_output_dim=model_spec.dim_model,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
@@ -1358,7 +1358,7 @@ def build_feature_ingestion(
 
     return _build_branch_ingestion(
         hparams=hparams,
-        branch_config=ingestion_layer_config,
+        branch_config=ingestion_spec,
         use_rope=use_rope,
         default_output_dim=model_spec.dim_model,
         direct_real_dtype_provider=direct_real_dtype_provider,
@@ -1456,7 +1456,7 @@ def _build_pass_through_ingestion(
 
 
 def _layout_columns(hparams: Any, layout_name: str) -> list[str]:
-    return list(hparams.feature_layout.layouts[layout_name].columns)
+    return list(hparams.feature_layout[layout_name].columns)
 
 
 def _build_branch_ingestion(
@@ -1572,7 +1572,7 @@ def _build_branch_ingestion(
         )
 
     if branch_config.type == "structured":
-        layout = hparams.feature_layout.layouts[branch_config.layout]
+        layout = hparams.feature_layout[branch_config.layout]
         output_dim = _resolve_required_output_dim(
             branch_config.output_dim,
             default_output_dim,

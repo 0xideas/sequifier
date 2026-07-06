@@ -74,7 +74,7 @@ Sequifier allows you to search not just for model parameters, but for the best *
 | `context_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
 | `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
-| `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_layer_config` references a structured layout. |
+| `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_spec` references a structured layout. |
 
 ---
 
@@ -115,7 +115,7 @@ dim_feedforward:
 | `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
-| `ingestion_layer_config` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed}`. |
+| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed}`. |
 | `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. If omitted for multiple ingestions, defaults to `{type: concat}`. Merge output width is always `dim_model`. |
 | `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. |
 | `prediction_length` | `int` | **Yes** | Number of steps to predict simultaneously. BERT trials override this to the sampled `context_length`. |
@@ -182,7 +182,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 | Group | Anchor Field | Linked Fields (Must match index) | Reason for Linkage |
 | :--- | :--- | :--- | :--- |
-| **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_layer_config` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion configs with explicit branch output dimensions often need the same pairing. |
+| **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_spec` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion configs with explicit branch output dimensions often need the same pairing. |
 | **Training Schedule** | `learning_rate` | `epochs`<br>`scheduler` | The magnitude of the learning rate often dictates how many epochs are needed. Schedulers often require `T_max` to match `epochs`. |
 | **Data Schema** | `input_columns` | `column_types` | Different subsets of columns require specific data type definitions. |
 

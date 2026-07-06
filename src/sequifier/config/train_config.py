@@ -15,6 +15,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    RootModel,
     StrictInt,
     StrictStr,
     field_serializer,
@@ -51,15 +52,12 @@ class CartesianLayoutModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["cartesian"]
-    axis_order: list[str] = Field(..., min_length=1)
     axes: dict[str, list[AnyType]] = Field(..., min_length=1)
     columns: dict[str, dict[str, AnyType]] = Field(..., min_length=1)
 
     @model_validator(mode="after")
     def validate_cartesian(self):
-        if self.axis_order != list(self.axes.keys()):
-            raise ValueError("axis_order must exactly match axes keys")
+        axis_names = list(self.axes)
 
         for axis, values in self.axes.items():
             if not values:
@@ -73,12 +71,12 @@ class CartesianLayoutModel(BaseModel):
 
         coordinate_tuples = set()
         for column_name, coordinates in self.columns.items():
-            if set(coordinates) != set(self.axis_order):
+            if set(coordinates) != set(axis_names):
                 raise ValueError(
                     f"Layout column {column_name!r} must define every axis"
                 )
 
-            coordinate_tuple = tuple(coordinates[axis] for axis in self.axis_order)
+            coordinate_tuple = tuple(coordinates[axis] for axis in axis_names)
             if coordinate_tuple in coordinate_tuples:
                 raise ValueError(
                     f"Duplicate cartesian coordinate tuple: {coordinate_tuple!r}"
@@ -92,27 +90,26 @@ class CartesianLayoutModel(BaseModel):
                         f"outside axis {axis!r}"
                     )
 
-        expected_tuples = set(product(*(self.axes[axis] for axis in self.axis_order)))
+        expected_tuples = set(product(*(self.axes[axis] for axis in axis_names)))
         if coordinate_tuples != expected_tuples:
             raise ValueError("cartesian layouts must contain every coordinate")
 
         return self
 
 
-class FeatureLayoutRegistryModel(BaseModel):
+class FeatureLayoutRegistryModel(RootModel[dict[str, CartesianLayoutModel]]):
     """Top-level registry of reusable feature layouts."""
 
-    model_config = ConfigDict(extra="forbid")
+    root: dict[str, CartesianLayoutModel] = Field(..., min_length=1)
 
-    version: int = 1
-    layouts: dict[str, CartesianLayoutModel] = Field(..., min_length=1)
+    def items(self):
+        return self.root.items()
 
-    @field_validator("version")
-    @classmethod
-    def validate_version(cls, v):
-        if v != 1:
-            raise ValueError("Only feature_layout version 1 is supported")
-        return v
+    def __contains__(self, key: str) -> bool:
+        return key in self.root
+
+    def __getitem__(self, key: str) -> CartesianLayoutModel:
+        return self.root[key]
 
 
 class DirectEmbedIngestionConfig(BaseModel):
@@ -423,7 +420,7 @@ class IngestionMergeConfig(BaseModel):
     type: Literal["concat", "sum", "gated", "attention"] = "concat"
 
 
-IngestionLayerConfig = BranchIngestionConfig | dict[str, BranchIngestionConfig]
+IngestionSpecConfig = BranchIngestionConfig | dict[str, BranchIngestionConfig]
 
 
 def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
@@ -800,7 +797,7 @@ class ModelSpecModel(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    ingestion_layer_config: IngestionLayerConfig = Field(
+    ingestion_spec: IngestionSpecConfig = Field(
         default_factory=DirectEmbedIngestionConfig
     )
     ingestion_merge: Optional[IngestionMergeConfig] = None
@@ -824,21 +821,21 @@ class ModelSpecModel(BaseModel):
     prediction_length: int
 
     @model_validator(mode="after")
-    def validate_ingestion_layer_output_dim(self):
-        if isinstance(self.ingestion_layer_config, dict):
+    def validate_ingestion_spec_output_dim(self):
+        if isinstance(self.ingestion_spec, dict):
             if self.ingestion_merge is None:
                 self.ingestion_merge = IngestionMergeConfig()
         elif (
-            getattr(self.ingestion_layer_config, "output_dim", None) is not None
-            and self.ingestion_layer_config.output_dim != self.dim_model
+            getattr(self.ingestion_spec, "output_dim", None) is not None
+            and self.ingestion_spec.output_dim != self.dim_model
         ):
             raise ValueError(
-                "model_spec.ingestion_layer_config.output_dim must equal dim_model"
+                "model_spec.ingestion_spec.output_dim must equal dim_model"
             )
         elif self.ingestion_merge is not None:
             raise ValueError(
                 "model_spec.ingestion_merge is only valid when "
-                "ingestion_layer_config defines multiple named ingestions"
+                "ingestion_spec defines multiple named ingestions"
             )
 
         return self
@@ -1148,7 +1145,7 @@ class TrainModel(BaseModel):
             return self
 
         allowed_columns = set(self.input_columns) | set(self.column_types)
-        for layout_name, layout in self.feature_layout.layouts.items():
+        for layout_name, layout in self.feature_layout.items():
             missing_columns = set(layout.columns) - allowed_columns
             if missing_columns:
                 raise ValueError(
@@ -1159,46 +1156,46 @@ class TrainModel(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_ingestion_layer_branches(self):
-        ingestion_layer_config = self.model_spec.ingestion_layer_config
-        if not isinstance(ingestion_layer_config, dict):
+    def validate_ingestion_spec_branches(self):
+        ingestion_spec = self.model_spec.ingestion_spec
+        if not isinstance(ingestion_spec, dict):
             columns = self._branch_columns(
-                ingestion_layer_config,
+                ingestion_spec,
                 default_columns=self.input_columns,
             )
             self._validate_ingestion_columns(
-                "model_spec.ingestion_layer_config",
+                "model_spec.ingestion_spec",
                 columns,
             )
-            if isinstance(ingestion_layer_config, StructuredIngestionConfig):
-                layout = self._layout_for_branch(ingestion_layer_config)
+            if isinstance(ingestion_spec, StructuredIngestionConfig):
+                layout = self._layout_for_branch(ingestion_spec)
                 output_dim = self._resolved_branch_output_dim(
-                    ingestion_layer_config,
+                    ingestion_spec,
                     columns,
                     default_output_dim=self.model_spec.dim_model,
-                    usage="model_spec.ingestion_layer_config",
+                    usage="model_spec.ingestion_spec",
                 )
                 self._validate_structured_axis_embeddings(
-                    ingestion_layer_config, layout, output_dim
+                    ingestion_spec, layout, output_dim
                 )
                 self._validate_structured_processing_blocks(
-                    ingestion_layer_config, layout, output_dim
+                    ingestion_spec, layout, output_dim
                 )
             if isinstance(
-                ingestion_layer_config,
+                ingestion_spec,
                 (DirectEmbedIngestionConfig, TemporalConvIngestionConfig),
             ):
                 self._validate_direct_embed_ingestion(
-                    "model_spec.ingestion_layer_config",
+                    "model_spec.ingestion_spec",
                     columns,
-                    ingestion_layer_config,
+                    ingestion_spec,
                     default_output_dim=self.model_spec.dim_model,
                 )
-            if isinstance(ingestion_layer_config, PassThroughIngestionConfig):
+            if isinstance(ingestion_spec, PassThroughIngestionConfig):
                 self._validate_pass_through_ingestion(
                     columns,
-                    ingestion_layer_config,
-                    usage="model_spec.ingestion_layer_config",
+                    ingestion_spec,
+                    usage="model_spec.ingestion_spec",
                     default_output_dim=self.model_spec.dim_model,
                 )
             return self
@@ -1210,10 +1207,10 @@ class TrainModel(BaseModel):
             )
 
         branch_default_output_dim = (
-            self.model_spec.dim_model if len(ingestion_layer_config) == 1 else None
+            self.model_spec.dim_model if len(ingestion_spec) == 1 else None
         )
         used_columns: dict[str, str] = {}
-        for branch_name, ingestion in ingestion_layer_config.items():
+        for branch_name, ingestion in ingestion_spec.items():
             columns = self._branch_columns(ingestion)
             if not columns:
                 raise ValueError(
@@ -1287,9 +1284,9 @@ class TrainModel(BaseModel):
             raise ValueError(
                 f"Ingestion layout {ingestion.layout!r} requires top-level feature_layout"
             )
-        if ingestion.layout not in self.feature_layout.layouts:
+        if ingestion.layout not in self.feature_layout:
             raise ValueError(f"Unknown feature_layout {ingestion.layout!r}")
-        return self.feature_layout.layouts[ingestion.layout]
+        return self.feature_layout[ingestion.layout]
 
     def _validate_structured_axis_embeddings(
         self,
@@ -1298,9 +1295,7 @@ class TrainModel(BaseModel):
         output_dim: int,
     ) -> None:
         unknown_axes = [
-            axis
-            for axis in ingestion.axis_embeddings.axes
-            if axis not in layout.axis_order
+            axis for axis in ingestion.axis_embeddings.axes if axis not in layout.axes
         ]
         if unknown_axes:
             raise ValueError(
@@ -1323,7 +1318,7 @@ class TrainModel(BaseModel):
         layout: CartesianLayoutModel,
         output_dim: int,
     ) -> None:
-        active_axes = list(layout.axis_order)
+        active_axes = list(layout.axes)
         channel_dim = ingestion.cell_dim or output_dim
 
         for block in ingestion.processing_blocks:
