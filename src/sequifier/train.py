@@ -783,7 +783,10 @@ class TransformerModel(nn.Module):
         self.use_rope = hparams.model_spec.positional_encoding == "rope"
         if hparams.model_spec.feature_embedding_dims is not None:
             self.feature_embedding_dims = hparams.model_spec.feature_embedding_dims
-        elif hparams.model_spec.ingestion_layer_config.type == "direct_embed":
+        elif (
+            not isinstance(hparams.model_spec.ingestion_layer_config, dict)
+            and hparams.model_spec.ingestion_layer_config.type == "direct_embed"
+        ):
             self.feature_embedding_dims = get_feature_embedding_dims(
                 self.initial_embedding_dim, self.categorical_columns, self.real_columns
             )

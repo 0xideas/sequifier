@@ -14,6 +14,7 @@ from sequifier.config.train_config import (
     DotDict,
     FeatureLayoutRegistryModel,
     IngestionLayerConfig,
+    IngestionMergeConfig,
     ModelSpecModel,
     NextOccurrenceConfigModel,
     ReplacementDistribution,
@@ -490,6 +491,10 @@ class ModelSpecHyperparameterSampling(BaseModel):
     ingestion_layer_config: Optional[
         Union[IngestionLayerConfig, list[IngestionLayerConfig]]
     ] = None
+    ingestion_merge: Optional[
+        Union[IngestionMergeConfig, list[IngestionMergeConfig]]
+    ] = None
+    allow_shared_ingestion_columns: bool = False
     n_head: list[int]
 
     dim_feedforward: OptunaInt
@@ -524,6 +529,13 @@ class ModelSpecHyperparameterSampling(BaseModel):
             if len(info.data.get("dim_model")) != len(ingestion_layer_config):
                 raise ValueError(
                     "dim_model and ingestion_layer_config must have the same number of candidate values, that are paired"
+                )
+
+        ingestion_merge = info.data.get("ingestion_merge")
+        if isinstance(ingestion_merge, list):
+            if len(info.data.get("dim_model")) != len(ingestion_merge):
+                raise ValueError(
+                    "dim_model and ingestion_merge must have the same number of candidate values, that are paired"
                 )
 
         if not (len(info.data.get("dim_model")) == len(v)):
@@ -564,6 +576,10 @@ class ModelSpecHyperparameterSampling(BaseModel):
             ingestion_layer_config = self.ingestion_layer_config[dim_model_idx]
         else:
             ingestion_layer_config = self.ingestion_layer_config
+        if isinstance(self.ingestion_merge, list):
+            ingestion_merge = self.ingestion_merge[dim_model_idx]
+        else:
+            ingestion_merge = self.ingestion_merge
 
         dim_feedforward = sample_param(trial, "dim_feedforward", self.dim_feedforward)
         num_layers = sample_param(trial, "num_layers", self.num_layers)
@@ -616,6 +632,11 @@ class ModelSpecHyperparameterSampling(BaseModel):
         }
         if ingestion_layer_config is not None:
             model_spec_kwargs["ingestion_layer_config"] = ingestion_layer_config
+        if ingestion_merge is not None:
+            model_spec_kwargs["ingestion_merge"] = ingestion_merge
+        model_spec_kwargs["allow_shared_ingestion_columns"] = (
+            self.allow_shared_ingestion_columns
+        )
 
         return ModelSpecModel(**model_spec_kwargs)
 

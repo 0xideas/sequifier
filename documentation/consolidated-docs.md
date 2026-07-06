@@ -410,7 +410,9 @@ These fields determine the size and complexity of the Transformer.
 | `joint_embedding_dim` | `int` | No | `null` | If set, projects concatenated inputs to this dim before the transformer. If set, must equal `dim_model`. |
 | `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
 | `feature_embedding_dims`| `dict` | No | `null` | Manual map of column names to embedding sizes. If `null`, sizes are auto-calculated. This works only if there are *only* real or *only* categorical variables, and `initial_embedding_dim` is divisible by the number of variables |
-| `ingestion_layer_config` | `dict` | No | `{type: direct_embed}` | Feature ingestion layer configuration. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. `composite` can merge branches such as `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` ingestion layers. |
+| `ingestion_layer_config` | `dict` | No | `{type: direct_embed}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |
+| `ingestion_merge` | `dict` or `null` | No | `null` | Merge strategy for named multi-ingestion configs. Defaults to `{type: concat, output_dim: dim_model}` when omitted. |
+| `allow_shared_ingestion_columns` | `bool` | No | `false` | Allows the same flat input column to be consumed by more than one named ingestion stream. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
 | `n_kv_heads` | `int` | No | `null` | Number of Key/Value heads for GQA/MQA. If `null`, defaults to `n_head` (standard MHA). |
@@ -442,21 +444,17 @@ feature_layout:
 
 model_spec:
   ingestion_layer_config:
-    type: composite
-    branches:
-      book:
-        ingestion:
-          type: structured
-          layout: order_book
-          output_dim: 128
-      context:
-        columns: [spread, volatility]
-        ingestion:
-          type: feature_pool
-          output_dim: 64
-    merge:
-      type: concat
-      output_dim: 256
+    book:
+      type: structured
+      layout: order_book
+      output_dim: 128
+    context:
+      type: feature_pool
+      columns: [spread, volatility]
+      output_dim: 64
+  ingestion_merge:
+    type: concat
+    output_dim: 256
 ```
 
 Use `temporal_conv` inside a composite branch when local Conv1D filters should
@@ -471,24 +469,22 @@ per-column linear encoders. It can be used as the top-level
 composite branch where the merge layer handles width projection.
 
 ```yaml
-branches:
+ingestion_layer_config:
   raw_prices:
+    type: pass_through
     columns: [mid_price, spread]
-    ingestion:
-      type: pass_through
 ```
 
 ```yaml
-branches:
+ingestion_layer_config:
   tape_context:
+    type: temporal_conv
     columns: [spread, imbalance, volatility]
-    ingestion:
-      type: temporal_conv
-      output_dim: 128
-      kernel_size: 5
-      dilation: 1
-      num_layers: 2
-      causal: true
+    output_dim: 128
+    kernel_size: 5
+    dilation: 1
+    num_layers: 2
+    causal: true
 ```
 
 Structured ingestion layers can optionally process cartesian axes before pooling. `cell_dim`
@@ -508,29 +504,30 @@ selects layout axes by name. For backward-compatible shorthand, a plain list is
 treated as learned axis embeddings.
 
 ```yaml
-ingestion:
-  type: structured
-  layout: order_book
-  cell_dim: 32
-  output_dim: 128
-  axis_embeddings:
-    type: learned
-    axes: [side, level]
-  processing_blocks:
-    - type: axis_conv
-      axes: [level]
-      output_dim: 32
-      unshared_axes: [side]
-    - type: axis_attention
-      axes: [level, field]
-      output_dim: 64
-      n_head: 4
-    - type: axis_projection
-      axes: [field]
-      output_dim: 128
-    - type: axis_pool
-      axes: [side]
-      mode: mean
+ingestion_layer_config:
+  book:
+    type: structured
+    layout: order_book
+    cell_dim: 32
+    output_dim: 128
+    axis_embeddings:
+      type: learned
+      axes: [side, level]
+    processing_blocks:
+      - type: axis_conv
+        axes: [level]
+        output_dim: 32
+        unshared_axes: [side]
+      - type: axis_attention
+        axes: [level, field]
+        output_dim: 64
+        n_head: 4
+      - type: axis_projection
+        axes: [field]
+        output_dim: 128
+      - type: axis_pool
+        axes: [side]
+        mode: mean
 ```
 
 ### 4\. Training Hyperparameters (`training_spec`)
@@ -1066,7 +1063,9 @@ dim_feedforward:
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
 | `initial_embedding_dim` | `list[int]` | **Yes** | Feature embedding size. Usually matches `dim_model`. |
 | `feature_embedding_dims` | `list[dict]` or `null` | **Yes** | List of maps for feature embedding dimensions. Use `null` only when auto-calculation is valid. |
-| `ingestion_layer_config` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion layer config. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed}`. |
+| `ingestion_layer_config` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed}`. |
+| `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. If omitted for multiple ingestions, defaults to `{type: concat, output_dim: dim_model}`. |
+| `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. |
 | `joint_embedding_dim` | `list[int or null]` | **Yes** | Joint embedding size. If not null, must match `dim_model`. |
 | `prediction_length` | `int` | **Yes** | Number of steps to predict simultaneously. BERT trials override this to the sampled `context_length`. |
 | `activation_fn` | `list[str]` | **Yes** | E.g., `['swiglu', 'gelu']`. |
@@ -1132,7 +1131,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 | Group | Anchor Field | Linked Fields (Must match index) | Reason for Linkage |
 | :--- | :--- | :--- | :--- |
-| **Model Backbone** | `dim_model` | `n_head`<br>`initial_embedding_dim`<br>`joint_embedding_dim`<br>`feature_embedding_dims`<br>`ingestion_layer_config` when provided as a list | $d_{model}$ determines embedding sizes and must be divisible by the number of heads. Ingestion configs with explicit output dimensions often need the same pairing. |
+| **Model Backbone** | `dim_model` | `n_head`<br>`initial_embedding_dim`<br>`joint_embedding_dim`<br>`feature_embedding_dims`<br>`ingestion_layer_config` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines embedding sizes and must be divisible by the number of heads. Ingestion configs with explicit output dimensions often need the same pairing. |
 | **Training Schedule** | `learning_rate` | `epochs`<br>`scheduler` | The magnitude of the learning rate often dictates how many epochs are needed. Schedulers often require `T_max` to match `epochs`. |
 | **Data Schema** | `input_columns` | `column_types` | Different subsets of columns require specific data type definitions. |
 

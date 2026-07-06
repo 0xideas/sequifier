@@ -1303,10 +1303,31 @@ def build_feature_ingestion(
     ingestion_layer_config = model_spec.ingestion_layer_config
     use_rope = model_spec.positional_encoding == "rope"
 
+    if isinstance(ingestion_layer_config, dict):
+        branches = {}
+        for branch_name, branch_config in ingestion_layer_config.items():
+            branches[branch_name] = _build_branch_ingestion(
+                hparams=hparams,
+                branch_config=branch_config,
+                use_rope=use_rope,
+                direct_real_dtype_provider=direct_real_dtype_provider,
+                device_max_concat_length=device_max_concat_length,
+            )
+
+        ingestion_merge = model_spec.ingestion_merge
+        if ingestion_merge is None:
+            raise ValueError("ingestion_merge must be configured for multiple streams")
+
+        return CompositeFeatureIngestion(
+            branches=branches,
+            merge_type=ingestion_merge.type,
+            output_dim=ingestion_merge.output_dim,
+        )
+
     if ingestion_layer_config.type == "direct_embed":
         return _build_direct_embed_ingestion(
             hparams=hparams,
-            columns=hparams.input_columns,
+            columns=ingestion_layer_config.columns or hparams.input_columns,
             ingestion_config=ingestion_layer_config,
             use_top_level_joint=True,
             device_max_concat_length=device_max_concat_length,
@@ -1315,26 +1336,18 @@ def build_feature_ingestion(
     if ingestion_layer_config.type == "pass_through":
         return _build_pass_through_ingestion(
             hparams=hparams,
-            columns=hparams.input_columns,
+            columns=ingestion_layer_config.columns or hparams.input_columns,
             ingestion_config=ingestion_layer_config,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
         )
 
-    branches = {}
-    for branch_name, branch_config in ingestion_layer_config.branches.items():
-        branches[branch_name] = _build_branch_ingestion(
-            hparams=hparams,
-            branch_config=branch_config,
-            use_rope=use_rope,
-            direct_real_dtype_provider=direct_real_dtype_provider,
-            device_max_concat_length=device_max_concat_length,
-        )
-
-    return CompositeFeatureIngestion(
-        branches=branches,
-        merge_type=ingestion_layer_config.merge.type,
-        output_dim=ingestion_layer_config.merge.output_dim,
+    return _build_branch_ingestion(
+        hparams=hparams,
+        branch_config=ingestion_layer_config,
+        use_rope=use_rope,
+        direct_real_dtype_provider=direct_real_dtype_provider,
+        device_max_concat_length=device_max_concat_length,
     )
 
 
@@ -1432,13 +1445,12 @@ def _build_branch_ingestion(
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
 ) -> BaseFeatureIngestion:
-    ingestion = branch_config.ingestion
-    if ingestion.type == "structured":
-        columns = _layout_columns(hparams, ingestion.layout)
-    elif ingestion.type == "grouped":
+    if branch_config.type == "structured":
+        columns = _layout_columns(hparams, branch_config.layout)
+    elif branch_config.type == "grouped":
         columns = [
             column
-            for group_columns in ingestion.groups.values()
+            for group_columns in branch_config.groups.values()
             for column in group_columns
         ]
     else:
@@ -1457,73 +1469,73 @@ def _build_branch_ingestion(
         "dropout": hparams.training_spec.dropout,
     }
 
-    if ingestion.type == "direct_embed":
+    if branch_config.type == "direct_embed":
         return _build_direct_embed_ingestion(
             hparams=hparams,
             columns=columns,
-            ingestion_config=ingestion,
+            ingestion_config=branch_config,
             use_top_level_joint=False,
             device_max_concat_length=device_max_concat_length,
         )
 
-    if ingestion.type == "pass_through":
+    if branch_config.type == "pass_through":
         return _build_pass_through_ingestion(
             hparams=hparams,
             columns=columns,
-            ingestion_config=ingestion,
+            ingestion_config=branch_config,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
         )
 
-    if ingestion.type == "temporal_conv":
+    if branch_config.type == "temporal_conv":
         base_ingestion = _build_direct_embed_ingestion(
             hparams=hparams,
             columns=columns,
-            ingestion_config=ingestion,
+            ingestion_config=branch_config,
             use_top_level_joint=False,
             device_max_concat_length=device_max_concat_length,
         )
         return TemporalConvFeatureIngestion(
             base_ingestion=base_ingestion,
-            output_dim=ingestion.output_dim,
-            kernel_size=ingestion.kernel_size,
-            dilation=ingestion.dilation,
-            num_layers=ingestion.num_layers,
-            causal=ingestion.causal,
-            activation_fn=ingestion.activation_fn,
-            dropout=ingestion.dropout,
+            output_dim=branch_config.output_dim,
+            kernel_size=branch_config.kernel_size,
+            dilation=branch_config.dilation,
+            num_layers=branch_config.num_layers,
+            causal=branch_config.causal,
+            activation_fn=branch_config.activation_fn,
+            dropout=branch_config.dropout,
         )
 
-    if ingestion.type == "feature_pool":
+    if branch_config.type == "feature_pool":
         return FeaturePoolFeatureIngestion(
             columns=columns,
-            output_dim=ingestion.output_dim,
+            output_dim=branch_config.output_dim,
             **common_kwargs,
         )
 
-    if ingestion.type == "grouped":
+    if branch_config.type == "grouped":
         return GroupedFeatureIngestion(
-            groups=ingestion.groups,
-            output_dim=ingestion.output_dim,
+            groups=branch_config.groups,
+            output_dim=branch_config.output_dim,
             **common_kwargs,
         )
 
-    if ingestion.type == "siamese":
+    if branch_config.type == "siamese":
         return SiameseFeatureIngestion(
             columns=columns,
-            output_dim=ingestion.output_dim,
+            output_dim=branch_config.output_dim,
             **common_kwargs,
         )
 
-    if ingestion.type == "structured":
-        layout = hparams.feature_layout.layouts[ingestion.layout]
+    if branch_config.type == "structured":
+        layout = hparams.feature_layout.layouts[branch_config.layout]
         return StructuredFeatureIngestion(
             layout=layout,
-            output_dim=ingestion.output_dim,
-            cell_dim=ingestion.cell_dim,
-            axis_embeddings=ingestion.axis_embeddings,
-            processing_blocks=ingestion.processing_blocks,
+            output_dim=branch_config.output_dim,
+            cell_dim=branch_config.cell_dim,
+            axis_embeddings=branch_config.axis_embeddings,
+            processing_blocks=branch_config.processing_blocks,
             **common_kwargs,
         )
 
-    raise ValueError(f"Unknown ingestion type: {ingestion.type}")
+    raise ValueError(f"Unknown ingestion type: {branch_config.type}")

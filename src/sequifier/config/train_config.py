@@ -122,7 +122,15 @@ class DirectEmbedIngestionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["direct_embed"] = "direct_embed"
+    columns: Optional[list[str]] = Field(default=None, min_length=1)
     output_dim: Optional[int] = Field(default=None, gt=0)
+
+    @field_validator("columns")
+    @classmethod
+    def validate_columns(cls, v):
+        if v is not None:
+            _validate_column_list_unique(v, "direct_embed ingestion columns")
+        return v
 
 
 class PassThroughIngestionConfig(BaseModel):
@@ -131,7 +139,15 @@ class PassThroughIngestionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["pass_through"]
+    columns: Optional[list[str]] = Field(default=None, min_length=1)
     output_dim: Optional[int] = Field(default=None, gt=0)
+
+    @field_validator("columns")
+    @classmethod
+    def validate_columns(cls, v):
+        if v is not None:
+            _validate_column_list_unique(v, "pass_through ingestion columns")
+        return v
 
 
 class FeaturePoolIngestionConfig(BaseModel):
@@ -140,7 +156,14 @@ class FeaturePoolIngestionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["feature_pool"]
+    columns: list[str] = Field(..., min_length=1)
     output_dim: int = Field(..., gt=0)
+
+    @field_validator("columns")
+    @classmethod
+    def validate_columns(cls, v):
+        _validate_column_list_unique(v, "feature_pool ingestion columns")
+        return v
 
 
 class GroupedIngestionConfig(BaseModel):
@@ -175,7 +198,14 @@ class SiameseIngestionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["siamese"]
+    columns: list[str] = Field(..., min_length=1)
     output_dim: int = Field(..., gt=0)
+
+    @field_validator("columns")
+    @classmethod
+    def validate_columns(cls, v):
+        _validate_column_list_unique(v, "siamese ingestion columns")
+        return v
 
 
 class TemporalConvIngestionConfig(BaseModel):
@@ -184,6 +214,7 @@ class TemporalConvIngestionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["temporal_conv"]
+    columns: list[str] = Field(..., min_length=1)
     output_dim: int = Field(..., gt=0)
     kernel_size: int = Field(3, gt=0)
     dilation: int = Field(1, gt=0)
@@ -194,6 +225,7 @@ class TemporalConvIngestionConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_temporal_conv(self):
+        _validate_column_list_unique(self.columns, "temporal_conv ingestion columns")
         if not self.causal and self.kernel_size % 2 == 0:
             raise ValueError(
                 "temporal_conv kernel_size must be odd when causal is false"
@@ -361,22 +393,6 @@ BranchIngestionConfig = Annotated[
 ]
 
 
-class IngestionBranchConfig(BaseModel):
-    """One branch of a composite ingestion layer."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    columns: Optional[list[str]] = Field(default=None, min_length=1)
-    ingestion: BranchIngestionConfig
-
-    @field_validator("columns")
-    @classmethod
-    def validate_columns(cls, v):
-        if v is not None:
-            _validate_column_list_unique(v, "Composite ingestion branch columns")
-        return v
-
-
 class IngestionMergeConfig(BaseModel):
     """How composite branch outputs are merged."""
 
@@ -386,25 +402,7 @@ class IngestionMergeConfig(BaseModel):
     output_dim: int = Field(..., gt=0)
 
 
-class CompositeIngestionLayerConfig(BaseModel):
-    """Multi-branch ingestion layer configuration."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["composite"]
-    branches: dict[str, IngestionBranchConfig] = Field(..., min_length=1)
-    merge: IngestionMergeConfig
-    allow_shared_columns: bool = False
-
-
-IngestionLayerConfig = Annotated[
-    Union[
-        DirectEmbedIngestionConfig,
-        PassThroughIngestionConfig,
-        CompositeIngestionLayerConfig,
-    ],
-    Field(discriminator="type"),
-]
+IngestionLayerConfig = BranchIngestionConfig | dict[str, BranchIngestionConfig]
 
 
 def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
@@ -787,6 +785,8 @@ class ModelSpecModel(BaseModel):
     ingestion_layer_config: IngestionLayerConfig = Field(
         default_factory=DirectEmbedIngestionConfig
     )
+    ingestion_merge: Optional[IngestionMergeConfig] = None
+    allow_shared_ingestion_columns: bool = False
     dim_model: int
     n_head: int
     dim_feedforward: int
@@ -813,15 +813,12 @@ class ModelSpecModel(BaseModel):
         ingestion_layer_config = info.data.get("ingestion_layer_config")
         dim_model = v
 
-        if isinstance(ingestion_layer_config, CompositeIngestionLayerConfig):
+        if isinstance(ingestion_layer_config, dict):
             return v
 
         if (
-            isinstance(
-                ingestion_layer_config,
-                (DirectEmbedIngestionConfig, PassThroughIngestionConfig),
-            )
-            and ingestion_layer_config.output_dim is not None
+            ingestion_layer_config is not None
+            and getattr(ingestion_layer_config, "output_dim", None) is not None
         ):
             return v
 
@@ -843,21 +840,24 @@ class ModelSpecModel(BaseModel):
 
     @model_validator(mode="after")
     def validate_ingestion_layer_output_dim(self):
-        if isinstance(self.ingestion_layer_config, CompositeIngestionLayerConfig):
-            if self.ingestion_layer_config.merge.output_dim != self.dim_model:
+        if isinstance(self.ingestion_layer_config, dict):
+            if self.ingestion_merge is None:
+                self.ingestion_merge = IngestionMergeConfig(output_dim=self.dim_model)
+            if self.ingestion_merge.output_dim != self.dim_model:
                 raise ValueError(
-                    "model_spec.ingestion_layer_config.merge.output_dim must equal dim_model"
+                    "model_spec.ingestion_merge.output_dim must equal dim_model"
                 )
         elif (
-            isinstance(
-                self.ingestion_layer_config,
-                (DirectEmbedIngestionConfig, PassThroughIngestionConfig),
-            )
-            and self.ingestion_layer_config.output_dim is not None
+            getattr(self.ingestion_layer_config, "output_dim", None) is not None
             and self.ingestion_layer_config.output_dim != self.dim_model
         ):
             raise ValueError(
                 "model_spec.ingestion_layer_config.output_dim must equal dim_model"
+            )
+        elif self.ingestion_merge is not None:
+            raise ValueError(
+                "model_spec.ingestion_merge is only valid when "
+                "ingestion_layer_config defines multiple named ingestions"
             )
 
         return self
@@ -1199,23 +1199,27 @@ class TrainModel(BaseModel):
         direct_embed_column_groups: list[tuple[list[str], int]] = []
         if isinstance(v.ingestion_layer_config, DirectEmbedIngestionConfig):
             direct_embed_column_groups.append(
-                (input_columns or [], v.initial_embedding_dim)
+                (
+                    v.ingestion_layer_config.columns or input_columns or [],
+                    v.initial_embedding_dim,
+                )
             )
-        elif isinstance(v.ingestion_layer_config, CompositeIngestionLayerConfig):
-            for branch in v.ingestion_layer_config.branches.values():
+        elif isinstance(v.ingestion_layer_config, TemporalConvIngestionConfig):
+            direct_embed_column_groups.append(
+                (v.ingestion_layer_config.columns, v.ingestion_layer_config.output_dim)  # type: ignore
+            )
+        elif isinstance(v.ingestion_layer_config, dict):
+            for branch in v.ingestion_layer_config.values():
                 if isinstance(
-                    branch.ingestion,
+                    branch,
                     (DirectEmbedIngestionConfig, TemporalConvIngestionConfig),
                 ):
                     if branch.columns is None:
-                        raise ValueError(
-                            "Composite direct_embed/temporal_conv ingestion branches must "
-                            "specify columns"
-                        )
+                        continue
                     direct_embed_column_groups.append(
                         (
                             branch.columns,
-                            branch.ingestion.output_dim or v.initial_embedding_dim,
+                            branch.output_dim or v.initial_embedding_dim,
                         )
                     )
 
@@ -1264,11 +1268,23 @@ class TrainModel(BaseModel):
     @model_validator(mode="after")
     def validate_ingestion_layer_branches(self):
         ingestion_layer_config = self.model_spec.ingestion_layer_config
-        if isinstance(
-            ingestion_layer_config,
-            (DirectEmbedIngestionConfig, PassThroughIngestionConfig),
-        ):
-            columns = self.input_columns
+        if not isinstance(ingestion_layer_config, dict):
+            columns = self._branch_columns(
+                ingestion_layer_config,
+                default_columns=self.input_columns,
+            )
+            self._validate_ingestion_columns(
+                "model_spec.ingestion_layer_config",
+                columns,
+            )
+            if isinstance(ingestion_layer_config, StructuredIngestionConfig):
+                layout = self._layout_for_branch(ingestion_layer_config)
+                self._validate_structured_axis_embeddings(
+                    ingestion_layer_config, layout
+                )
+                self._validate_structured_processing_blocks(
+                    ingestion_layer_config, layout
+                )
             if isinstance(ingestion_layer_config, PassThroughIngestionConfig):
                 self._validate_pass_through_ingestion(
                     columns,
@@ -1278,51 +1294,57 @@ class TrainModel(BaseModel):
                 )
             return self
 
-        if ingestion_layer_config.merge.output_dim != self.model_spec.dim_model:
+        ingestion_merge = self.model_spec.ingestion_merge
+        if ingestion_merge is None:
             raise ValueError(
-                "Composite ingestion layer merge output_dim must equal dim_model"
+                "model_spec.ingestion_merge must be configured for multiple ingestions"
             )
 
+        if ingestion_merge.output_dim != self.model_spec.dim_model:
+            raise ValueError("Multiple-ingestion merge output_dim must equal dim_model")
+
         used_columns: dict[str, str] = {}
-        for branch_name, branch in ingestion_layer_config.branches.items():
-            columns = self._branch_columns(branch)
+        for branch_name, ingestion in ingestion_layer_config.items():
+            columns = self._branch_columns(ingestion)
             if not columns:
                 raise ValueError(
-                    f"Composite ingestion branch {branch_name!r} must resolve to at "
+                    f"Ingestion branch {branch_name!r} must resolve to at "
                     "least one input column"
                 )
-            missing_columns = set(columns) - set(self.input_columns)
-            if missing_columns:
-                raise ValueError(
-                    f"Composite ingestion branch {branch_name!r} references unknown "
-                    f"input columns: {sorted(missing_columns)}"
-                )
+            self._validate_ingestion_columns(branch_name, columns)
 
-            if not ingestion_layer_config.allow_shared_columns:
+            if not self.model_spec.allow_shared_ingestion_columns:
                 overlapping_columns = [
                     column for column in columns if column in used_columns
                 ]
                 if overlapping_columns:
                     raise ValueError(
-                        "Composite ingestion branches cannot share columns unless "
-                        "allow_shared_columns is true: "
+                        "Ingestion branches cannot share columns unless "
+                        "allow_shared_ingestion_columns is true: "
                         f"{sorted(overlapping_columns)}"
                     )
                 for column in columns:
                     used_columns[column] = branch_name
 
-            if isinstance(branch.ingestion, StructuredIngestionConfig):
-                layout = self._layout_for_branch(branch.ingestion)
-                self._validate_structured_axis_embeddings(branch.ingestion, layout)
-                self._validate_structured_processing_blocks(branch.ingestion, layout)
-            if isinstance(branch.ingestion, PassThroughIngestionConfig):
+            if isinstance(ingestion, StructuredIngestionConfig):
+                layout = self._layout_for_branch(ingestion)
+                self._validate_structured_axis_embeddings(ingestion, layout)
+                self._validate_structured_processing_blocks(ingestion, layout)
+            if isinstance(ingestion, PassThroughIngestionConfig):
                 self._validate_pass_through_ingestion(
                     columns,
-                    branch.ingestion,
+                    ingestion,
                     usage=f"Composite ingestion branch {branch_name!r}",
                     require_model_width=False,
                 )
         return self
+
+    def _validate_ingestion_columns(self, usage: str, columns: list[str]) -> None:
+        missing_columns = set(columns) - set(self.input_columns)
+        if missing_columns:
+            raise ValueError(
+                f"{usage} references unknown input columns: {sorted(missing_columns)}"
+            )
 
     def _layout_for_branch(
         self,
@@ -1411,33 +1433,36 @@ class TrainModel(BaseModel):
                 f"{ingestion.output_dim}, got {channel_dim}"
             )
 
-    def _branch_columns(self, branch: IngestionBranchConfig) -> list[str]:
-        ingestion = branch.ingestion
+    def _branch_columns(
+        self,
+        ingestion: BranchIngestionConfig,
+        default_columns: Optional[list[str]] = None,
+    ) -> list[str]:
         if isinstance(ingestion, StructuredIngestionConfig):
             layout = self._layout_for_branch(ingestion)
-            layout_columns = list(layout.columns)
-            if branch.columns is not None and branch.columns != layout_columns:
-                raise ValueError(
-                    "Structured ingestion branch columns must match the referenced layout"
-                )
-            return layout_columns
+            return list(layout.columns)
 
         if isinstance(ingestion, GroupedIngestionConfig):
-            grouped_columns = [
+            return [
                 column
                 for group_columns in ingestion.groups.values()
                 for column in group_columns
             ]
-            if branch.columns is not None and branch.columns != grouped_columns:
+
+        if (
+            isinstance(
+                ingestion,
+                (DirectEmbedIngestionConfig, PassThroughIngestionConfig),
+            )
+            and ingestion.columns is None
+        ):
+            if default_columns is None:
                 raise ValueError(
-                    "Grouped ingestion branch columns must match grouped columns"
+                    f"{ingestion.type} ingestion branches must configure columns"
                 )
-            return grouped_columns
+            return default_columns
 
-        if branch.columns is None:
-            raise ValueError("Composite ingestion branch columns must be configured")
-
-        return branch.columns
+        return ingestion.columns  # type: ignore
 
     def _validate_pass_through_ingestion(
         self,
