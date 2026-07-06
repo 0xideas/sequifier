@@ -159,9 +159,9 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
             self.pos_encoder = None
 
         if self.output_dim != self.input_dim:
-            self.joint_embedding_layer = nn.Linear(self.input_dim, self.output_dim)
+            self.output_projection_layer = nn.Linear(self.input_dim, self.output_dim)
         else:
-            self.joint_embedding_layer = None
+            self.output_projection_layer = None
 
     def initialize_weights(self) -> None:
         for col in self.categorical_columns:
@@ -173,10 +173,12 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
                     mean=0.0, std=self.INIT_STD
                 )
 
-        if self.joint_embedding_layer is not None:
-            self.joint_embedding_layer.weight.data.normal_(mean=0.0, std=self.INIT_STD)
-            if self.joint_embedding_layer.bias is not None:
-                self.joint_embedding_layer.bias.data.zero_()
+        if self.output_projection_layer is not None:
+            self.output_projection_layer.weight.data.normal_(
+                mean=0.0, std=self.INIT_STD
+            )
+            if self.output_projection_layer.bias is not None:
+                self.output_projection_layer.bias.data.zero_()
 
     def _recursive_concat(self, srcs: list[Tensor]) -> Tensor:
         if len(srcs) <= self.device_max_concat_length:
@@ -216,8 +218,8 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
             srcs.append(self._with_position(col, src_t))
 
         output = self._recursive_concat(srcs)
-        if self.joint_embedding_layer is not None:
-            output = self.joint_embedding_layer(output)
+        if self.output_projection_layer is not None:
+            output = self.output_projection_layer(output)
         return output
 
 
@@ -258,9 +260,9 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
             self.pos_encoder = None
 
         if self.output_dim != self.input_dim:
-            self.joint_embedding_layer = nn.Linear(self.input_dim, self.output_dim)
+            self.output_projection_layer = nn.Linear(self.input_dim, self.output_dim)
         else:
-            self.joint_embedding_layer = None
+            self.output_projection_layer = None
 
     def initialize_weights(self) -> None:
         if self.pos_encoder is not None:
@@ -269,10 +271,12 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
                     mean=0.0, std=self.INIT_STD
                 )
 
-        if self.joint_embedding_layer is not None:
-            self.joint_embedding_layer.weight.data.normal_(mean=0.0, std=self.INIT_STD)
-            if self.joint_embedding_layer.bias is not None:
-                self.joint_embedding_layer.bias.data.zero_()
+        if self.output_projection_layer is not None:
+            self.output_projection_layer.weight.data.normal_(
+                mean=0.0, std=self.INIT_STD
+            )
+            if self.output_projection_layer.bias is not None:
+                self.output_projection_layer.bias.data.zero_()
 
     def _recursive_concat(self, srcs: list[Tensor]) -> Tensor:
         if len(srcs) <= self.device_max_concat_length:
@@ -287,8 +291,8 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
         return self._recursive_concat(srcs_inner)
 
     def _target_dtype(self, src: dict[str, Tensor]) -> torch.dtype:
-        if self.joint_embedding_layer is not None:
-            return self.joint_embedding_layer.weight.dtype
+        if self.output_projection_layer is not None:
+            return self.output_projection_layer.weight.dtype
         if self.direct_real_dtype_provider is not None:
             return self.direct_real_dtype_provider()
         return src[self.real_columns[0]].dtype
@@ -313,9 +317,9 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
             srcs.append(self._with_position(col, src_t))
 
         output = self._recursive_concat(srcs)
-        if self.joint_embedding_layer is not None:
-            output = self.joint_embedding_layer(
-                output.to(dtype=self.joint_embedding_layer.weight.dtype)
+        if self.output_projection_layer is not None:
+            output = self.output_projection_layer(
+                output.to(dtype=self.output_projection_layer.weight.dtype)
             )
         return output
 
@@ -1384,8 +1388,6 @@ def _build_direct_embed_ingestion(
     )
     feature_embedding_dims = _feature_dims_for_columns(hparams, columns)
     output_dim = ingestion_config.output_dim
-    if use_top_level_joint and output_dim is None:
-        output_dim = hparams.model_spec.joint_embedding_dim
 
     embedding_size = (
         hparams.model_spec.initial_embedding_dim

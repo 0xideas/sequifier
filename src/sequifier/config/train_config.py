@@ -781,7 +781,6 @@ class ModelSpecModel(BaseModel):
 
     initial_embedding_dim: int
     feature_embedding_dims: Optional[dict[str, int]] = None
-    joint_embedding_dim: Optional[int] = None
     ingestion_layer_config: IngestionLayerConfig = Field(
         default_factory=DirectEmbedIngestionConfig
     )
@@ -809,7 +808,6 @@ class ModelSpecModel(BaseModel):
     @classmethod
     def validate_dim_model(cls, v, info):
         initial_embedding_dim = info.data.get("initial_embedding_dim")
-        joint_embedding_dim = info.data.get("joint_embedding_dim")
         ingestion_layer_config = info.data.get("ingestion_layer_config")
         dim_model = v
 
@@ -825,16 +823,12 @@ class ModelSpecModel(BaseModel):
         if isinstance(ingestion_layer_config, PassThroughIngestionConfig):
             return v
 
-        if joint_embedding_dim is None:
-            if not v == initial_embedding_dim:
-                raise ValueError(
-                    f"If no joint_embedding_dim is configured, dim_model must be equal to initial_embedding_dim, {dim_model = } != {initial_embedding_dim = }"
-                )
-        else:
-            if not v == joint_embedding_dim:
-                raise ValueError(
-                    f"If joint_embedding_dim is configured it must be equal to dim_model, {dim_model = } != {joint_embedding_dim = }"
-                )
+        if not v == initial_embedding_dim:
+            raise ValueError(
+                "If ingestion_layer_config.output_dim is not configured, "
+                "dim_model must be equal to initial_embedding_dim, "
+                f"{dim_model = } != {initial_embedding_dim = }"
+            )
 
         return v
 

@@ -485,7 +485,6 @@ class ModelSpecHyperparameterSampling(BaseModel):
     """Model-architecture search space with paired width choices."""
 
     initial_embedding_dim: list[int]
-    joint_embedding_dim: list[Optional[int]]
     dim_model: list[int]
     feature_embedding_dims: Optional[list[dict[str, int]]]
     ingestion_layer_config: Optional[
@@ -549,12 +548,6 @@ class ModelSpecHyperparameterSampling(BaseModel):
                     "initial_embedding_dim must have the same number of values as dim_model"
                 )
 
-        if "joint_embedding_dim" in info.data:
-            if len(info.data["joint_embedding_dim"]) != dim_model_len:
-                raise ValueError(
-                    "joint_embedding_dim must have the same number of values as dim_model"
-                )
-
         return v
 
     def sample_trial(self, trial: Any) -> ModelSpecModel:
@@ -564,7 +557,6 @@ class ModelSpecHyperparameterSampling(BaseModel):
         )
 
         initial_embedding_dim = self.initial_embedding_dim[dim_model_idx]
-        joint_embedding_dim = self.joint_embedding_dim[dim_model_idx]
         dim_model = self.dim_model[dim_model_idx]
         n_head = self.n_head[dim_model_idx]
         feature_embedding_dims = (
@@ -610,13 +602,12 @@ class ModelSpecHyperparameterSampling(BaseModel):
             n_kv_heads = trial.suggest_categorical("n_kv_heads", valid_kv_heads)
 
         logger.info(
-            f"{initial_embedding_dim} - {joint_embedding_dim = } - {dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
+            f"{initial_embedding_dim} - {dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
         )
 
         model_spec_kwargs = {
             "initial_embedding_dim": initial_embedding_dim,
             "feature_embedding_dims": feature_embedding_dims,
-            "joint_embedding_dim": joint_embedding_dim,
             "dim_model": dim_model,
             "n_head": n_head,
             "dim_feedforward": dim_feedforward,

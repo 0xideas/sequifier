@@ -778,7 +778,6 @@ class TransformerModel(nn.Module):
         self.objective = create_objective(hparams)
         self.dim_model = self.hparams.model_spec.dim_model
         self.initial_embedding_dim = self.hparams.model_spec.initial_embedding_dim
-        self.joint_embedding_dim = hparams.model_spec.joint_embedding_dim
 
         self.use_rope = hparams.model_spec.positional_encoding == "rope"
         if hparams.model_spec.feature_embedding_dims is not None:
@@ -905,10 +904,6 @@ class TransformerModel(nn.Module):
     @property
     def real_columns_direct(self) -> list[str]:
         return getattr(self.ingestion, "real_columns_direct", [])
-
-    @property
-    def joint_embedding_layer(self):
-        return getattr(self.ingestion, "joint_embedding_layer", None)
 
     def _ingestion_direct_real_dtype(self) -> torch.dtype:
         return self.layers[0].ff.get_first_layer_dtype()

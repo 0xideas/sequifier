@@ -44,8 +44,7 @@ These fields determine the size and complexity of the Transformer.
 | `n_head` | `int` | **Yes** | - | Number of attention heads. `dim_model` must be divisible by `n_head`. |
 | `num_layers` | `int` | **Yes** | - | Number of transformer encoder layers. |
 | `dim_feedforward` | `int` | **Yes** | - | Dimension of the feedforward network model ($d_{ff}$). |
-| `initial_embedding_dim`| `int` | **Yes** | - | Size of initial feature embeddings. Must equal`dim_model` unless a `joint_embedding_dim` is configured. |
-| `joint_embedding_dim` | `int` | No | `null` | If set, projects concatenated inputs to this dim before the transformer. If set, must equal `dim_model`. |
+| `initial_embedding_dim`| `int` | **Yes** | - | Size of initial feature embeddings for `direct_embed`. Must equal `dim_model` unless `ingestion_layer_config.output_dim` is configured. |
 | `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
 | `feature_embedding_dims`| `dict` | No | `null` | Manual map of column names to embedding sizes. If `null`, sizes are auto-calculated. This works only if there are *only* real or *only* categorical variables, and `initial_embedding_dim` is divisible by the number of variables |
 | `ingestion_layer_config` | `dict` | No | `{type: direct_embed}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |

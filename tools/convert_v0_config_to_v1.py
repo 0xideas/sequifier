@@ -54,9 +54,6 @@ def convert_model_spec(ms, is_hp_search=False):
         rename_key(ms, "d_model", "dim_model")
         ms["initial_embedding_dim"] = val
 
-        if is_hp_search:
-            ms["joint_embedding_dim"] = [None] * len(val)
-
     if "d_model_by_column" in ms:
         rename_key(ms, "d_model_by_column", "feature_embedding_dims")
 

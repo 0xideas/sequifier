@@ -406,8 +406,7 @@ These fields determine the size and complexity of the Transformer.
 | `n_head` | `int` | **Yes** | - | Number of attention heads. `dim_model` must be divisible by `n_head`. |
 | `num_layers` | `int` | **Yes** | - | Number of transformer encoder layers. |
 | `dim_feedforward` | `int` | **Yes** | - | Dimension of the feedforward network model ($d_{ff}$). |
-| `initial_embedding_dim`| `int` | **Yes** | - | Size of initial feature embeddings. Must equal`dim_model` unless a `joint_embedding_dim` is configured. |
-| `joint_embedding_dim` | `int` | No | `null` | If set, projects concatenated inputs to this dim before the transformer. If set, must equal `dim_model`. |
+| `initial_embedding_dim`| `int` | **Yes** | - | Size of initial feature embeddings for `direct_embed`. Must equal `dim_model` unless `ingestion_layer_config.output_dim` is configured. |
 | `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
 | `feature_embedding_dims`| `dict` | No | `null` | Manual map of column names to embedding sizes. If `null`, sizes are auto-calculated. This works only if there are *only* real or *only* categorical variables, and `initial_embedding_dim` is divisible by the number of variables |
 | `ingestion_layer_config` | `dict` | No | `{type: direct_embed}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |
@@ -1066,7 +1065,6 @@ dim_feedforward:
 | `ingestion_layer_config` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed}`. |
 | `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. If omitted for multiple ingestions, defaults to `{type: concat, output_dim: dim_model}`. |
 | `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. |
-| `joint_embedding_dim` | `list[int or null]` | **Yes** | Joint embedding size. If not null, must match `dim_model`. |
 | `prediction_length` | `int` | **Yes** | Number of steps to predict simultaneously. BERT trials override this to the sampled `context_length`. |
 | `activation_fn` | `list[str]` | **Yes** | E.g., `['swiglu', 'gelu']`. |
 | `attention_type` | `list[str]` | **Yes** | E.g., `['mha', 'mqa']`. |
@@ -1131,7 +1129,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 | Group | Anchor Field | Linked Fields (Must match index) | Reason for Linkage |
 | :--- | :--- | :--- | :--- |
-| **Model Backbone** | `dim_model` | `n_head`<br>`initial_embedding_dim`<br>`joint_embedding_dim`<br>`feature_embedding_dims`<br>`ingestion_layer_config` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines embedding sizes and must be divisible by the number of heads. Ingestion configs with explicit output dimensions often need the same pairing. |
+| **Model Backbone** | `dim_model` | `n_head`<br>`initial_embedding_dim`<br>`feature_embedding_dims`<br>`ingestion_layer_config` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines embedding sizes and must be divisible by the number of heads. Ingestion configs with explicit output dimensions often need the same pairing. |
 | **Training Schedule** | `learning_rate` | `epochs`<br>`scheduler` | The magnitude of the learning rate often dictates how many epochs are needed. Schedulers often require `T_max` to match `epochs`. |
 | **Data Schema** | `input_columns` | `column_types` | Different subsets of columns require specific data type definitions. |
 
