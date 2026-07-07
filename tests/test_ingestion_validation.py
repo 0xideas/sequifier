@@ -1,6 +1,9 @@
 import pytest
 import torch
 
+from sequifier.config.hyperparameter_search_config import (
+    ModelSpecHyperparameterSampling,
+)
 from sequifier.config.train_config import (
     AxisAttentionBlockModel,
     AxisConvBlockModel,
@@ -18,6 +21,7 @@ from sequifier.model.ingestions import (
     IngestionMerge,
     StructuredFeatureIngestion,
     TemporalConvFeatureIngestion,
+    _AxisConvBlock,
     _split_columns,
 )
 
@@ -32,6 +36,26 @@ def _model_spec(**overrides):
     }
     values.update(overrides)
     return ModelSpecModel(**values)
+
+
+def _model_hparam_sampling(**overrides):
+    values = {
+        "dim_model": [4],
+        "ingestion_spec": None,
+        "n_head": [2],
+        "dim_feedforward": [8],
+        "num_layers": [1],
+        "prediction_length": 1,
+        "activation_fn": ["swiglu"],
+        "normalization": ["rmsnorm"],
+        "positional_encoding": ["learned"],
+        "attention_type": ["mha"],
+        "norm_first": [True],
+        "n_kv_heads": [None],
+        "rope_theta": [10000.0],
+    }
+    values.update(overrides)
+    return ModelSpecHyperparameterSampling(**values)
 
 
 def _train_config(
@@ -112,6 +136,24 @@ def test_provided_ingestion_configs_require_output_dim():
     assert ingestion_spec is not None
     assert not isinstance(ingestion_spec, dict)
     assert ingestion_spec.output_dim == 4
+
+
+def test_fixed_single_ingestion_hparam_must_match_all_dim_model_candidates():
+    with pytest.raises(Exception, match="fixed single-branch"):
+        _model_hparam_sampling(
+            dim_model=[4, 8],
+            n_head=[2, 2],
+            ingestion_spec={"type": "direct_embed", "output_dim": 4},
+        )
+
+    _model_hparam_sampling(
+        dim_model=[4, 8],
+        n_head=[2, 2],
+        ingestion_spec=[
+            {"type": "direct_embed", "output_dim": 4},
+            {"type": "direct_embed", "output_dim": 8},
+        ],
+    )
 
 
 def test_module_dict_unsafe_branch_and_group_names_are_rejected():
@@ -227,6 +269,11 @@ def test_runtime_module_dict_key_guards():
         )
 
 
+def test_invalid_runtime_merge_type_is_rejected():
+    with pytest.raises(ValueError, match="merge_type"):
+        IngestionMerge("invalid", {"a": 4}, 4)
+
+
 def test_merge_and_temporal_conv_layers_use_custom_initializer():
     torch.manual_seed(1)
     merge = IngestionMerge("gated", {"a": 2, "b": 4}, 4)
@@ -278,6 +325,65 @@ def test_merge_and_temporal_conv_layers_use_custom_initializer():
         temporal_conv.layers[0].bias,
         torch.zeros_like(temporal_conv.layers[0].bias),
     )
+
+
+def test_temporal_conv_casts_inputs_to_conv_weight_dtype():
+    class BFloatBaseIngestion(torch.nn.Module):
+        output_dim = 4
+
+        def forward(self, src, metadata):
+            return torch.ones(2, 4, self.output_dim, dtype=torch.bfloat16)
+
+        def initialize_weights(self):
+            return None
+
+    temporal_conv = TemporalConvFeatureIngestion(
+        base_ingestion=BFloatBaseIngestion(),
+        output_dim=4,
+        kernel_size=3,
+        dilation=1,
+        num_layers=1,
+        causal=True,
+        activation_fn="gelu",
+        dropout=0.0,
+    )
+
+    output = temporal_conv({}, {})
+
+    assert output.dtype == temporal_conv.layers[0].weight.dtype
+
+
+def test_axis_conv_casts_inputs_to_conv_weight_dtype():
+    block = _AxisConvBlock(
+        axes=["row"],
+        unshared_axes=[],
+        output_dim=2,
+        kernel_size=3,
+        active_axes=["row"],
+        axis_sizes={"row": 3},
+        input_dim=2,
+    )
+    x = torch.ones(2, 4, 3, 2, dtype=torch.bfloat16)
+
+    output = block(x)
+
+    assert output.dtype == block.layers["shared"].weight.dtype
+
+    unshared_block = _AxisConvBlock(
+        axes=["row"],
+        unshared_axes=["slice"],
+        output_dim=2,
+        kernel_size=3,
+        active_axes=["slice", "row"],
+        axis_sizes={"slice": 2, "row": 3},
+        input_dim=2,
+    )
+    x = torch.ones(2, 4, 2, 3, 2, dtype=torch.bfloat16)
+
+    output = unshared_block(x)
+    first_layer = next(iter(unshared_block.layers.values()))
+
+    assert output.dtype == first_layer.weight.dtype
 
 
 def test_structured_processing_blocks_use_custom_initializer():

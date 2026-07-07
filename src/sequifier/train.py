@@ -929,6 +929,15 @@ class TransformerModel(nn.Module):
                 target_dtype = get_torch_dtype(layer_config["embedding"])
                 module.to(dtype=target_dtype)
 
+            elif isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+                conv_dtype = (
+                    layer_config.get("conv")
+                    or layer_config.get("linear")
+                    or layer_config.get("embedding")
+                )
+                if conv_dtype is not None:
+                    module.to(dtype=get_torch_dtype(conv_dtype))
+
             elif isinstance(module, (nn.LayerNorm, RMSNorm)) and "norm" in layer_config:
                 target_dtype = get_torch_dtype(layer_config["norm"])
                 module.to(dtype=target_dtype)

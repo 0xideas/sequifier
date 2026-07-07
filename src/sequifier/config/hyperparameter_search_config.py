@@ -340,7 +340,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     @field_validator("layer_type_dtypes")
     @classmethod
     def validate_layer_type_dtypes(cls, v):
-        expected_keys = ["embedding", "linear", "norm", "decoder"]
+        expected_keys = ["embedding", "linear", "conv", "norm", "decoder"]
         allowed_types = [
             "float32",
             "float16",
@@ -530,6 +530,26 @@ class ModelSpecHyperparameterSampling(BaseModel):
             )
 
         return v
+
+    @model_validator(mode="after")
+    def validate_fixed_single_ingestion_matches_dim_model(self):
+        if self.ingestion_spec is None or isinstance(self.ingestion_spec, (dict, list)):
+            return self
+
+        mismatched_dim_models = [
+            dim_model
+            for dim_model in self.dim_model
+            if dim_model != self.ingestion_spec.output_dim
+        ]
+        if mismatched_dim_models:
+            raise ValueError(
+                "model_hyperparameter_sampling.ingestion_spec.output_dim must "
+                "match every dim_model candidate when a fixed single-branch "
+                "ingestion_spec is provided. Provide ingestion_spec as a list "
+                "paired with dim_model for variable widths."
+            )
+
+        return self
 
     def sample_trial(self, trial: Any) -> ModelSpecModel:
         """Sample architecture hyperparameters for one Optuna trial."""

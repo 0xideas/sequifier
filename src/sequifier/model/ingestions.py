@@ -442,7 +442,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         output = self.base_ingestion(src, metadata)
         for layer in self.layers:
-            conv_input = output.transpose(1, 2)
+            conv_input = output.transpose(1, 2).to(dtype=layer.weight.dtype)
             conv_input = F.pad(conv_input, self._temporal_padding())
             output = layer(conv_input).transpose(1, 2)
             output = self.drop(self.activation(output))
@@ -742,7 +742,8 @@ class _AxisProjectionBlock(_AxisWeightInitializer, nn.Module):
             + [self.axis_sizes[axis] for axis in self.output_axes]
             + [self.output_dim]
         )
-        output = x.new_zeros(output_shape)
+        first_layer = cast(nn.Linear, next(iter(self.layers.values())))
+        output = x.new_zeros(output_shape, dtype=first_layer.weight.dtype)
         remaining_axes = [
             axis for axis in self.active_axes if axis not in self.unshared_axes
         ]
@@ -842,8 +843,9 @@ class _AxisConvBlock(_AxisWeightInitializer, nn.Module):
         x = x.permute(*permute_dims)
         leading_shape = x.shape[: 2 + len(other_axes)]
         sweep_shape = [self.axis_sizes[axis] for axis in sweep_axes]
+        conv_layer = cast(nn.Conv1d | nn.Conv2d | nn.Conv3d, layer)
         x = x.reshape(-1, self.input_dim, *sweep_shape)
-        x = layer(x)
+        x = conv_layer(x.to(dtype=conv_layer.weight.dtype))
         x = x.reshape(*leading_shape, self.output_dim, *sweep_shape)
 
         axis_to_dim = {axis: 2 + index for index, axis in enumerate(other_axes)} | {
@@ -869,7 +871,10 @@ class _AxisConvBlock(_AxisWeightInitializer, nn.Module):
             + [self.axis_sizes[axis] for axis in self.output_axes]
             + [self.output_dim]
         )
-        output = x.new_zeros(output_shape)
+        first_layer = cast(
+            nn.Conv1d | nn.Conv2d | nn.Conv3d, next(iter(self.layers.values()))
+        )
+        output = x.new_zeros(output_shape, dtype=first_layer.weight.dtype)
         remaining_axes = [
             axis for axis in self.active_axes if axis not in self.unshared_axes
         ]
@@ -1319,7 +1324,7 @@ class IngestionMerge(nn.Module):
                 if input_dim != self.output_dim
                 else nn.Identity()
             )
-        else:
+        elif self.merge_type in {"sum", "gated", "attention"}:
             self.branch_projections = ModuleDict(
                 {
                     name: (
@@ -1336,6 +1341,11 @@ class IngestionMerge(nn.Module):
                 )
             elif self.merge_type == "attention":
                 self.query = nn.Parameter(torch.zeros(self.output_dim))
+        else:
+            raise ValueError(
+                "merge_type must be one of 'concat', 'sum', 'gated', or "
+                f"'attention', got {self.merge_type!r}"
+            )
 
     def _initialize_linear_weights(self, layer: nn.Linear) -> None:
         layer.weight.data.normal_(mean=0.0, std=self.INIT_STD)
