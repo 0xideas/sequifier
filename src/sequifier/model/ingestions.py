@@ -1,7 +1,7 @@
 import math
 from collections.abc import Callable
 from itertools import product
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import torch
 import torch.nn.functional as F
@@ -99,6 +99,14 @@ class BaseFeatureIngestion(nn.Module):
     def initialize_weights(self) -> None:
         return None
 
+    def _initialize_linear_weights(self, layer: nn.Linear) -> None:
+        layer.weight.data.normal_(mean=0.0, std=self.INIT_STD)
+        if layer.bias is not None:
+            layer.bias.data.zero_()
+
+    def _scale_inputs(self, x: Tensor) -> Tensor:
+        return x * math.sqrt(self.output_dim)
+
 
 class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
     """The original sequifier per-column embedding path."""
@@ -170,20 +178,19 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
 
     def initialize_weights(self) -> None:
         for col in self.categorical_columns:
-            self.encoder[col].weight.data.normal_(mean=0.0, std=self.INIT_STD)
+            embedding = cast(nn.Embedding, self.encoder[col])
+            embedding.weight.data.normal_(mean=0.0, std=self.INIT_STD)
+
+        for col in self.real_columns:
+            self._initialize_linear_weights(cast(nn.Linear, self.encoder[col]))
 
         if self.pos_encoder is not None:
             for col_name in self.pos_encoder:
-                self.pos_encoder[col_name].weight.data.normal_(
-                    mean=0.0, std=self.INIT_STD
-                )
+                pos_embedding = cast(nn.Embedding, self.pos_encoder[col_name])
+                pos_embedding.weight.data.normal_(mean=0.0, std=self.INIT_STD)
 
         if self.output_projection_layer is not None:
-            self.output_projection_layer.weight.data.normal_(
-                mean=0.0, std=self.INIT_STD
-            )
-            if self.output_projection_layer.bias is not None:
-                self.output_projection_layer.bias.data.zero_()
+            self._initialize_linear_weights(self.output_projection_layer)
 
     def _recursive_concat(self, srcs: list[Tensor]) -> Tensor:
         if len(srcs) <= self.device_max_concat_length:
@@ -210,15 +217,15 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
 
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         srcs = []
-        scale = math.sqrt(self.embedding_size)
         for col in self.categorical_columns:
-            src_t = self.encoder[col](embedding_safe_indices(src[col])) * scale
+            embedding = cast(nn.Embedding, self.encoder[col])
+            src_t = self._scale_inputs(embedding(embedding_safe_indices(src[col])))
             srcs.append(self._with_position(col, src_t))
 
         for col in self.real_columns:
-            layer = self.encoder[col]
+            layer = cast(nn.Linear, self.encoder[col])
             inp = src[col][:, :, None].to(dtype=layer.weight.dtype)
-            src_t = layer(inp) * scale
+            src_t = self._scale_inputs(layer(inp))
 
             srcs.append(self._with_position(col, src_t))
 
@@ -272,16 +279,11 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
     def initialize_weights(self) -> None:
         if self.pos_encoder is not None:
             for col_name in self.pos_encoder:
-                self.pos_encoder[col_name].weight.data.normal_(
-                    mean=0.0, std=self.INIT_STD
-                )
+                pos_embedding = cast(nn.Embedding, self.pos_encoder[col_name])
+                pos_embedding.weight.data.normal_(mean=0.0, std=self.INIT_STD)
 
         if self.output_projection_layer is not None:
-            self.output_projection_layer.weight.data.normal_(
-                mean=0.0, std=self.INIT_STD
-            )
-            if self.output_projection_layer.bias is not None:
-                self.output_projection_layer.bias.data.zero_()
+            self._initialize_linear_weights(self.output_projection_layer)
 
     def _recursive_concat(self, srcs: list[Tensor]) -> Tensor:
         if len(srcs) <= self.device_max_concat_length:
@@ -315,10 +317,9 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
 
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         srcs = []
-        scale = math.sqrt(self.embedding_size)
         target_dtype = self._target_dtype(src)
         for col in self.real_columns:
-            src_t = src[col].unsqueeze(2).to(dtype=target_dtype) * scale
+            src_t = self._scale_inputs(src[col].unsqueeze(2).to(dtype=target_dtype))
             srcs.append(self._with_position(col, src_t))
 
         output = self._recursive_concat(srcs)
@@ -433,15 +434,19 @@ class _ColumnTokenIngestion(BaseFeatureIngestion):
 
     def initialize_weights(self) -> None:
         for col in self.categorical_columns:
-            self.encoder[col].weight.data.normal_(mean=0.0, std=self.INIT_STD)
+            embedding = cast(nn.Embedding, self.encoder[col])
+            embedding.weight.data.normal_(mean=0.0, std=self.INIT_STD)
+        for col in self.real_columns:
+            self._initialize_linear_weights(cast(nn.Linear, self.encoder[col]))
         if self.pos_encoder is not None:
             self.pos_encoder.weight.data.normal_(mean=0.0, std=self.INIT_STD)
 
     def _encode_column(self, col: str, src: dict[str, Tensor]) -> Tensor:
         if col in self.categorical_columns:
-            return self.encoder[col](embedding_safe_indices(src[col]))
+            embedding = cast(nn.Embedding, self.encoder[col])
+            return embedding(embedding_safe_indices(src[col]))
 
-        layer = self.encoder[col]
+        layer = cast(nn.Linear, self.encoder[col])
         return layer(src[col][:, :, None].to(dtype=layer.weight.dtype))
 
     def _with_position(self, x: Tensor) -> Tensor:
@@ -450,6 +455,9 @@ class _ColumnTokenIngestion(BaseFeatureIngestion):
         pos = torch.arange(0, self.context_length, dtype=torch.long, device=x.device)
         pos = pos.repeat(x.shape[0], 1)
         return self.drop(x + self.pos_encoder(pos))  # type: ignore[operator]
+
+    def _with_scaled_position(self, x: Tensor) -> Tensor:
+        return self._with_position(self._scale_inputs(x))
 
 
 class FeaturePoolFeatureIngestion(_ColumnTokenIngestion):
@@ -470,7 +478,7 @@ class FeaturePoolFeatureIngestion(_ColumnTokenIngestion):
         tokens = torch.stack(encoded, dim=2)
         feature_embedding = self.feature_embedding.to(dtype=tokens.dtype)
         tokens = tokens + feature_embedding[None, None, :, :]
-        return self._with_position(tokens.mean(dim=2))
+        return self._with_scaled_position(tokens.mean(dim=2))
 
 
 class GroupedFeatureIngestion(BaseFeatureIngestion):
@@ -562,6 +570,8 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
     def initialize_weights(self) -> None:
         if self.categorical_encoder is not None:
             self.categorical_encoder.weight.data.normal_(mean=0.0, std=self.INIT_STD)
+        if self.real_encoder is not None:
+            self._initialize_linear_weights(self.real_encoder)
         if self.pos_encoder is not None:
             self.pos_encoder.weight.data.normal_(mean=0.0, std=self.INIT_STD)
 
@@ -585,7 +595,8 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
                         src[col][:, :, None].to(dtype=self.real_encoder.weight.dtype)  # type: ignore
                     )
                 )
-        return self._with_position(torch.stack(encoded, dim=2).mean(dim=2))
+        output = torch.stack(encoded, dim=2).mean(dim=2)
+        return self._with_position(self._scale_inputs(output))
 
 
 def _product(values: list[int]) -> int:
@@ -1200,7 +1211,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         dense_cells = self._apply_axis_embeddings(self._dense_cells(src))
         if not self.axis_blocks:
             axis_dims = tuple(range(2, 2 + len(self.axis_sizes)))
-            return self._with_position(dense_cells.mean(dim=axis_dims))
+            return self._with_scaled_position(dense_cells.mean(dim=axis_dims))
 
         output = dense_cells
         for block in self.axis_blocks:
@@ -1210,7 +1221,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
             axis_dims = tuple(range(2, 2 + len(self.active_axes_after_blocks)))
             output = output.mean(dim=axis_dims)
 
-        return self._with_position(output)
+        return self._with_scaled_position(output)
 
 
 class IngestionMerge(nn.Module):

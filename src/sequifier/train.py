@@ -1034,7 +1034,7 @@ class TransformerModel(nn.Module):
     @conditional_beartype
     def _zero_padding_positions(self, x: Tensor, valid_mask: Tensor) -> Tensor:
         """Zero padded query positions after attention/FFN layers."""
-        return x * valid_mask[:, :, None].to(dtype=x.dtype)
+        return x.masked_fill(~valid_mask[:, :, None], 0.0)
 
     @conditional_beartype
     def forward_inner(
@@ -1999,9 +1999,7 @@ class TransformerModel(nn.Module):
                     f"{target_column!r}: loss has {raw_loss.numel()} elements "
                     f"but mask has {mask.numel()}."
                 )
-            current_mask = mask.to(dtype=raw_loss.dtype)
-
-            loss_sums[target_column] = (raw_loss * current_mask).sum()
+            loss_sums[target_column] = raw_loss.masked_select(mask).sum()
 
         return loss_sums, token_count
 
