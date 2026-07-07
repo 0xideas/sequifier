@@ -166,6 +166,9 @@ class SelfAttention(nn.Module):
             xk = xk.repeat_interleave(n_rep, dim=1)
             xv = xv.repeat_interleave(n_rep, dim=1)
 
+        if mask is not None and mask.is_floating_point() and mask.dtype != xq.dtype:
+            mask = mask.to(dtype=xq.dtype)
+
         # Scaled Dot Product Attention
         output = F.scaled_dot_product_attention(
             xq,
