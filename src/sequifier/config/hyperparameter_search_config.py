@@ -533,7 +533,24 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
     @model_validator(mode="after")
     def validate_fixed_single_ingestion_matches_dim_model(self):
-        if self.ingestion_spec is None or isinstance(self.ingestion_spec, (dict, list)):
+        if self.ingestion_spec is None or isinstance(self.ingestion_spec, dict):
+            return self
+
+        if isinstance(self.ingestion_spec, list):
+            mismatched_candidates = [
+                (index, dim_model, ingestion_spec.output_dim)
+                for index, (dim_model, ingestion_spec) in enumerate(
+                    zip(self.dim_model, self.ingestion_spec)
+                )
+                if not isinstance(ingestion_spec, dict)
+                and dim_model != ingestion_spec.output_dim
+            ]
+            if mismatched_candidates:
+                raise ValueError(
+                    "model_hyperparameter_sampling.ingestion_spec list candidates "
+                    "must match their paired dim_model values for single-branch "
+                    f"ingestions. Mismatches: {mismatched_candidates}"
+                )
             return self
 
         mismatched_dim_models = [

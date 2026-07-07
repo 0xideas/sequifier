@@ -8,6 +8,12 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn import ModuleDict
 
+from sequifier.model.dtypes import (
+    cast_floating_to_dtype,
+    cast_floating_to_module_dtype,
+    module_param_dtype,
+)
+
 EMBEDDING_INDEX_DTYPES = (torch.int32, torch.int64)
 NARROW_EMBEDDING_INDEX_DTYPES = (
     torch.int8,
@@ -262,6 +268,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         if self.use_rope:
             return self.drop(src_t)
         src_p = self._position_encoding(col, src_t.shape[0], src_t.device)
+        src_p = cast_floating_to_dtype(src_p, src_t.dtype)
         return self.drop(src_t + src_p)
 
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
@@ -280,7 +287,9 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
 
         output = self._recursive_concat(srcs)
         if self.output_projection_layer is not None:
-            output = self.output_projection_layer(output)
+            output = self.output_projection_layer(
+                cast_floating_to_module_dtype(output, self.output_projection_layer)
+            )
         return output
 
 
@@ -362,6 +371,7 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
         if self.use_rope:
             return self.drop(src_t)
         src_p = self._position_encoding(col, src_t.shape[0], src_t.device)
+        src_p = cast_floating_to_dtype(src_p, src_t.dtype)
         return self.drop(src_t + src_p)
 
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
@@ -505,7 +515,9 @@ class _ColumnTokenIngestion(BaseFeatureIngestion):
             return self.drop(x)
         pos = torch.arange(0, self.context_length, dtype=torch.long, device=x.device)
         pos = pos.repeat(x.shape[0], 1)
-        return self.drop(x + self.pos_encoder(pos))  # type: ignore[operator]
+        pos_embedding = self.pos_encoder(pos)  # type: ignore[operator]
+        pos_embedding = cast_floating_to_dtype(pos_embedding, x.dtype)
+        return self.drop(x + pos_embedding)
 
     def _with_scaled_position(self, x: Tensor) -> Tensor:
         return self._with_position(self._scale_inputs(x))
@@ -634,7 +646,9 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
             return self.drop(x)
         pos = torch.arange(0, self.context_length, dtype=torch.long, device=x.device)
         pos = pos.repeat(x.shape[0], 1)
-        return self.drop(x + self.pos_encoder(pos))  # type: ignore[operator]
+        pos_embedding = self.pos_encoder(pos)  # type: ignore[operator]
+        pos_embedding = cast_floating_to_dtype(pos_embedding, x.dtype)
+        return self.drop(x + pos_embedding)
 
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         encoded = []
@@ -726,6 +740,7 @@ class _AxisProjectionBlock(_AxisWeightInitializer, nn.Module):
         x = x.permute(*permute_dims)
         leading_shape = x.shape[: 2 + len(keep_axes)]
         x = x.reshape(-1, layer.in_features)
+        x = cast_floating_to_module_dtype(x, layer)
         x = layer(x)
         return x.reshape(*leading_shape, self.output_dim)
 
@@ -934,7 +949,9 @@ class _AxisAttentionLayer(_AxisWeightInitializer, nn.Module):
         self._initialize_attention_weights(self.attention)
 
     def forward(self, x: Tensor) -> Tensor:
+        x = cast_floating_to_module_dtype(x, self.input_projection)
         x = self.input_projection(x)
+        x = cast_floating_to_module_dtype(x, self.attention)
         output, _ = self.attention(x, x, x, need_weights=False)
         return output
 
@@ -1026,7 +1043,9 @@ class _AxisAttentionBlock(_AxisWeightInitializer, nn.Module):
             + [self.axis_sizes[axis] for axis in self.output_axes]
             + [self.output_dim]
         )
-        output = x.new_zeros(output_shape)
+        first_layer = cast(_AxisAttentionLayer, next(iter(self.layers.values())))
+        output_dtype = module_param_dtype(first_layer) or x.dtype
+        output = x.new_zeros(output_shape, dtype=output_dtype)
         remaining_axes = [
             axis for axis in self.active_axes if axis not in self.unshared_axes
         ]
@@ -1373,10 +1392,16 @@ class IngestionMerge(nn.Module):
                 [branch_outputs[name] for name in self.branch_names],
                 dim=-1,
             )
-            return self.concat_projection(merged)
+            return self.concat_projection(
+                cast_floating_to_module_dtype(merged, self.concat_projection)
+            )
 
         projected = [
-            self.branch_projections[name](branch_outputs[name])
+            self.branch_projections[name](
+                cast_floating_to_module_dtype(
+                    branch_outputs[name], self.branch_projections[name]
+                )
+            )
             for name in self.branch_names
         ]
         stacked = torch.stack(projected, dim=2)
@@ -1385,7 +1410,10 @@ class IngestionMerge(nn.Module):
 
         if self.merge_type == "gated":
             gate_input = torch.cat(projected, dim=-1)
-            weights = torch.softmax(self.gate(gate_input), dim=-1)
+            weights = torch.softmax(
+                self.gate(cast_floating_to_module_dtype(gate_input, self.gate)),
+                dim=-1,
+            )
             return (stacked * weights[:, :, :, None]).sum(dim=2)
 
         query = self.query.to(dtype=stacked.dtype)

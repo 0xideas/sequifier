@@ -93,6 +93,7 @@ from sequifier.io.sequifier_dataset_from_folder_pt import (  # noqa: E402
 from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
     SequifierDatasetFromFolderPtLazy,
 )
+from sequifier.model.dtypes import cast_floating_to_module_dtype  # noqa: E402
 from sequifier.model.ingestions import build_feature_ingestion  # noqa: E402
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.objectives import create_objective  # noqa: E402
@@ -938,6 +939,11 @@ class TransformerModel(nn.Module):
                 if conv_dtype is not None:
                     module.to(dtype=get_torch_dtype(conv_dtype))
 
+            elif isinstance(module, nn.MultiheadAttention):
+                attention_dtype = layer_config.get("linear")
+                if attention_dtype is not None:
+                    module.to(dtype=get_torch_dtype(attention_dtype))
+
             elif isinstance(module, (nn.LayerNorm, RMSNorm)) and "norm" in layer_config:
                 target_dtype = get_torch_dtype(layer_config["norm"])
                 module.to(dtype=target_dtype)
@@ -1067,7 +1073,7 @@ class TransformerModel(nn.Module):
             src2 = layer(src2, src_mask=mask)
             src2 = self._zero_padding_positions(src2, valid_mask)
 
-        src2 = self.final_norm(src2)
+        src2 = self.final_norm(cast_floating_to_module_dtype(src2, self.final_norm))
         src2 = self._zero_padding_positions(src2, valid_mask)
 
         return src2.transpose(0, 1)
