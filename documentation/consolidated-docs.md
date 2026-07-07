@@ -407,7 +407,7 @@ These fields determine the size and complexity of the Transformer.
 | `num_layers` | `int` | **Yes** | - | Number of transformer encoder layers. |
 | `dim_feedforward` | `int` | **Yes** | - | Dimension of the feedforward network model ($d_{ff}$). |
 | `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
-| `ingestion_spec` | `dict` | No | `{type: direct_embed}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |
+| `ingestion_spec` | `dict` | No | `{type: direct_embed, output_dim: dim_model}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |
 | `ingestion_merge` | `dict` or `null` | No | `null` | Merge strategy for named multi-ingestion configs. Defaults to `{type: concat}` when omitted. Merge output width is always `dim_model`. |
 | `allow_shared_ingestion_columns` | `bool` | No | `false` | Allows the same flat input column to be consumed by more than one named ingestion stream. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
@@ -449,15 +449,18 @@ model_spec:
     type: concat
 ```
 
-For a single ingestion branch, `output_dim` is optional and defaults to
-`dim_model`. In named multi-ingestion configs, branch `output_dim` is required
-for branches without a natural width. `pass_through` naturally uses the number
-of real columns, and `direct_embed` naturally uses the sum of
-`feature_embedding_dims` when those dimensions are configured.
+If `ingestion_spec` is omitted, training uses `direct_embed` with
+`output_dim: dim_model`. Once an ingestion block is configured explicitly,
+every ingestion type must set `output_dim`. For a single top-level ingestion,
+`output_dim` must equal `dim_model`; for named multi-ingestion configs, each
+branch declares its own `output_dim` and the merge layer produces `dim_model`.
+Direct-embed `feature_embedding_dims`, when configured, must sum to the branch
+`output_dim`.
 
 ```yaml
 ingestion_spec:
   type: direct_embed
+  output_dim: 24
   feature_embedding_dims:
     customer_segment: 16
     spend_30d: 8
@@ -479,6 +482,7 @@ ingestion_spec:
   raw_prices:
     type: pass_through
     columns: [mid_price, spread]
+    output_dim: 2
 ```
 
 ```yaml
@@ -1067,7 +1071,7 @@ dim_feedforward:
 | `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
-| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed}`. |
+| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. |
 | `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. If omitted for multiple ingestions, defaults to `{type: concat}`. Merge output width is always `dim_model`. |
 | `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. |
 | `prediction_length` | `int` | **Yes** | Number of steps to predict simultaneously. BERT trials override this to the sampled `context_length`. |

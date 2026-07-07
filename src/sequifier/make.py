@@ -39,6 +39,7 @@ export_onnx: true
 model_spec:
   ingestion_spec:
     type: direct_embed
+    output_dim: 128
     feature_embedding_dims: # optional per-column embedding sizes for direct_embed
       EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical
   dim_model: 128

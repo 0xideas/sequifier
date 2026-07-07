@@ -35,6 +35,13 @@ def embedding_safe_indices(indices: Tensor) -> Tensor:
     return indices.to(dtype=target_dtype)
 
 
+def _validate_module_dict_key(key: str, usage: str) -> None:
+    if key == "":
+        raise ValueError(f"{usage} cannot be empty")
+    if "." in key:
+        raise ValueError(f"{usage} cannot contain '.'")
+
+
 def get_feature_embedding_dims(
     embedding_size: int,
     categorical_columns: list[str],
@@ -100,6 +107,11 @@ class BaseFeatureIngestion(nn.Module):
         return None
 
     def _initialize_linear_weights(self, layer: nn.Linear) -> None:
+        layer.weight.data.normal_(mean=0.0, std=self.INIT_STD)
+        if layer.bias is not None:
+            layer.bias.data.zero_()
+
+    def _initialize_conv1d_weights(self, layer: nn.Conv1d) -> None:
         layer.weight.data.normal_(mean=0.0, std=self.INIT_STD)
         if layer.bias is not None:
             layer.bias.data.zero_()
@@ -371,6 +383,8 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
 
     def initialize_weights(self) -> None:
         self.base_ingestion.initialize_weights()
+        for layer in self.layers:
+            self._initialize_conv1d_weights(layer)
 
     @staticmethod
     def _activation(name: str) -> nn.Module:
@@ -503,6 +517,9 @@ class GroupedFeatureIngestion(BaseFeatureIngestion):
         categorical_set = set(categorical_columns)
         real_set = set(real_columns)
         for group_name, group_columns in self.groups.items():
+            _validate_module_dict_key(
+                group_name, f"grouped ingestion group {group_name!r}"
+            )
             self.group_ingestions[group_name] = FeaturePoolFeatureIngestion(
                 columns=group_columns,
                 categorical_columns=[
@@ -1225,6 +1242,8 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
 
 
 class IngestionMerge(nn.Module):
+    INIT_STD = BaseFeatureIngestion.INIT_STD
+
     def __init__(self, merge_type: str, branch_dims: dict[str, int], output_dim: int):
         super().__init__()
         self.merge_type = merge_type
@@ -1256,6 +1275,26 @@ class IngestionMerge(nn.Module):
                 )
             elif self.merge_type == "attention":
                 self.query = nn.Parameter(torch.zeros(self.output_dim))
+
+    def _initialize_linear_weights(self, layer: nn.Linear) -> None:
+        layer.weight.data.normal_(mean=0.0, std=self.INIT_STD)
+        if layer.bias is not None:
+            layer.bias.data.zero_()
+
+    def initialize_weights(self) -> None:
+        if self.merge_type == "concat":
+            if isinstance(self.concat_projection, nn.Linear):
+                self._initialize_linear_weights(self.concat_projection)
+            return
+
+        for projection in self.branch_projections.values():
+            if isinstance(projection, nn.Linear):
+                self._initialize_linear_weights(projection)
+
+        if self.merge_type == "gated":
+            self._initialize_linear_weights(self.gate)
+        elif self.merge_type == "attention":
+            self.query.data.normal_(mean=0.0, std=self.INIT_STD)
 
     def forward(self, branch_outputs: dict[str, Tensor]) -> Tensor:
         if self.merge_type == "concat":
@@ -1294,6 +1333,10 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
         output_dim: int,
     ):
         super().__init__()
+        for branch_name in branches:
+            _validate_module_dict_key(
+                branch_name, f"Composite ingestion branch {branch_name!r}"
+            )
         self.branches = ModuleDict(branches)
         self.output_dim = output_dim
         self.merge = IngestionMerge(
@@ -1305,6 +1348,7 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
     def initialize_weights(self) -> None:
         for branch in self.branches.values():
             branch.initialize_weights()
+        self.merge.initialize_weights()
 
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         branch_outputs = {
@@ -1323,17 +1367,16 @@ def build_feature_ingestion(
     ingestion_spec = model_spec.ingestion_spec
     use_rope = model_spec.positional_encoding == "rope"
 
+    if ingestion_spec is None:
+        raise ValueError("ingestion_spec must be configured")
+
     if isinstance(ingestion_spec, dict):
         branches = {}
-        branch_default_output_dim = (
-            model_spec.dim_model if len(ingestion_spec) == 1 else None
-        )
         for branch_name, branch_config in ingestion_spec.items():
             branches[branch_name] = _build_branch_ingestion(
                 hparams=hparams,
                 branch_config=branch_config,
                 use_rope=use_rope,
-                default_output_dim=branch_default_output_dim,
                 direct_real_dtype_provider=direct_real_dtype_provider,
                 device_max_concat_length=device_max_concat_length,
             )
@@ -1353,7 +1396,6 @@ def build_feature_ingestion(
             hparams=hparams,
             columns=ingestion_spec.columns or hparams.input_columns,
             ingestion_config=ingestion_spec,
-            default_output_dim=model_spec.dim_model,
             device_max_concat_length=device_max_concat_length,
         )
 
@@ -1362,7 +1404,6 @@ def build_feature_ingestion(
             hparams=hparams,
             columns=ingestion_spec.columns or hparams.input_columns,
             ingestion_config=ingestion_spec,
-            default_output_dim=model_spec.dim_model,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
         )
@@ -1371,7 +1412,6 @@ def build_feature_ingestion(
         hparams=hparams,
         branch_config=ingestion_spec,
         use_rope=use_rope,
-        default_output_dim=model_spec.dim_model,
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
     )
@@ -1399,14 +1439,11 @@ def _feature_dims_for_columns(
 
 def _resolve_required_output_dim(
     configured_output_dim: Optional[int],
-    default_output_dim: Optional[int],
     *,
     usage: str,
 ) -> int:
     if configured_output_dim is not None:
         return configured_output_dim
-    if default_output_dim is not None:
-        return default_output_dim
     raise ValueError(f"{usage} must configure output_dim")
 
 
@@ -1415,14 +1452,16 @@ def _build_direct_embed_ingestion(
     hparams: Any,
     columns: list[str],
     ingestion_config: Any,
-    default_output_dim: Optional[int],
     device_max_concat_length: int,
 ) -> DirectEmbedFeatureIngestion:
     categorical_columns, real_columns = _split_columns(
         columns, hparams.categorical_columns, hparams.real_columns
     )
     feature_embedding_dims = _feature_dims_for_columns(ingestion_config, columns)
-    output_dim = ingestion_config.output_dim or default_output_dim
+    output_dim = _resolve_required_output_dim(
+        ingestion_config.output_dim,
+        usage="direct_embed ingestion",
+    )
     embedding_size = None if feature_embedding_dims is not None else output_dim
     return DirectEmbedFeatureIngestion(
         categorical_columns=categorical_columns,
@@ -1443,7 +1482,6 @@ def _build_pass_through_ingestion(
     hparams: Any,
     columns: list[str],
     ingestion_config: Any,
-    default_output_dim: Optional[int],
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
 ) -> PassThroughFeatureIngestion:
@@ -1460,7 +1498,10 @@ def _build_pass_through_ingestion(
         context_length=hparams.window_view.context_length,
         use_rope=hparams.model_spec.positional_encoding == "rope",
         dropout=hparams.training_spec.dropout,
-        output_dim=ingestion_config.output_dim or default_output_dim,
+        output_dim=_resolve_required_output_dim(
+            ingestion_config.output_dim,
+            usage="pass_through ingestion",
+        ),
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
     )
@@ -1475,7 +1516,6 @@ def _build_branch_ingestion(
     hparams: Any,
     branch_config: Any,
     use_rope: bool,
-    default_output_dim: Optional[int],
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
 ) -> BaseFeatureIngestion:
@@ -1508,7 +1548,6 @@ def _build_branch_ingestion(
             hparams=hparams,
             columns=columns,
             ingestion_config=branch_config,
-            default_output_dim=default_output_dim,
             device_max_concat_length=device_max_concat_length,
         )
 
@@ -1517,7 +1556,6 @@ def _build_branch_ingestion(
             hparams=hparams,
             columns=columns,
             ingestion_config=branch_config,
-            default_output_dim=default_output_dim,
             direct_real_dtype_provider=direct_real_dtype_provider,
             device_max_concat_length=device_max_concat_length,
         )
@@ -1525,14 +1563,12 @@ def _build_branch_ingestion(
     if branch_config.type == "temporal_conv":
         output_dim = _resolve_required_output_dim(
             branch_config.output_dim,
-            default_output_dim,
             usage="temporal_conv ingestion",
         )
         base_ingestion = _build_direct_embed_ingestion(
             hparams=hparams,
             columns=columns,
             ingestion_config=branch_config,
-            default_output_dim=output_dim,
             device_max_concat_length=device_max_concat_length,
         )
         return TemporalConvFeatureIngestion(
@@ -1549,7 +1585,6 @@ def _build_branch_ingestion(
     if branch_config.type == "feature_pool":
         output_dim = _resolve_required_output_dim(
             branch_config.output_dim,
-            default_output_dim,
             usage="feature_pool ingestion",
         )
         return FeaturePoolFeatureIngestion(
@@ -1561,7 +1596,6 @@ def _build_branch_ingestion(
     if branch_config.type == "grouped":
         output_dim = _resolve_required_output_dim(
             branch_config.output_dim,
-            default_output_dim,
             usage="grouped ingestion",
         )
         return GroupedFeatureIngestion(
@@ -1573,7 +1607,6 @@ def _build_branch_ingestion(
     if branch_config.type == "siamese":
         output_dim = _resolve_required_output_dim(
             branch_config.output_dim,
-            default_output_dim,
             usage="siamese ingestion",
         )
         return SiameseFeatureIngestion(
@@ -1586,7 +1619,6 @@ def _build_branch_ingestion(
         layout = hparams.feature_layout[branch_config.layout]
         output_dim = _resolve_required_output_dim(
             branch_config.output_dim,
-            default_output_dim,
             usage="structured ingestion",
         )
         return StructuredFeatureIngestion(

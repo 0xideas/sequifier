@@ -4,7 +4,7 @@ import math
 import os
 import warnings
 from itertools import product
-from typing import Annotated, Any, Literal, Optional, Union
+from typing import Annotated, Any, Literal, Optional, TypeAlias, Union
 
 import torch
 import torch_optimizer
@@ -44,7 +44,7 @@ from sequifier.objectives import (
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 
 AnyType = str | int | float
-NextOccurrenceTargetValue = StrictInt | StrictStr
+NextOccurrenceTargetValue: TypeAlias = StrictInt | StrictStr
 
 
 class CartesianLayoutModel(BaseModel):
@@ -119,7 +119,7 @@ class DirectEmbedIngestionConfig(BaseModel):
 
     type: Literal["direct_embed"] = "direct_embed"
     columns: Optional[list[str]] = Field(default=None, min_length=1)
-    output_dim: Optional[int] = Field(default=None, gt=0)
+    output_dim: int = Field(..., gt=0)
     feature_embedding_dims: Optional[dict[str, int]] = None
 
     @field_validator("columns")
@@ -143,7 +143,7 @@ class PassThroughIngestionConfig(BaseModel):
 
     type: Literal["pass_through"]
     columns: Optional[list[str]] = Field(default=None, min_length=1)
-    output_dim: Optional[int] = Field(default=None, gt=0)
+    output_dim: int = Field(..., gt=0)
 
     @field_validator("columns")
     @classmethod
@@ -160,7 +160,7 @@ class FeaturePoolIngestionConfig(BaseModel):
 
     type: Literal["feature_pool"]
     columns: list[str] = Field(..., min_length=1)
-    output_dim: Optional[int] = Field(default=None, gt=0)
+    output_dim: int = Field(..., gt=0)
 
     @field_validator("columns")
     @classmethod
@@ -175,13 +175,16 @@ class GroupedIngestionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["grouped"]
-    output_dim: Optional[int] = Field(default=None, gt=0)
+    output_dim: int = Field(..., gt=0)
     groups: dict[str, list[str]] = Field(..., min_length=1)
 
     @model_validator(mode="after")
     def validate_groups(self):
         grouped_columns = []
         for group_name, columns in self.groups.items():
+            _validate_module_dict_key(
+                group_name, f"grouped ingestion group {group_name!r}"
+            )
             if not columns:
                 raise ValueError(
                     f"grouped ingestion group {group_name!r} must contain columns"
@@ -202,7 +205,7 @@ class SiameseIngestionConfig(BaseModel):
 
     type: Literal["siamese"]
     columns: list[str] = Field(..., min_length=1)
-    output_dim: Optional[int] = Field(default=None, gt=0)
+    output_dim: int = Field(..., gt=0)
 
     @field_validator("columns")
     @classmethod
@@ -218,7 +221,7 @@ class TemporalConvIngestionConfig(BaseModel):
 
     type: Literal["temporal_conv"]
     columns: list[str] = Field(..., min_length=1)
-    output_dim: Optional[int] = Field(default=None, gt=0)
+    output_dim: int = Field(..., gt=0)
     feature_embedding_dims: Optional[dict[str, int]] = None
     kernel_size: int = Field(3, gt=0)
     dilation: int = Field(1, gt=0)
@@ -334,6 +337,13 @@ def _validate_column_list_unique(columns: list[str], field_name: str) -> None:
         raise ValueError(f"{field_name} cannot contain duplicate columns")
 
 
+def _validate_module_dict_key(key: str, usage: str) -> None:
+    if key == "":
+        raise ValueError(f"{usage} cannot be empty")
+    if "." in key:
+        raise ValueError(f"{usage} cannot contain '.'")
+
+
 def _validate_feature_embedding_dims(
     feature_embedding_dims: Optional[dict[str, int]], field_name: str
 ) -> None:
@@ -383,7 +393,7 @@ class StructuredIngestionConfig(BaseModel):
 
     type: Literal["structured"]
     layout: str
-    output_dim: Optional[int] = Field(default=None, gt=0)
+    output_dim: int = Field(..., gt=0)
     cell_dim: Optional[int] = Field(default=None, gt=0)
     axis_embeddings: AxisEmbeddingModel = Field(default_factory=AxisEmbeddingModel)
     processing_blocks: list[StructuredProcessingBlock] = Field(default_factory=list)
@@ -797,9 +807,7 @@ class ModelSpecModel(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    ingestion_spec: IngestionSpecConfig = Field(
-        default_factory=DirectEmbedIngestionConfig
-    )
+    ingestion_spec: Optional[IngestionSpecConfig] = None
     ingestion_merge: Optional[IngestionMergeConfig] = None
     allow_shared_ingestion_columns: bool = False
     dim_model: int
@@ -820,15 +828,41 @@ class ModelSpecModel(BaseModel):
 
     prediction_length: int
 
+    @model_validator(mode="before")
+    @classmethod
+    def default_ingestion_spec(cls, values):
+        if not isinstance(values, dict):
+            return values
+        if values.get("ingestion_spec") is not None:
+            return values
+        dim_model = values.get("dim_model")
+        if dim_model is None:
+            return values
+        values = dict(values)
+        values["ingestion_spec"] = {
+            "type": "direct_embed",
+            "output_dim": dim_model,
+        }
+        return values
+
     @model_validator(mode="after")
     def validate_ingestion_spec_output_dim(self):
+        if self.ingestion_spec is None:
+            self.ingestion_spec = DirectEmbedIngestionConfig(output_dim=self.dim_model)
+
         if isinstance(self.ingestion_spec, dict):
+            if not self.ingestion_spec:
+                raise ValueError(
+                    "model_spec.ingestion_spec must define at least one "
+                    "named ingestion"
+                )
+            for branch_name in self.ingestion_spec:
+                _validate_module_dict_key(
+                    branch_name, f"Composite ingestion branch {branch_name!r}"
+                )
             if self.ingestion_merge is None:
                 self.ingestion_merge = IngestionMergeConfig()
-        elif (
-            getattr(self.ingestion_spec, "output_dim", None) is not None
-            and self.ingestion_spec.output_dim != self.dim_model
-        ):
+        elif self.ingestion_spec.output_dim != self.dim_model:
             raise ValueError(
                 "model_spec.ingestion_spec.output_dim must equal dim_model"
             )
@@ -1144,7 +1178,7 @@ class TrainModel(BaseModel):
         if self.feature_layout is None:
             return self
 
-        allowed_columns = set(self.input_columns) | set(self.column_types)
+        allowed_columns = set(self.input_columns)
         for layout_name, layout in self.feature_layout.items():
             missing_columns = set(layout.columns) - allowed_columns
             if missing_columns:
@@ -1158,6 +1192,8 @@ class TrainModel(BaseModel):
     @model_validator(mode="after")
     def validate_ingestion_spec_branches(self):
         ingestion_spec = self.model_spec.ingestion_spec
+        if ingestion_spec is None:
+            raise ValueError("model_spec.ingestion_spec must be configured")
         if not isinstance(ingestion_spec, dict):
             columns = self._branch_columns(
                 ingestion_spec,
@@ -1167,12 +1203,15 @@ class TrainModel(BaseModel):
                 "model_spec.ingestion_spec",
                 columns,
             )
+            self._validate_all_input_columns_used(
+                columns,
+                "model_spec.ingestion_spec",
+            )
             if isinstance(ingestion_spec, StructuredIngestionConfig):
                 layout = self._layout_for_branch(ingestion_spec)
                 output_dim = self._resolved_branch_output_dim(
                     ingestion_spec,
                     columns,
-                    default_output_dim=self.model_spec.dim_model,
                     usage="model_spec.ingestion_spec",
                 )
                 self._validate_structured_axis_embeddings(
@@ -1189,14 +1228,12 @@ class TrainModel(BaseModel):
                     "model_spec.ingestion_spec",
                     columns,
                     ingestion_spec,
-                    default_output_dim=self.model_spec.dim_model,
                 )
             if isinstance(ingestion_spec, PassThroughIngestionConfig):
                 self._validate_pass_through_ingestion(
                     columns,
                     ingestion_spec,
                     usage="model_spec.ingestion_spec",
-                    default_output_dim=self.model_spec.dim_model,
                 )
             return self
 
@@ -1206,10 +1243,8 @@ class TrainModel(BaseModel):
                 "model_spec.ingestion_merge must be configured for multiple ingestions"
             )
 
-        branch_default_output_dim = (
-            self.model_spec.dim_model if len(ingestion_spec) == 1 else None
-        )
         used_columns: dict[str, str] = {}
+        consumed_columns: set[str] = set()
         for branch_name, ingestion in ingestion_spec.items():
             columns = self._branch_columns(ingestion)
             if not columns:
@@ -1218,6 +1253,7 @@ class TrainModel(BaseModel):
                     "least one input column"
                 )
             self._validate_ingestion_columns(branch_name, columns)
+            consumed_columns.update(columns)
 
             if not self.model_spec.allow_shared_ingestion_columns:
                 overlapping_columns = [
@@ -1237,7 +1273,6 @@ class TrainModel(BaseModel):
                 output_dim = self._resolved_branch_output_dim(
                     ingestion,
                     columns,
-                    default_output_dim=branch_default_output_dim,
                     usage=f"Composite ingestion branch {branch_name!r}",
                 )
                 self._validate_structured_axis_embeddings(ingestion, layout, output_dim)
@@ -1252,21 +1287,22 @@ class TrainModel(BaseModel):
                     f"Composite ingestion branch {branch_name!r}",
                     columns,
                     ingestion,
-                    default_output_dim=branch_default_output_dim,
                 )
             if isinstance(ingestion, PassThroughIngestionConfig):
                 self._validate_pass_through_ingestion(
                     columns,
                     ingestion,
                     usage=f"Composite ingestion branch {branch_name!r}",
-                    default_output_dim=branch_default_output_dim,
                 )
             self._resolved_branch_output_dim(
                 ingestion,
                 columns,
-                default_output_dim=branch_default_output_dim,
                 usage=f"Composite ingestion branch {branch_name!r}",
             )
+        self._validate_all_input_columns_used(
+            consumed_columns,
+            "model_spec.ingestion_spec",
+        )
         return self
 
     def _validate_ingestion_columns(self, usage: str, columns: list[str]) -> None:
@@ -1274,6 +1310,16 @@ class TrainModel(BaseModel):
         if missing_columns:
             raise ValueError(
                 f"{usage} references unknown input columns: {sorted(missing_columns)}"
+            )
+
+    def _validate_all_input_columns_used(
+        self, columns: list[str] | set[str], usage: str
+    ) -> None:
+        unused_columns = set(self.input_columns) - set(columns)
+        if unused_columns:
+            raise ValueError(
+                f"{usage} must consume every input column; unused columns: "
+                f"{sorted(unused_columns)}"
             )
 
     def _layout_for_branch(
@@ -1400,7 +1446,6 @@ class TrainModel(BaseModel):
         ingestion: PassThroughIngestionConfig,
         *,
         usage: str,
-        default_output_dim: Optional[int],
     ) -> None:
         categorical_columns = [
             col for col in columns if col in self.categorical_columns
@@ -1417,35 +1462,21 @@ class TrainModel(BaseModel):
         output_dim = self._resolved_branch_output_dim(
             ingestion,
             columns,
-            default_output_dim=default_output_dim,
             usage=usage,
         )
-        if default_output_dim is not None and output_dim != self.model_spec.dim_model:
-            raise ValueError(
-                f"{usage} output_dim ({output_dim}) must equal dim_model "
-                f"({self.model_spec.dim_model})"
-            )
+        if output_dim <= 0:
+            raise ValueError(f"{usage} output_dim must be positive")
 
     def _resolved_branch_output_dim(
         self,
         ingestion: BranchIngestionConfig,
         columns: list[str],
         *,
-        default_output_dim: Optional[int],
         usage: str,
     ) -> int:
         configured_output_dim = getattr(ingestion, "output_dim", None)
         if configured_output_dim is not None:
             return configured_output_dim
-        if default_output_dim is not None:
-            return default_output_dim
-        if isinstance(ingestion, PassThroughIngestionConfig):
-            return len([col for col in columns if col in self.real_columns])
-        if (
-            isinstance(ingestion, DirectEmbedIngestionConfig)
-            and ingestion.feature_embedding_dims is not None
-        ):
-            return sum(ingestion.feature_embedding_dims.values())
         raise ValueError(f"{usage} must configure output_dim")
 
     def _validate_direct_embed_ingestion(
@@ -1453,10 +1484,13 @@ class TrainModel(BaseModel):
         usage: str,
         columns: list[str],
         ingestion: DirectEmbedIngestionConfig | TemporalConvIngestionConfig,
-        *,
-        default_output_dim: Optional[int],
     ) -> None:
         feature_embedding_dims = ingestion.feature_embedding_dims
+        output_dim = self._resolved_branch_output_dim(
+            ingestion,
+            columns,
+            usage=usage,
+        )
         if feature_embedding_dims is not None and set(feature_embedding_dims) != set(
             columns
         ):
@@ -1466,14 +1500,15 @@ class TrainModel(BaseModel):
             )
 
         if feature_embedding_dims is not None:
+            embedding_dim = sum(feature_embedding_dims.values())
+            if embedding_dim != output_dim:
+                raise ValueError(
+                    f"{usage} feature_embedding_dims sum ({embedding_dim}) must "
+                    f"equal output_dim ({output_dim})"
+                )
             return
 
-        embedding_size = self._resolved_branch_output_dim(
-            ingestion,
-            columns,
-            default_output_dim=default_output_dim,
-            usage=usage,
-        )
+        embedding_size = output_dim
         categorical_columns = [
             col for col in columns if col in self.categorical_columns
         ]
