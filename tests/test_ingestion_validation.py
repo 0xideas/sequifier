@@ -2,6 +2,10 @@ import pytest
 import torch
 
 from sequifier.config.train_config import (
+    AxisAttentionBlockModel,
+    AxisConvBlockModel,
+    AxisProjectionBlockModel,
+    CartesianLayoutModel,
     GroupedIngestionConfig,
     ModelSpecModel,
     TrainModel,
@@ -12,7 +16,9 @@ from sequifier.model.ingestions import (
     DirectEmbedFeatureIngestion,
     GroupedFeatureIngestion,
     IngestionMerge,
+    StructuredFeatureIngestion,
     TemporalConvFeatureIngestion,
+    _split_columns,
 )
 
 
@@ -157,6 +163,26 @@ def test_ingestion_must_consume_all_input_columns():
         )
 
 
+def test_ingestion_columns_must_be_declared_categorical_or_real():
+    with pytest.raises(Exception, match="categorical_columns or real_columns"):
+        TrainModel(
+            **_train_config(
+                {
+                    "type": "direct_embed",
+                    "columns": ["cat", "real", "extra"],
+                    "output_dim": 4,
+                    "feature_embedding_dims": {"cat": 1, "real": 1, "extra": 2},
+                },
+                input_columns=["cat", "real", "extra"],
+            )
+        )
+
+
+def test_runtime_split_columns_rejects_untyped_columns():
+    with pytest.raises(ValueError, match="would drop columns"):
+        _split_columns(["cat", "extra"], ["cat"], [])
+
+
 def test_manual_feature_embedding_dims_must_match_output_dim():
     with pytest.raises(Exception, match="feature_embedding_dims sum"):
         TrainModel(
@@ -251,4 +277,74 @@ def test_merge_and_temporal_conv_layers_use_custom_initializer():
     assert torch.allclose(
         temporal_conv.layers[0].bias,
         torch.zeros_like(temporal_conv.layers[0].bias),
+    )
+
+
+def test_structured_processing_blocks_use_custom_initializer():
+    layout = CartesianLayoutModel(
+        axes={"row": ["a", "b"], "col": ["x", "y"]},
+        columns={
+            "real_ax": {"row": "a", "col": "x"},
+            "real_ay": {"row": "a", "col": "y"},
+            "real_bx": {"row": "b", "col": "x"},
+            "real_by": {"row": "b", "col": "y"},
+        },
+    )
+    ingestion = StructuredFeatureIngestion(
+        layout=layout,
+        categorical_columns=[],
+        real_columns=["real_ax", "real_ay", "real_bx", "real_by"],
+        n_classes={},
+        context_length=4,
+        output_dim=4,
+        use_rope=False,
+        dropout=0.0,
+        cell_dim=4,
+        processing_blocks=[
+            AxisProjectionBlockModel(
+                type="axis_projection",
+                axes=["row"],
+                output_dim=4,
+            ),
+            AxisConvBlockModel(
+                type="axis_conv",
+                axes=["col"],
+                output_dim=4,
+            ),
+            AxisAttentionBlockModel(
+                type="axis_attention",
+                axes=["col"],
+                output_dim=4,
+                n_head=2,
+            ),
+        ],
+    )
+    projection_block = ingestion.axis_blocks[0]
+    conv_block = ingestion.axis_blocks[1]
+    attention_layer = ingestion.axis_blocks[2].layers["shared"]
+
+    torch.nn.init.constant_(projection_block.layers["shared"].bias, 1.0)
+    torch.nn.init.constant_(conv_block.layers["shared"].bias, 1.0)
+    torch.nn.init.constant_(attention_layer.attention.in_proj_weight, 0.0)
+    torch.nn.init.constant_(attention_layer.attention.in_proj_bias, 1.0)
+    torch.nn.init.constant_(attention_layer.attention.out_proj.bias, 1.0)
+
+    ingestion.initialize_weights()
+
+    assert torch.allclose(
+        projection_block.layers["shared"].bias,
+        torch.zeros_like(projection_block.layers["shared"].bias),
+    )
+    assert torch.allclose(
+        conv_block.layers["shared"].bias,
+        torch.zeros_like(conv_block.layers["shared"].bias),
+    )
+    assert torch.count_nonzero(attention_layer.attention.in_proj_weight) > 0
+    assert torch.allclose(
+        attention_layer.attention.in_proj_bias,
+        torch.zeros_like(attention_layer.attention.in_proj_bias),
+    )
+    assert torch.allclose(
+        attention_layer.attention.out_proj.bias,
+        torch.zeros_like(attention_layer.attention.out_proj.bias),
     )

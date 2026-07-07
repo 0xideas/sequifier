@@ -1312,6 +1312,14 @@ class TrainModel(BaseModel):
                 f"{usage} references unknown input columns: {sorted(missing_columns)}"
             )
 
+        typed_columns = set(self.categorical_columns) | set(self.real_columns)
+        untyped_columns = set(columns) - typed_columns
+        if untyped_columns:
+            raise ValueError(
+                f"{usage} references columns that must be declared in "
+                f"categorical_columns or real_columns: {sorted(untyped_columns)}"
+            )
+
     def _validate_all_input_columns_used(
         self, columns: list[str] | set[str], usage: str
     ) -> None:

@@ -120,6 +120,43 @@ class BaseFeatureIngestion(nn.Module):
         return x * math.sqrt(self.output_dim)
 
 
+class _AxisWeightInitializer:
+    INIT_STD = BaseFeatureIngestion.INIT_STD
+
+    def _initialize_linear_weights(self, layer: nn.Linear) -> None:
+        layer.weight.data.normal_(mean=0.0, std=self.INIT_STD)
+        if layer.bias is not None:
+            layer.bias.data.zero_()
+
+    def _initialize_conv_weights(
+        self, layer: nn.Conv1d | nn.Conv2d | nn.Conv3d
+    ) -> None:
+        layer.weight.data.normal_(mean=0.0, std=self.INIT_STD)
+        if layer.bias is not None:
+            layer.bias.data.zero_()
+
+    def _initialize_attention_weights(self, layer: nn.MultiheadAttention) -> None:
+        if layer.in_proj_weight is not None:
+            layer.in_proj_weight.data.normal_(mean=0.0, std=self.INIT_STD)
+        if layer.in_proj_bias is not None:
+            layer.in_proj_bias.data.zero_()
+
+        for weight in (
+            layer.q_proj_weight,
+            layer.k_proj_weight,
+            layer.v_proj_weight,
+        ):
+            if weight is not None:
+                weight.data.normal_(mean=0.0, std=self.INIT_STD)
+
+        if layer.bias_k is not None:
+            layer.bias_k.data.zero_()
+        if layer.bias_v is not None:
+            layer.bias_v.data.zero_()
+
+        self._initialize_linear_weights(layer.out_proj)
+
+
 class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
     """The original sequifier per-column embedding path."""
 
@@ -634,7 +671,7 @@ def _rotate_half_last_dim(x: Tensor) -> Tensor:
     return torch.cat((-x2, x1), dim=-1)
 
 
-class _AxisProjectionBlock(nn.Module):
+class _AxisProjectionBlock(_AxisWeightInitializer, nn.Module):
     """Project one or more cartesian axes into the channel dimension."""
 
     def __init__(
@@ -668,6 +705,10 @@ class _AxisProjectionBlock(nn.Module):
                 for indices in self.unshared_indices
             }
         )
+
+    def initialize_weights(self) -> None:
+        for layer in self.layers.values():
+            self._initialize_linear_weights(cast(nn.Linear, layer))
 
     def _apply_shared(
         self,
@@ -733,7 +774,7 @@ class _AxisProjectionBlock(nn.Module):
         return output
 
 
-class _AxisConvBlock(nn.Module):
+class _AxisConvBlock(_AxisWeightInitializer, nn.Module):
     """Apply a native convolution over one to three cartesian axes."""
 
     CONV_CLASSES = {
@@ -778,6 +819,11 @@ class _AxisConvBlock(nn.Module):
                 for indices in self.unshared_indices
             }
         )
+
+    def initialize_weights(self) -> None:
+        for layer in self.layers.values():
+            if isinstance(layer, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+                self._initialize_conv_weights(layer)
 
     def _apply_shared(
         self,
@@ -855,7 +901,7 @@ class _AxisConvBlock(nn.Module):
         return output
 
 
-class _AxisAttentionLayer(nn.Module):
+class _AxisAttentionLayer(_AxisWeightInitializer, nn.Module):
     def __init__(
         self,
         *,
@@ -877,13 +923,18 @@ class _AxisAttentionLayer(nn.Module):
             batch_first=True,
         )
 
+    def initialize_weights(self) -> None:
+        if isinstance(self.input_projection, nn.Linear):
+            self._initialize_linear_weights(self.input_projection)
+        self._initialize_attention_weights(self.attention)
+
     def forward(self, x: Tensor) -> Tensor:
         x = self.input_projection(x)
         output, _ = self.attention(x, x, x, need_weights=False)
         return output
 
 
-class _AxisAttentionBlock(nn.Module):
+class _AxisAttentionBlock(_AxisWeightInitializer, nn.Module):
     """Apply self-attention over one or more cartesian axes."""
 
     def __init__(
@@ -922,6 +973,10 @@ class _AxisAttentionBlock(nn.Module):
                 for indices in self.unshared_indices
             }
         )
+
+    def initialize_weights(self) -> None:
+        for layer in self.layers.values():
+            cast(_AxisAttentionLayer, layer).initialize_weights()
 
     def _apply_shared(
         self,
@@ -1158,6 +1213,12 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         super().initialize_weights()
         for layer in self.axis_embedding_layers:
             layer.weight.data.normal_(mean=0.0, std=self.INIT_STD)
+        for block in self.axis_blocks:
+            if isinstance(
+                block,
+                (_AxisProjectionBlock, _AxisConvBlock, _AxisAttentionBlock),
+            ):
+                block.initialize_weights()
 
     def _dense_cells(self, src: dict[str, Tensor]) -> Tensor:
         encoded = [self._encode_column(col, src) for col in self.ordered_columns]
@@ -1422,6 +1483,13 @@ def _split_columns(
 ) -> tuple[list[str], list[str]]:
     categorical_set = set(categorical_columns)
     real_set = set(real_columns)
+    typed_columns = categorical_set | real_set
+    dropped_columns = [col for col in columns if col not in typed_columns]
+    if dropped_columns:
+        raise ValueError(
+            "Ingestion columns must be declared in categorical_columns or "
+            f"real_columns; would drop columns: {dropped_columns}"
+        )
     return (
         [col for col in columns if col in categorical_set],
         [col for col in columns if col in real_set],
