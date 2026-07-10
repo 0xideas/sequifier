@@ -24,6 +24,7 @@ read_format: parquet
 metadata_config_path: PLEASE FILL
 
 input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
+feature_layout: null # optional structure annotations for flat input columns
 target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
 target_column_types: # 'criterion' in training_spec must also be adapted
   EXAMPLE_TARGET_COLUMN_NAME: real
@@ -36,10 +37,11 @@ export_embedding_model: PLEASE FILL # true or false
 export_onnx: true
 
 model_spec:
-  initial_embedding_dim: 128
-  feature_embedding_dims: # the size of the embedding of individual variables, must sum to dim_model
-    EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical
-  joint_embedding_dim: null
+  ingestion_spec:
+    type: direct_embed
+    output_dim: 128
+    feature_embedding_dims: # optional per-column embedding sizes for direct_embed
+      EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical
   dim_model: 128
   n_head: 16
   dim_feedforward: 128

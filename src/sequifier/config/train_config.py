@@ -3,9 +3,9 @@ import json
 import math
 import os
 import warnings
-from typing import Any, Optional, Union
+from itertools import product
+from typing import Annotated, Any, Literal, Optional, TypeAlias, Union
 
-import numpy as np
 import torch
 import torch_optimizer
 import yaml
@@ -15,6 +15,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    RootModel,
     StrictInt,
     StrictStr,
     field_serializer,
@@ -43,7 +44,393 @@ from sequifier.objectives import (
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 
 AnyType = str | int | float
-NextOccurrenceTargetValue = StrictInt | StrictStr
+NextOccurrenceTargetValue: TypeAlias = StrictInt | StrictStr
+
+
+class CartesianLayoutModel(BaseModel):
+    """Reusable coordinate annotation for flat feature columns."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    axes: dict[str, list[AnyType]] = Field(..., min_length=1)
+    columns: dict[str, dict[str, AnyType]] = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def validate_cartesian(self):
+        axis_names = list(self.axes)
+
+        for axis, values in self.axes.items():
+            if not values:
+                raise ValueError(
+                    f"Layout axis {axis!r} must contain at least one value"
+                )
+            if len(values) != len(set(values)):
+                raise ValueError(
+                    f"Layout axis {axis!r} cannot contain duplicate values"
+                )
+
+        coordinate_tuples = set()
+        for column_name, coordinates in self.columns.items():
+            if set(coordinates) != set(axis_names):
+                raise ValueError(
+                    f"Layout column {column_name!r} must define every axis"
+                )
+
+            coordinate_tuple = tuple(coordinates[axis] for axis in axis_names)
+            if coordinate_tuple in coordinate_tuples:
+                raise ValueError(
+                    f"Duplicate cartesian coordinate tuple: {coordinate_tuple!r}"
+                )
+            coordinate_tuples.add(coordinate_tuple)
+
+            for axis, value in coordinates.items():
+                if value not in self.axes[axis]:
+                    raise ValueError(
+                        f"Layout column {column_name!r} has value {value!r} "
+                        f"outside axis {axis!r}"
+                    )
+
+        expected_tuples = set(product(*(self.axes[axis] for axis in axis_names)))
+        if coordinate_tuples != expected_tuples:
+            raise ValueError("cartesian layouts must contain every coordinate")
+
+        return self
+
+
+class FeatureLayoutRegistryModel(RootModel[dict[str, CartesianLayoutModel]]):
+    """Top-level registry of reusable feature layouts."""
+
+    root: dict[str, CartesianLayoutModel] = Field(..., min_length=1)
+
+    def items(self):
+        return self.root.items()
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.root
+
+    def __getitem__(self, key: str) -> CartesianLayoutModel:
+        return self.root[key]
+
+
+class DirectEmbedIngestionConfig(BaseModel):
+    """Use the existing flat-column embedding path."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["direct_embed"] = "direct_embed"
+    columns: Optional[list[str]] = Field(default=None, min_length=1)
+    output_dim: int = Field(..., gt=0)
+    feature_embedding_dims: Optional[dict[str, int]] = None
+
+    @field_validator("columns")
+    @classmethod
+    def validate_columns(cls, v):
+        if v is not None:
+            _validate_column_list_unique(v, "direct_embed ingestion columns")
+        return v
+
+    @field_validator("feature_embedding_dims")
+    @classmethod
+    def validate_feature_embedding_dims(cls, v):
+        _validate_feature_embedding_dims(v, "direct_embed feature_embedding_dims")
+        return v
+
+
+class PassThroughIngestionConfig(BaseModel):
+    """Pass real-valued columns through without per-feature encoders."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["pass_through"]
+    columns: Optional[list[str]] = Field(default=None, min_length=1)
+    output_dim: int = Field(..., gt=0)
+
+    @field_validator("columns")
+    @classmethod
+    def validate_columns(cls, v):
+        if v is not None:
+            _validate_column_list_unique(v, "pass_through ingestion columns")
+        return v
+
+
+class FeaturePoolIngestionConfig(BaseModel):
+    """Encode columns as feature tokens before pooling to one time token."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["feature_pool"]
+    columns: list[str] = Field(..., min_length=1)
+    output_dim: int = Field(..., gt=0)
+
+    @field_validator("columns")
+    @classmethod
+    def validate_columns(cls, v):
+        _validate_column_list_unique(v, "feature_pool ingestion columns")
+        return v
+
+
+class GroupedIngestionConfig(BaseModel):
+    """Encode configured column groups and merge them within one branch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["grouped"]
+    output_dim: int = Field(..., gt=0)
+    groups: dict[str, list[str]] = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def validate_groups(self):
+        grouped_columns = []
+        for group_name, columns in self.groups.items():
+            _validate_module_dict_key(
+                group_name, f"grouped ingestion group {group_name!r}"
+            )
+            if not columns:
+                raise ValueError(
+                    f"grouped ingestion group {group_name!r} must contain columns"
+                )
+            _validate_column_list_unique(
+                columns, f"grouped ingestion group {group_name!r}"
+            )
+            grouped_columns.extend(columns)
+
+        _validate_column_list_unique(grouped_columns, "grouped ingestion columns")
+        return self
+
+
+class SiameseIngestionConfig(BaseModel):
+    """Apply one shared scalar encoder across the branch columns."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["siamese"]
+    columns: list[str] = Field(..., min_length=1)
+    output_dim: int = Field(..., gt=0)
+
+    @field_validator("columns")
+    @classmethod
+    def validate_columns(cls, v):
+        _validate_column_list_unique(v, "siamese ingestion columns")
+        return v
+
+
+class TemporalConvIngestionConfig(BaseModel):
+    """Encode columns, then apply Conv1D over the time axis."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["temporal_conv"]
+    columns: list[str] = Field(..., min_length=1)
+    output_dim: int = Field(..., gt=0)
+    feature_embedding_dims: Optional[dict[str, int]] = None
+    kernel_size: int = Field(3, gt=0)
+    dilation: int = Field(1, gt=0)
+    num_layers: int = Field(1, gt=0)
+    causal: bool = True
+    activation_fn: Literal["relu", "gelu", "silu"] = "gelu"
+    dropout: float = Field(0.0, ge=0.0, lt=1.0)
+
+    @model_validator(mode="after")
+    def validate_temporal_conv(self):
+        _validate_column_list_unique(self.columns, "temporal_conv ingestion columns")
+        _validate_feature_embedding_dims(
+            self.feature_embedding_dims, "temporal_conv feature_embedding_dims"
+        )
+        if not self.causal and self.kernel_size % 2 == 0:
+            raise ValueError(
+                "temporal_conv kernel_size must be odd when causal is false"
+            )
+        return self
+
+
+class AxisProjectionBlockModel(BaseModel):
+    """Flatten configured cartesian axes and project them with a linear layer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["axis_projection"]
+    axes: list[str] = Field(..., min_length=1)
+    output_dim: int = Field(..., gt=0)
+    unshared_axes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_axes_unique(self):
+        _validate_axis_list_unique(self.axes, "axes")
+        _validate_axis_list_unique(self.unshared_axes, "unshared_axes")
+        return self
+
+
+class AxisConvBlockModel(BaseModel):
+    """Sweep a native 1D/2D/3D convolution over configured cartesian axes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["axis_conv"]
+    axes: list[str] = Field(..., min_length=1, max_length=3)
+    output_dim: int = Field(..., gt=0)
+    kernel_size: int = Field(3, gt=0)
+    unshared_axes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_axes_unique(self):
+        _validate_axis_list_unique(self.axes, "axes")
+        _validate_axis_list_unique(self.unshared_axes, "unshared_axes")
+        if self.kernel_size % 2 == 0:
+            raise ValueError("axis_conv kernel_size must be odd to preserve axis sizes")
+        return self
+
+
+class AxisAttentionBlockModel(BaseModel):
+    """Apply self-attention over one or more configured cartesian axes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["axis_attention"]
+    axes: list[str] = Field(..., min_length=1)
+    output_dim: int = Field(..., gt=0)
+    n_head: int = Field(1, gt=0)
+    dropout: float = Field(0.0, ge=0.0, lt=1.0)
+    unshared_axes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_axes_unique(self):
+        _validate_axis_list_unique(self.axes, "axes")
+        _validate_axis_list_unique(self.unshared_axes, "unshared_axes")
+        if self.output_dim % self.n_head != 0:
+            raise ValueError("axis_attention output_dim must be divisible by n_head")
+        return self
+
+
+class AxisPoolBlockModel(BaseModel):
+    """Reduce configured cartesian axes without changing the channel dimension."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["axis_pool"]
+    axes: list[str] = Field(..., min_length=1)
+    mode: Literal["mean", "sum", "max"] = "mean"
+
+    @model_validator(mode="after")
+    def validate_axes_unique(self):
+        _validate_axis_list_unique(self.axes, "axes")
+        return self
+
+
+StructuredProcessingBlock = Annotated[
+    Union[
+        AxisProjectionBlockModel,
+        AxisConvBlockModel,
+        AxisAttentionBlockModel,
+        AxisPoolBlockModel,
+    ],
+    Field(discriminator="type"),
+]
+
+
+def _validate_axis_list_unique(axes: list[str], field_name: str) -> None:
+    if len(axes) != len(set(axes)):
+        raise ValueError(f"{field_name} cannot contain duplicate axes")
+
+
+def _validate_column_list_unique(columns: list[str], field_name: str) -> None:
+    if len(columns) != len(set(columns)):
+        raise ValueError(f"{field_name} cannot contain duplicate columns")
+
+
+def _validate_module_dict_key(key: str, usage: str) -> None:
+    if key == "":
+        raise ValueError(f"{usage} cannot be empty")
+    if "." in key:
+        raise ValueError(f"{usage} cannot contain '.'")
+
+
+def _validate_feature_embedding_dims(
+    feature_embedding_dims: Optional[dict[str, int]], field_name: str
+) -> None:
+    if feature_embedding_dims is None:
+        return
+    invalid_dims = {
+        column: dim for column, dim in feature_embedding_dims.items() if dim <= 0
+    }
+    if invalid_dims:
+        raise ValueError(f"{field_name} values must be positive: {invalid_dims}")
+
+
+class AxisEmbeddingModel(BaseModel):
+    """Optional positional encoding for cartesian layout axes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["none", "learned", "rope"] = "none"
+    axes: list[str] = Field(default_factory=list)
+    rope_theta: float = Field(10000.0, gt=0.0)
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, v):
+        if v is None:
+            return "none"
+        if isinstance(v, str):
+            return v.lower()
+        return v
+
+    @model_validator(mode="after")
+    def validate_axes(self):
+        _validate_axis_list_unique(self.axes, "axis_embeddings.axes")
+        if self.type == "none" and self.axes:
+            raise ValueError("axis_embeddings.axes must be empty when type is 'none'")
+        if self.type != "none" and not self.axes:
+            raise ValueError(
+                "axis_embeddings.axes must contain at least one axis unless type is 'none'"
+            )
+        return self
+
+
+class StructuredIngestionConfig(BaseModel):
+    """Consume a top-level cartesian layout."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["structured"]
+    layout: str
+    output_dim: int = Field(..., gt=0)
+    cell_dim: Optional[int] = Field(default=None, gt=0)
+    axis_embeddings: AxisEmbeddingModel = Field(default_factory=AxisEmbeddingModel)
+    processing_blocks: list[StructuredProcessingBlock] = Field(default_factory=list)
+
+    @field_validator("axis_embeddings", mode="before")
+    @classmethod
+    def normalize_axis_embeddings(cls, v):
+        if v is None:
+            return {"type": "none", "axes": []}
+        if isinstance(v, list):
+            return {"type": "learned", "axes": v}
+        return v
+
+
+BranchIngestionConfig = Annotated[
+    Union[
+        DirectEmbedIngestionConfig,
+        PassThroughIngestionConfig,
+        FeaturePoolIngestionConfig,
+        GroupedIngestionConfig,
+        SiameseIngestionConfig,
+        TemporalConvIngestionConfig,
+        StructuredIngestionConfig,
+    ],
+    Field(discriminator="type"),
+]
+
+
+class IngestionMergeConfig(BaseModel):
+    """How composite branch outputs are merged."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["concat", "sum", "gated", "attention"] = "concat"
+
+
+IngestionSpecConfig = BranchIngestionConfig | dict[str, BranchIngestionConfig]
 
 
 def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
@@ -284,7 +671,7 @@ class TrainingSpecModel(BaseModel):
     @field_validator("layer_type_dtypes")
     @classmethod
     def validate_layer_type_dtypes(cls, v):
-        expected_keys = ["embedding", "linear", "norm", "decoder"]
+        expected_keys = ["embedding", "linear", "conv", "norm", "decoder"]
         allowed_types = [
             "float32",
             "float16",
@@ -420,9 +807,9 @@ class ModelSpecModel(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    initial_embedding_dim: int
-    feature_embedding_dims: Optional[dict[str, int]] = None
-    joint_embedding_dim: Optional[int] = None
+    ingestion_spec: Optional[IngestionSpecConfig] = None
+    ingestion_merge: Optional[IngestionMergeConfig] = None
+    allow_shared_ingestion_columns: bool = False
     dim_model: int
     n_head: int
     dim_feedforward: int
@@ -441,25 +828,51 @@ class ModelSpecModel(BaseModel):
 
     prediction_length: int
 
-    @field_validator("dim_model")
+    @model_validator(mode="before")
     @classmethod
-    def validate_dim_model(cls, v, info):
-        initial_embedding_dim = info.data.get("initial_embedding_dim")
-        joint_embedding_dim = info.data.get("joint_embedding_dim")
-        dim_model = v
+    def default_ingestion_spec(cls, values):
+        if not isinstance(values, dict):
+            return values
+        if values.get("ingestion_spec") is not None:
+            return values
+        dim_model = values.get("dim_model")
+        if dim_model is None:
+            return values
+        values = dict(values)
+        values["ingestion_spec"] = {
+            "type": "direct_embed",
+            "output_dim": dim_model,
+        }
+        return values
 
-        if joint_embedding_dim is None:
-            if not v == initial_embedding_dim:
-                raise ValueError(
-                    f"If no joint_embedding_dim is configured, dim_model must be equal to initial_embedding_dim, {dim_model = } != {initial_embedding_dim = }"
-                )
-        else:
-            if not v == joint_embedding_dim:
-                raise ValueError(
-                    f"If joint_embedding_dim is configured it must be equal to dim_model, {dim_model = } != {joint_embedding_dim = }"
-                )
+    @model_validator(mode="after")
+    def validate_ingestion_spec_output_dim(self):
+        if self.ingestion_spec is None:
+            self.ingestion_spec = DirectEmbedIngestionConfig(output_dim=self.dim_model)
 
-        return v
+        if isinstance(self.ingestion_spec, dict):
+            if not self.ingestion_spec:
+                raise ValueError(
+                    "model_spec.ingestion_spec must define at least one "
+                    "named ingestion"
+                )
+            for branch_name in self.ingestion_spec:
+                _validate_module_dict_key(
+                    branch_name, f"Composite ingestion branch {branch_name!r}"
+                )
+            if self.ingestion_merge is None:
+                self.ingestion_merge = IngestionMergeConfig()
+        elif self.ingestion_spec.output_dim != self.dim_model:
+            raise ValueError(
+                "model_spec.ingestion_spec.output_dim must equal dim_model"
+            )
+        elif self.ingestion_merge is not None:
+            raise ValueError(
+                "model_spec.ingestion_merge is only valid when "
+                "ingestion_spec defines multiple named ingestions"
+            )
+
+        return self
 
     @field_validator("activation_fn")
     @classmethod
@@ -487,20 +900,6 @@ class ModelSpecModel(BaseModel):
     def validate_attention_type(cls, v):
         if v not in ["mha", "mqa", "gqa"]:
             raise ValueError(f"Invalid attention_type: {v}")
-        return v
-
-    @field_validator("feature_embedding_dims")
-    @classmethod
-    def validate_feature_embedding_dims(cls, v, info):
-        initial_embedding_dim = info.data.get("initial_embedding_dim")
-        if (
-            v is not None
-            and initial_embedding_dim
-            and sum(v.values()) != initial_embedding_dim
-        ):
-            raise ValueError(
-                f"Sum of feature_embedding_dims {sum(v.values())} != initial_embedding_dim {initial_embedding_dim}"
-            )
         return v
 
     @field_validator("n_head")
@@ -573,6 +972,7 @@ class TrainModel(BaseModel):
     export_pt: bool = False
     export_with_dropout: bool = False
 
+    feature_layout: Optional[FeatureLayoutRegistryModel] = None
     model_spec: ModelSpecModel
     training_spec: TrainingSpecModel
 
@@ -773,45 +1173,370 @@ class TrainModel(BaseModel):
             raise ValueError(f"{columns_ordered_filtered = } != {target_columns = }")
         return v
 
-    @field_validator("model_spec")
-    @classmethod
-    def validate_model_spec(cls, v, info):
-        # Original validation: consistent columns
-        if not (
-            info.data.get("input_columns") is None
-            or (v.feature_embedding_dims is None)
-            or np.all(
-                np.array(list(v.feature_embedding_dims.keys()))
-                == np.array(list(info.data.get("input_columns")))
+    @model_validator(mode="after")
+    def validate_feature_layout_columns(self):
+        if self.feature_layout is None:
+            return self
+
+        allowed_columns = set(self.input_columns)
+        for layout_name, layout in self.feature_layout.items():
+            missing_columns = set(layout.columns) - allowed_columns
+            if missing_columns:
+                raise ValueError(
+                    f"feature_layout {layout_name!r} references unknown columns: "
+                    f"{sorted(missing_columns)}"
+                )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_ingestion_spec_branches(self):
+        ingestion_spec = self.model_spec.ingestion_spec
+        if ingestion_spec is None:
+            raise ValueError("model_spec.ingestion_spec must be configured")
+        if not isinstance(ingestion_spec, dict):
+            columns = self._branch_columns(
+                ingestion_spec,
+                default_columns=self.input_columns,
             )
+            self._validate_ingestion_columns(
+                "model_spec.ingestion_spec",
+                columns,
+            )
+            self._validate_all_input_columns_used(
+                columns,
+                "model_spec.ingestion_spec",
+            )
+            if isinstance(ingestion_spec, StructuredIngestionConfig):
+                layout = self._layout_for_branch(ingestion_spec)
+                output_dim = self._resolved_branch_output_dim(
+                    ingestion_spec,
+                    columns,
+                    usage="model_spec.ingestion_spec",
+                )
+                self._validate_structured_axis_embeddings(
+                    ingestion_spec, layout, output_dim
+                )
+                self._validate_structured_processing_blocks(
+                    ingestion_spec, layout, output_dim
+                )
+            if isinstance(
+                ingestion_spec,
+                (DirectEmbedIngestionConfig, TemporalConvIngestionConfig),
+            ):
+                self._validate_direct_embed_ingestion(
+                    "model_spec.ingestion_spec",
+                    columns,
+                    ingestion_spec,
+                )
+            if isinstance(ingestion_spec, PassThroughIngestionConfig):
+                self._validate_pass_through_ingestion(
+                    columns,
+                    ingestion_spec,
+                    usage="model_spec.ingestion_spec",
+                )
+            return self
+
+        ingestion_merge = self.model_spec.ingestion_merge
+        if ingestion_merge is None:
+            raise ValueError(
+                "model_spec.ingestion_merge must be configured for multiple ingestions"
+            )
+
+        used_columns: dict[str, str] = {}
+        consumed_columns: set[str] = set()
+        for branch_name, ingestion in ingestion_spec.items():
+            columns = self._branch_columns(ingestion)
+            if not columns:
+                raise ValueError(
+                    f"Ingestion branch {branch_name!r} must resolve to at "
+                    "least one input column"
+                )
+            self._validate_ingestion_columns(branch_name, columns)
+            consumed_columns.update(columns)
+
+            if not self.model_spec.allow_shared_ingestion_columns:
+                overlapping_columns = [
+                    column for column in columns if column in used_columns
+                ]
+                if overlapping_columns:
+                    raise ValueError(
+                        "Ingestion branches cannot share columns unless "
+                        "allow_shared_ingestion_columns is true: "
+                        f"{sorted(overlapping_columns)}"
+                    )
+                for column in columns:
+                    used_columns[column] = branch_name
+
+            if isinstance(ingestion, StructuredIngestionConfig):
+                layout = self._layout_for_branch(ingestion)
+                output_dim = self._resolved_branch_output_dim(
+                    ingestion,
+                    columns,
+                    usage=f"Composite ingestion branch {branch_name!r}",
+                )
+                self._validate_structured_axis_embeddings(ingestion, layout, output_dim)
+                self._validate_structured_processing_blocks(
+                    ingestion, layout, output_dim
+                )
+            if isinstance(
+                ingestion,
+                (DirectEmbedIngestionConfig, TemporalConvIngestionConfig),
+            ):
+                self._validate_direct_embed_ingestion(
+                    f"Composite ingestion branch {branch_name!r}",
+                    columns,
+                    ingestion,
+                )
+            if isinstance(ingestion, PassThroughIngestionConfig):
+                self._validate_pass_through_ingestion(
+                    columns,
+                    ingestion,
+                    usage=f"Composite ingestion branch {branch_name!r}",
+                )
+            self._resolved_branch_output_dim(
+                ingestion,
+                columns,
+                usage=f"Composite ingestion branch {branch_name!r}",
+            )
+        self._validate_all_input_columns_used(
+            consumed_columns,
+            "model_spec.ingestion_spec",
+        )
+        return self
+
+    def _validate_ingestion_columns(self, usage: str, columns: list[str]) -> None:
+        missing_columns = set(columns) - set(self.input_columns)
+        if missing_columns:
+            raise ValueError(
+                f"{usage} references unknown input columns: {sorted(missing_columns)}"
+            )
+
+        typed_columns = set(self.categorical_columns) | set(self.real_columns)
+        untyped_columns = set(columns) - typed_columns
+        if untyped_columns:
+            raise ValueError(
+                f"{usage} references columns that must be declared in "
+                f"categorical_columns or real_columns: {sorted(untyped_columns)}"
+            )
+
+    def _validate_all_input_columns_used(
+        self, columns: list[str] | set[str], usage: str
+    ) -> None:
+        unused_columns = set(self.input_columns) - set(columns)
+        if unused_columns:
+            raise ValueError(
+                f"{usage} must consume every input column; unused columns: "
+                f"{sorted(unused_columns)}"
+            )
+
+    def _layout_for_branch(
+        self,
+        ingestion: StructuredIngestionConfig,
+    ) -> CartesianLayoutModel:
+        if self.feature_layout is None:
+            raise ValueError(
+                f"Ingestion layout {ingestion.layout!r} requires top-level feature_layout"
+            )
+        if ingestion.layout not in self.feature_layout:
+            raise ValueError(f"Unknown feature_layout {ingestion.layout!r}")
+        return self.feature_layout[ingestion.layout]
+
+    def _validate_structured_axis_embeddings(
+        self,
+        ingestion: StructuredIngestionConfig,
+        layout: CartesianLayoutModel,
+        output_dim: int,
+    ) -> None:
+        unknown_axes = [
+            axis for axis in ingestion.axis_embeddings.axes if axis not in layout.axes
+        ]
+        if unknown_axes:
+            raise ValueError(
+                "Structured ingestion axis_embeddings references unavailable axes: "
+                f"{unknown_axes}"
+            )
+
+        if (
+            ingestion.axis_embeddings.type == "rope"
+            and (ingestion.cell_dim or output_dim) % 2 != 0
         ):
             raise ValueError(
-                "If feature_embedding_dims is not None, dimensions must be specified for all input columns"
+                "Structured ingestion axis_embeddings type 'rope' requires an even "
+                "cell_dim/output_dim"
             )
 
-        # Additional validation based on constraints in src/sequifier/train.py
-        categorical_columns = info.data.get("categorical_columns", [])
-        real_columns = info.data.get("real_columns", [])
-        n_categorical = len(categorical_columns)
-        n_real = len(real_columns)
+    def _validate_structured_processing_blocks(
+        self,
+        ingestion: StructuredIngestionConfig,
+        layout: CartesianLayoutModel,
+        output_dim: int,
+    ) -> None:
+        active_axes = list(layout.axes)
+        channel_dim = ingestion.cell_dim or output_dim
 
-        # Constraint 1: Mixed Data Types
-        # If both real and categorical variables are present, feature_embedding_dims must be set.
-        if n_categorical > 0 and n_real > 0:
-            if v.feature_embedding_dims is None:
+        for block in ingestion.processing_blocks:
+            unknown_axes = [axis for axis in block.axes if axis not in active_axes]
+            if unknown_axes:
                 raise ValueError(
-                    "If both real and categorical variables are present, 'feature_embedding_dims' in 'model_spec' must be set explicitly."
+                    f"Structured ingestion block references unavailable axes: "
+                    f"{unknown_axes}"
                 )
 
-        # Constraint 2: Categorical Divisibility
-        # If only categorical variables are included and auto-calculation is used,
-        # max(dim_model, n_head) must be divisible by the number of categorical variables.
-        if n_categorical > 0 and n_real == 0 and v.feature_embedding_dims is None:
-            embedding_size = v.initial_embedding_dim
-            if embedding_size % n_categorical != 0:
-                raise ValueError(
-                    f"If only categorical variables are included and feature_embedding_dims is not set, "
-                    f"initial_embedding_dim ({embedding_size}) must be a multiple of the number of categorical variables ({n_categorical}: {categorical_columns})."
-                )
+            if isinstance(
+                block,
+                (
+                    AxisProjectionBlockModel,
+                    AxisConvBlockModel,
+                    AxisAttentionBlockModel,
+                ),
+            ):
+                available_unshared_axes = [
+                    axis for axis in active_axes if axis not in block.axes
+                ]
+                invalid_unshared_axes = [
+                    axis
+                    for axis in block.unshared_axes
+                    if axis not in available_unshared_axes
+                ]
+                if invalid_unshared_axes:
+                    raise ValueError(
+                        "Structured ingestion block unshared_axes must be a subset "
+                        "of non-swept active axes: "
+                        f"{invalid_unshared_axes}"
+                    )
 
-        return v
+                channel_dim = block.output_dim
+
+            if isinstance(block, (AxisProjectionBlockModel, AxisPoolBlockModel)):
+                active_axes = [axis for axis in active_axes if axis not in block.axes]
+
+        if channel_dim != output_dim:
+            raise ValueError(
+                "Structured ingestion processing_blocks must produce output_dim "
+                f"{output_dim}, got {channel_dim}"
+            )
+
+    def _branch_columns(
+        self,
+        ingestion: BranchIngestionConfig,
+        default_columns: Optional[list[str]] = None,
+    ) -> list[str]:
+        if isinstance(ingestion, StructuredIngestionConfig):
+            layout = self._layout_for_branch(ingestion)
+            return list(layout.columns)
+
+        if isinstance(ingestion, GroupedIngestionConfig):
+            return [
+                column
+                for group_columns in ingestion.groups.values()
+                for column in group_columns
+            ]
+
+        if (
+            isinstance(
+                ingestion,
+                (DirectEmbedIngestionConfig, PassThroughIngestionConfig),
+            )
+            and ingestion.columns is None
+        ):
+            if default_columns is None:
+                raise ValueError(
+                    f"{ingestion.type} ingestion branches must configure columns"
+                )
+            return default_columns
+
+        return ingestion.columns  # type: ignore
+
+    def _validate_pass_through_ingestion(
+        self,
+        columns: list[str],
+        ingestion: PassThroughIngestionConfig,
+        *,
+        usage: str,
+    ) -> None:
+        categorical_columns = [
+            col for col in columns if col in self.categorical_columns
+        ]
+        real_columns = [col for col in columns if col in self.real_columns]
+        if categorical_columns:
+            raise ValueError(
+                f"{usage} type 'pass_through' only supports real columns; "
+                f"got categorical columns {categorical_columns}"
+            )
+        if not real_columns:
+            raise ValueError(f"{usage} type 'pass_through' requires real columns")
+
+        output_dim = self._resolved_branch_output_dim(
+            ingestion,
+            columns,
+            usage=usage,
+        )
+        if output_dim <= 0:
+            raise ValueError(f"{usage} output_dim must be positive")
+
+    def _resolved_branch_output_dim(
+        self,
+        ingestion: BranchIngestionConfig,
+        columns: list[str],
+        *,
+        usage: str,
+    ) -> int:
+        configured_output_dim = getattr(ingestion, "output_dim", None)
+        if configured_output_dim is not None:
+            return configured_output_dim
+        raise ValueError(f"{usage} must configure output_dim")
+
+    def _validate_direct_embed_ingestion(
+        self,
+        usage: str,
+        columns: list[str],
+        ingestion: DirectEmbedIngestionConfig | TemporalConvIngestionConfig,
+    ) -> None:
+        feature_embedding_dims = ingestion.feature_embedding_dims
+        output_dim = self._resolved_branch_output_dim(
+            ingestion,
+            columns,
+            usage=usage,
+        )
+        if feature_embedding_dims is not None and set(feature_embedding_dims) != set(
+            columns
+        ):
+            raise ValueError(
+                f"{usage} feature_embedding_dims must contain exactly its input "
+                f"columns. Expected {columns}, got {list(feature_embedding_dims)}"
+            )
+
+        if feature_embedding_dims is not None:
+            embedding_dim = sum(feature_embedding_dims.values())
+            if embedding_dim != output_dim:
+                raise ValueError(
+                    f"{usage} feature_embedding_dims sum ({embedding_dim}) must "
+                    f"equal output_dim ({output_dim})"
+                )
+            return
+
+        embedding_size = output_dim
+        categorical_columns = [
+            col for col in columns if col in self.categorical_columns
+        ]
+        real_columns = [col for col in columns if col in self.real_columns]
+
+        if categorical_columns and real_columns:
+            raise ValueError(
+                f"{usage} must configure feature_embedding_dims when both real "
+                "and categorical variables are present."
+            )
+
+        if real_columns and embedding_size < len(real_columns):
+            raise ValueError(
+                f"{usage} output_dim ({embedding_size}) must be at least the "
+                f"number of real variables ({len(real_columns)})."
+            )
+
+        if categorical_columns and embedding_size % len(categorical_columns) != 0:
+            raise ValueError(
+                f"{usage} output_dim ({embedding_size}) must be a multiple of "
+                f"the number of categorical variables ({len(categorical_columns)}: "
+                f"{categorical_columns})."
+            )

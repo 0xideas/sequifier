@@ -12,6 +12,9 @@ from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.config.train_config import (
     BERTSpecModel,
     DotDict,
+    FeatureLayoutRegistryModel,
+    IngestionMergeConfig,
+    IngestionSpecConfig,
     ModelSpecModel,
     NextOccurrenceConfigModel,
     ReplacementDistribution,
@@ -337,7 +340,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     @field_validator("layer_type_dtypes")
     @classmethod
     def validate_layer_type_dtypes(cls, v):
-        expected_keys = ["embedding", "linear", "norm", "decoder"]
+        expected_keys = ["embedding", "linear", "conv", "norm", "decoder"]
         allowed_types = [
             "float32",
             "float16",
@@ -481,10 +484,14 @@ class TrainingSpecHyperparameterSampling(BaseModel):
 class ModelSpecHyperparameterSampling(BaseModel):
     """Model-architecture search space with paired width choices."""
 
-    initial_embedding_dim: list[int]
-    joint_embedding_dim: list[Optional[int]]
     dim_model: list[int]
-    feature_embedding_dims: Optional[list[dict[str, int]]]
+    ingestion_spec: Optional[Union[IngestionSpecConfig, list[IngestionSpecConfig]]] = (
+        None
+    )
+    ingestion_merge: Optional[
+        Union[IngestionMergeConfig, list[IngestionMergeConfig]]
+    ] = None
+    allow_shared_ingestion_columns: bool = False
     n_head: list[int]
 
     dim_feedforward: OptunaInt
@@ -503,15 +510,18 @@ class ModelSpecHyperparameterSampling(BaseModel):
     @field_validator("n_head")
     @classmethod
     def validate_model_spec(cls, v, info):
-        dim_model_len = len(info.data.get("dim_model", []))
-
-        if info.data.get("feature_embedding_dims") is not None:
-            if not (
-                len(info.data.get("dim_model"))
-                == len(info.data.get("feature_embedding_dims"))
-            ):
+        ingestion_spec = info.data.get("ingestion_spec")
+        if isinstance(ingestion_spec, list):
+            if len(info.data.get("dim_model")) != len(ingestion_spec):
                 raise ValueError(
-                    "dim_model and feature_embedding_dims must have the same number of candidate values, that are paired"
+                    "dim_model and ingestion_spec must have the same number of candidate values, that are paired"
+                )
+
+        ingestion_merge = info.data.get("ingestion_merge")
+        if isinstance(ingestion_merge, list):
+            if len(info.data.get("dim_model")) != len(ingestion_merge):
+                raise ValueError(
+                    "dim_model and ingestion_merge must have the same number of candidate values, that are paired"
                 )
 
         if not (len(info.data.get("dim_model")) == len(v)):
@@ -519,19 +529,44 @@ class ModelSpecHyperparameterSampling(BaseModel):
                 "dim_model and n_head must have the same number of candidate values, that are paired"
             )
 
-        if "initial_embedding_dim" in info.data:
-            if len(info.data["initial_embedding_dim"]) != dim_model_len:
-                raise ValueError(
-                    "initial_embedding_dim must have the same number of values as dim_model"
-                )
-
-        if "joint_embedding_dim" in info.data:
-            if len(info.data["joint_embedding_dim"]) != dim_model_len:
-                raise ValueError(
-                    "joint_embedding_dim must have the same number of values as dim_model"
-                )
-
         return v
+
+    @model_validator(mode="after")
+    def validate_fixed_single_ingestion_matches_dim_model(self):
+        if self.ingestion_spec is None or isinstance(self.ingestion_spec, dict):
+            return self
+
+        if isinstance(self.ingestion_spec, list):
+            mismatched_candidates = [
+                (index, dim_model, ingestion_spec.output_dim)
+                for index, (dim_model, ingestion_spec) in enumerate(
+                    zip(self.dim_model, self.ingestion_spec)
+                )
+                if not isinstance(ingestion_spec, dict)
+                and dim_model != ingestion_spec.output_dim
+            ]
+            if mismatched_candidates:
+                raise ValueError(
+                    "model_hyperparameter_sampling.ingestion_spec list candidates "
+                    "must match their paired dim_model values for single-branch "
+                    f"ingestions. Mismatches: {mismatched_candidates}"
+                )
+            return self
+
+        mismatched_dim_models = [
+            dim_model
+            for dim_model in self.dim_model
+            if dim_model != self.ingestion_spec.output_dim
+        ]
+        if mismatched_dim_models:
+            raise ValueError(
+                "model_hyperparameter_sampling.ingestion_spec.output_dim must "
+                "match every dim_model candidate when a fixed single-branch "
+                "ingestion_spec is provided. Provide ingestion_spec as a list "
+                "paired with dim_model for variable widths."
+            )
+
+        return self
 
     def sample_trial(self, trial: Any) -> ModelSpecModel:
         """Sample architecture hyperparameters for one Optuna trial."""
@@ -539,15 +574,16 @@ class ModelSpecHyperparameterSampling(BaseModel):
             "dim_model_idx", list(range(len(self.dim_model)))
         )
 
-        initial_embedding_dim = self.initial_embedding_dim[dim_model_idx]
-        joint_embedding_dim = self.joint_embedding_dim[dim_model_idx]
         dim_model = self.dim_model[dim_model_idx]
         n_head = self.n_head[dim_model_idx]
-        feature_embedding_dims = (
-            None
-            if self.feature_embedding_dims is None
-            else self.feature_embedding_dims[dim_model_idx]
-        )
+        if isinstance(self.ingestion_spec, list):
+            ingestion_spec = self.ingestion_spec[dim_model_idx]
+        else:
+            ingestion_spec = self.ingestion_spec
+        if isinstance(self.ingestion_merge, list):
+            ingestion_merge = self.ingestion_merge[dim_model_idx]
+        else:
+            ingestion_merge = self.ingestion_merge
 
         dim_feedforward = sample_param(trial, "dim_feedforward", self.dim_feedforward)
         num_layers = sample_param(trial, "num_layers", self.num_layers)
@@ -578,26 +614,32 @@ class ModelSpecHyperparameterSampling(BaseModel):
             n_kv_heads = trial.suggest_categorical("n_kv_heads", valid_kv_heads)
 
         logger.info(
-            f"{initial_embedding_dim} - {joint_embedding_dim = } - {dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
+            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
         )
 
-        return ModelSpecModel(
-            initial_embedding_dim=initial_embedding_dim,
-            feature_embedding_dims=feature_embedding_dims,
-            joint_embedding_dim=joint_embedding_dim,
-            dim_model=dim_model,
-            n_head=n_head,
-            dim_feedforward=dim_feedforward,
-            num_layers=num_layers,
-            activation_fn=activation_fn,
-            normalization=normalization,
-            positional_encoding=positional_encoding,
-            attention_type=attention_type,
-            norm_first=norm_first,
-            n_kv_heads=n_kv_heads,
-            rope_theta=rope_theta,
-            prediction_length=self.prediction_length,
+        model_spec_kwargs = {
+            "dim_model": dim_model,
+            "n_head": n_head,
+            "dim_feedforward": dim_feedforward,
+            "num_layers": num_layers,
+            "activation_fn": activation_fn,
+            "normalization": normalization,
+            "positional_encoding": positional_encoding,
+            "attention_type": attention_type,
+            "norm_first": norm_first,
+            "n_kv_heads": n_kv_heads,
+            "rope_theta": rope_theta,
+            "prediction_length": self.prediction_length,
+        }
+        if ingestion_spec is not None:
+            model_spec_kwargs["ingestion_spec"] = ingestion_spec
+        if ingestion_merge is not None:
+            model_spec_kwargs["ingestion_merge"] = ingestion_merge
+        model_spec_kwargs["allow_shared_ingestion_columns"] = (
+            self.allow_shared_ingestion_columns
         )
+
+        return ModelSpecModel(**model_spec_kwargs)
 
 
 class HyperparameterSearchConfig(BaseModel):
@@ -633,6 +675,8 @@ class HyperparameterSearchConfig(BaseModel):
     export_onnx: bool = True
     export_pt: bool = False
     export_with_dropout: bool = False
+
+    feature_layout: Optional[FeatureLayoutRegistryModel] = None
 
     evaluation_inference_config: Optional[str] = None
     evaluation_script: Optional[str] = None
@@ -807,6 +851,7 @@ class HyperparameterSearchConfig(BaseModel):
             export_onnx=self.export_onnx,
             export_pt=self.export_pt,
             export_with_dropout=self.export_with_dropout,
+            feature_layout=self.feature_layout,
             model_spec=model_spec,
             training_spec=training_spec,
         )

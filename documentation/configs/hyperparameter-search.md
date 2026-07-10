@@ -74,6 +74,7 @@ Sequifier allows you to search not just for model parameters, but for the best *
 | `context_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
 | `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
+| `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_spec` references a structured layout. |
 
 ---
 
@@ -114,9 +115,9 @@ dim_feedforward:
 | `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
-| `initial_embedding_dim` | `list[int]` | **Yes** | Feature embedding size. Usually matches `dim_model`. |
-| `feature_embedding_dims` | `list[dict]` or `null` | **Yes** | List of maps for feature embedding dimensions. Use `null` only when auto-calculation is valid. |
-| `joint_embedding_dim` | `list[int or null]` | **Yes** | Joint embedding size. If not null, must match `dim_model`. |
+| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. |
+| `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. If omitted for multiple ingestions, defaults to `{type: concat}`. Merge output width is always `dim_model`. |
+| `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. |
 | `prediction_length` | `int` | **Yes** | Number of steps to predict simultaneously. BERT trials override this to the sampled `context_length`. |
 | `activation_fn` | `list[str]` | **Yes** | E.g., `['swiglu', 'gelu']`. |
 | `attention_type` | `list[str]` | **Yes** | E.g., `['mha', 'mqa']`. |
@@ -162,7 +163,7 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `max_ram_gb` | `int` or `float`| No | `16` | RAM limit (GB) for the cache when using lazy loading. |
 | `load_full_data_to_ram` | `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt` or `read_format: parquet` and folder-style sharded data. |
-| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float64`, `float8_e4m3fn`, `float8_e5m2`). |
+| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `conv`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float64`, `float8_e4m3fn`, `float8_e5m2`). |
 | `layer_autocast` | `bool` | No | `true` | Enable `torch.autocast`. |
 | `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`. |
 | `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly `true` or `false` if data\_parallelism is 'FSDP'. |
@@ -181,7 +182,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 | Group | Anchor Field | Linked Fields (Must match index) | Reason for Linkage |
 | :--- | :--- | :--- | :--- |
-| **Model Backbone** | `dim_model` | `n_head`<br>`initial_embedding_dim`<br>`joint_embedding_dim`<br>`feature_embedding_dims` | $d_{model}$ determines embedding sizes and must be divisible by the number of heads. |
+| **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_spec` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion configs with explicit branch output dimensions often need the same pairing. |
 | **Training Schedule** | `learning_rate` | `epochs`<br>`scheduler` | The magnitude of the learning rate often dictates how many epochs are needed. Schedulers often require `T_max` to match `epochs`. |
 | **Data Schema** | `input_columns` | `column_types` | Different subsets of columns require specific data type definitions. |
 

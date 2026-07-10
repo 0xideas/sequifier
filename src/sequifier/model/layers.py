@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from sequifier.model.dtypes import cast_floating_to_module_dtype
+
 
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -86,9 +88,14 @@ class FeedForward(nn.Module):
 
     def forward(self, x):
         if self.activation_fn == "swiglu":
-            return self.w3(self.dropout(F.silu(self.w1(x)) * self.w2(x)))
+            w1_out = self.w1(cast_floating_to_module_dtype(x, self.w1))
+            w2_out = self.w2(cast_floating_to_module_dtype(x, self.w2))
+            hidden = self.dropout(F.silu(w1_out) * w2_out)
+            return self.w3(cast_floating_to_module_dtype(hidden, self.w3))
         else:
-            return self.linear2(self.dropout(self.act(self.linear1(x))))
+            hidden = self.linear1(cast_floating_to_module_dtype(x, self.linear1))
+            hidden = self.dropout(self.act(hidden))
+            return self.linear2(cast_floating_to_module_dtype(hidden, self.linear2))
 
 
 class SelfAttention(nn.Module):
@@ -129,18 +136,22 @@ class SelfAttention(nn.Module):
         # x shape: (batch, seq_len, dim)
         batch_size, seq_len, _ = x.shape
 
+        xq_input = cast_floating_to_module_dtype(x, self.wq)
+        xk_input = cast_floating_to_module_dtype(x, self.wk)
+        xv_input = cast_floating_to_module_dtype(x, self.wv)
+
         xq = (
-            self.wq(x)
+            self.wq(xq_input)
             .view(batch_size, seq_len, self.n_head, self.head_dim)
             .transpose(1, 2)
         )
         xk = (
-            self.wk(x)
+            self.wk(xk_input)
             .view(batch_size, seq_len, self.n_kv_heads, self.head_dim)
             .transpose(1, 2)
         )
         xv = (
-            self.wv(x)
+            self.wv(xv_input)
             .view(batch_size, seq_len, self.n_kv_heads, self.head_dim)
             .transpose(1, 2)
         )
@@ -155,6 +166,9 @@ class SelfAttention(nn.Module):
             xk = xk.repeat_interleave(n_rep, dim=1)
             xv = xv.repeat_interleave(n_rep, dim=1)
 
+        if mask is not None and mask.is_floating_point() and mask.dtype != xq.dtype:
+            mask = mask.to(dtype=xq.dtype)
+
         # Scaled Dot Product Attention
         output = F.scaled_dot_product_attention(
             xq,
@@ -165,7 +179,7 @@ class SelfAttention(nn.Module):
         )
 
         output = output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
-        return self.wo(output)
+        return self.wo(cast_floating_to_module_dtype(output, self.wo))
 
 
 class SequifierEncoderLayer(nn.Module):
@@ -196,12 +210,29 @@ class SequifierEncoderLayer(nn.Module):
         self.ff = FeedForward(dim_model, dim_feedforward, config.activation_fn, dropout)
         self.dropout = nn.Dropout(dropout)
 
+    @staticmethod
+    def _residual_add(residual, update):
+        if (
+            residual.is_floating_point()
+            and update.is_floating_point()
+            and residual.dtype != update.dtype
+        ):
+            residual = residual.to(dtype=update.dtype)
+        return residual + update
+
     def forward(self, src, src_mask=None):
         # Pre-LN vs Post-LN logic
         if self.norm_first:
-            x = src + self.dropout(self.attn(self.norm1(src), mask=src_mask))
-            x = x + self.dropout(self.ff(self.norm2(x)))
+            normed_src = self.norm1(cast_floating_to_module_dtype(src, self.norm1))
+            x = self._residual_add(
+                src,
+                self.dropout(self.attn(normed_src, mask=src_mask)),
+            )
+            normed_x = self.norm2(cast_floating_to_module_dtype(x, self.norm2))
+            x = self._residual_add(x, self.dropout(self.ff(normed_x)))
         else:
-            x = self.norm1(src + self.dropout(self.attn(src, mask=src_mask)))
-            x = self.norm2(x + self.dropout(self.ff(x)))
+            x = self._residual_add(src, self.dropout(self.attn(src, mask=src_mask)))
+            x = self.norm1(cast_floating_to_module_dtype(x, self.norm1))
+            x = self._residual_add(x, self.dropout(self.ff(x)))
+            x = self.norm2(cast_floating_to_module_dtype(x, self.norm2))
         return x

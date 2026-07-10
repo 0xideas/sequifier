@@ -372,7 +372,7 @@ sequifier train --config-path configs/train.yaml
 
 ## Configuration Fields
 
-The configuration is defined in a YAML file (e.g., `train.yaml`). The file is structured into root-level fields (mostly data/paths) and two subsections: `model_spec` (architecture) and `training_spec` (hyperparameters).
+The configuration is defined in a YAML file (e.g., `train.yaml`). The file is structured into root-level fields (mostly data/paths), an optional `feature_layout` annotation section, and two subsections: `model_spec` (architecture) and `training_spec` (hyperparameters).
 
 ### 1\. File System & Inputs
 
@@ -392,6 +392,7 @@ The configuration is defined in a YAML file (e.g., `train.yaml`). The file is st
 | `target_columns` | `list[str]`| **Yes** | - | The specific column(s) the model should learn to predict. |
 | `target_column_types`| `dict` | **Yes** | - | Map of target columns to their type: `'categorical'` or `'real'`. The key order in target_column_types must exactly match the list order in target_columns |
 | `input_columns` | `list[str]` or `null`| **Yes** | `null` | Subset of columns to use as input features. Set to `null` to use all columns available in metadata. |
+| `feature_layout` | `dict` or `null` | No | `null` | Optional annotation registry for structured flat input columns. It does not change preprocessing output or stored files. |
 | `context_length` | `int` | **Yes** | - | Model input context length. It must fit inside the metadata `stored_context_width` with the stored `max_target_offset`. |
 | `target_offset` | `int` | No | `1` | Future offset used for forward-looking objectives. BERT-style training forces this to `0`. |
 
@@ -405,10 +406,10 @@ These fields determine the size and complexity of the Transformer.
 | `n_head` | `int` | **Yes** | - | Number of attention heads. `dim_model` must be divisible by `n_head`. |
 | `num_layers` | `int` | **Yes** | - | Number of transformer encoder layers. |
 | `dim_feedforward` | `int` | **Yes** | - | Dimension of the feedforward network model ($d_{ff}$). |
-| `initial_embedding_dim`| `int` | **Yes** | - | Size of initial feature embeddings. Must equal`dim_model` unless a `joint_embedding_dim` is configured. |
-| `joint_embedding_dim` | `int` | No | `null` | If set, projects concatenated inputs to this dim before the transformer. If set, must equal `dim_model`. |
 | `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
-| `feature_embedding_dims`| `dict` | No | `null` | Manual map of column names to embedding sizes. If `null`, sizes are auto-calculated. This works only if there are *only* real or *only* categorical variables, and `initial_embedding_dim` is divisible by the number of variables |
+| `ingestion_spec` | `dict` | No | `{type: direct_embed, output_dim: dim_model}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |
+| `ingestion_merge` | `dict` or `null` | No | `null` | Merge strategy for named multi-ingestion configs. Defaults to `{type: concat}` when omitted. Merge output width is always `dim_model`. |
+| `allow_shared_ingestion_columns` | `bool` | No | `false` | Allows the same flat input column to be consumed by more than one named ingestion stream. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
 | `n_kv_heads` | `int` | No | `null` | Number of Key/Value heads for GQA/MQA. If `null`, defaults to `n_head` (standard MHA). |
@@ -416,6 +417,128 @@ These fields determine the size and complexity of the Transformer.
 | `rope_theta` | `float` | No | `10000.0` | The base frequency for RoPE. Increase for long-context extrapolation. |
 | `normalization` | `str` | No | `rmsnorm`| `rmsnorm` or `layer_norm`. |
 | `norm_first` | `bool` | No | `true` | If `true` (Pre-LN), applies normalization before attention/FFN. More stable. |
+
+#### Feature Layout And Ingestion Layers
+
+`feature_layout` describes reusable structure for existing flat columns. `model_spec.ingestion_spec` chooses how the model consumes those columns. Preprocessing, datasets, and exported ONNX inputs remain flat-column based.
+
+```yaml
+feature_layout:
+  order_book:
+    axes:
+      side: [a, b]
+      level: [1]
+      field: [price, size]
+    columns:
+      a_1_price: {side: a, level: 1, field: price}
+      a_1_size:  {side: a, level: 1, field: size}
+      b_1_price: {side: b, level: 1, field: price}
+      b_1_size:  {side: b, level: 1, field: size}
+
+model_spec:
+  ingestion_spec:
+    book:
+      type: structured
+      layout: order_book
+      output_dim: 128
+    context:
+      type: feature_pool
+      columns: [spread, volatility]
+      output_dim: 64
+  ingestion_merge:
+    type: concat
+```
+
+If `ingestion_spec` is omitted, training uses `direct_embed` with
+`output_dim: dim_model`. Once an ingestion block is configured explicitly,
+every ingestion type must set `output_dim`. For a single top-level ingestion,
+`output_dim` must equal `dim_model`; for named multi-ingestion configs, each
+branch declares its own `output_dim` and the merge layer produces `dim_model`.
+Direct-embed `feature_embedding_dims`, when configured, must sum to the branch
+`output_dim`.
+
+```yaml
+ingestion_spec:
+  type: direct_embed
+  output_dim: 24
+  feature_embedding_dims:
+    customer_segment: 16
+    spend_30d: 8
+```
+
+Use `temporal_conv` inside a composite branch when local Conv1D filters should
+run across timesteps before the global transformer consumes the sequence. The
+branch first uses the same flat column encoder as `direct_embed`, then applies one or
+more same-width Conv1D layers. `causal` defaults to `true`; non-causal temporal
+convolution requires an odd `kernel_size` so the sequence length is preserved.
+
+Use `pass_through` for real-valued columns that should enter the model without
+per-column linear encoders. It can be used as the top-level
+`ingestion_spec` when its output width equals `dim_model`, or inside a
+composite branch where the merge layer handles width projection.
+
+```yaml
+ingestion_spec:
+  raw_prices:
+    type: pass_through
+    columns: [mid_price, spread]
+    output_dim: 2
+```
+
+```yaml
+ingestion_spec:
+  tape_context:
+    type: temporal_conv
+    columns: [spread, imbalance, volatility]
+    output_dim: 128
+    kernel_size: 5
+    dilation: 1
+    num_layers: 2
+    causal: true
+```
+
+Structured ingestion layers can optionally process cartesian axes before pooling. `cell_dim`
+sets the per-cell encoder size and defaults to `output_dim`. `processing_blocks`
+are compiled at model initialization. `axis_projection` flattens configured axes
+plus the channel dimension and removes those axes, `axis_conv` applies a
+same-size 1D/2D/3D convolution while preserving axes, `axis_attention` applies
+self-attention over one or more axes while preserving axes, and `axis_pool`
+reduces axes with `mean`, `sum`, or `max`. Parametric blocks can set
+`unshared_axes` to use separate parameters for coordinates on non-swept axes.
+
+Structured ingestion layers can also add axis-local positional information before any
+axis processing blocks run. `axis_embeddings.type` defaults to `none`; set it to
+`learned` to add learned coordinate embeddings or `rope` to apply rotary
+coordinate encoding over the cell channel dimension. `axis_embeddings.axes`
+selects layout axes by name. For backward-compatible shorthand, a plain list is
+treated as learned axis embeddings.
+
+```yaml
+ingestion_spec:
+  book:
+    type: structured
+    layout: order_book
+    cell_dim: 32
+    output_dim: 128
+    axis_embeddings:
+      type: learned
+      axes: [side, level]
+    processing_blocks:
+      - type: axis_conv
+        axes: [level]
+        output_dim: 32
+        unshared_axes: [side]
+      - type: axis_attention
+        axes: [level, field]
+        output_dim: 64
+        n_head: 4
+      - type: axis_projection
+        axes: [field]
+        output_dim: 128
+      - type: axis_pool
+        axes: [side]
+        mode: mean
+```
 
 ### 4\. Training Hyperparameters (`training_spec`)
 
@@ -454,7 +577,7 @@ These fields determine the size and complexity of the Transformer.
 | `continue_training` | `bool` | No | `true` | Load model weights and optimizer state from the latest checkpoint and continue training. |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt` or `read_format: parquet` and folder-style sharded data. |
 | `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
-| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float64`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
+| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `conv`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float64`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. |
 | `layer_autocast` | `bool` | No | `true` | If `true`, enables `torch.autocast` for automatic mixed precision training. |
 | `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`. |
 | `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly true or false if `data_parallelism` is `FSDP`. Must be `null` otherwise. |
@@ -907,6 +1030,7 @@ Sequifier allows you to search not just for model parameters, but for the best *
 | `context_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
 | `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
+| `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_spec` references a structured layout. |
 
 ---
 
@@ -947,9 +1071,9 @@ dim_feedforward:
 | `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
-| `initial_embedding_dim` | `list[int]` | **Yes** | Feature embedding size. Usually matches `dim_model`. |
-| `feature_embedding_dims` | `list[dict]` or `null` | **Yes** | List of maps for feature embedding dimensions. Use `null` only when auto-calculation is valid. |
-| `joint_embedding_dim` | `list[int or null]` | **Yes** | Joint embedding size. If not null, must match `dim_model`. |
+| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. |
+| `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. If omitted for multiple ingestions, defaults to `{type: concat}`. Merge output width is always `dim_model`. |
+| `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. |
 | `prediction_length` | `int` | **Yes** | Number of steps to predict simultaneously. BERT trials override this to the sampled `context_length`. |
 | `activation_fn` | `list[str]` | **Yes** | E.g., `['swiglu', 'gelu']`. |
 | `attention_type` | `list[str]` | **Yes** | E.g., `['mha', 'mqa']`. |
@@ -995,7 +1119,7 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `max_ram_gb` | `int` or `float`| No | `16` | RAM limit (GB) for the cache when using lazy loading. |
 | `load_full_data_to_ram` | `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt` or `read_format: parquet` and folder-style sharded data. |
-| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float64`, `float8_e4m3fn`, `float8_e5m2`). |
+| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `conv`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float64`, `float8_e4m3fn`, `float8_e5m2`). |
 | `layer_autocast` | `bool` | No | `true` | Enable `torch.autocast`. |
 | `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`. |
 | `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly `true` or `false` if data\_parallelism is 'FSDP'. |
@@ -1014,7 +1138,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 | Group | Anchor Field | Linked Fields (Must match index) | Reason for Linkage |
 | :--- | :--- | :--- | :--- |
-| **Model Backbone** | `dim_model` | `n_head`<br>`initial_embedding_dim`<br>`joint_embedding_dim`<br>`feature_embedding_dims` | $d_{model}$ determines embedding sizes and must be divisible by the number of heads. |
+| **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_spec` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion configs with explicit branch output dimensions often need the same pairing. |
 | **Training Schedule** | `learning_rate` | `epochs`<br>`scheduler` | The magnitude of the learning rate often dictates how many epochs are needed. Schedulers often require `T_max` to match `epochs`. |
 | **Data Schema** | `input_columns` | `column_types` | Different subsets of columns require specific data type definitions. |
 
