@@ -276,9 +276,9 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">itertools</span><span class="w"> </span><span class="kn">import</span> <span class="n">product</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Annotated</span><span class="p">,</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Literal</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">TypeAlias</span><span class="p">,</span> <span class="n">Union</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch_optimizer</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">yaml</span>
@@ -288,6 +288,7 @@
     <span class="n">BaseModel</span><span class="p">,</span>
     <span class="n">ConfigDict</span><span class="p">,</span>
     <span class="n">Field</span><span class="p">,</span>
+    <span class="n">RootModel</span><span class="p">,</span>
     <span class="n">StrictInt</span><span class="p">,</span>
     <span class="n">StrictStr</span><span class="p">,</span>
     <span class="n">field_serializer</span><span class="p">,</span>
@@ -316,7 +317,393 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="p">,</span> <span class="n">validate_special_token_ids</span>
 
 <span class="n">AnyType</span> <span class="o">=</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">int</span> <span class="o">|</span> <span class="nb">float</span>
-<span class="n">NextOccurrenceTargetValue</span> <span class="o">=</span> <span class="n">StrictInt</span> <span class="o">|</span> <span class="n">StrictStr</span>
+<span class="n">NextOccurrenceTargetValue</span><span class="p">:</span> <span class="n">TypeAlias</span> <span class="o">=</span> <span class="n">StrictInt</span> <span class="o">|</span> <span class="n">StrictStr</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">CartesianLayoutModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Reusable coordinate annotation for flat feature columns.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="n">axes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">AnyType</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">columns</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">AnyType</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_cartesian</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">axis_names</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">axes</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">axis</span><span class="p">,</span> <span class="n">values</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">axes</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">values</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Layout axis </span><span class="si">{</span><span class="n">axis</span><span class="si">!r}</span><span class="s2"> must contain at least one value&quot;</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">values</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">values</span><span class="p">)):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Layout axis </span><span class="si">{</span><span class="n">axis</span><span class="si">!r}</span><span class="s2"> cannot contain duplicate values&quot;</span>
+                <span class="p">)</span>
+
+        <span class="n">coordinate_tuples</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">column_name</span><span class="p">,</span> <span class="n">coordinates</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">columns</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="k">if</span> <span class="nb">set</span><span class="p">(</span><span class="n">coordinates</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">set</span><span class="p">(</span><span class="n">axis_names</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Layout column </span><span class="si">{</span><span class="n">column_name</span><span class="si">!r}</span><span class="s2"> must define every axis&quot;</span>
+                <span class="p">)</span>
+
+            <span class="n">coordinate_tuple</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">coordinates</span><span class="p">[</span><span class="n">axis</span><span class="p">]</span> <span class="k">for</span> <span class="n">axis</span> <span class="ow">in</span> <span class="n">axis_names</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">coordinate_tuple</span> <span class="ow">in</span> <span class="n">coordinate_tuples</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Duplicate cartesian coordinate tuple: </span><span class="si">{</span><span class="n">coordinate_tuple</span><span class="si">!r}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+            <span class="n">coordinate_tuples</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">coordinate_tuple</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">axis</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">coordinates</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="k">if</span> <span class="n">value</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">axes</span><span class="p">[</span><span class="n">axis</span><span class="p">]:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="sa">f</span><span class="s2">&quot;Layout column </span><span class="si">{</span><span class="n">column_name</span><span class="si">!r}</span><span class="s2"> has value </span><span class="si">{</span><span class="n">value</span><span class="si">!r}</span><span class="s2"> &quot;</span>
+                        <span class="sa">f</span><span class="s2">&quot;outside axis </span><span class="si">{</span><span class="n">axis</span><span class="si">!r}</span><span class="s2">&quot;</span>
+                    <span class="p">)</span>
+
+        <span class="n">expected_tuples</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">product</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">axes</span><span class="p">[</span><span class="n">axis</span><span class="p">]</span> <span class="k">for</span> <span class="n">axis</span> <span class="ow">in</span> <span class="n">axis_names</span><span class="p">)))</span>
+        <span class="k">if</span> <span class="n">coordinate_tuples</span> <span class="o">!=</span> <span class="n">expected_tuples</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;cartesian layouts must contain every coordinate&quot;</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">FeatureLayoutRegistryModel</span><span class="p">(</span><span class="n">RootModel</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">CartesianLayoutModel</span><span class="p">]]):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Top-level registry of reusable feature layouts.&quot;&quot;&quot;</span>
+
+    <span class="n">root</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">CartesianLayoutModel</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">items</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">root</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__contains__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">root</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">CartesianLayoutModel</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">root</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">DirectEmbedIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Use the existing flat-column embedding path.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;direct_embed&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;direct_embed&quot;</span>
+    <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">feature_embedding_dims</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;columns&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_columns</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">_validate_column_list_unique</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="s2">&quot;direct_embed ingestion columns&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;feature_embedding_dims&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_feature_embedding_dims</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="n">_validate_feature_embedding_dims</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="s2">&quot;direct_embed feature_embedding_dims&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">PassThroughIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Pass real-valued columns through without per-feature encoders.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;pass_through&quot;</span><span class="p">]</span>
+    <span class="n">columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;columns&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_columns</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">_validate_column_list_unique</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="s2">&quot;pass_through ingestion columns&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">FeaturePoolIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Encode columns as feature tokens before pooling to one time token.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;feature_pool&quot;</span><span class="p">]</span>
+    <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;columns&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_columns</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="n">_validate_column_list_unique</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="s2">&quot;feature_pool ingestion columns&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">GroupedIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Encode configured column groups and merge them within one branch.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;grouped&quot;</span><span class="p">]</span>
+    <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">groups</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_groups</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">grouped_columns</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">group_name</span><span class="p">,</span> <span class="n">columns</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">groups</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">_validate_module_dict_key</span><span class="p">(</span>
+                <span class="n">group_name</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;grouped ingestion group </span><span class="si">{</span><span class="n">group_name</span><span class="si">!r}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">columns</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;grouped ingestion group </span><span class="si">{</span><span class="n">group_name</span><span class="si">!r}</span><span class="s2"> must contain columns&quot;</span>
+                <span class="p">)</span>
+            <span class="n">_validate_column_list_unique</span><span class="p">(</span>
+                <span class="n">columns</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;grouped ingestion group </span><span class="si">{</span><span class="n">group_name</span><span class="si">!r}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+            <span class="n">grouped_columns</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">columns</span><span class="p">)</span>
+
+        <span class="n">_validate_column_list_unique</span><span class="p">(</span><span class="n">grouped_columns</span><span class="p">,</span> <span class="s2">&quot;grouped ingestion columns&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">SiameseIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply one shared scalar encoder across the branch columns.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;siamese&quot;</span><span class="p">]</span>
+    <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;columns&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_columns</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="n">_validate_column_list_unique</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="s2">&quot;siamese ingestion columns&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">v</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">TemporalConvIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Encode columns, then apply Conv1D over the time axis.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;temporal_conv&quot;</span><span class="p">]</span>
+    <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">feature_embedding_dims</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">kernel_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">dilation</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">num_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">causal</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">activation_fn</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;relu&quot;</span><span class="p">,</span> <span class="s2">&quot;gelu&quot;</span><span class="p">,</span> <span class="s2">&quot;silu&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;gelu&quot;</span>
+    <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">lt</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_temporal_conv</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">_validate_column_list_unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">columns</span><span class="p">,</span> <span class="s2">&quot;temporal_conv ingestion columns&quot;</span><span class="p">)</span>
+        <span class="n">_validate_feature_embedding_dims</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span><span class="p">,</span> <span class="s2">&quot;temporal_conv feature_embedding_dims&quot;</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">causal</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">kernel_size</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;temporal_conv kernel_size must be odd when causal is false&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">AxisProjectionBlockModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Flatten configured cartesian axes and project them with a linear layer.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;axis_projection&quot;</span><span class="p">]</span>
+    <span class="n">axes</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">unshared_axes</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_axes_unique</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">_validate_axis_list_unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">axes</span><span class="p">,</span> <span class="s2">&quot;axes&quot;</span><span class="p">)</span>
+        <span class="n">_validate_axis_list_unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">unshared_axes</span><span class="p">,</span> <span class="s2">&quot;unshared_axes&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">AxisConvBlockModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Sweep a native 1D/2D/3D convolution over configured cartesian axes.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;axis_conv&quot;</span><span class="p">]</span>
+    <span class="n">axes</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">max_length</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+    <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">kernel_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">unshared_axes</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_axes_unique</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">_validate_axis_list_unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">axes</span><span class="p">,</span> <span class="s2">&quot;axes&quot;</span><span class="p">)</span>
+        <span class="n">_validate_axis_list_unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">unshared_axes</span><span class="p">,</span> <span class="s2">&quot;unshared_axes&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">kernel_size</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;axis_conv kernel_size must be odd to preserve axis sizes&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">AxisAttentionBlockModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply self-attention over one or more configured cartesian axes.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;axis_attention&quot;</span><span class="p">]</span>
+    <span class="n">axes</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">n_head</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">lt</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+    <span class="n">unshared_axes</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_axes_unique</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">_validate_axis_list_unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">axes</span><span class="p">,</span> <span class="s2">&quot;axes&quot;</span><span class="p">)</span>
+        <span class="n">_validate_axis_list_unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">unshared_axes</span><span class="p">,</span> <span class="s2">&quot;unshared_axes&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">output_dim</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_head</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;axis_attention output_dim must be divisible by n_head&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">AxisPoolBlockModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Reduce configured cartesian axes without changing the channel dimension.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;axis_pool&quot;</span><span class="p">]</span>
+    <span class="n">axes</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">mode</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;mean&quot;</span><span class="p">,</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span> <span class="s2">&quot;max&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;mean&quot;</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_axes_unique</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">_validate_axis_list_unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">axes</span><span class="p">,</span> <span class="s2">&quot;axes&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="n">StructuredProcessingBlock</span> <span class="o">=</span> <span class="n">Annotated</span><span class="p">[</span>
+    <span class="n">Union</span><span class="p">[</span>
+        <span class="n">AxisProjectionBlockModel</span><span class="p">,</span>
+        <span class="n">AxisConvBlockModel</span><span class="p">,</span>
+        <span class="n">AxisAttentionBlockModel</span><span class="p">,</span>
+        <span class="n">AxisPoolBlockModel</span><span class="p">,</span>
+    <span class="p">],</span>
+    <span class="n">Field</span><span class="p">(</span><span class="n">discriminator</span><span class="o">=</span><span class="s2">&quot;type&quot;</span><span class="p">),</span>
+<span class="p">]</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_validate_axis_list_unique</span><span class="p">(</span><span class="n">axes</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">field_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">axes</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">axes</span><span class="p">)):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">field_name</span><span class="si">}</span><span class="s2"> cannot contain duplicate axes&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_validate_column_list_unique</span><span class="p">(</span><span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">field_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">columns</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">columns</span><span class="p">)):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">field_name</span><span class="si">}</span><span class="s2"> cannot contain duplicate columns&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_validate_module_dict_key</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">usage</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">key</span> <span class="o">==</span> <span class="s2">&quot;&quot;</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> cannot be empty&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">&quot;.&quot;</span> <span class="ow">in</span> <span class="n">key</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> cannot contain &#39;.&#39;&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_validate_feature_embedding_dims</span><span class="p">(</span>
+    <span class="n">feature_embedding_dims</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]],</span> <span class="n">field_name</span><span class="p">:</span> <span class="nb">str</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">feature_embedding_dims</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span>
+    <span class="n">invalid_dims</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">column</span><span class="p">:</span> <span class="n">dim</span> <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">dim</span> <span class="ow">in</span> <span class="n">feature_embedding_dims</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">dim</span> <span class="o">&lt;=</span> <span class="mi">0</span>
+    <span class="p">}</span>
+    <span class="k">if</span> <span class="n">invalid_dims</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">field_name</span><span class="si">}</span><span class="s2"> values must be positive: </span><span class="si">{</span><span class="n">invalid_dims</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">AxisEmbeddingModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Optional positional encoding for cartesian layout axes.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;none&quot;</span><span class="p">,</span> <span class="s2">&quot;learned&quot;</span><span class="p">,</span> <span class="s2">&quot;rope&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;none&quot;</span>
+    <span class="n">axes</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+    <span class="n">rope_theta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mf">10000.0</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;type&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">normalize_type</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="s2">&quot;none&quot;</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">v</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">v</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_axes</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">_validate_axis_list_unique</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">axes</span><span class="p">,</span> <span class="s2">&quot;axis_embeddings.axes&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s2">&quot;none&quot;</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">axes</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;axis_embeddings.axes must be empty when type is &#39;none&#39;&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">type</span> <span class="o">!=</span> <span class="s2">&quot;none&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">axes</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;axis_embeddings.axes must contain at least one axis unless type is &#39;none&#39;&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">StructuredIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Consume a top-level cartesian layout.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;structured&quot;</span><span class="p">]</span>
+    <span class="n">layout</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">cell_dim</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">axis_embeddings</span><span class="p">:</span> <span class="n">AxisEmbeddingModel</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="n">AxisEmbeddingModel</span><span class="p">)</span>
+    <span class="n">processing_blocks</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">StructuredProcessingBlock</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;axis_embeddings&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">normalize_axis_embeddings</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;none&quot;</span><span class="p">,</span> <span class="s2">&quot;axes&quot;</span><span class="p">:</span> <span class="p">[]}</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;learned&quot;</span><span class="p">,</span> <span class="s2">&quot;axes&quot;</span><span class="p">:</span> <span class="n">v</span><span class="p">}</span>
+        <span class="k">return</span> <span class="n">v</span>
+
+
+<span class="n">BranchIngestionConfig</span> <span class="o">=</span> <span class="n">Annotated</span><span class="p">[</span>
+    <span class="n">Union</span><span class="p">[</span>
+        <span class="n">DirectEmbedIngestionConfig</span><span class="p">,</span>
+        <span class="n">PassThroughIngestionConfig</span><span class="p">,</span>
+        <span class="n">FeaturePoolIngestionConfig</span><span class="p">,</span>
+        <span class="n">GroupedIngestionConfig</span><span class="p">,</span>
+        <span class="n">SiameseIngestionConfig</span><span class="p">,</span>
+        <span class="n">TemporalConvIngestionConfig</span><span class="p">,</span>
+        <span class="n">StructuredIngestionConfig</span><span class="p">,</span>
+    <span class="p">],</span>
+    <span class="n">Field</span><span class="p">(</span><span class="n">discriminator</span><span class="o">=</span><span class="s2">&quot;type&quot;</span><span class="p">),</span>
+<span class="p">]</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">IngestionMergeConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;How composite branch outputs are merged.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;concat&quot;</span><span class="p">,</span> <span class="s2">&quot;sum&quot;</span><span class="p">,</span> <span class="s2">&quot;gated&quot;</span><span class="p">,</span> <span class="s2">&quot;attention&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;concat&quot;</span>
+
+
+<span class="n">IngestionSpecConfig</span> <span class="o">=</span> <span class="n">BranchIngestionConfig</span> <span class="o">|</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">BranchIngestionConfig</span><span class="p">]</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_validate_class_share_log_columns</span><span class="p">(</span><span class="n">config_values</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -557,7 +944,7 @@
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;layer_type_dtypes&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_layer_type_dtypes</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
-        <span class="n">expected_keys</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;embedding&quot;</span><span class="p">,</span> <span class="s2">&quot;linear&quot;</span><span class="p">,</span> <span class="s2">&quot;norm&quot;</span><span class="p">,</span> <span class="s2">&quot;decoder&quot;</span><span class="p">]</span>
+        <span class="n">expected_keys</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;embedding&quot;</span><span class="p">,</span> <span class="s2">&quot;linear&quot;</span><span class="p">,</span> <span class="s2">&quot;conv&quot;</span><span class="p">,</span> <span class="s2">&quot;norm&quot;</span><span class="p">,</span> <span class="s2">&quot;decoder&quot;</span><span class="p">]</span>
         <span class="n">allowed_types</span> <span class="o">=</span> <span class="p">[</span>
             <span class="s2">&quot;float32&quot;</span><span class="p">,</span>
             <span class="s2">&quot;float16&quot;</span><span class="p">,</span>
@@ -693,9 +1080,9 @@
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">arbitrary_types_allowed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
 
-    <span class="n">initial_embedding_dim</span><span class="p">:</span> <span class="nb">int</span>
-    <span class="n">feature_embedding_dims</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">joint_embedding_dim</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">ingestion_spec</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">IngestionSpecConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">ingestion_merge</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">IngestionMergeConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">allow_shared_ingestion_columns</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">dim_model</span><span class="p">:</span> <span class="nb">int</span>
     <span class="n">n_head</span><span class="p">:</span> <span class="nb">int</span>
     <span class="n">dim_feedforward</span><span class="p">:</span> <span class="nb">int</span>
@@ -714,25 +1101,51 @@
 
     <span class="n">prediction_length</span><span class="p">:</span> <span class="nb">int</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;dim_model&quot;</span><span class="p">)</span>
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_dim_model</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">info</span><span class="p">):</span>
-        <span class="n">initial_embedding_dim</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;initial_embedding_dim&quot;</span><span class="p">)</span>
-        <span class="n">joint_embedding_dim</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;joint_embedding_dim&quot;</span><span class="p">)</span>
-        <span class="n">dim_model</span> <span class="o">=</span> <span class="n">v</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">default_ingestion_spec</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">values</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">values</span>
+        <span class="k">if</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;ingestion_spec&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">values</span>
+        <span class="n">dim_model</span> <span class="o">=</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;dim_model&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">dim_model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">values</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
+        <span class="n">values</span><span class="p">[</span><span class="s2">&quot;ingestion_spec&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;direct_embed&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;output_dim&quot;</span><span class="p">:</span> <span class="n">dim_model</span><span class="p">,</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="n">values</span>
 
-        <span class="k">if</span> <span class="n">joint_embedding_dim</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="n">v</span> <span class="o">==</span> <span class="n">initial_embedding_dim</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;If no joint_embedding_dim is configured, dim_model must be equal to initial_embedding_dim, </span><span class="si">{</span><span class="n">dim_model</span><span class="w"> </span><span class="si">= }</span><span class="s2"> != </span><span class="si">{</span><span class="n">initial_embedding_dim</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span>
-                <span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="n">v</span> <span class="o">==</span> <span class="n">joint_embedding_dim</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;If joint_embedding_dim is configured it must be equal to dim_model, </span><span class="si">{</span><span class="n">dim_model</span><span class="w"> </span><span class="si">= }</span><span class="s2"> != </span><span class="si">{</span><span class="n">joint_embedding_dim</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span>
-                <span class="p">)</span>
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_ingestion_spec_output_dim</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span> <span class="o">=</span> <span class="n">DirectEmbedIngestionConfig</span><span class="p">(</span><span class="n">output_dim</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">)</span>
 
-        <span class="k">return</span> <span class="n">v</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;model_spec.ingestion_spec must define at least one &quot;</span>
+                    <span class="s2">&quot;named ingestion&quot;</span>
+                <span class="p">)</span>
+            <span class="k">for</span> <span class="n">branch_name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">:</span>
+                <span class="n">_validate_module_dict_key</span><span class="p">(</span>
+                    <span class="n">branch_name</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Composite ingestion branch </span><span class="si">{</span><span class="n">branch_name</span><span class="si">!r}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_merge</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_merge</span> <span class="o">=</span> <span class="n">IngestionMergeConfig</span><span class="p">()</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="o">.</span><span class="n">output_dim</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;model_spec.ingestion_spec.output_dim must equal dim_model&quot;</span>
+            <span class="p">)</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_merge</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;model_spec.ingestion_merge is only valid when &quot;</span>
+                <span class="s2">&quot;ingestion_spec defines multiple named ingestions&quot;</span>
+            <span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;activation_fn&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
@@ -760,20 +1173,6 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_attention_type</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;mha&quot;</span><span class="p">,</span> <span class="s2">&quot;mqa&quot;</span><span class="p">,</span> <span class="s2">&quot;gqa&quot;</span><span class="p">]:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid attention_type: </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">v</span>
-
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;feature_embedding_dims&quot;</span><span class="p">)</span>
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_feature_embedding_dims</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">info</span><span class="p">):</span>
-        <span class="n">initial_embedding_dim</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;initial_embedding_dim&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="p">(</span>
-            <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="n">initial_embedding_dim</span>
-            <span class="ow">and</span> <span class="nb">sum</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">values</span><span class="p">())</span> <span class="o">!=</span> <span class="n">initial_embedding_dim</span>
-        <span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Sum of feature_embedding_dims </span><span class="si">{</span><span class="nb">sum</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">values</span><span class="p">())</span><span class="si">}</span><span class="s2"> != initial_embedding_dim </span><span class="si">{</span><span class="n">initial_embedding_dim</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;n_head&quot;</span><span class="p">)</span>
@@ -846,6 +1245,7 @@
     <span class="n">export_pt</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">export_with_dropout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
 
+    <span class="n">feature_layout</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FeatureLayoutRegistryModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">model_spec</span><span class="p">:</span> <span class="n">ModelSpecModel</span>
     <span class="n">training_spec</span><span class="p">:</span> <span class="n">TrainingSpecModel</span>
 
@@ -1046,48 +1446,373 @@
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">columns_ordered_filtered</span><span class="w"> </span><span class="si">= }</span><span class="s2"> != </span><span class="si">{</span><span class="n">target_columns</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;model_spec&quot;</span><span class="p">)</span>
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_model_spec</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">info</span><span class="p">):</span>
-        <span class="c1"># Original validation: consistent columns</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span>
-            <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;input_columns&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span>
-            <span class="ow">or</span> <span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">feature_embedding_dims</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">)</span>
-            <span class="ow">or</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span>
-                <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">feature_embedding_dims</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
-                <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;input_columns&quot;</span><span class="p">)))</span>
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_feature_layout_columns</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_layout</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span>
+
+        <span class="n">allowed_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">layout_name</span><span class="p">,</span> <span class="n">layout</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_layout</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">missing_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">layout</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span> <span class="o">-</span> <span class="n">allowed_columns</span>
+            <span class="k">if</span> <span class="n">missing_columns</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;feature_layout </span><span class="si">{</span><span class="n">layout_name</span><span class="si">!r}</span><span class="s2"> references unknown columns: &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">missing_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_ingestion_spec_branches</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">ingestion_spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">ingestion_spec</span>
+        <span class="k">if</span> <span class="n">ingestion_spec</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;model_spec.ingestion_spec must be configured&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="n">columns</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_branch_columns</span><span class="p">(</span>
+                <span class="n">ingestion_spec</span><span class="p">,</span>
+                <span class="n">default_columns</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">input_columns</span><span class="p">,</span>
             <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_validate_ingestion_columns</span><span class="p">(</span>
+                <span class="s2">&quot;model_spec.ingestion_spec&quot;</span><span class="p">,</span>
+                <span class="n">columns</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_validate_all_input_columns_used</span><span class="p">(</span>
+                <span class="n">columns</span><span class="p">,</span>
+                <span class="s2">&quot;model_spec.ingestion_spec&quot;</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="n">StructuredIngestionConfig</span><span class="p">):</span>
+                <span class="n">layout</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_layout_for_branch</span><span class="p">(</span><span class="n">ingestion_spec</span><span class="p">)</span>
+                <span class="n">output_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_resolved_branch_output_dim</span><span class="p">(</span>
+                    <span class="n">ingestion_spec</span><span class="p">,</span>
+                    <span class="n">columns</span><span class="p">,</span>
+                    <span class="n">usage</span><span class="o">=</span><span class="s2">&quot;model_spec.ingestion_spec&quot;</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_validate_structured_axis_embeddings</span><span class="p">(</span>
+                    <span class="n">ingestion_spec</span><span class="p">,</span> <span class="n">layout</span><span class="p">,</span> <span class="n">output_dim</span>
+                <span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_validate_structured_processing_blocks</span><span class="p">(</span>
+                    <span class="n">ingestion_spec</span><span class="p">,</span> <span class="n">layout</span><span class="p">,</span> <span class="n">output_dim</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span>
+                <span class="n">ingestion_spec</span><span class="p">,</span>
+                <span class="p">(</span><span class="n">DirectEmbedIngestionConfig</span><span class="p">,</span> <span class="n">TemporalConvIngestionConfig</span><span class="p">),</span>
+            <span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_validate_direct_embed_ingestion</span><span class="p">(</span>
+                    <span class="s2">&quot;model_spec.ingestion_spec&quot;</span><span class="p">,</span>
+                    <span class="n">columns</span><span class="p">,</span>
+                    <span class="n">ingestion_spec</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="n">PassThroughIngestionConfig</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_validate_pass_through_ingestion</span><span class="p">(</span>
+                    <span class="n">columns</span><span class="p">,</span>
+                    <span class="n">ingestion_spec</span><span class="p">,</span>
+                    <span class="n">usage</span><span class="o">=</span><span class="s2">&quot;model_spec.ingestion_spec&quot;</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="k">return</span> <span class="bp">self</span>
+
+        <span class="n">ingestion_merge</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">ingestion_merge</span>
+        <span class="k">if</span> <span class="n">ingestion_merge</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;model_spec.ingestion_merge must be configured for multiple ingestions&quot;</span>
+            <span class="p">)</span>
+
+        <span class="n">used_columns</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">consumed_columns</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">branch_name</span><span class="p">,</span> <span class="n">ingestion</span> <span class="ow">in</span> <span class="n">ingestion_spec</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">columns</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_branch_columns</span><span class="p">(</span><span class="n">ingestion</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">columns</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Ingestion branch </span><span class="si">{</span><span class="n">branch_name</span><span class="si">!r}</span><span class="s2"> must resolve to at &quot;</span>
+                    <span class="s2">&quot;least one input column&quot;</span>
+                <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_validate_ingestion_columns</span><span class="p">(</span><span class="n">branch_name</span><span class="p">,</span> <span class="n">columns</span><span class="p">)</span>
+            <span class="n">consumed_columns</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">columns</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">allow_shared_ingestion_columns</span><span class="p">:</span>
+                <span class="n">overlapping_columns</span> <span class="o">=</span> <span class="p">[</span>
+                    <span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">columns</span> <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">used_columns</span>
+                <span class="p">]</span>
+                <span class="k">if</span> <span class="n">overlapping_columns</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="s2">&quot;Ingestion branches cannot share columns unless &quot;</span>
+                        <span class="s2">&quot;allow_shared_ingestion_columns is true: &quot;</span>
+                        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">overlapping_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+                    <span class="p">)</span>
+                <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">columns</span><span class="p">:</span>
+                    <span class="n">used_columns</span><span class="p">[</span><span class="n">column</span><span class="p">]</span> <span class="o">=</span> <span class="n">branch_name</span>
+
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">ingestion</span><span class="p">,</span> <span class="n">StructuredIngestionConfig</span><span class="p">):</span>
+                <span class="n">layout</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_layout_for_branch</span><span class="p">(</span><span class="n">ingestion</span><span class="p">)</span>
+                <span class="n">output_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_resolved_branch_output_dim</span><span class="p">(</span>
+                    <span class="n">ingestion</span><span class="p">,</span>
+                    <span class="n">columns</span><span class="p">,</span>
+                    <span class="n">usage</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;Composite ingestion branch </span><span class="si">{</span><span class="n">branch_name</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_validate_structured_axis_embeddings</span><span class="p">(</span><span class="n">ingestion</span><span class="p">,</span> <span class="n">layout</span><span class="p">,</span> <span class="n">output_dim</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_validate_structured_processing_blocks</span><span class="p">(</span>
+                    <span class="n">ingestion</span><span class="p">,</span> <span class="n">layout</span><span class="p">,</span> <span class="n">output_dim</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span>
+                <span class="n">ingestion</span><span class="p">,</span>
+                <span class="p">(</span><span class="n">DirectEmbedIngestionConfig</span><span class="p">,</span> <span class="n">TemporalConvIngestionConfig</span><span class="p">),</span>
+            <span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_validate_direct_embed_ingestion</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Composite ingestion branch </span><span class="si">{</span><span class="n">branch_name</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">,</span>
+                    <span class="n">columns</span><span class="p">,</span>
+                    <span class="n">ingestion</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">ingestion</span><span class="p">,</span> <span class="n">PassThroughIngestionConfig</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_validate_pass_through_ingestion</span><span class="p">(</span>
+                    <span class="n">columns</span><span class="p">,</span>
+                    <span class="n">ingestion</span><span class="p">,</span>
+                    <span class="n">usage</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;Composite ingestion branch </span><span class="si">{</span><span class="n">branch_name</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_resolved_branch_output_dim</span><span class="p">(</span>
+                <span class="n">ingestion</span><span class="p">,</span>
+                <span class="n">columns</span><span class="p">,</span>
+                <span class="n">usage</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;Composite ingestion branch </span><span class="si">{</span><span class="n">branch_name</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_validate_all_input_columns_used</span><span class="p">(</span>
+            <span class="n">consumed_columns</span><span class="p">,</span>
+            <span class="s2">&quot;model_spec.ingestion_spec&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_validate_ingestion_columns</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">usage</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">missing_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">columns</span><span class="p">)</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">missing_columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> references unknown input columns: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">missing_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+
+        <span class="n">typed_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">)</span> <span class="o">|</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span><span class="p">)</span>
+        <span class="n">untyped_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">columns</span><span class="p">)</span> <span class="o">-</span> <span class="n">typed_columns</span>
+        <span class="k">if</span> <span class="n">untyped_columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> references columns that must be declared in &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;categorical_columns or real_columns: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">untyped_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_validate_all_input_columns_used</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">set</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">usage</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">unused_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="n">columns</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">unused_columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> must consume every input column; unused columns: &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">unused_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_layout_for_branch</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">ingestion</span><span class="p">:</span> <span class="n">StructuredIngestionConfig</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">CartesianLayoutModel</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_layout</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Ingestion layout </span><span class="si">{</span><span class="n">ingestion</span><span class="o">.</span><span class="n">layout</span><span class="si">!r}</span><span class="s2"> requires top-level feature_layout&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="n">ingestion</span><span class="o">.</span><span class="n">layout</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_layout</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown feature_layout </span><span class="si">{</span><span class="n">ingestion</span><span class="o">.</span><span class="n">layout</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_layout</span><span class="p">[</span><span class="n">ingestion</span><span class="o">.</span><span class="n">layout</span><span class="p">]</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_validate_structured_axis_embeddings</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">ingestion</span><span class="p">:</span> <span class="n">StructuredIngestionConfig</span><span class="p">,</span>
+        <span class="n">layout</span><span class="p">:</span> <span class="n">CartesianLayoutModel</span><span class="p">,</span>
+        <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">unknown_axes</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">axis</span> <span class="k">for</span> <span class="n">axis</span> <span class="ow">in</span> <span class="n">ingestion</span><span class="o">.</span><span class="n">axis_embeddings</span><span class="o">.</span><span class="n">axes</span> <span class="k">if</span> <span class="n">axis</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">layout</span><span class="o">.</span><span class="n">axes</span>
+        <span class="p">]</span>
+        <span class="k">if</span> <span class="n">unknown_axes</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Structured ingestion axis_embeddings references unavailable axes: &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">unknown_axes</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">ingestion</span><span class="o">.</span><span class="n">axis_embeddings</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s2">&quot;rope&quot;</span>
+            <span class="ow">and</span> <span class="p">(</span><span class="n">ingestion</span><span class="o">.</span><span class="n">cell_dim</span> <span class="ow">or</span> <span class="n">output_dim</span><span class="p">)</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">!=</span> <span class="mi">0</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;If feature_embedding_dims is not None, dimensions must be specified for all input columns&quot;</span>
+                <span class="s2">&quot;Structured ingestion axis_embeddings type &#39;rope&#39; requires an even &quot;</span>
+                <span class="s2">&quot;cell_dim/output_dim&quot;</span>
             <span class="p">)</span>
 
-        <span class="c1"># Additional validation based on constraints in src/sequifier/train.py</span>
-        <span class="n">categorical_columns</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;categorical_columns&quot;</span><span class="p">,</span> <span class="p">[])</span>
-        <span class="n">real_columns</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;real_columns&quot;</span><span class="p">,</span> <span class="p">[])</span>
-        <span class="n">n_categorical</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">)</span>
-        <span class="n">n_real</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">real_columns</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_validate_structured_processing_blocks</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">ingestion</span><span class="p">:</span> <span class="n">StructuredIngestionConfig</span><span class="p">,</span>
+        <span class="n">layout</span><span class="p">:</span> <span class="n">CartesianLayoutModel</span><span class="p">,</span>
+        <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">active_axes</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">layout</span><span class="o">.</span><span class="n">axes</span><span class="p">)</span>
+        <span class="n">channel_dim</span> <span class="o">=</span> <span class="n">ingestion</span><span class="o">.</span><span class="n">cell_dim</span> <span class="ow">or</span> <span class="n">output_dim</span>
 
-        <span class="c1"># Constraint 1: Mixed Data Types</span>
-        <span class="c1"># If both real and categorical variables are present, feature_embedding_dims must be set.</span>
-        <span class="k">if</span> <span class="n">n_categorical</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">n_real</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">v</span><span class="o">.</span><span class="n">feature_embedding_dims</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="n">ingestion</span><span class="o">.</span><span class="n">processing_blocks</span><span class="p">:</span>
+            <span class="n">unknown_axes</span> <span class="o">=</span> <span class="p">[</span><span class="n">axis</span> <span class="k">for</span> <span class="n">axis</span> <span class="ow">in</span> <span class="n">block</span><span class="o">.</span><span class="n">axes</span> <span class="k">if</span> <span class="n">axis</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">active_axes</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">unknown_axes</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;If both real and categorical variables are present, &#39;feature_embedding_dims&#39; in &#39;model_spec&#39; must be set explicitly.&quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;Structured ingestion block references unavailable axes: &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">unknown_axes</span><span class="si">}</span><span class="s2">&quot;</span>
                 <span class="p">)</span>
 
-        <span class="c1"># Constraint 2: Categorical Divisibility</span>
-        <span class="c1"># If only categorical variables are included and auto-calculation is used,</span>
-        <span class="c1"># max(dim_model, n_head) must be divisible by the number of categorical variables.</span>
-        <span class="k">if</span> <span class="n">n_categorical</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">n_real</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">v</span><span class="o">.</span><span class="n">feature_embedding_dims</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">embedding_size</span> <span class="o">=</span> <span class="n">v</span><span class="o">.</span><span class="n">initial_embedding_dim</span>
-            <span class="k">if</span> <span class="n">embedding_size</span> <span class="o">%</span> <span class="n">n_categorical</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;If only categorical variables are included and feature_embedding_dims is not set, &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;initial_embedding_dim (</span><span class="si">{</span><span class="n">embedding_size</span><span class="si">}</span><span class="s2">) must be a multiple of the number of categorical variables (</span><span class="si">{</span><span class="n">n_categorical</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">categorical_columns</span><span class="si">}</span><span class="s2">).&quot;</span>
-                <span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span>
+                <span class="n">block</span><span class="p">,</span>
+                <span class="p">(</span>
+                    <span class="n">AxisProjectionBlockModel</span><span class="p">,</span>
+                    <span class="n">AxisConvBlockModel</span><span class="p">,</span>
+                    <span class="n">AxisAttentionBlockModel</span><span class="p">,</span>
+                <span class="p">),</span>
+            <span class="p">):</span>
+                <span class="n">available_unshared_axes</span> <span class="o">=</span> <span class="p">[</span>
+                    <span class="n">axis</span> <span class="k">for</span> <span class="n">axis</span> <span class="ow">in</span> <span class="n">active_axes</span> <span class="k">if</span> <span class="n">axis</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">block</span><span class="o">.</span><span class="n">axes</span>
+                <span class="p">]</span>
+                <span class="n">invalid_unshared_axes</span> <span class="o">=</span> <span class="p">[</span>
+                    <span class="n">axis</span>
+                    <span class="k">for</span> <span class="n">axis</span> <span class="ow">in</span> <span class="n">block</span><span class="o">.</span><span class="n">unshared_axes</span>
+                    <span class="k">if</span> <span class="n">axis</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">available_unshared_axes</span>
+                <span class="p">]</span>
+                <span class="k">if</span> <span class="n">invalid_unshared_axes</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="s2">&quot;Structured ingestion block unshared_axes must be a subset &quot;</span>
+                        <span class="s2">&quot;of non-swept active axes: &quot;</span>
+                        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">invalid_unshared_axes</span><span class="si">}</span><span class="s2">&quot;</span>
+                    <span class="p">)</span>
 
-        <span class="k">return</span> <span class="n">v</span></div>
+                <span class="n">channel_dim</span> <span class="o">=</span> <span class="n">block</span><span class="o">.</span><span class="n">output_dim</span>
+
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">block</span><span class="p">,</span> <span class="p">(</span><span class="n">AxisProjectionBlockModel</span><span class="p">,</span> <span class="n">AxisPoolBlockModel</span><span class="p">)):</span>
+                <span class="n">active_axes</span> <span class="o">=</span> <span class="p">[</span><span class="n">axis</span> <span class="k">for</span> <span class="n">axis</span> <span class="ow">in</span> <span class="n">active_axes</span> <span class="k">if</span> <span class="n">axis</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">block</span><span class="o">.</span><span class="n">axes</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="n">channel_dim</span> <span class="o">!=</span> <span class="n">output_dim</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Structured ingestion processing_blocks must produce output_dim &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">output_dim</span><span class="si">}</span><span class="s2">, got </span><span class="si">{</span><span class="n">channel_dim</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_branch_columns</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">ingestion</span><span class="p">:</span> <span class="n">BranchIngestionConfig</span><span class="p">,</span>
+        <span class="n">default_columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">ingestion</span><span class="p">,</span> <span class="n">StructuredIngestionConfig</span><span class="p">):</span>
+            <span class="n">layout</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_layout_for_branch</span><span class="p">(</span><span class="n">ingestion</span><span class="p">)</span>
+            <span class="k">return</span> <span class="nb">list</span><span class="p">(</span><span class="n">layout</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">ingestion</span><span class="p">,</span> <span class="n">GroupedIngestionConfig</span><span class="p">):</span>
+            <span class="k">return</span> <span class="p">[</span>
+                <span class="n">column</span>
+                <span class="k">for</span> <span class="n">group_columns</span> <span class="ow">in</span> <span class="n">ingestion</span><span class="o">.</span><span class="n">groups</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+                <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">group_columns</span>
+            <span class="p">]</span>
+
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="nb">isinstance</span><span class="p">(</span>
+                <span class="n">ingestion</span><span class="p">,</span>
+                <span class="p">(</span><span class="n">DirectEmbedIngestionConfig</span><span class="p">,</span> <span class="n">PassThroughIngestionConfig</span><span class="p">),</span>
+            <span class="p">)</span>
+            <span class="ow">and</span> <span class="n">ingestion</span><span class="o">.</span><span class="n">columns</span> <span class="ow">is</span> <span class="kc">None</span>
+        <span class="p">):</span>
+            <span class="k">if</span> <span class="n">default_columns</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">ingestion</span><span class="o">.</span><span class="n">type</span><span class="si">}</span><span class="s2"> ingestion branches must configure columns&quot;</span>
+                <span class="p">)</span>
+            <span class="k">return</span> <span class="n">default_columns</span>
+
+        <span class="k">return</span> <span class="n">ingestion</span><span class="o">.</span><span class="n">columns</span>  <span class="c1"># type: ignore</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_validate_pass_through_ingestion</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
+        <span class="n">ingestion</span><span class="p">:</span> <span class="n">PassThroughIngestionConfig</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">usage</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">categorical_columns</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">col</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">columns</span> <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span>
+        <span class="p">]</span>
+        <span class="n">real_columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">col</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">columns</span> <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">categorical_columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> type &#39;pass_through&#39; only supports real columns; &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;got categorical columns </span><span class="si">{</span><span class="n">categorical_columns</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">real_columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> type &#39;pass_through&#39; requires real columns&quot;</span><span class="p">)</span>
+
+        <span class="n">output_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_resolved_branch_output_dim</span><span class="p">(</span>
+            <span class="n">ingestion</span><span class="p">,</span>
+            <span class="n">columns</span><span class="p">,</span>
+            <span class="n">usage</span><span class="o">=</span><span class="n">usage</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">output_dim</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> output_dim must be positive&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_resolved_branch_output_dim</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">ingestion</span><span class="p">:</span> <span class="n">BranchIngestionConfig</span><span class="p">,</span>
+        <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">usage</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="n">configured_output_dim</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">ingestion</span><span class="p">,</span> <span class="s2">&quot;output_dim&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">configured_output_dim</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">configured_output_dim</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> must configure output_dim&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_validate_direct_embed_ingestion</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">usage</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
+        <span class="n">ingestion</span><span class="p">:</span> <span class="n">DirectEmbedIngestionConfig</span> <span class="o">|</span> <span class="n">TemporalConvIngestionConfig</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">feature_embedding_dims</span> <span class="o">=</span> <span class="n">ingestion</span><span class="o">.</span><span class="n">feature_embedding_dims</span>
+        <span class="n">output_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_resolved_branch_output_dim</span><span class="p">(</span>
+            <span class="n">ingestion</span><span class="p">,</span>
+            <span class="n">columns</span><span class="p">,</span>
+            <span class="n">usage</span><span class="o">=</span><span class="n">usage</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">feature_embedding_dims</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">set</span><span class="p">(</span><span class="n">feature_embedding_dims</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">set</span><span class="p">(</span>
+            <span class="n">columns</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> feature_embedding_dims must contain exactly its input &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;columns. Expected </span><span class="si">{</span><span class="n">columns</span><span class="si">}</span><span class="s2">, got </span><span class="si">{</span><span class="nb">list</span><span class="p">(</span><span class="n">feature_embedding_dims</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">feature_embedding_dims</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">embedding_dim</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">feature_embedding_dims</span><span class="o">.</span><span class="n">values</span><span class="p">())</span>
+            <span class="k">if</span> <span class="n">embedding_dim</span> <span class="o">!=</span> <span class="n">output_dim</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> feature_embedding_dims sum (</span><span class="si">{</span><span class="n">embedding_dim</span><span class="si">}</span><span class="s2">) must &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;equal output_dim (</span><span class="si">{</span><span class="n">output_dim</span><span class="si">}</span><span class="s2">)&quot;</span>
+                <span class="p">)</span>
+            <span class="k">return</span>
+
+        <span class="n">embedding_size</span> <span class="o">=</span> <span class="n">output_dim</span>
+        <span class="n">categorical_columns</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">col</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">columns</span> <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span>
+        <span class="p">]</span>
+        <span class="n">real_columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">col</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">columns</span> <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="n">categorical_columns</span> <span class="ow">and</span> <span class="n">real_columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> must configure feature_embedding_dims when both real &quot;</span>
+                <span class="s2">&quot;and categorical variables are present.&quot;</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">real_columns</span> <span class="ow">and</span> <span class="n">embedding_size</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">real_columns</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> output_dim (</span><span class="si">{</span><span class="n">embedding_size</span><span class="si">}</span><span class="s2">) must be at least the &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;number of real variables (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">real_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">).&quot;</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">categorical_columns</span> <span class="ow">and</span> <span class="n">embedding_size</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">usage</span><span class="si">}</span><span class="s2"> output_dim (</span><span class="si">{</span><span class="n">embedding_size</span><span class="si">}</span><span class="s2">) must be a multiple of &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;the number of categorical variables (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">: &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">categorical_columns</span><span class="si">}</span><span class="s2">).&quot;</span>
+            <span class="p">)</span></div>
 </pre></div>
         </article>
       </div>

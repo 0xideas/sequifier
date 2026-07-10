@@ -285,6 +285,9 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">BERTSpecModel</span><span class="p">,</span>
     <span class="n">DotDict</span><span class="p">,</span>
+    <span class="n">FeatureLayoutRegistryModel</span><span class="p">,</span>
+    <span class="n">IngestionMergeConfig</span><span class="p">,</span>
+    <span class="n">IngestionSpecConfig</span><span class="p">,</span>
     <span class="n">ModelSpecModel</span><span class="p">,</span>
     <span class="n">NextOccurrenceConfigModel</span><span class="p">,</span>
     <span class="n">ReplacementDistribution</span><span class="p">,</span>
@@ -610,7 +613,7 @@
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;layer_type_dtypes&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_layer_type_dtypes</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
-        <span class="n">expected_keys</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;embedding&quot;</span><span class="p">,</span> <span class="s2">&quot;linear&quot;</span><span class="p">,</span> <span class="s2">&quot;norm&quot;</span><span class="p">,</span> <span class="s2">&quot;decoder&quot;</span><span class="p">]</span>
+        <span class="n">expected_keys</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;embedding&quot;</span><span class="p">,</span> <span class="s2">&quot;linear&quot;</span><span class="p">,</span> <span class="s2">&quot;conv&quot;</span><span class="p">,</span> <span class="s2">&quot;norm&quot;</span><span class="p">,</span> <span class="s2">&quot;decoder&quot;</span><span class="p">]</span>
         <span class="n">allowed_types</span> <span class="o">=</span> <span class="p">[</span>
             <span class="s2">&quot;float32&quot;</span><span class="p">,</span>
             <span class="s2">&quot;float16&quot;</span><span class="p">,</span>
@@ -754,10 +757,14 @@
 <div class="viewcode-block" id="ModelSpecHyperparameterSampling"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">ModelSpecHyperparameterSampling</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Model-architecture search space with paired width choices.&quot;&quot;&quot;</span>
 
-    <span class="n">initial_embedding_dim</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
-    <span class="n">joint_embedding_dim</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span>
     <span class="n">dim_model</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
-    <span class="n">feature_embedding_dims</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]]</span>
+    <span class="n">ingestion_spec</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="n">IngestionSpecConfig</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">IngestionSpecConfig</span><span class="p">]]]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="kc">None</span>
+    <span class="p">)</span>
+    <span class="n">ingestion_merge</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span>
+        <span class="n">Union</span><span class="p">[</span><span class="n">IngestionMergeConfig</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">IngestionMergeConfig</span><span class="p">]]</span>
+    <span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">allow_shared_ingestion_columns</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">n_head</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
 
     <span class="n">dim_feedforward</span><span class="p">:</span> <span class="n">OptunaInt</span>
@@ -776,15 +783,18 @@
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;n_head&quot;</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_model_spec</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">info</span><span class="p">):</span>
-        <span class="n">dim_model_len</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;dim_model&quot;</span><span class="p">,</span> <span class="p">[]))</span>
-
-        <span class="k">if</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;feature_embedding_dims&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span>
-                <span class="nb">len</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;dim_model&quot;</span><span class="p">))</span>
-                <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;feature_embedding_dims&quot;</span><span class="p">))</span>
-            <span class="p">):</span>
+        <span class="n">ingestion_spec</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;ingestion_spec&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;dim_model&quot;</span><span class="p">))</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">ingestion_spec</span><span class="p">):</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;dim_model and feature_embedding_dims must have the same number of candidate values, that are paired&quot;</span>
+                    <span class="s2">&quot;dim_model and ingestion_spec must have the same number of candidate values, that are paired&quot;</span>
+                <span class="p">)</span>
+
+        <span class="n">ingestion_merge</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;ingestion_merge&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">ingestion_merge</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;dim_model&quot;</span><span class="p">))</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">ingestion_merge</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;dim_model and ingestion_merge must have the same number of candidate values, that are paired&quot;</span>
                 <span class="p">)</span>
 
         <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;dim_model&quot;</span><span class="p">))</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">v</span><span class="p">)):</span>
@@ -792,19 +802,44 @@
                 <span class="s2">&quot;dim_model and n_head must have the same number of candidate values, that are paired&quot;</span>
             <span class="p">)</span>
 
-        <span class="k">if</span> <span class="s2">&quot;initial_embedding_dim&quot;</span> <span class="ow">in</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="p">:</span>
-            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;initial_embedding_dim&quot;</span><span class="p">])</span> <span class="o">!=</span> <span class="n">dim_model_len</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;initial_embedding_dim must have the same number of values as dim_model&quot;</span>
-                <span class="p">)</span>
-
-        <span class="k">if</span> <span class="s2">&quot;joint_embedding_dim&quot;</span> <span class="ow">in</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="p">:</span>
-            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;joint_embedding_dim&quot;</span><span class="p">])</span> <span class="o">!=</span> <span class="n">dim_model_len</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;joint_embedding_dim must have the same number of values as dim_model&quot;</span>
-                <span class="p">)</span>
-
         <span class="k">return</span> <span class="n">v</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_fixed_single_ingestion_matches_dim_model</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">self</span>
+
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="n">mismatched_candidates</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">dim_model</span><span class="p">,</span> <span class="n">ingestion_spec</span><span class="o">.</span><span class="n">output_dim</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="p">(</span><span class="n">dim_model</span><span class="p">,</span> <span class="n">ingestion_spec</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span>
+                    <span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">)</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span>
+                <span class="ow">and</span> <span class="n">dim_model</span> <span class="o">!=</span> <span class="n">ingestion_spec</span><span class="o">.</span><span class="n">output_dim</span>
+            <span class="p">]</span>
+            <span class="k">if</span> <span class="n">mismatched_candidates</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;model_hyperparameter_sampling.ingestion_spec list candidates &quot;</span>
+                    <span class="s2">&quot;must match their paired dim_model values for single-branch &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;ingestions. Mismatches: </span><span class="si">{</span><span class="n">mismatched_candidates</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+            <span class="k">return</span> <span class="bp">self</span>
+
+        <span class="n">mismatched_dim_models</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">dim_model</span>
+            <span class="k">for</span> <span class="n">dim_model</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span>
+            <span class="k">if</span> <span class="n">dim_model</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="o">.</span><span class="n">output_dim</span>
+        <span class="p">]</span>
+        <span class="k">if</span> <span class="n">mismatched_dim_models</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;model_hyperparameter_sampling.ingestion_spec.output_dim must &quot;</span>
+                <span class="s2">&quot;match every dim_model candidate when a fixed single-branch &quot;</span>
+                <span class="s2">&quot;ingestion_spec is provided. Provide ingestion_spec as a list &quot;</span>
+                <span class="s2">&quot;paired with dim_model for variable widths.&quot;</span>
+            <span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span>
 
 <div class="viewcode-block" id="ModelSpecHyperparameterSampling.sample_trial"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.sample_trial">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">sample_trial</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trial</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ModelSpecModel</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Sample architecture hyperparameters for one Optuna trial.&quot;&quot;&quot;</span>
@@ -812,15 +847,16 @@
             <span class="s2">&quot;dim_model_idx&quot;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">)))</span>
         <span class="p">)</span>
 
-        <span class="n">initial_embedding_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span><span class="p">[</span><span class="n">dim_model_idx</span><span class="p">]</span>
-        <span class="n">joint_embedding_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_dim</span><span class="p">[</span><span class="n">dim_model_idx</span><span class="p">]</span>
         <span class="n">dim_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">[</span><span class="n">dim_model_idx</span><span class="p">]</span>
         <span class="n">n_head</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_head</span><span class="p">[</span><span class="n">dim_model_idx</span><span class="p">]</span>
-        <span class="n">feature_embedding_dims</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="kc">None</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span> <span class="ow">is</span> <span class="kc">None</span>
-            <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span><span class="p">[</span><span class="n">dim_model_idx</span><span class="p">]</span>
-        <span class="p">)</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="n">ingestion_spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">[</span><span class="n">dim_model_idx</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">ingestion_spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion_merge</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="n">ingestion_merge</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_merge</span><span class="p">[</span><span class="n">dim_model_idx</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">ingestion_merge</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_merge</span>
 
         <span class="n">dim_feedforward</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="s2">&quot;dim_feedforward&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_feedforward</span><span class="p">)</span>
         <span class="n">num_layers</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="s2">&quot;num_layers&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_layers</span><span class="p">)</span>
@@ -851,26 +887,32 @@
             <span class="n">n_kv_heads</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span><span class="s2">&quot;n_kv_heads&quot;</span><span class="p">,</span> <span class="n">valid_kv_heads</span><span class="p">)</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">initial_embedding_dim</span><span class="si">}</span><span class="s2"> - </span><span class="si">{</span><span class="n">joint_embedding_dim</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">dim_model</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">dim_feedforward</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">num_layers</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">activation_fn</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">normalization</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">positional_encoding</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">attention_type</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">norm_first</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">n_kv_heads</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">rope_theta</span><span class="w"> </span><span class="si">= }</span><span class="s2"> &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">dim_model</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">dim_feedforward</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">num_layers</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">activation_fn</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">normalization</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">positional_encoding</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">attention_type</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">norm_first</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">n_kv_heads</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">rope_theta</span><span class="w"> </span><span class="si">= }</span><span class="s2"> &quot;</span>
         <span class="p">)</span>
 
-        <span class="k">return</span> <span class="n">ModelSpecModel</span><span class="p">(</span>
-            <span class="n">initial_embedding_dim</span><span class="o">=</span><span class="n">initial_embedding_dim</span><span class="p">,</span>
-            <span class="n">feature_embedding_dims</span><span class="o">=</span><span class="n">feature_embedding_dims</span><span class="p">,</span>
-            <span class="n">joint_embedding_dim</span><span class="o">=</span><span class="n">joint_embedding_dim</span><span class="p">,</span>
-            <span class="n">dim_model</span><span class="o">=</span><span class="n">dim_model</span><span class="p">,</span>
-            <span class="n">n_head</span><span class="o">=</span><span class="n">n_head</span><span class="p">,</span>
-            <span class="n">dim_feedforward</span><span class="o">=</span><span class="n">dim_feedforward</span><span class="p">,</span>
-            <span class="n">num_layers</span><span class="o">=</span><span class="n">num_layers</span><span class="p">,</span>
-            <span class="n">activation_fn</span><span class="o">=</span><span class="n">activation_fn</span><span class="p">,</span>
-            <span class="n">normalization</span><span class="o">=</span><span class="n">normalization</span><span class="p">,</span>
-            <span class="n">positional_encoding</span><span class="o">=</span><span class="n">positional_encoding</span><span class="p">,</span>
-            <span class="n">attention_type</span><span class="o">=</span><span class="n">attention_type</span><span class="p">,</span>
-            <span class="n">norm_first</span><span class="o">=</span><span class="n">norm_first</span><span class="p">,</span>
-            <span class="n">n_kv_heads</span><span class="o">=</span><span class="n">n_kv_heads</span><span class="p">,</span>
-            <span class="n">rope_theta</span><span class="o">=</span><span class="n">rope_theta</span><span class="p">,</span>
-            <span class="n">prediction_length</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
-        <span class="p">)</span></div></div>
+        <span class="n">model_spec_kwargs</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;dim_model&quot;</span><span class="p">:</span> <span class="n">dim_model</span><span class="p">,</span>
+            <span class="s2">&quot;n_head&quot;</span><span class="p">:</span> <span class="n">n_head</span><span class="p">,</span>
+            <span class="s2">&quot;dim_feedforward&quot;</span><span class="p">:</span> <span class="n">dim_feedforward</span><span class="p">,</span>
+            <span class="s2">&quot;num_layers&quot;</span><span class="p">:</span> <span class="n">num_layers</span><span class="p">,</span>
+            <span class="s2">&quot;activation_fn&quot;</span><span class="p">:</span> <span class="n">activation_fn</span><span class="p">,</span>
+            <span class="s2">&quot;normalization&quot;</span><span class="p">:</span> <span class="n">normalization</span><span class="p">,</span>
+            <span class="s2">&quot;positional_encoding&quot;</span><span class="p">:</span> <span class="n">positional_encoding</span><span class="p">,</span>
+            <span class="s2">&quot;attention_type&quot;</span><span class="p">:</span> <span class="n">attention_type</span><span class="p">,</span>
+            <span class="s2">&quot;norm_first&quot;</span><span class="p">:</span> <span class="n">norm_first</span><span class="p">,</span>
+            <span class="s2">&quot;n_kv_heads&quot;</span><span class="p">:</span> <span class="n">n_kv_heads</span><span class="p">,</span>
+            <span class="s2">&quot;rope_theta&quot;</span><span class="p">:</span> <span class="n">rope_theta</span><span class="p">,</span>
+            <span class="s2">&quot;prediction_length&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
+        <span class="p">}</span>
+        <span class="k">if</span> <span class="n">ingestion_spec</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">model_spec_kwargs</span><span class="p">[</span><span class="s2">&quot;ingestion_spec&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">ingestion_spec</span>
+        <span class="k">if</span> <span class="n">ingestion_merge</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">model_spec_kwargs</span><span class="p">[</span><span class="s2">&quot;ingestion_merge&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">ingestion_merge</span>
+        <span class="n">model_spec_kwargs</span><span class="p">[</span><span class="s2">&quot;allow_shared_ingestion_columns&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">allow_shared_ingestion_columns</span>
+        <span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">ModelSpecModel</span><span class="p">(</span><span class="o">**</span><span class="n">model_spec_kwargs</span><span class="p">)</span></div></div>
 
 
 <div class="viewcode-block" id="HyperparameterSearchConfig"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">HyperparameterSearchConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
@@ -906,6 +948,8 @@
     <span class="n">export_onnx</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">export_pt</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">export_with_dropout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+
+    <span class="n">feature_layout</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FeatureLayoutRegistryModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
 
     <span class="n">evaluation_inference_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">evaluation_script</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
@@ -1080,6 +1124,7 @@
             <span class="n">export_onnx</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">export_onnx</span><span class="p">,</span>
             <span class="n">export_pt</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">export_pt</span><span class="p">,</span>
             <span class="n">export_with_dropout</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">export_with_dropout</span><span class="p">,</span>
+            <span class="n">feature_layout</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">feature_layout</span><span class="p">,</span>
             <span class="n">model_spec</span><span class="o">=</span><span class="n">model_spec</span><span class="p">,</span>
             <span class="n">training_spec</span><span class="o">=</span><span class="n">training_spec</span><span class="p">,</span>
         <span class="p">)</span></div></div>

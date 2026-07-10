@@ -366,6 +366,8 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.sequifier_dataset_from_folder_pt_lazy</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
     <span class="n">SequifierDatasetFromFolderPtLazy</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.dtypes</span><span class="w"> </span><span class="kn">import</span> <span class="n">cast_floating_to_module_dtype</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.ingestions</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_feature_ingestion</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">RMSNorm</span><span class="p">,</span> <span class="n">SequifierEncoderLayer</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.objectives</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_objective</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.optimizers.optimizers</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_optimizer_class</span>  <span class="c1"># noqa: E402</span>
@@ -385,14 +387,6 @@
     <span class="k">if</span> <span class="n">dtype</span> <span class="ow">in</span> <span class="n">WIDE_UNSIGNED_EMBEDDING_INDEX_DTYPES</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">int64</span>
     <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Embedding indices must use an integer dtype, got </span><span class="si">{</span><span class="n">dtype</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
-
-
-<span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_embedding_safe_indices</span><span class="p">(</span><span class="n">indices</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-    <span class="n">target_dtype</span> <span class="o">=</span> <span class="n">_smallest_embedding_safe_dtype</span><span class="p">(</span><span class="n">indices</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">indices</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">target_dtype</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">indices</span>
-    <span class="k">return</span> <span class="n">indices</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">target_dtype</span><span class="p">)</span>
 
 
 <span class="nd">@beartype</span>
@@ -1053,59 +1047,14 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">early_stopping_epochs</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span> <span class="o">=</span> <span class="n">hparams</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">objective</span> <span class="o">=</span> <span class="n">create_objective</span><span class="p">(</span><span class="n">hparams</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">drop</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">dropout</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span> <span class="o">=</span> <span class="n">ModuleDict</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">dim_model</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">initial_embedding_dim</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_dim</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">joint_embedding_dim</span>
-
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_dim</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_layer</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_dim</span>
-            <span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_layer</span> <span class="o">=</span> <span class="kc">None</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">use_rope</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">positional_encoding</span> <span class="o">==</span> <span class="s2">&quot;rope&quot;</span>
-        <span class="k">if</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">feature_embedding_dims</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">feature_embedding_dims</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_feature_embedding_dims</span><span class="p">(</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span>
-            <span class="p">)</span>
-
-        <span class="bp">self</span><span class="o">.</span><span class="n">real_columns_with_embedding</span> <span class="o">=</span> <span class="p">[]</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">real_columns_direct</span> <span class="o">=</span> <span class="p">[]</span>
-        <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span><span class="p">:</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span><span class="p">[</span><span class="n">col</span><span class="p">])</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">real_columns_with_embedding</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">col</span><span class="p">)</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
-                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                        <span class="sa">f</span><span class="s2">&quot;Real column </span><span class="si">{</span><span class="n">col</span><span class="si">}</span><span class="s2"> without embedding must have feature_embedding_dims=1&quot;</span>
-                    <span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">real_columns_direct</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">col</span><span class="p">)</span>
-
-        <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">n_classes</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Embedding</span><span class="p">(</span>
-                    <span class="n">n_classes</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span><span class="p">[</span><span class="n">col</span><span class="p">]</span>
-                <span class="p">)</span>
-
-        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_rope</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">pos_encoder</span> <span class="o">=</span> <span class="n">ModuleDict</span><span class="p">()</span>
-            <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">pos_encoder</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Embedding</span><span class="p">(</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span><span class="p">[</span><span class="n">col</span><span class="p">]</span>
-                <span class="p">)</span>
-            <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">n_classes</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-                <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">:</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">pos_encoder</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Embedding</span><span class="p">(</span>
-                        <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span><span class="p">[</span><span class="n">col</span><span class="p">]</span>
-                    <span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">pos_encoder</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span> <span class="o">=</span> <span class="n">build_feature_ingestion</span><span class="p">(</span>
+            <span class="n">hparams</span><span class="o">=</span><span class="n">hparams</span><span class="p">,</span>
+            <span class="n">direct_real_dtype_provider</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_ingestion_direct_real_dtype</span><span class="p">,</span>
+            <span class="n">device_max_concat_length</span><span class="o">=</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">device_max_concat_length</span><span class="p">,</span>
+        <span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">layers</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">ModuleList</span><span class="p">(</span>
             <span class="p">[</span>
@@ -1202,6 +1151,21 @@
 
         <span class="bp">self</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">)</span></div>
 
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">encoder</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ModuleDict</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="p">,</span> <span class="s2">&quot;encoder&quot;</span><span class="p">,</span> <span class="n">ModuleDict</span><span class="p">())</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">pos_encoder</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="p">,</span> <span class="s2">&quot;pos_encoder&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">real_columns_direct</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="p">,</span> <span class="s2">&quot;real_columns_direct&quot;</span><span class="p">,</span> <span class="p">[])</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_ingestion_direct_real_dtype</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">ff</span><span class="o">.</span><span class="n">get_first_layer_dtype</span><span class="p">()</span>
+
 <div class="viewcode-block" id="TransformerModel.initialize_optimizer"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.initialize_optimizer">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">initialize_optimizer</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="n">Any</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Create optimizer and scheduler from training config.&quot;&quot;&quot;</span>
@@ -1239,6 +1203,20 @@
                 <span class="n">target_dtype</span> <span class="o">=</span> <span class="n">get_torch_dtype</span><span class="p">(</span><span class="n">layer_config</span><span class="p">[</span><span class="s2">&quot;embedding&quot;</span><span class="p">])</span>
                 <span class="n">module</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">target_dtype</span><span class="p">)</span>
 
+            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Conv1d</span><span class="p">,</span> <span class="n">nn</span><span class="o">.</span><span class="n">Conv2d</span><span class="p">,</span> <span class="n">nn</span><span class="o">.</span><span class="n">Conv3d</span><span class="p">)):</span>
+                <span class="n">conv_dtype</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">layer_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;conv&quot;</span><span class="p">)</span>
+                    <span class="ow">or</span> <span class="n">layer_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;linear&quot;</span><span class="p">)</span>
+                    <span class="ow">or</span> <span class="n">layer_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;embedding&quot;</span><span class="p">)</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="n">conv_dtype</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">module</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">get_torch_dtype</span><span class="p">(</span><span class="n">conv_dtype</span><span class="p">))</span>
+
+            <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="n">nn</span><span class="o">.</span><span class="n">MultiheadAttention</span><span class="p">):</span>
+                <span class="n">attention_dtype</span> <span class="o">=</span> <span class="n">layer_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;linear&quot;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">attention_dtype</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">module</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">get_torch_dtype</span><span class="p">(</span><span class="n">attention_dtype</span><span class="p">))</span>
+
             <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">LayerNorm</span><span class="p">,</span> <span class="n">RMSNorm</span><span class="p">))</span> <span class="ow">and</span> <span class="s2">&quot;norm&quot;</span> <span class="ow">in</span> <span class="n">layer_config</span><span class="p">:</span>
                 <span class="n">target_dtype</span> <span class="o">=</span> <span class="n">get_torch_dtype</span><span class="p">(</span><span class="n">layer_config</span><span class="p">[</span><span class="s2">&quot;norm&quot;</span><span class="p">])</span>
                 <span class="n">module</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">target_dtype</span><span class="p">)</span>
@@ -1274,58 +1252,6 @@
             <span class="n">criterion</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">criterion_class</span><span class="p">(</span><span class="o">**</span><span class="n">criterion_kwargs</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">criterion</span>
 
-    <span class="nd">@beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_get_feature_embedding_dims</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">embedding_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-        <span class="n">categorical_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
-        <span class="n">real_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Allocate embedding dimensions across homogeneous input columns.&quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">)</span> <span class="o">+</span> <span class="nb">len</span><span class="p">(</span><span class="n">real_columns</span><span class="p">))</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;No columns found&quot;</span><span class="p">)</span>
-
-        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">real_columns</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">embedding_size</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">real_columns</span><span class="p">):</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;initial_embedding_dim (</span><span class="si">{</span><span class="n">embedding_size</span><span class="si">}</span><span class="s2">) is smaller than the number of real input columns (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">real_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">). &quot;</span>
-                    <span class="s2">&quot;Cannot allocate at least 1 dimension per column.&quot;</span>
-                <span class="p">)</span>
-
-            <span class="n">feature_embedding_dims</span> <span class="o">=</span> <span class="p">{</span><span class="n">col</span><span class="p">:</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">real_columns</span><span class="p">}</span>
-            <span class="n">column_index</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">enumerate</span><span class="p">(</span><span class="n">real_columns</span><span class="p">))</span>
-
-            <span class="n">remaining_dims</span> <span class="o">=</span> <span class="n">embedding_size</span> <span class="o">-</span> <span class="nb">len</span><span class="p">(</span><span class="n">real_columns</span><span class="p">)</span>
-            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">remaining_dims</span><span class="p">):</span>
-                <span class="n">j</span> <span class="o">=</span> <span class="n">i</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">real_columns</span><span class="p">)</span>
-                <span class="n">feature_embedding_dims</span><span class="p">[</span><span class="n">column_index</span><span class="p">[</span><span class="n">j</span><span class="p">]]</span> <span class="o">+=</span> <span class="mi">1</span>
-
-            <span class="k">if</span> <span class="nb">sum</span><span class="p">(</span><span class="n">feature_embedding_dims</span><span class="o">.</span><span class="n">values</span><span class="p">())</span> <span class="o">!=</span> <span class="n">embedding_size</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;Auto-calculated embedding dimensions (</span><span class="si">{</span><span class="nb">sum</span><span class="p">(</span><span class="n">feature_embedding_dims</span><span class="o">.</span><span class="n">values</span><span class="p">())</span><span class="si">}</span><span class="s2">) do not sum to initial_embedding_dim (</span><span class="si">{</span><span class="n">embedding_size</span><span class="si">}</span><span class="s2">).&quot;</span>
-                <span class="p">)</span>
-        <span class="k">elif</span> <span class="nb">len</span><span class="p">(</span><span class="n">real_columns</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">embedding_size</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">):</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;initial_embedding_dim (</span><span class="si">{</span><span class="n">embedding_size</span><span class="si">}</span><span class="s2">) is smaller than the number of categorical columns (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">). &quot;</span>
-                    <span class="s2">&quot;Resulting embedding dimension would be 0.&quot;</span>
-                <span class="p">)</span>
-
-            <span class="k">if</span> <span class="p">(</span><span class="n">embedding_size</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">))</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;initial_embedding_dim (</span><span class="si">{</span><span class="n">embedding_size</span><span class="si">}</span><span class="s2">) must be divisible by n_categorical (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">)&quot;</span>
-                <span class="p">)</span>
-            <span class="n">dim_model_comp</span> <span class="o">=</span> <span class="n">embedding_size</span> <span class="o">//</span> <span class="nb">len</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">)</span>
-            <span class="n">feature_embedding_dims</span> <span class="o">=</span> <span class="p">{</span>
-                <span class="n">col</span><span class="p">:</span> <span class="n">dim_model_comp</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">categorical_columns</span>
-            <span class="p">}</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;If both real and categorical variables are present, feature_embedding_dims config value must be set&quot;</span>
-            <span class="p">)</span>
-
-        <span class="k">return</span> <span class="n">feature_embedding_dims</span>
-
     <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_generate_square_subsequent_mask</span><span class="p">(</span><span class="n">sz</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a causal attention mask.&quot;&quot;&quot;</span>
@@ -1340,21 +1266,11 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">_init_weights</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialize trainable weights with the model default.&quot;&quot;&quot;</span>
         <span class="n">init_std</span> <span class="o">=</span> <span class="mf">0.02</span>
-        <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">normal_</span><span class="p">(</span><span class="n">mean</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">std</span><span class="o">=</span><span class="n">init_std</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">initialize_weights</span><span class="p">()</span>
 
         <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">bias</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">zero_</span><span class="p">()</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">normal_</span><span class="p">(</span><span class="n">mean</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">std</span><span class="o">=</span><span class="n">init_std</span><span class="p">)</span>
-
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">pos_encoder</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">for</span> <span class="n">col_name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">pos_encoder</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">pos_encoder</span><span class="p">[</span><span class="n">col_name</span><span class="p">]</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">normal_</span><span class="p">(</span><span class="n">mean</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">std</span><span class="o">=</span><span class="n">init_std</span><span class="p">)</span>
-
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_layer</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_layer</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">normal_</span><span class="p">(</span><span class="n">mean</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">std</span><span class="o">=</span><span class="n">init_std</span><span class="p">)</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_layer</span><span class="o">.</span><span class="n">bias</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_layer</span><span class="o">.</span><span class="n">bias</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">zero_</span><span class="p">()</span>
 
     <span class="nd">@conditional_beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_recursive_concat</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">srcs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]):</span>
@@ -1406,67 +1322,14 @@
     <span class="nd">@conditional_beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_zero_padding_positions</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">valid_mask</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Zero padded query positions after attention/FFN layers.&quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="n">x</span> <span class="o">*</span> <span class="n">valid_mask</span><span class="p">[:,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">masked_fill</span><span class="p">(</span><span class="o">~</span><span class="n">valid_mask</span><span class="p">[:,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">],</span> <span class="mf">0.0</span><span class="p">)</span>
 
 <div class="viewcode-block" id="TransformerModel.forward_inner"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.forward_inner">[docs]</a>    <span class="nd">@conditional_beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">forward_inner</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">src</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span> <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Encode inputs into contextual hidden states.&quot;&quot;&quot;</span>
-        <span class="n">srcs</span> <span class="o">=</span> <span class="p">[]</span>
-        <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">:</span>
-            <span class="n">src_t</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span><span class="p">[</span><span class="n">col</span><span class="p">](</span><span class="n">_embedding_safe_indices</span><span class="p">(</span><span class="n">src</span><span class="p">[</span><span class="n">col</span><span class="p">])</span><span class="o">.</span><span class="n">T</span><span class="p">)</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span>
-            <span class="p">)</span>
-
-            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_rope</span><span class="p">:</span>
-                <span class="n">pos</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span>
-                        <span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">src_t</span><span class="o">.</span><span class="n">device</span>
-                    <span class="p">)</span>
-                    <span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">src_t</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="mi">1</span><span class="p">)</span>
-                    <span class="o">.</span><span class="n">T</span>
-                <span class="p">)</span>
-                <span class="n">src_p</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pos_encoder</span><span class="p">[</span><span class="n">col</span><span class="p">](</span><span class="n">pos</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
-
-                <span class="n">src_c</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">src_t</span> <span class="o">+</span> <span class="n">src_p</span><span class="p">)</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="n">src_c</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">src_t</span><span class="p">)</span>
-
-            <span class="n">srcs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">src_c</span><span class="p">)</span>
-
-        <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns_direct</span><span class="p">:</span>
-                <span class="n">target_dtype</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">ff</span><span class="o">.</span><span class="n">get_first_layer_dtype</span><span class="p">()</span>
-                <span class="n">src_t</span> <span class="o">=</span> <span class="n">src</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">target_dtype</span><span class="p">)</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span>
-                <span class="p">)</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="k">assert</span> <span class="n">col</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_columns_with_embedding</span>
-                <span class="n">layer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span><span class="p">[</span><span class="n">col</span><span class="p">]</span>
-                <span class="n">inp</span> <span class="o">=</span> <span class="n">src</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="p">[:,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">layer</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
-                <span class="n">src_t</span> <span class="o">=</span> <span class="n">layer</span><span class="p">(</span><span class="n">inp</span><span class="p">)</span> <span class="o">*</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">initial_embedding_dim</span><span class="p">)</span>
-
-            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_rope</span><span class="p">:</span>
-                <span class="n">pos</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span>
-                        <span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">src_t</span><span class="o">.</span><span class="n">device</span>
-                    <span class="p">)</span>
-                    <span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">src_t</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="mi">1</span><span class="p">)</span>
-                    <span class="o">.</span><span class="n">T</span>
-                <span class="p">)</span>
-                <span class="n">src_p</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pos_encoder</span><span class="p">[</span><span class="n">col</span><span class="p">](</span><span class="n">pos</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
-                <span class="n">src_c</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">src_t</span> <span class="o">+</span> <span class="n">src_p</span><span class="p">)</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="n">src_c</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">src_t</span><span class="p">)</span>
-
-            <span class="n">srcs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">src_c</span><span class="p">)</span>
-
-        <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_recursive_concat</span><span class="p">(</span><span class="n">srcs</span><span class="p">)</span>
-        <span class="n">src2</span> <span class="o">=</span> <span class="n">src2</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
-
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_layer</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">joint_embedding_layer</span><span class="p">(</span><span class="n">src2</span><span class="p">)</span>
+        <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="p">(</span><span class="n">src</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
 
         <span class="n">valid_mask</span> <span class="o">=</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;attention_valid_mask&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">bool</span><span class="p">()</span>  <span class="c1"># type: ignore</span>
         <span class="k">if</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">src2</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]:</span>
@@ -1483,7 +1346,7 @@
             <span class="n">src2</span> <span class="o">=</span> <span class="n">layer</span><span class="p">(</span><span class="n">src2</span><span class="p">,</span> <span class="n">src_mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
             <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_zero_padding_positions</span><span class="p">(</span><span class="n">src2</span><span class="p">,</span> <span class="n">valid_mask</span><span class="p">)</span>
 
-        <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">final_norm</span><span class="p">(</span><span class="n">src2</span><span class="p">)</span>
+        <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">final_norm</span><span class="p">(</span><span class="n">cast_floating_to_module_dtype</span><span class="p">(</span><span class="n">src2</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">final_norm</span><span class="p">))</span>
         <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_zero_padding_positions</span><span class="p">(</span><span class="n">src2</span><span class="p">,</span> <span class="n">valid_mask</span><span class="p">)</span>
 
         <span class="k">return</span> <span class="n">src2</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span></div>
@@ -1653,6 +1516,11 @@
             <span class="s2">&quot;n_classes&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="p">,</span>
             <span class="s2">&quot;id_maps&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">id_maps</span><span class="p">,</span>
             <span class="s2">&quot;special_token_ids&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">special_token_ids</span><span class="p">,</span>
+            <span class="s2">&quot;feature_layout&quot;</span><span class="p">:</span> <span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">feature_layout</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;json&quot;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">feature_layout</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                <span class="k">else</span> <span class="kc">None</span>
+            <span class="p">),</span>
             <span class="s2">&quot;model_spec&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;json&quot;</span><span class="p">),</span>
         <span class="p">}</span>
         <span class="n">provenance</span> <span class="o">=</span> <span class="p">{</span>
@@ -2419,9 +2287,7 @@
                     <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">target_column</span><span class="si">!r}</span><span class="s2">: loss has </span><span class="si">{</span><span class="n">raw_loss</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span><span class="si">}</span><span class="s2"> elements &quot;</span>
                     <span class="sa">f</span><span class="s2">&quot;but mask has </span><span class="si">{</span><span class="n">mask</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span><span class="si">}</span><span class="s2">.&quot;</span>
                 <span class="p">)</span>
-            <span class="n">current_mask</span> <span class="o">=</span> <span class="n">mask</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">raw_loss</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
-
-            <span class="n">loss_sums</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">raw_loss</span> <span class="o">*</span> <span class="n">current_mask</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+            <span class="n">loss_sums</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">raw_loss</span><span class="o">.</span><span class="n">masked_select</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
 
         <span class="k">return</span> <span class="n">loss_sums</span><span class="p">,</span> <span class="n">token_count</span>
 

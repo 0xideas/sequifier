@@ -297,6 +297,7 @@
 <span class="s2">metadata_config_path: PLEASE FILL</span>
 
 <span class="s2">input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
+<span class="s2">feature_layout: null # optional structure annotations for flat input columns</span>
 <span class="s2">target_columns: [EXAMPLE_TARGET_COLUMN_NAME]</span>
 <span class="s2">target_column_types: # &#39;criterion&#39; in training_spec must also be adapted</span>
 <span class="s2">  EXAMPLE_TARGET_COLUMN_NAME: real</span>
@@ -309,10 +310,11 @@
 <span class="s2">export_onnx: true</span>
 
 <span class="s2">model_spec:</span>
-<span class="s2">  initial_embedding_dim: 128</span>
-<span class="s2">  feature_embedding_dims: # the size of the embedding of individual variables, must sum to dim_model</span>
-<span class="s2">    EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical</span>
-<span class="s2">  joint_embedding_dim: null</span>
+<span class="s2">  ingestion_spec:</span>
+<span class="s2">    type: direct_embed</span>
+<span class="s2">    output_dim: 128</span>
+<span class="s2">    feature_embedding_dims: # optional per-column embedding sizes for direct_embed</span>
+<span class="s2">      EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical</span>
 <span class="s2">  dim_model: 128</span>
 <span class="s2">  n_head: 16</span>
 <span class="s2">  dim_feedforward: 128</span>
