@@ -35,7 +35,7 @@ The configuration is defined in a YAML file (e.g., `infer.yaml`).
 | `model_path` | `str` or `list[str]` | **Yes** | - | Path to a specific model file, or a list of paths to process sequentially. (e.g., `models/sequifier-[NAME]-best-[EPOCH].pt`). |
 | `training_config_path`| `str` | No | `configs/train.yaml`| Path to the config used to train the model. Required to reconstruct PyTorch `.pt` exports. |
 | `metadata_config_path`| `str` | **Yes** | - | Path to the JSON metadata file generated during preprocessing. Used for ID mapping and normalization. |
-| `read_format` | `str` | No | `parquet` | Format of input data (`csv`, `parquet`, `pt`). |
+| `read_format` | `str` | No | `parquet` | Format of input data. Single-file inference supports `csv` and `parquet`; folder inference supports `parquet` and `pt`. |
 | `write_format` | `str` | No | `csv` | Format for output predictions (`csv`, `parquet`). |
 
 ### 2\. Schema & Columns
@@ -44,7 +44,7 @@ These fields tell the inference engine which columns to extract from the new dat
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `input_columns` | `list[str]` or `null`| **Yes** | - | List of feature columns. Must match the columns the model was trained on. Set to `null` to use all metadata columns. |
+| `input_columns` | `list[str]` or `null`| **Yes** | `null` | List of feature columns. Must match the columns the model was trained on. Set to `null` to use all metadata columns. |
 | `target_columns` | `list[str]`| **Yes** | - | The column(s) to predict. |
 | `column_types` | `dict` | No | Metadata column types | Map of all columns to their type (e.g., `Int64`, `Float64`). Usually copied from metadata. |
 | `target_column_types`| `dict` | **Yes** | - | Map of target columns to `categorical` or `real`. |
@@ -61,9 +61,9 @@ These fields tell the inference engine which columns to extract from the new dat
 | `inference_batch_size`| `int` | **Yes** | - | Number of sequences to process at once. |
 | `autoregression` | `bool` | No | `false` | If `true`, feeds predictions back into the model to predict further into the future. |
 | `autoregression_total_steps`| `int` | No | `null` | If `autoregression: true`, how many total steps to predict, starting from the *first* subsequence in the inference data. |
-| `output_probabilities`| `bool` | No | `false` | If `true`, outputs the full probability distribution for categorical targets. |
+| `output_probabilities`| `bool` | No | `false` | If `true`, outputs the full probability distribution for categorical targets. Real-valued targets do not produce probability files. |
 | `sample_from_distribution_columns`| `Optional[list[str]]`| No | `null` | If set, the model **samples** from the predicted distribution for these columns instead of taking the top-1 (argmax). Essential for diversity in generation. |
-| `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). Set to `false` for real-only targets. |
+| `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). Must be `false` when all targets are real-valued. |
 | `infer_with_dropout` | `bool` | No | `false` | If `true`, keeps dropout active during inference (useful for uncertainty estimation/Monte Carlo Dropout). For ONNX models, this is only effective if the model was exported with `export_with_dropout: true` during training. |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
 
@@ -81,7 +81,7 @@ These fields tell the inference engine which columns to extract from the new dat
 
   * **`csv`:** Best for standard inference on small data. The inferer will filter the data to `input_columns` automatically.
   * **`parquet`** Best for most use cases. Can be used with lazy loading, will use less disk space but more CPU than `pt`
-  * **`pt`** Optimized for lazy loading, uses more disk space but less CPU than `parquet`
+  * **`pt`** Folder-only format optimized for lazy loading. Uses more disk space but less CPU than `parquet`.
 
 ### 2\. `model_type`: `generative` vs. `embedding`
 
@@ -120,7 +120,7 @@ Results are saved in the `outputs/` folder within your project root.
 
 2.  **Probabilities:** `outputs/probabilities/[MODEL_NAME]-[TARGET_COLUMN]-probabilities.[format]`
 
-      * Generated only if `output_probabilities: true`.
+      * Generated only for categorical targets if `output_probabilities: true`.
       * Contains one column per class.
 
 3.  **Embeddings:** `outputs/embeddings/[MODEL_NAME]-embeddings.[format]`

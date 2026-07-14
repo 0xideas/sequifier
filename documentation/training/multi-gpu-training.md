@@ -38,6 +38,8 @@ training_spec:
   distributed: true
   data_parallelism: 'FSDP' # or 'DDP'
   fsdp_cpu_offload: false   # omit if using 'DDP'; set true to offload FSDP parameters to CPU RAM
+  layer_type_dtypes: null    # required for FSDP; use layer_autocast for mixed precision
+  torch_compile: inner       # use inner or none for FSDP; use outer or none for DDP
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)
   backend: nccl        # 'nccl' is the standard and most efficient backend for NVIDIA GPUs
 
@@ -66,7 +68,7 @@ Sequifier will read the `world_size` config parameter and automatically spawn th
 
 Sequifier cannot automatically spawn Python processes across physical network boundaries. For multi-node training, you must use an external cluster manager (like Slurm) combined with PyTorch's `torchrun` utility.
 
-When `sequifier` detects `torchrun` environment variables (like `RANK` and `WORLD_SIZE`), it bypasses its internal spawner and attaches to the distributed network established by the cluster.
+When `sequifier` detects `torchrun` environment variables (like `RANK` and `WORLD_SIZE`), it bypasses its internal spawner and attaches to the distributed network established by the cluster. In that mode, the environment `WORLD_SIZE` is used.
 
 Here is a standard `sbatch` script template for launching Sequifier across multiple nodes:
 
