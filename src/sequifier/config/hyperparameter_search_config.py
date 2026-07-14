@@ -492,6 +492,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
         Union[IngestionMergeConfig, list[IngestionMergeConfig]]
     ] = None
     allow_shared_ingestion_columns: bool = False
+    allow_unused_input_columns: bool = False
+    auxiliary_input_columns: list[str] = Field(default_factory=list)
     n_head: list[int]
 
     dim_feedforward: OptunaInt
@@ -638,6 +640,10 @@ class ModelSpecHyperparameterSampling(BaseModel):
         model_spec_kwargs["allow_shared_ingestion_columns"] = (
             self.allow_shared_ingestion_columns
         )
+        model_spec_kwargs["allow_unused_input_columns"] = (
+            self.allow_unused_input_columns
+        )
+        model_spec_kwargs["auxiliary_input_columns"] = self.auxiliary_input_columns
 
         return ModelSpecModel(**model_spec_kwargs)
 

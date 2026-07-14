@@ -810,6 +810,8 @@ class ModelSpecModel(BaseModel):
     ingestion_spec: Optional[IngestionSpecConfig] = None
     ingestion_merge: Optional[IngestionMergeConfig] = None
     allow_shared_ingestion_columns: bool = False
+    allow_unused_input_columns: bool = False
+    auxiliary_input_columns: list[str] = Field(default_factory=list)
     dim_model: int
     n_head: int
     dim_feedforward: int
@@ -900,6 +902,12 @@ class ModelSpecModel(BaseModel):
     def validate_attention_type(cls, v):
         if v not in ["mha", "mqa", "gqa"]:
             raise ValueError(f"Invalid attention_type: {v}")
+        return v
+
+    @field_validator("auxiliary_input_columns")
+    @classmethod
+    def validate_auxiliary_input_columns(cls, v):
+        _validate_column_list_unique(v, "model_spec.auxiliary_input_columns")
         return v
 
     @field_validator("n_head")
@@ -1190,6 +1198,18 @@ class TrainModel(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def validate_auxiliary_input_columns(self):
+        auxiliary_columns = set(self.model_spec.auxiliary_input_columns)
+        missing_columns = auxiliary_columns - set(self.input_columns)
+        if missing_columns:
+            raise ValueError(
+                "model_spec.auxiliary_input_columns references unknown input "
+                f"columns: {sorted(missing_columns)}"
+            )
+
+        return self
+
+    @model_validator(mode="after")
     def validate_ingestion_spec_branches(self):
         ingestion_spec = self.model_spec.ingestion_spec
         if ingestion_spec is None:
@@ -1312,6 +1332,14 @@ class TrainModel(BaseModel):
                 f"{usage} references unknown input columns: {sorted(missing_columns)}"
             )
 
+        auxiliary_columns = set(self.model_spec.auxiliary_input_columns)
+        consumed_auxiliary_columns = set(columns) & auxiliary_columns
+        if consumed_auxiliary_columns:
+            raise ValueError(
+                f"{usage} consumes auxiliary input columns: "
+                f"{sorted(consumed_auxiliary_columns)}"
+            )
+
         typed_columns = set(self.categorical_columns) | set(self.real_columns)
         untyped_columns = set(columns) - typed_columns
         if untyped_columns:
@@ -1323,11 +1351,23 @@ class TrainModel(BaseModel):
     def _validate_all_input_columns_used(
         self, columns: list[str] | set[str], usage: str
     ) -> None:
-        unused_columns = set(self.input_columns) - set(columns)
-        if unused_columns:
+        consumed_columns = set(columns)
+        auxiliary_columns = set(self.model_spec.auxiliary_input_columns)
+        unused_columns = set(self.input_columns) - consumed_columns
+        unexpected_unused_columns = unused_columns - auxiliary_columns
+
+        if self.model_spec.allow_unused_input_columns:
+            if unused_columns:
+                logger.warning(
+                    f"{usage} does not consume every input column; unused "
+                    f"columns: {sorted(unused_columns)}"
+                )
+            return
+
+        if unexpected_unused_columns:
             raise ValueError(
                 f"{usage} must consume every input column; unused columns: "
-                f"{sorted(unused_columns)}"
+                f"{sorted(unexpected_unused_columns)}"
             )
 
     def _layout_for_branch(

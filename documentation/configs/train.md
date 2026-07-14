@@ -48,6 +48,8 @@ These fields determine the size and complexity of the Transformer.
 | `ingestion_spec` | `dict` | No | `{type: direct_embed, output_dim: dim_model}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |
 | `ingestion_merge` | `dict` or `null` | No | `null` | Merge strategy for named multi-ingestion configs: `concat`, `sum`, `gated`, or `attention`. Defaults to `{type: concat}` when omitted. Merge output width is always `dim_model`. |
 | `allow_shared_ingestion_columns` | `bool` | No | `false` | Allows the same flat input column to be consumed by more than one named ingestion stream. |
+| `auxiliary_input_columns` | `list[str]` | No | `[]` | Input columns that are intentionally kept in `batch.inputs` but must not be consumed by any ingestion branch. All other input columns still need to be consumed. |
+| `allow_unused_input_columns` | `bool` | No | `false` | Broad compatibility escape hatch that allows unused `input_columns` and logs a warning listing them. Prefer `auxiliary_input_columns` for intentional auxiliary inputs. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
 | `n_kv_heads` | `int` | No | `null` | Number of Key/Value heads. `null` is valid for standard MHA; `mqa` requires `1`, and `gqa` requires a divisor of `n_head`. |
@@ -95,6 +97,30 @@ branch declares its own `output_dim` and the merge layer produces `dim_model`.
 Direct-embed `feature_embedding_dims`, when configured, must contain exactly the
 branch columns and sum to the branch `output_dim`. It is required when a
 direct-embed or temporal-conv branch mixes real and categorical columns.
+
+Every non-auxiliary input column must be consumed by `ingestion_spec`. Use
+`auxiliary_input_columns` for columns that should stay available in
+`batch.inputs` without entering the model ingestion path, such as labels or
+side-channel values needed by custom training code. Validation rejects auxiliary
+columns if an ingestion branch accidentally consumes them.
+
+```yaml
+input_columns:
+  - bid_size
+  - ask_size
+  - label_k100
+
+model_spec:
+  auxiliary_input_columns:
+    - label_k100
+  ingestion_spec:
+    type: temporal_conv
+    columns: [bid_size, ask_size]
+    output_dim: 128
+```
+
+For migration or experimentation, `allow_unused_input_columns: true` allows any
+unused input columns and emits a warning listing the unused column names.
 
 ```yaml
 ingestion_spec:
