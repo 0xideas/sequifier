@@ -120,6 +120,7 @@ dim_feedforward:
 | `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. Defaults to `false`. |
 | `auxiliary_input_columns` | `list[str]` | No | Input columns that are intentionally kept in `batch.inputs` but must not be consumed by sampled ingestion configs. Defaults to `[]`. |
 | `allow_unused_input_columns` | `bool` | No | Allows sampled train configs to leave input columns unused and log the unused names. Defaults to `false`; prefer `auxiliary_input_columns` for intentional auxiliary inputs. |
+| `shared_layer_groups` | `list[list[int]]` | No | Fixed transformer layer-sharing groups applied to every sampled model, e.g. `[[0, 1], [6, 7]]`. Defaults to `[]`. Each group must contain at least two unique, in-range indices, and groups cannot overlap. |
 | `prediction_length` | `int` | **Yes** | Number of steps to predict simultaneously. BERT trials override this to the sampled `context_length`. |
 | `activation_fn` | `list[str]` | **Yes** | E.g., `['swiglu', 'gelu']`. |
 | `attention_type` | `list[str]` | **Yes** | E.g., `['mha', 'mqa']`. |
@@ -129,6 +130,12 @@ dim_feedforward:
 | `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope', 'range']`. |
 | `positional_encoding_scope` | `list[str]` | No | `['per_feature']`. Use `['global']` for shared learned positions; `range` trials force `global`. |
 | `rope_theta` | `list` or `Distribution` | **Yes** | Base frequency for RoPE. |
+
+`ingestion_spec` accepts the same ingestion definitions as `sequifier train`.
+For `temporal_conv`, this includes `base_ingestion` (`direct_embed` or
+`pass_through`) and `post_conv_norm` (`layer_norm`, `rmsnorm`, or `none`).
+`base_ingestion: pass_through` is useful for raw real-valued temporal features:
+the first Conv1D maps from the raw feature width to the branch `output_dim`.
 
 ### 6. Training Hyperparameters (`training_hyperparameter_sampling`)
 Most fields here are lists for sampling, but some are scalar values fixed for all runs.
@@ -203,6 +210,10 @@ All other parameters are considered **Independent**. Sequifier will test every v
   * **Model:** `num_layers`, `dim_feedforward`, `activation_fn`, `normalization`, `norm_first`, `positional_encoding`, `attention_type`, `rope_theta`.
   * **Training:** `training_objective`, `batch_size`, `dropout`, `accumulation_steps`, `optimizer`.
   * **Data:** `context_length`.
+
+`shared_layer_groups` is fixed for every sampled model rather than sampled as a
+list of alternatives. If `num_layers` is sampled, make sure every configured
+sharing group is valid for every possible sampled layer count.
 
 ### 3\. Special Case: `n_kv_heads`
 

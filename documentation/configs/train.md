@@ -58,6 +58,7 @@ These fields determine the size and complexity of the Transformer.
 | `rope_theta` | `float` | No | `10000.0` | The base frequency for RoPE. Increase for long-context extrapolation. |
 | `normalization` | `str` | No | `rmsnorm`| `rmsnorm` or `layer_norm`. |
 | `norm_first` | `bool` | No | `true` | If `true` (Pre-LN), applies normalization before attention/FFN. More stable. |
+| `shared_layer_groups` | `list[list[int]]` | No | `[]` | Groups of transformer layer indices that should reuse one `SequifierEncoderLayer` instance, e.g. `[[0, 1], [6, 7]]`. Each group must contain at least two unique, in-range indices, and groups cannot overlap. |
 
 #### Feature Layout And Ingestion Layers
 
@@ -97,7 +98,8 @@ every ingestion type must set `output_dim`. For a single top-level ingestion,
 branch declares its own `output_dim` and the merge layer produces `dim_model`.
 Direct-embed `feature_embedding_dims`, when configured, must contain exactly the
 branch columns and sum to the branch `output_dim`. It is required when a
-direct-embed or temporal-conv branch mixes real and categorical columns.
+direct-embed branch, or a temporal-conv branch using `base_ingestion:
+direct_embed`, mixes real and categorical columns.
 
 `positional_encoding` controls the form of temporal information, while
 `positional_encoding_scope` controls where non-RoPE position is injected. The
@@ -141,13 +143,26 @@ ingestion_spec:
 ```
 
 Use `temporal_conv` inside a composite branch when local Conv1D filters should
-run across timesteps before the global transformer consumes the sequence. The
-branch first uses the same flat column encoder as `direct_embed`, then applies one or
-more same-width Conv1D layers. `causal` defaults to `true`; non-causal temporal
-convolution requires an odd `kernel_size` so the sequence length is preserved.
-Set `dilation` to either a positive integer shared by every layer or a list of
-positive integers for a per-layer schedule. If `dilation` is a list and
-`num_layers` is omitted, `num_layers` defaults to the length of the schedule.
+run across timesteps before the global transformer consumes the sequence.
+`base_ingestion` controls what enters the first convolution:
+
+* `direct_embed` (default) uses the same flat column encoder as `direct_embed`
+  before convolution. This supports real and categorical columns.
+* `pass_through` passes real-valued columns through without per-column learned
+  scalar encoders. The first Conv1D maps from the raw real-feature width to
+  `output_dim`, so this is the closest path to raw LOB-style temporal
+  convolution. It only supports real columns, and `feature_embedding_dims` is
+  invalid with this base.
+
+After the convolutional stack, `post_conv_norm` applies normalization before any
+model-level positional encoding and transformer attention. It defaults to
+`layer_norm`; set it to `rmsnorm` or `none` to change that behavior.
+
+`causal` defaults to `true`; non-causal temporal convolution requires an odd
+`kernel_size` so the sequence length is preserved. Set `dilation` to either a
+positive integer shared by every layer or a list of positive integers for a
+per-layer schedule. If `dilation` is a list and `num_layers` is omitted,
+`num_layers` defaults to the length of the schedule.
 
 Use `pass_through` for real-valued columns that should enter the model without
 per-column linear encoders. It can be used as the top-level
@@ -168,11 +183,25 @@ ingestion_spec:
     type: temporal_conv
     columns: [spread, imbalance, volatility]
     output_dim: 128
+    base_ingestion: pass_through
     kernel_size: 5
     dilation: [1, 2, 4, 8, 16]
     causal: true
+    post_conv_norm: layer_norm
 positional_encoding: range
 positional_encoding_scope: global
+```
+
+To reuse transformer block weights across multiple layer iterations, configure
+`shared_layer_groups` under `model_spec`. In the example below, layers 0 and 1
+run as two sequential transformer iterations but share the same attention,
+feed-forward, and normalization parameters.
+
+```yaml
+model_spec:
+  num_layers: 2
+  shared_layer_groups:
+    - [0, 1]
 ```
 
 Structured ingestion layers can optionally process cartesian axes before pooling. `cell_dim`

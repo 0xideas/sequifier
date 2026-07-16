@@ -802,19 +802,7 @@ class TransformerModel(nn.Module):
                     self.dim_model + 1, self.dim_model
                 )
 
-        self.layers = nn.ModuleList(
-            [
-                SequifierEncoderLayer(
-                    hparams.model_spec,
-                    self.dim_model,
-                    hparams.model_spec.n_head,
-                    hparams.model_spec.dim_feedforward,
-                    hparams.training_spec.dropout,
-                    hparams.window_view.context_length,
-                )
-                for _ in range(hparams.model_spec.num_layers)
-            ]
-        )
+        self.layers = self._build_encoder_layers(hparams)
 
         if hparams.model_spec.norm_first:
             NormClass = (
@@ -904,6 +892,27 @@ class TransformerModel(nn.Module):
     @property
     def pos_encoder(self):
         return getattr(self.ingestion, "pos_encoder", None)
+
+    def _build_encoder_layer(self, hparams: Any) -> SequifierEncoderLayer:
+        return SequifierEncoderLayer(
+            hparams.model_spec,
+            self.dim_model,
+            hparams.model_spec.n_head,
+            hparams.model_spec.dim_feedforward,
+            hparams.training_spec.dropout,
+            hparams.window_view.context_length,
+        )
+
+    def _build_encoder_layers(self, hparams: Any) -> nn.ModuleList:
+        layers = [
+            self._build_encoder_layer(hparams)
+            for _ in range(hparams.model_spec.num_layers)
+        ]
+        for group in hparams.model_spec.shared_layer_groups:
+            shared_layer = layers[group[0]]
+            for layer_idx in group[1:]:
+                layers[layer_idx] = shared_layer
+        return nn.ModuleList(layers)
 
     @property
     def real_columns_direct(self) -> list[str]:

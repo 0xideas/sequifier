@@ -509,6 +509,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
     attention_type: list[str]
 
     norm_first: list[bool]
+    shared_layer_groups: list[list[int]] = Field(default_factory=list)
     n_kv_heads: list[Optional[int]]
     rope_theta: OptunaFloat
 
@@ -641,6 +642,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             "positional_encoding_scope": positional_encoding_scope,
             "attention_type": attention_type,
             "norm_first": norm_first,
+            "shared_layer_groups": self.shared_layer_groups,
             "n_kv_heads": n_kv_heads,
             "rope_theta": rope_theta,
             "prediction_length": self.prediction_length,

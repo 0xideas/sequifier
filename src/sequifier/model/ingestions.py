@@ -13,6 +13,7 @@ from sequifier.model.dtypes import (
     cast_floating_to_module_dtype,
     module_param_dtype,
 )
+from sequifier.model.layers import RMSNorm
 
 EMBEDDING_INDEX_DTYPES = (torch.int32, torch.int64)
 NARROW_EMBEDDING_INDEX_DTYPES = (
@@ -395,21 +396,19 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
     def __init__(
         self,
         *,
-        base_ingestion: DirectEmbedFeatureIngestion,
+        base_ingestion: BaseFeatureIngestion,
         output_dim: int,
         kernel_size: int,
         dilation_schedule: list[int],
         causal: bool,
         activation_fn: str,
         dropout: float,
+        post_conv_norm: str,
     ):
         super().__init__()
         self.base_ingestion = base_ingestion
+        self.input_dim = self.base_ingestion.output_dim
         self.output_dim = output_dim
-        if self.base_ingestion.output_dim != self.output_dim:
-            raise ValueError(
-                "temporal_conv base ingestion output_dim must match output_dim"
-            )
         self.kernel_size = kernel_size
         self.dilation_schedule = list(dilation_schedule)
         if not self.dilation_schedule:
@@ -421,16 +420,17 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
         self.layers = nn.ModuleList(
             [
                 nn.Conv1d(
-                    self.output_dim,
+                    self.input_dim if layer_idx == 0 else self.output_dim,
                     self.output_dim,
                     kernel_size=self.kernel_size,
                     dilation=dilation,
                 )
-                for dilation in self.dilation_schedule
+                for layer_idx, dilation in enumerate(self.dilation_schedule)
             ]
         )
         self.activation = self._activation(activation_fn)
         self.drop = nn.Dropout(dropout)
+        self.post_conv_norm = self._norm(post_conv_norm, self.output_dim)
 
     def initialize_weights(self) -> None:
         self.base_ingestion.initialize_weights()
@@ -447,6 +447,16 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
             return nn.SiLU()
         raise ValueError(f"Unknown temporal_conv activation_fn: {name}")
 
+    @staticmethod
+    def _norm(name: str, output_dim: int) -> nn.Module:
+        if name == "layer_norm":
+            return nn.LayerNorm(output_dim)
+        if name == "rmsnorm":
+            return RMSNorm(output_dim)
+        if name == "none":
+            return nn.Identity()
+        raise ValueError(f"Unknown temporal_conv post_conv_norm: {name}")
+
     def _temporal_padding(self, dilation: int) -> tuple[int, int]:
         padding = (self.kernel_size - 1) * dilation
         if self.causal:
@@ -460,7 +470,9 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
             conv_input = F.pad(conv_input, self._temporal_padding(dilation))
             output = layer(conv_input).transpose(1, 2)
             output = self.drop(self.activation(output))
-        return output
+        return self.post_conv_norm(
+            cast_floating_to_module_dtype(output, self.post_conv_norm)
+        )
 
 
 class _ColumnTokenIngestion(BaseFeatureIngestion):
@@ -1601,6 +1613,7 @@ def _build_pass_through_ingestion(
     ingestion_config: Any,
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
+    output_dim_override: Optional[int] = None,
 ) -> PassThroughFeatureIngestion:
     categorical_columns, real_columns = _split_columns(
         columns, hparams.categorical_columns, hparams.real_columns
@@ -1615,9 +1628,13 @@ def _build_pass_through_ingestion(
         context_length=hparams.window_view.context_length,
         add_ingestion_position=_add_ingestion_position_encoding(hparams.model_spec),
         dropout=hparams.training_spec.dropout,
-        output_dim=_resolve_required_output_dim(
-            ingestion_config.output_dim,
-            usage="pass_through ingestion",
+        output_dim=(
+            output_dim_override
+            if output_dim_override is not None
+            else _resolve_required_output_dim(
+                ingestion_config.output_dim,
+                usage="pass_through ingestion",
+            )
         ),
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
@@ -1682,12 +1699,26 @@ def _build_branch_ingestion(
             branch_config.output_dim,
             usage="temporal_conv ingestion",
         )
-        base_ingestion = _build_direct_embed_ingestion(
-            hparams=hparams,
-            columns=columns,
-            ingestion_config=branch_config,
-            device_max_concat_length=device_max_concat_length,
-        )
+        if branch_config.base_ingestion == "direct_embed":
+            base_ingestion = _build_direct_embed_ingestion(
+                hparams=hparams,
+                columns=columns,
+                ingestion_config=branch_config,
+                device_max_concat_length=device_max_concat_length,
+            )
+        elif branch_config.base_ingestion == "pass_through":
+            base_ingestion = _build_pass_through_ingestion(
+                hparams=hparams,
+                columns=columns,
+                ingestion_config=branch_config,
+                direct_real_dtype_provider=direct_real_dtype_provider,
+                device_max_concat_length=device_max_concat_length,
+                output_dim_override=len(real_columns),
+            )
+        else:
+            raise ValueError(
+                f"Unknown temporal_conv base_ingestion: {branch_config.base_ingestion}"
+            )
         return TemporalConvFeatureIngestion(
             base_ingestion=base_ingestion,
             output_dim=output_dim,
@@ -1696,6 +1727,7 @@ def _build_branch_ingestion(
             causal=branch_config.causal,
             activation_fn=branch_config.activation_fn,
             dropout=branch_config.dropout,
+            post_conv_norm=branch_config.post_conv_norm,
         )
 
     if branch_config.type == "feature_pool":

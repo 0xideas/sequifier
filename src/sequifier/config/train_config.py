@@ -222,6 +222,7 @@ class TemporalConvIngestionConfig(BaseModel):
     type: Literal["temporal_conv"]
     columns: list[str] = Field(..., min_length=1)
     output_dim: int = Field(..., gt=0)
+    base_ingestion: Literal["direct_embed", "pass_through"] = "direct_embed"
     feature_embedding_dims: Optional[dict[str, int]] = None
     kernel_size: int = Field(3, gt=0)
     dilation: int | list[int] = 1
@@ -229,6 +230,7 @@ class TemporalConvIngestionConfig(BaseModel):
     causal: bool = True
     activation_fn: Literal["relu", "gelu", "silu"] = "gelu"
     dropout: float = Field(0.0, ge=0.0, lt=1.0)
+    post_conv_norm: Literal["layer_norm", "rmsnorm", "none"] = "layer_norm"
 
     @model_validator(mode="before")
     @classmethod
@@ -247,6 +249,11 @@ class TemporalConvIngestionConfig(BaseModel):
         _validate_feature_embedding_dims(
             self.feature_embedding_dims, "temporal_conv feature_embedding_dims"
         )
+        if self.base_ingestion == "pass_through" and self.feature_embedding_dims:
+            raise ValueError(
+                "temporal_conv feature_embedding_dims is only valid when "
+                "base_ingestion is 'direct_embed'"
+            )
         if isinstance(self.dilation, list):
             invalid_dilation_values = [d for d in self.dilation if d <= 0]
             if invalid_dilation_values:
@@ -857,6 +864,7 @@ class ModelSpecModel(BaseModel):
     )
 
     norm_first: bool = True
+    shared_layer_groups: list[list[int]] = Field(default_factory=list)
     n_kv_heads: Optional[int] = None
     rope_theta: float = 10000.0
 
@@ -911,6 +919,42 @@ class ModelSpecModel(BaseModel):
                 "model_spec.ingestion_merge is only valid when "
                 "ingestion_spec defines multiple named ingestions"
             )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_shared_layer_groups(self):
+        seen_layers: set[int] = set()
+        for group in self.shared_layer_groups:
+            if len(group) < 2:
+                raise ValueError(
+                    "model_spec.shared_layer_groups entries must contain at "
+                    "least two layer indices"
+                )
+
+            group_layers = set(group)
+            if len(group_layers) != len(group):
+                raise ValueError(
+                    "model_spec.shared_layer_groups entries cannot contain "
+                    f"duplicate layer indices: {group}"
+                )
+
+            invalid_layers = [
+                layer for layer in group if layer < 0 or layer >= self.num_layers
+            ]
+            if invalid_layers:
+                raise ValueError(
+                    "model_spec.shared_layer_groups references layer indices "
+                    f"outside [0, {self.num_layers - 1}]: {invalid_layers}"
+                )
+
+            overlapping_layers = group_layers & seen_layers
+            if overlapping_layers:
+                raise ValueError(
+                    "model_spec.shared_layer_groups cannot reference a layer "
+                    f"in multiple groups: {sorted(overlapping_layers)}"
+                )
+            seen_layers.update(group_layers)
 
         return self
 
@@ -1297,11 +1341,14 @@ class TrainModel(BaseModel):
                 self._validate_structured_processing_blocks(
                     ingestion_spec, layout, output_dim
                 )
-            if isinstance(
-                ingestion_spec,
-                (DirectEmbedIngestionConfig, TemporalConvIngestionConfig),
-            ):
+            if isinstance(ingestion_spec, DirectEmbedIngestionConfig):
                 self._validate_direct_embed_ingestion(
+                    "model_spec.ingestion_spec",
+                    columns,
+                    ingestion_spec,
+                )
+            if isinstance(ingestion_spec, TemporalConvIngestionConfig):
+                self._validate_temporal_conv_ingestion(
                     "model_spec.ingestion_spec",
                     columns,
                     ingestion_spec,
@@ -1356,11 +1403,14 @@ class TrainModel(BaseModel):
                 self._validate_structured_processing_blocks(
                     ingestion, layout, output_dim
                 )
-            if isinstance(
-                ingestion,
-                (DirectEmbedIngestionConfig, TemporalConvIngestionConfig),
-            ):
+            if isinstance(ingestion, DirectEmbedIngestionConfig):
                 self._validate_direct_embed_ingestion(
+                    f"Composite ingestion branch {branch_name!r}",
+                    columns,
+                    ingestion,
+                )
+            if isinstance(ingestion, TemporalConvIngestionConfig):
+                self._validate_temporal_conv_ingestion(
                     f"Composite ingestion branch {branch_name!r}",
                     columns,
                     ingestion,
@@ -1637,3 +1687,22 @@ class TrainModel(BaseModel):
                 f"the number of categorical variables ({len(categorical_columns)}: "
                 f"{categorical_columns})."
             )
+
+    def _validate_temporal_conv_ingestion(
+        self,
+        usage: str,
+        columns: list[str],
+        ingestion: TemporalConvIngestionConfig,
+    ) -> None:
+        if ingestion.base_ingestion == "direct_embed":
+            self._validate_direct_embed_ingestion(usage, columns, ingestion)
+            return
+
+        if ingestion.base_ingestion == "pass_through":
+            self._validate_pass_through_ingestion(columns, ingestion, usage=usage)
+            return
+
+        raise ValueError(
+            f"{usage} temporal_conv base_ingestion is invalid: "
+            f"{ingestion.base_ingestion}"
+        )
