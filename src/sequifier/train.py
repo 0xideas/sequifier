@@ -776,12 +776,31 @@ class TransformerModel(nn.Module):
         self.objective = create_objective(hparams)
         self.dim_model = self.hparams.model_spec.dim_model
 
-        self.use_rope = hparams.model_spec.positional_encoding == "rope"
+        self.positional_encoding = hparams.model_spec.positional_encoding
+        self.positional_encoding_scope = hparams.model_spec.positional_encoding_scope
+        self.use_rope = self.positional_encoding == "rope"
         self.ingestion = build_feature_ingestion(
             hparams=hparams,
             direct_real_dtype_provider=self._ingestion_direct_real_dtype,
             device_max_concat_length=hparams.training_spec.device_max_concat_length,
         )
+        self.global_position_encoder = None
+        self.range_position_projection = None
+        self.global_position_drop = nn.Dropout(hparams.training_spec.dropout)
+        self.register_buffer(
+            "range_position_values",
+            self._build_range_position_values(self.context_length),
+            persistent=False,
+        )
+        if self.positional_encoding_scope == "global":
+            if self.positional_encoding == "learned":
+                self.global_position_encoder = nn.Embedding(
+                    self.context_length, self.dim_model
+                )
+            elif self.positional_encoding == "range":
+                self.range_position_projection = nn.Linear(
+                    self.dim_model + 1, self.dim_model
+                )
 
         self.layers = nn.ModuleList(
             [
@@ -985,6 +1004,13 @@ class TransformerModel(nn.Module):
         return torch.triu(torch.ones(sz, sz) * float("-inf"), diagonal=1)
 
     @staticmethod
+    def _build_range_position_values(context_length: int) -> Tensor:
+        """Return fixed slot coordinates in [-1, 1] for global range encoding."""
+        if context_length == 1:
+            return torch.zeros(1, dtype=torch.float32)
+        return torch.linspace(-1.0, 1.0, steps=context_length, dtype=torch.float32)
+
+    @staticmethod
     def _filter_key(dict_: dict[str, Any], key: str) -> dict[str, Any]:
         """Return a copy without key."""
         return {k: v for k, v in dict_.items() if k != key}
@@ -994,6 +1020,13 @@ class TransformerModel(nn.Module):
         """Initialize trainable weights with the model default."""
         init_std = 0.02
         self.ingestion.initialize_weights()
+
+        if self.global_position_encoder is not None:
+            self.global_position_encoder.weight.data.normal_(mean=0.0, std=init_std)
+
+        if self.range_position_projection is not None:
+            self.range_position_projection.weight.data.normal_(mean=0.0, std=init_std)
+            self.range_position_projection.bias.data.zero_()
 
         for target_column in self.target_columns:
             self.decoder[target_column].bias.data.zero_()
@@ -1052,6 +1085,45 @@ class TransformerModel(nn.Module):
         return x.masked_fill(~valid_mask[:, :, None], 0.0)
 
     @conditional_beartype
+    def _global_position_indices(self, x: Tensor) -> Tensor:
+        """Return absolute window-slot indices shared across feature channels."""
+        pos = torch.arange(0, self.context_length, dtype=torch.long, device=x.device)
+        return pos.repeat(x.shape[0], 1)
+
+    @conditional_beartype
+    def _apply_global_position(self, x: Tensor) -> Tensor:
+        """Apply model-level positional encoding after ingestion."""
+        if x.shape[1] != self.context_length:
+            raise ValueError(
+                f"Input sequence length ({x.shape[1]}) must match "
+                f"context_length ({self.context_length}) for global position encoding."
+            )
+
+        if self.global_position_encoder is not None:
+            pos_embedding = self.global_position_encoder(
+                self._global_position_indices(x)
+            )
+            pos_embedding = pos_embedding.to(dtype=x.dtype)
+            return self.global_position_drop(x + pos_embedding)
+
+        if self.range_position_projection is not None:
+            position_channel = self.range_position_values.to(
+                device=x.device, dtype=x.dtype
+            )
+            position_channel = position_channel.view(1, self.context_length, 1).expand(
+                x.shape[0], -1, -1
+            )
+            positioned = torch.cat((x, position_channel), dim=-1)
+            positioned = self.range_position_projection(
+                cast_floating_to_module_dtype(
+                    positioned, self.range_position_projection
+                )
+            )
+            return self.global_position_drop(positioned)
+
+        return x
+
+    @conditional_beartype
     def forward_inner(
         self, src: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> Tensor:
@@ -1065,6 +1137,7 @@ class TransformerModel(nn.Module):
                 f"expected {tuple(src2.shape[:2])} = (batch_size, context_length). "
                 "Check attention_valid_mask / leftPadLength construction."
             )
+        src2 = self._apply_global_position(src2)
         src2 = self._zero_padding_positions(src2, valid_mask)
 
         mask = self._build_attention_mask(valid_mask, dtype=src2.dtype)

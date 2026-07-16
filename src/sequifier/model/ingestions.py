@@ -175,7 +175,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         context_length: int,
         embedding_size: Optional[int],
         feature_embedding_dims: Optional[dict[str, int]],
-        use_rope: bool,
+        add_ingestion_position: bool,
         dropout: float,
         output_dim: Optional[int] = None,
         device_max_concat_length: int = 12,
@@ -185,7 +185,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         self.real_columns = real_columns
         self.n_classes = n_classes
         self.context_length = context_length
-        self.use_rope = use_rope
+        self.add_ingestion_position = add_ingestion_position
         self.drop = nn.Dropout(dropout)
         self.device_max_concat_length = device_max_concat_length
 
@@ -217,7 +217,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
                 self.n_classes[col], self.feature_embedding_dims[col]
             )
 
-        if not self.use_rope:
+        if self.add_ingestion_position:
             self.pos_encoder = ModuleDict()
             for col in self.real_columns + self.categorical_columns:
                 self.pos_encoder[col] = nn.Embedding(
@@ -265,7 +265,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         return self.pos_encoder[col](pos)  # type: ignore[index]
 
     def _with_position(self, col: str, src_t: Tensor) -> Tensor:
-        if self.use_rope:
+        if not self.add_ingestion_position:
             return self.drop(src_t)
         src_p = self._position_encoding(col, src_t.shape[0], src_t.device)
         src_p = cast_floating_to_dtype(src_p, src_t.dtype)
@@ -301,7 +301,7 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
         *,
         real_columns: list[str],
         context_length: int,
-        use_rope: bool,
+        add_ingestion_position: bool,
         dropout: float,
         output_dim: Optional[int] = None,
         direct_real_dtype_provider: Optional[Callable[[], torch.dtype]] = None,
@@ -314,7 +314,7 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
         self.real_columns = real_columns
         self.real_columns_direct = list(real_columns)
         self.context_length = context_length
-        self.use_rope = use_rope
+        self.add_ingestion_position = add_ingestion_position
         self.drop = nn.Dropout(dropout)
         self.input_dim = len(real_columns)
         self.embedding_size = self.input_dim
@@ -322,7 +322,7 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
         self.direct_real_dtype_provider = direct_real_dtype_provider
         self.device_max_concat_length = device_max_concat_length
 
-        if not self.use_rope:
+        if self.add_ingestion_position:
             self.pos_encoder = ModuleDict()
             for col in self.real_columns:
                 self.pos_encoder[col] = nn.Embedding(self.context_length, 1)
@@ -368,7 +368,7 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
         return self.pos_encoder[col](pos)  # type: ignore[index]
 
     def _with_position(self, col: str, src_t: Tensor) -> Tensor:
-        if self.use_rope:
+        if not self.add_ingestion_position:
             return self.drop(src_t)
         src_p = self._position_encoding(col, src_t.shape[0], src_t.device)
         src_p = cast_floating_to_dtype(src_p, src_t.dtype)
@@ -473,7 +473,7 @@ class _ColumnTokenIngestion(BaseFeatureIngestion):
         n_classes: dict[str, int],
         context_length: int,
         output_dim: int,
-        use_rope: bool,
+        add_ingestion_position: bool,
         dropout: float,
     ):
         super().__init__()
@@ -483,7 +483,7 @@ class _ColumnTokenIngestion(BaseFeatureIngestion):
         self.n_classes = n_classes
         self.context_length = context_length
         self.output_dim = output_dim
-        self.use_rope = use_rope
+        self.add_ingestion_position = add_ingestion_position
         self.drop = nn.Dropout(dropout)
 
         self.encoder = ModuleDict()
@@ -492,7 +492,7 @@ class _ColumnTokenIngestion(BaseFeatureIngestion):
         for col in self.real_columns:
             self.encoder[col] = nn.Linear(1, self.output_dim)
 
-        if not self.use_rope:
+        if self.add_ingestion_position:
             self.pos_encoder = nn.Embedding(self.context_length, self.output_dim)
         else:
             self.pos_encoder = None
@@ -515,7 +515,7 @@ class _ColumnTokenIngestion(BaseFeatureIngestion):
         return layer(src[col][:, :, None].to(dtype=layer.weight.dtype))
 
     def _with_position(self, x: Tensor) -> Tensor:
-        if self.use_rope:
+        if not self.add_ingestion_position:
             return self.drop(x)
         pos = torch.arange(0, self.context_length, dtype=torch.long, device=x.device)
         pos = pos.repeat(x.shape[0], 1)
@@ -560,7 +560,7 @@ class GroupedFeatureIngestion(BaseFeatureIngestion):
         n_classes: dict[str, int],
         context_length: int,
         output_dim: int,
-        use_rope: bool,
+        add_ingestion_position: bool,
         dropout: float,
     ):
         super().__init__()
@@ -582,7 +582,7 @@ class GroupedFeatureIngestion(BaseFeatureIngestion):
                 n_classes=n_classes,
                 context_length=context_length,
                 output_dim=output_dim,
-                use_rope=use_rope,
+                add_ingestion_position=add_ingestion_position,
                 dropout=dropout,
             )
 
@@ -609,7 +609,7 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
         n_classes: dict[str, int],
         context_length: int,
         output_dim: int,
-        use_rope: bool,
+        add_ingestion_position: bool,
         dropout: float,
     ):
         super().__init__()
@@ -618,7 +618,7 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
         self.real_columns = real_columns
         self.context_length = context_length
         self.output_dim = output_dim
-        self.use_rope = use_rope
+        self.add_ingestion_position = add_ingestion_position
         self.drop = nn.Dropout(dropout)
 
         if categorical_columns:
@@ -632,7 +632,7 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
         else:
             self.real_encoder = None
 
-        if not self.use_rope:
+        if self.add_ingestion_position:
             self.pos_encoder = nn.Embedding(self.context_length, self.output_dim)
         else:
             self.pos_encoder = None
@@ -646,7 +646,7 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
             self.pos_encoder.weight.data.normal_(mean=0.0, std=self.INIT_STD)
 
     def _with_position(self, x: Tensor) -> Tensor:
-        if self.use_rope:
+        if not self.add_ingestion_position:
             return self.drop(x)
         pos = torch.arange(0, self.context_length, dtype=torch.long, device=x.device)
         pos = pos.repeat(x.shape[0], 1)
@@ -1118,7 +1118,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         n_classes: dict[str, int],
         context_length: int,
         output_dim: int,
-        use_rope: bool,
+        add_ingestion_position: bool,
         dropout: float,
         cell_dim: Optional[int] = None,
         axis_embeddings: Optional[Any] = None,
@@ -1155,11 +1155,11 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
             n_classes=n_classes,
             context_length=context_length,
             output_dim=self.cell_dim,
-            use_rope=use_rope,
+            add_ingestion_position=add_ingestion_position,
             dropout=dropout,
         )
         self.output_dim = output_dim
-        if not self.use_rope:
+        if self.add_ingestion_position:
             self.pos_encoder = nn.Embedding(self.context_length, self.output_dim)
 
         self.axis_embedding_type = (
@@ -1460,6 +1460,13 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
         return self.merge(branch_outputs)
 
 
+def _add_ingestion_position_encoding(model_spec: Any) -> bool:
+    return (
+        model_spec.positional_encoding == "learned"
+        and model_spec.positional_encoding_scope == "per_feature"
+    )
+
+
 def build_feature_ingestion(
     *,
     hparams: Any,
@@ -1468,7 +1475,7 @@ def build_feature_ingestion(
 ) -> BaseFeatureIngestion:
     model_spec = hparams.model_spec
     ingestion_spec = model_spec.ingestion_spec
-    use_rope = model_spec.positional_encoding == "rope"
+    add_ingestion_position = _add_ingestion_position_encoding(model_spec)
 
     if ingestion_spec is None:
         raise ValueError("ingestion_spec must be configured")
@@ -1479,7 +1486,7 @@ def build_feature_ingestion(
             branches[branch_name] = _build_branch_ingestion(
                 hparams=hparams,
                 branch_config=branch_config,
-                use_rope=use_rope,
+                add_ingestion_position=add_ingestion_position,
                 direct_real_dtype_provider=direct_real_dtype_provider,
                 device_max_concat_length=device_max_concat_length,
             )
@@ -1514,7 +1521,7 @@ def build_feature_ingestion(
     return _build_branch_ingestion(
         hparams=hparams,
         branch_config=ingestion_spec,
-        use_rope=use_rope,
+        add_ingestion_position=add_ingestion_position,
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
     )
@@ -1580,7 +1587,7 @@ def _build_direct_embed_ingestion(
         context_length=hparams.window_view.context_length,
         embedding_size=embedding_size,
         feature_embedding_dims=feature_embedding_dims,
-        use_rope=hparams.model_spec.positional_encoding == "rope",
+        add_ingestion_position=_add_ingestion_position_encoding(hparams.model_spec),
         dropout=hparams.training_spec.dropout,
         output_dim=output_dim,
         device_max_concat_length=device_max_concat_length,
@@ -1606,7 +1613,7 @@ def _build_pass_through_ingestion(
     return PassThroughFeatureIngestion(
         real_columns=real_columns,
         context_length=hparams.window_view.context_length,
-        use_rope=hparams.model_spec.positional_encoding == "rope",
+        add_ingestion_position=_add_ingestion_position_encoding(hparams.model_spec),
         dropout=hparams.training_spec.dropout,
         output_dim=_resolve_required_output_dim(
             ingestion_config.output_dim,
@@ -1625,7 +1632,7 @@ def _build_branch_ingestion(
     *,
     hparams: Any,
     branch_config: Any,
-    use_rope: bool,
+    add_ingestion_position: bool,
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
 ) -> BaseFeatureIngestion:
@@ -1649,7 +1656,7 @@ def _build_branch_ingestion(
         "real_columns": real_columns,
         "n_classes": hparams.n_classes,
         "context_length": hparams.window_view.context_length,
-        "use_rope": use_rope,
+        "add_ingestion_position": add_ingestion_position,
         "dropout": hparams.training_spec.dropout,
     }
 

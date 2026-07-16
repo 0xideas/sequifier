@@ -391,7 +391,8 @@ These fields determine the size and complexity of the Transformer.
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
 | `n_kv_heads` | `int` | No | `null` | Number of Key/Value heads. `null` is valid for standard MHA; `mqa` requires `1`, and `gqa` requires a divisor of `n_head`. |
-| `positional_encoding` | `str` | No | `learned`| `learned` (Standard absolute) or `rope` (Rotary Positional Embedding). |
+| `positional_encoding` | `str` | No | `learned`| `learned` (standard absolute), `rope` (Rotary Positional Embedding), or `range` (fixed continuous window coordinate). |
+| `positional_encoding_scope` | `str` | No | `per_feature` | `per_feature` keeps the legacy ingestion-time learned position path. `global` injects one shared time coordinate after ingestion and before the transformer. `range` always uses `global`. |
 | `rope_theta` | `float` | No | `10000.0` | The base frequency for RoPE. Increase for long-context extrapolation. |
 | `normalization` | `str` | No | `rmsnorm`| `rmsnorm` or `layer_norm`. |
 | `norm_first` | `bool` | No | `true` | If `true` (Pre-LN), applies normalization before attention/FFN. More stable. |
@@ -435,6 +436,14 @@ branch declares its own `output_dim` and the merge layer produces `dim_model`.
 Direct-embed `feature_embedding_dims`, when configured, must contain exactly the
 branch columns and sum to the branch `output_dim`. It is required when a
 direct-embed or temporal-conv branch mixes real and categorical columns.
+
+`positional_encoding` controls the form of temporal information, while
+`positional_encoding_scope` controls where non-RoPE position is injected. The
+default `learned` + `per_feature` setting preserves Sequifier's legacy behavior:
+position embeddings are added inside the ingestion layer, before temporal
+convolution. Use `learned` + `global` to add one shared learned time embedding
+after ingestion. Use `range` for a fixed scalar coordinate from `-1` to `1` over
+the context window; it is also injected globally after ingestion.
 
 Every non-auxiliary input column must be consumed by `ingestion_spec`. Use
 `auxiliary_input_columns` for columns that should stay available in
@@ -500,6 +509,8 @@ ingestion_spec:
     kernel_size: 5
     dilation: [1, 2, 4, 8, 16]
     causal: true
+positional_encoding: range
+positional_encoding_scope: global
 ```
 
 Structured ingestion layers can optionally process cartesian axes before pooling. `cell_dim`
@@ -1092,7 +1103,8 @@ dim_feedforward:
 | `n_kv_heads` | `list[int or null]` | **Yes** | Number of KV heads. Use `1` for MQA, a divisor of `n_head` for GQA, and `null` only with MHA. Invalid values are filtered for each sampled `n_head`. |
 | `normalization` | `list[str]` | **Yes** | E.g., `['rmsnorm']`. |
 | `norm_first` | `list[bool]` | **Yes** | Pre-LN vs Post-LN. |
-| `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope']`. |
+| `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope', 'range']`. |
+| `positional_encoding_scope` | `list[str]` | No | `['per_feature']`. Use `['global']` for shared learned positions; `range` trials force `global`. |
 | `rope_theta` | `list` or `Distribution` | **Yes** | Base frequency for RoPE. |
 
 ### 6. Training Hyperparameters (`training_hyperparameter_sampling`)

@@ -46,6 +46,8 @@ model_spec:
   n_head: 16
   dim_feedforward: 128
   num_layers: 3
+  positional_encoding: learned
+  positional_encoding_scope: per_feature
   prediction_length: 1
 training_spec:
   training_objective: causal

@@ -503,6 +503,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
     activation_fn: list[str]
     normalization: list[str]
     positional_encoding: list[str]
+    positional_encoding_scope: list[str] = Field(
+        default_factory=lambda: ["per_feature"]
+    )
     attention_type: list[str]
 
     norm_first: list[bool]
@@ -596,6 +599,14 @@ class ModelSpecHyperparameterSampling(BaseModel):
         positional_encoding = trial.suggest_categorical(
             "positional_encoding", self.positional_encoding
         )
+        sampled_positional_encoding_scope = trial.suggest_categorical(
+            "positional_encoding_scope", self.positional_encoding_scope
+        )
+        positional_encoding_scope = (
+            "global"
+            if positional_encoding == "range"
+            else sampled_positional_encoding_scope
+        )
         attention_type = trial.suggest_categorical(
             "attention_type", self.attention_type
         )
@@ -616,7 +627,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             n_kv_heads = trial.suggest_categorical("n_kv_heads", valid_kv_heads)
 
         logger.info(
-            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
+            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {positional_encoding_scope = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
         )
 
         model_spec_kwargs = {
@@ -627,6 +638,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             "activation_fn": activation_fn,
             "normalization": normalization,
             "positional_encoding": positional_encoding,
+            "positional_encoding_scope": positional_encoding_scope,
             "attention_type": attention_type,
             "norm_first": norm_first,
             "n_kv_heads": n_kv_heads,

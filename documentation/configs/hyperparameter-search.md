@@ -126,7 +126,8 @@ dim_feedforward:
 | `n_kv_heads` | `list[int or null]` | **Yes** | Number of KV heads. Use `1` for MQA, a divisor of `n_head` for GQA, and `null` only with MHA. Invalid values are filtered for each sampled `n_head`. |
 | `normalization` | `list[str]` | **Yes** | E.g., `['rmsnorm']`. |
 | `norm_first` | `list[bool]` | **Yes** | Pre-LN vs Post-LN. |
-| `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope']`. |
+| `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope', 'range']`. |
+| `positional_encoding_scope` | `list[str]` | No | `['per_feature']`. Use `['global']` for shared learned positions; `range` trials force `global`. |
 | `rope_theta` | `list` or `Distribution` | **Yes** | Base frequency for RoPE. |
 
 ### 6. Training Hyperparameters (`training_hyperparameter_sampling`)
