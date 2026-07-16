@@ -224,11 +224,22 @@ class TemporalConvIngestionConfig(BaseModel):
     output_dim: int = Field(..., gt=0)
     feature_embedding_dims: Optional[dict[str, int]] = None
     kernel_size: int = Field(3, gt=0)
-    dilation: int = Field(1, gt=0)
+    dilation: int | list[int] = 1
     num_layers: int = Field(1, gt=0)
     causal: bool = True
     activation_fn: Literal["relu", "gelu", "silu"] = "gelu"
     dropout: float = Field(0.0, ge=0.0, lt=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_num_layers_from_dilation_schedule(cls, values):
+        if not isinstance(values, dict):
+            return values
+        dilation = values.get("dilation")
+        if isinstance(dilation, list) and "num_layers" not in values:
+            values = dict(values)
+            values["num_layers"] = len(dilation)
+        return values
 
     @model_validator(mode="after")
     def validate_temporal_conv(self):
@@ -236,11 +247,31 @@ class TemporalConvIngestionConfig(BaseModel):
         _validate_feature_embedding_dims(
             self.feature_embedding_dims, "temporal_conv feature_embedding_dims"
         )
+        if isinstance(self.dilation, list):
+            invalid_dilation_values = [d for d in self.dilation if d <= 0]
+            if invalid_dilation_values:
+                raise ValueError(
+                    "temporal_conv dilation schedule must contain positive "
+                    f"integers: {invalid_dilation_values}"
+                )
+            if len(self.dilation) != self.num_layers:
+                raise ValueError(
+                    "temporal_conv dilation schedule length must equal "
+                    f"num_layers: {len(self.dilation)} != {self.num_layers}"
+                )
+        elif self.dilation <= 0:
+            raise ValueError("temporal_conv dilation must be positive")
         if not self.causal and self.kernel_size % 2 == 0:
             raise ValueError(
                 "temporal_conv kernel_size must be odd when causal is false"
             )
         return self
+
+    @property
+    def dilation_schedule(self) -> list[int]:
+        if isinstance(self.dilation, list):
+            return self.dilation
+        return [self.dilation] * self.num_layers
 
 
 class AxisProjectionBlockModel(BaseModel):
@@ -819,7 +850,8 @@ class ModelSpecModel(BaseModel):
 
     activation_fn: str = "swiglu"  # Options: "relu", "gelu", "swiglu"
     normalization: str = "rmsnorm"  # Options: "layer_norm", "rmsnorm"
-    positional_encoding: str = "learned"  # Options: "learned", "rope" (Rotary)
+    positional_encoding: str = "learned"  # Options: "learned", "rope", "range"
+    positional_encoding_scope: str = "per_feature"  # Options: "per_feature", "global"
     attention_type: str = (
         "mha"  # Options: "mha" (Multi-Head), "mqa" (Multi-Query), "gqa" (Grouped-Query)
     )
@@ -835,6 +867,12 @@ class ModelSpecModel(BaseModel):
     def default_ingestion_spec(cls, values):
         if not isinstance(values, dict):
             return values
+        if (
+            values.get("positional_encoding") == "range"
+            and "positional_encoding_scope" not in values
+        ):
+            values = dict(values)
+            values["positional_encoding_scope"] = "global"
         if values.get("ingestion_spec") is not None:
             return values
         dim_model = values.get("dim_model")
@@ -893,9 +931,28 @@ class ModelSpecModel(BaseModel):
     @field_validator("positional_encoding")
     @classmethod
     def validate_pos_encoding(cls, v):
-        if v not in ["learned", "rope"]:
+        if v not in ["learned", "rope", "range"]:
             raise ValueError(f"Invalid positional_encoding: {v}")
         return v
+
+    @field_validator("positional_encoding_scope")
+    @classmethod
+    def validate_pos_encoding_scope(cls, v):
+        if v not in ["per_feature", "global"]:
+            raise ValueError(f"Invalid positional_encoding_scope: {v}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_positional_encoding_combination(self):
+        if (
+            self.positional_encoding == "range"
+            and self.positional_encoding_scope != "global"
+        ):
+            raise ValueError(
+                "positional_encoding 'range' requires "
+                "positional_encoding_scope 'global'"
+            )
+        return self
 
     @field_validator("attention_type")
     @classmethod

@@ -398,8 +398,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
         base_ingestion: DirectEmbedFeatureIngestion,
         output_dim: int,
         kernel_size: int,
-        dilation: int,
-        num_layers: int,
+        dilation_schedule: list[int],
         causal: bool,
         activation_fn: str,
         dropout: float,
@@ -412,7 +411,12 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
                 "temporal_conv base ingestion output_dim must match output_dim"
             )
         self.kernel_size = kernel_size
-        self.dilation = dilation
+        self.dilation_schedule = list(dilation_schedule)
+        if not self.dilation_schedule:
+            raise ValueError(
+                "temporal_conv dilation schedule must contain at least one value"
+            )
+        self.num_layers = len(self.dilation_schedule)
         self.causal = causal
         self.layers = nn.ModuleList(
             [
@@ -420,9 +424,9 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
                     self.output_dim,
                     self.output_dim,
                     kernel_size=self.kernel_size,
-                    dilation=self.dilation,
+                    dilation=dilation,
                 )
-                for _ in range(num_layers)
+                for dilation in self.dilation_schedule
             ]
         )
         self.activation = self._activation(activation_fn)
@@ -443,17 +447,17 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
             return nn.SiLU()
         raise ValueError(f"Unknown temporal_conv activation_fn: {name}")
 
-    def _temporal_padding(self) -> tuple[int, int]:
-        padding = (self.kernel_size - 1) * self.dilation
+    def _temporal_padding(self, dilation: int) -> tuple[int, int]:
+        padding = (self.kernel_size - 1) * dilation
         if self.causal:
             return padding, 0
         return padding // 2, padding // 2
 
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         output = self.base_ingestion(src, metadata)
-        for layer in self.layers:
+        for layer, dilation in zip(self.layers, self.dilation_schedule):
             conv_input = output.transpose(1, 2).to(dtype=layer.weight.dtype)
-            conv_input = F.pad(conv_input, self._temporal_padding())
+            conv_input = F.pad(conv_input, self._temporal_padding(dilation))
             output = layer(conv_input).transpose(1, 2)
             output = self.drop(self.activation(output))
         return output
@@ -1681,8 +1685,7 @@ def _build_branch_ingestion(
             base_ingestion=base_ingestion,
             output_dim=output_dim,
             kernel_size=branch_config.kernel_size,
-            dilation=branch_config.dilation,
-            num_layers=branch_config.num_layers,
+            dilation_schedule=branch_config.dilation_schedule,
             causal=branch_config.causal,
             activation_fn=branch_config.activation_fn,
             dropout=branch_config.dropout,

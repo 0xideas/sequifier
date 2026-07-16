@@ -474,6 +474,9 @@ run across timesteps before the global transformer consumes the sequence. The
 branch first uses the same flat column encoder as `direct_embed`, then applies one or
 more same-width Conv1D layers. `causal` defaults to `true`; non-causal temporal
 convolution requires an odd `kernel_size` so the sequence length is preserved.
+Set `dilation` to either a positive integer shared by every layer or a list of
+positive integers for a per-layer schedule. If `dilation` is a list and
+`num_layers` is omitted, `num_layers` defaults to the length of the schedule.
 
 Use `pass_through` for real-valued columns that should enter the model without
 per-column linear encoders. It can be used as the top-level
@@ -495,8 +498,7 @@ ingestion_spec:
     columns: [spread, imbalance, volatility]
     output_dim: 128
     kernel_size: 5
-    dilation: 1
-    num_layers: 2
+    dilation: [1, 2, 4, 8, 16]
     causal: true
 ```
 
