@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.config.train_config import (
     BERTSpecModel,
+    DecodingSpecConfig,
     DotDict,
     FeatureLayoutRegistryModel,
     IngestionMergeConfig,
@@ -499,6 +500,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
     dim_feedforward: OptunaInt
     num_layers: OptunaInt
     prediction_length: int
+    decoding_support: Union[int, OptunaInt] = 1
+    decoding_spec: Optional[Union[DecodingSpecConfig, list[DecodingSpecConfig]]] = None
 
     activation_fn: list[str]
     normalization: list[str]
@@ -512,6 +515,33 @@ class ModelSpecHyperparameterSampling(BaseModel):
     shared_layer_groups: list[list[int]] = Field(default_factory=list)
     n_kv_heads: list[Optional[int]]
     rope_theta: OptunaFloat
+
+    @field_validator("decoding_support")
+    @classmethod
+    def validate_decoding_support(cls, v):
+        if isinstance(v, int):
+            if v <= 0:
+                raise ValueError("decoding_support must be positive")
+            return v
+        if isinstance(v, list):
+            if not v:
+                raise ValueError("decoding_support candidates cannot be empty")
+            invalid_values = [support for support in v if support <= 0]
+            if invalid_values:
+                raise ValueError(
+                    "decoding_support candidates must be positive: " f"{invalid_values}"
+                )
+            return v
+        if v.low <= 0:
+            raise ValueError("decoding_support distribution must be positive")
+        return v
+
+    @field_validator("decoding_spec")
+    @classmethod
+    def validate_decoding_spec_candidates(cls, v):
+        if isinstance(v, list) and not v:
+            raise ValueError("decoding_spec candidates cannot be empty")
+        return v
 
     @field_validator("n_head")
     @classmethod
@@ -542,19 +572,34 @@ class ModelSpecHyperparameterSampling(BaseModel):
         if self.ingestion_spec is None or isinstance(self.ingestion_spec, dict):
             return self
 
+        def expected_output_dims(dim_model: int) -> set[int]:
+            return {
+                dim_model - (positional_encoding == "range_concat")
+                for positional_encoding in self.positional_encoding
+            }
+
         if isinstance(self.ingestion_spec, list):
             mismatched_candidates = [
-                (index, dim_model, ingestion_spec.output_dim)
+                (
+                    index,
+                    dim_model,
+                    ingestion_spec.output_dim,
+                    sorted(expected_output_dims(dim_model)),
+                )
                 for index, (dim_model, ingestion_spec) in enumerate(
                     zip(self.dim_model, self.ingestion_spec)
                 )
                 if not isinstance(ingestion_spec, dict)
-                and dim_model != ingestion_spec.output_dim
+                and any(
+                    ingestion_spec.output_dim != expected_output_dim
+                    for expected_output_dim in expected_output_dims(dim_model)
+                )
             ]
             if mismatched_candidates:
                 raise ValueError(
                     "model_hyperparameter_sampling.ingestion_spec list candidates "
-                    "must match their paired dim_model values for single-branch "
+                    "must match the ingestion output dimensions required by their "
+                    "paired dim_model and positional_encoding values for single-branch "
                     f"ingestions. Mismatches: {mismatched_candidates}"
                 )
             return self
@@ -562,12 +607,16 @@ class ModelSpecHyperparameterSampling(BaseModel):
         mismatched_dim_models = [
             dim_model
             for dim_model in self.dim_model
-            if dim_model != self.ingestion_spec.output_dim
+            if any(
+                self.ingestion_spec.output_dim != expected_output_dim
+                for expected_output_dim in expected_output_dims(dim_model)
+            )
         ]
         if mismatched_dim_models:
             raise ValueError(
                 "model_hyperparameter_sampling.ingestion_spec.output_dim must "
-                "match every dim_model candidate when a fixed single-branch "
+                "match the ingestion output dimension required by every dim_model "
+                "and positional_encoding candidate when a fixed single-branch "
                 "ingestion_spec is provided. Provide ingestion_spec as a list "
                 "paired with dim_model for variable widths."
             )
@@ -590,6 +639,18 @@ class ModelSpecHyperparameterSampling(BaseModel):
             ingestion_merge = self.ingestion_merge[dim_model_idx]
         else:
             ingestion_merge = self.ingestion_merge
+        decoding_support = (
+            self.decoding_support
+            if isinstance(self.decoding_support, int)
+            else sample_param(trial, "decoding_support", self.decoding_support)
+        )
+        if isinstance(self.decoding_spec, list):
+            decoding_spec_idx = trial.suggest_categorical(
+                "decoding_spec_idx", list(range(len(self.decoding_spec)))
+            )
+            decoding_spec = self.decoding_spec[decoding_spec_idx]
+        else:
+            decoding_spec = self.decoding_spec
 
         dim_feedforward = sample_param(trial, "dim_feedforward", self.dim_feedforward)
         num_layers = sample_param(trial, "num_layers", self.num_layers)
@@ -605,7 +666,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         )
         positional_encoding_scope = (
             "global"
-            if positional_encoding == "range"
+            if positional_encoding in {"range", "range_concat"}
             else sampled_positional_encoding_scope
         )
         attention_type = trial.suggest_categorical(
@@ -646,7 +707,10 @@ class ModelSpecHyperparameterSampling(BaseModel):
             "n_kv_heads": n_kv_heads,
             "rope_theta": rope_theta,
             "prediction_length": self.prediction_length,
+            "decoding_support": decoding_support,
         }
+        if decoding_spec is not None:
+            model_spec_kwargs["decoding_spec"] = decoding_spec
         if ingestion_spec is not None:
             model_spec_kwargs["ingestion_spec"] = ingestion_spec
         if ingestion_merge is not None:
@@ -687,6 +751,7 @@ class HyperparameterSearchConfig(BaseModel):
 
     context_length: list[int]
     storage_layout: StoredWindowLayout
+    model_window_stride: Optional[int] = Field(default=None, gt=0)
     n_classes: dict[str, int]
     inference_batch_size: int
 
@@ -863,6 +928,7 @@ class HyperparameterSearchConfig(BaseModel):
             id_maps=self.id_maps,
             storage_layout=self.storage_layout,
             window_view=window_view,
+            model_window_stride=self.model_window_stride,
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=101,

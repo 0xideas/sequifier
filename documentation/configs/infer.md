@@ -56,6 +56,7 @@ These fields tell the inference engine which columns to extract from the new dat
 | `model_type` | `str` | **Yes** | - | `generative` (predict next value) or `embedding` (extract vector representation). |
 | `training_objective` | `str` | **Yes** | - | Objective used during training: `causal`, `bert`, `final_value`, or `next_occurrence`. |
 | `context_length` | `int` | **Yes** | - | The model context window size. It must match the trained model view and fit inside the stored metadata capacity. |
+| `model_window_stride` | `int` or `null` | No | `null` | Distance between model-window starts inferred from each stored preprocessing row. `null` uses the legacy right-aligned view; a positive integer infers every contained view on a right-anchored grid. |
 | `target_offset` | `int` | No | `1` | Future offset used for forward-looking objectives. BERT-style inference forces this to `0`. |
 | `prediction_length` | `int` | No | `1` for forward objectives; `context_length` for BERT | Number of steps to predict *simultaneously*. **Must be 1** if `autoregression: true`. |
 | `inference_batch_size`| `int` | **Yes** | - | Number of sequences to process at once. |
@@ -66,6 +67,10 @@ These fields tell the inference engine which columns to extract from the new dat
 | `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). Must be `false` when all targets are real-valued. |
 | `infer_with_dropout` | `bool` | No | `false` | If `true`, keeps dropout active during inference (useful for uncertainty estimation/Monte Carlo Dropout). For ONNX models, this is only effective if the model was exported with `export_with_dropout: true` during training. |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
+
+Prediction and embedding outputs include `subsequenceId` and
+`windowStartOffset`. `itemPosition` is calculated from the physical stored-row
+start plus this model-window offset.
 
 ### 4\. System
 
@@ -116,7 +121,7 @@ Results are saved in the `outputs/` folder within your project root.
 
       * Standard tabular data containing `sequenceId`, `itemPosition`, and columns for your predicted targets.
       * If `map_to_id` is true, categorical predictions will be the original strings (e.g., "Product\_A"). If false, they will be integers (e.g., 42).
-      * Real-valued predictions are automatically denormalized back to their original scale.
+      * Real-valued predictions are denormalized back to their original scale when preprocessing used `normalize_real_columns: true`; otherwise they are returned unchanged.
 
 2.  **Probabilities:** `outputs/probabilities/[MODEL_NAME]-[TARGET_COLUMN]-probabilities.[format]`
 

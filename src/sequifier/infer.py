@@ -1,6 +1,7 @@
 import json
 import os
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -16,17 +17,20 @@ from sequifier.config.infer_config import InfererModel, load_inferer_config
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configure_determinism,
+    configured_model_window_stride,
     construct_index_maps,
     normalize_path,
+    numpy_storage_to_pytorch,
     numpy_to_pytorch,
     resolve_unified_polars_numeric_dtype,
+    resolve_window_sampling_plan,
     resolve_window_view,
     subset_to_input_columns,
     validate_stored_window_width,
     write_data,
 )
 from sequifier.objectives import get_objective_class
-from sequifier.special_tokens import validate_special_token_ids
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 from sequifier.train import (
     infer_with_embedding_model,
     infer_with_generative_model,
@@ -76,14 +80,21 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
             )
             id_maps = metadata_config["id_maps"]
             selected_columns_statistics = metadata_config["selected_columns_statistics"]
+            normalize_real_columns = metadata_config.get("normalize_real_columns", True)
     else:
         id_maps = None
         selected_columns_statistics = {}
+        normalize_real_columns = True
 
     configure_determinism(config.seed, config.enforce_determinism)
 
     infer_worker(
-        config, args_config, id_maps, selected_columns_statistics, (0.0, 100.0)
+        config,
+        args_config,
+        id_maps,
+        selected_columns_statistics,
+        (0.0, 100.0),
+        normalize_real_columns=normalize_real_columns,
     )
 
 
@@ -189,6 +200,152 @@ def apply_inference_tensor_types(
     }
 
 
+@dataclass(frozen=True)
+class WindowedInferenceBatch:
+    """Model-facing windows plus physical identities and adjusted starts."""
+
+    inputs: dict[str, torch.Tensor]
+    metadata: dict[str, torch.Tensor]
+    sequence_ids: torch.Tensor
+    subsequence_ids: torch.Tensor
+    model_start_positions: torch.Tensor
+    window_start_offsets: torch.Tensor
+
+
+@beartype
+def _windowed_inference_batch_from_storage(
+    config: InfererModel,
+    sequences: dict[str, torch.Tensor],
+    sequence_ids: torch.Tensor,
+    subsequence_ids: torch.Tensor,
+    start_positions: torch.Tensor,
+    left_pad_lengths: torch.Tensor,
+) -> WindowedInferenceBatch:
+    plan = resolve_window_sampling_plan(
+        config.storage_layout,
+        config.window_view,
+        configured_model_window_stride(config),
+    )
+    sample_index = plan.build_index(left_pad_lengths)
+    if len(sample_index) == 0:
+        raise ValueError("No usable model windows were found for inference.")
+
+    logical_indices = torch.arange(len(sample_index), dtype=torch.int64)
+    stored_rows, input_starts = sample_index.resolve(logical_indices)
+    inputs = {
+        column: plan.gather(
+            sequences[column],
+            stored_rows,
+            input_starts,
+        )
+        for column in config.input_columns
+    }
+    metadata = plan.build_masks(
+        left_pad_lengths[stored_rows],
+        input_starts,
+    )
+    return WindowedInferenceBatch(
+        inputs=inputs,
+        metadata=metadata,
+        sequence_ids=sequence_ids[stored_rows],
+        subsequence_ids=subsequence_ids[stored_rows],
+        model_start_positions=start_positions[stored_rows] + input_starts,
+        window_start_offsets=input_starts,
+    )
+
+
+@beartype
+def _windowed_inference_batch_from_dataframe(
+    config: InfererModel,
+    data: pl.DataFrame,
+    column_types: dict[str, torch.dtype],
+) -> WindowedInferenceBatch:
+    if config.input_columns is not None:
+        subset = subset_to_input_columns(data, config.input_columns)
+        if not isinstance(subset, pl.DataFrame):
+            raise TypeError("Expected eager preprocessed inference data")
+        data = subset
+    data = apply_inference_column_types(data, config)
+
+    sequences, left_pad_lengths = numpy_storage_to_pytorch(
+        data,
+        column_types,
+        config.input_columns,
+        config.storage_layout.stored_context_width,
+        sort_rows=False,
+    )
+    identities = data.group_by(
+        ["sequenceId", "subsequenceId"], maintain_order=True
+    ).agg(pl.col("startItemPosition").first().alias("startItemPosition"))
+    return _windowed_inference_batch_from_storage(
+        config,
+        sequences,
+        torch.tensor(
+            identities.get_column("sequenceId").to_numpy(),
+            dtype=torch.int64,
+        ),
+        torch.tensor(
+            identities.get_column("subsequenceId").to_numpy(),
+            dtype=torch.int64,
+        ),
+        torch.tensor(
+            identities.get_column("startItemPosition").to_numpy(),
+            dtype=torch.int64,
+        ),
+        left_pad_lengths,
+    )
+
+
+@beartype
+def _windowed_inference_batch_from_pt(
+    config: InfererModel,
+    data: tuple,
+    column_types: dict[str, torch.dtype],
+) -> WindowedInferenceBatch:
+    (
+        sequences,
+        sequence_ids,
+        subsequence_ids,
+        start_positions,
+        left_pad_lengths,
+    ) = data
+    sequences = apply_inference_tensor_types(sequences, column_types)
+    for tensor in sequences.values():
+        validate_stored_window_width(
+            tensor,
+            config.storage_layout.stored_context_width,
+        )
+    return _windowed_inference_batch_from_storage(
+        config,
+        sequences,
+        sequence_ids,
+        subsequence_ids,
+        start_positions,
+        left_pad_lengths,
+    )
+
+
+@beartype
+def _windowed_inference_batch(
+    config: InfererModel,
+    data: Any,
+    column_types: dict[str, torch.dtype],
+) -> WindowedInferenceBatch:
+    if isinstance(data, pl.DataFrame):
+        return _windowed_inference_batch_from_dataframe(
+            config,
+            data,
+            column_types,
+        )
+    if isinstance(data, tuple):
+        return _windowed_inference_batch_from_pt(
+            config,
+            data,
+            column_types,
+        )
+    raise TypeError(f"Unsupported preprocessed inference chunk: {type(data).__name__}")
+
+
 @beartype
 def infer_worker(
     config: Any,
@@ -196,6 +353,7 @@ def infer_worker(
     id_maps: Optional[dict[str, dict[str | int, int]]],
     selected_columns_statistics: dict[str, dict[str, float]],
     percentage_limits: Optional[tuple[float, float]],
+    normalize_real_columns: bool,
 ):
     """Load data, instantiate models, and run the configured inference mode."""
     logger.info(f"[INFO] Reading data from '{config.data_path}'...")
@@ -265,6 +423,8 @@ def infer_worker(
             config.device,
             args_config=args_config,
             training_config_path=config.training_config_path,
+            training_objective=config.training_objective,
+            normalize_real_columns=normalize_real_columns,
         )
 
         column_types = _torch_column_types(config)
@@ -287,13 +447,18 @@ def calculate_item_positions(
     context_length: int,
     prediction_length: int,
     training_objective: str,
+    target_offset: int = 1,
 ) -> np.ndarray:
     """Return flattened absolute item positions for inference outputs."""
-    return get_objective_class(training_objective).item_positions(
+    objective_class = get_objective_class(training_objective)
+    positions = objective_class.item_positions(
         start_positions,
         context_length,
         prediction_length,
     )
+    if objective_class.forward_looking:
+        positions = positions + target_offset - 1
+    return positions
 
 
 @beartype
@@ -380,6 +545,41 @@ def _apply_valid_prediction_mask_to_dict(
 
 
 @beartype
+def _autoregression_seed_dataframe(
+    config: InfererModel,
+    data: pl.DataFrame,
+) -> pl.DataFrame:
+    """Keep the first physical subsequence for each autoregressive sequence."""
+    verify_variable_order(data)
+    selected = subset_to_input_columns(data, config.input_columns)
+    if not isinstance(selected, pl.DataFrame):
+        raise TypeError("Expected eager preprocessed autoregression data")
+
+    seed_data = selected.filter(
+        pl.col("subsequenceId") == pl.col("subsequenceId").first().over("sequenceId")
+    )
+    expected_columns = set(config.input_columns)
+    for sequence_id, sequence_data in seed_data.group_by(
+        "sequenceId",
+        maintain_order=True,
+    ):
+        found_columns = set(sequence_data.get_column("inputCol").to_list())
+        if found_columns != expected_columns:
+            raise ValueError(
+                "The first autoregression subsequence must contain every input "
+                f"column exactly once for sequenceId={sequence_id!r}; expected "
+                f"{sorted(expected_columns)}, found {sorted(found_columns)}."
+            )
+        if sequence_data.height != len(expected_columns):
+            raise ValueError(
+                "The first autoregression subsequence contains duplicate input "
+                f"rows for sequenceId={sequence_id!r}."
+            )
+
+    return seed_data
+
+
+@beartype
 def infer_embedding(
     config: "InfererModel",
     inferer: "Inferer",
@@ -390,118 +590,54 @@ def infer_embedding(
     """Write embeddings for each dataset chunk."""
     for data_id, data in enumerate(dataset):
         prediction_length = inferer.prediction_length
-        valid_prediction_mask = None
-
         is_folder_input = os.path.isdir(
             normalize_path(config.data_path, config.project_root)
         )
-
-        if config.read_format in ["parquet", "csv"] and not is_folder_input:
-            if config.input_columns is not None:
-                data = subset_to_input_columns(data, config.input_columns)
-            data = apply_inference_column_types(data, config)
-
-            # Determine the number of input features
-            n_input_cols = data.get_column("inputCol").n_unique()
-
-            # Create a mask to select only one row per sequence
-            mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
-
+        windowed = _windowed_inference_batch(config, data, column_types)
+        if (
+            isinstance(data, pl.DataFrame)
+            and configured_model_window_stride(config) is None
+        ):
             embeddings = get_embeddings(config, inferer, data, column_types)
-            valid_prediction_mask = _valid_mask_from_preprocessed_data(
-                config, data, prediction_length, mask_key="attention_valid_mask"
-            )
-
-            sequence_ids_for_preds = data.get_column("sequenceId").filter(mask)
-            subsequence_ids_for_preds = data.get_column("subsequenceId").filter(mask)
-            item_positions_for_preds_base = (
-                data.get_column("startItemPosition").filter(mask).to_numpy()
-            )
-        elif config.read_format == "parquet" and is_folder_input:
-            # Folder-based Parquet chunk logic
-            if config.input_columns is not None:
-                data = subset_to_input_columns(data, config.input_columns)
-            data = apply_inference_column_types(data, config)
-
-            n_input_cols = data.get_column("inputCol").n_unique()
-            mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
-
-            embeddings = get_embeddings(config, inferer, data, column_types)
-            valid_prediction_mask = _valid_mask_from_preprocessed_data(
-                config, data, prediction_length, mask_key="attention_valid_mask"
-            )
-
-            sequence_ids_for_preds = (
-                data.get_column("sequenceId").filter(mask).to_numpy()
-            )
-            subsequence_ids_for_preds = (
-                data.get_column("subsequenceId").filter(mask).to_numpy()
-            )
-            item_positions_for_preds_base = (
-                data.get_column("startItemPosition").filter(mask).to_numpy()
-            )
-
-        elif config.read_format == "pt":
-            (
-                sequences_dict,
-                sequence_ids_tensor,
-                subsequence_ids_tensor,
-                start_positions_tensor,
-                left_pad_lengths_tensor,
-            ) = data
-            sequences_dict = apply_inference_tensor_types(sequences_dict, column_types)
-            for tensor in sequences_dict.values():
-                validate_stored_window_width(
-                    tensor, config.storage_layout.stored_context_width
-                )
-
-            resolved_view = resolve_window_view(
-                config.storage_layout, config.window_view
-            )
-            metadata = resolved_view.build_masks(left_pad_lengths_tensor)
-            embeddings = get_embeddings_pt(
-                config,
-                inferer,
-                sequences_dict,
-                metadata=metadata,
+        else:
+            embeddings = inferer.infer_embedding(
+                {key: value.numpy() for key, value in windowed.inputs.items()},
+                metadata={
+                    key: value.numpy() for key, value in windowed.metadata.items()
+                },
                 column_types=column_types,
             )
-            valid_prediction_mask = _flatten_valid_mask(
-                config, metadata, prediction_length, mask_key="attention_valid_mask"
-            )
+        valid_prediction_mask = _flatten_valid_mask(
+            config,
+            windowed.metadata,
+            prediction_length,
+            mask_key="attention_valid_mask",
+        )
 
-            sequence_ids_for_preds = sequence_ids_tensor.numpy()
-            subsequence_ids_for_preds = subsequence_ids_tensor.numpy()
-            item_positions_for_preds_base = start_positions_tensor.numpy()
-
-        else:
-            raise Exception("impossible")
-
-        # Step 2: Calculate absolute positions and repeat IDs
-        # (e.g., for seq_len=50, inf_size=5, offsets are [45, 46, 47, 48, 49])
         base_offsets = np.arange(
             config.window_view.context_length - prediction_length,
             config.window_view.context_length,
         )
-
-        # Tile these offsets for each sample in the batch
-        position_offsets_tiled = np.tile(
-            base_offsets, len(item_positions_for_preds_base)
-        )
-
-        # Repeat the base start position for each of the N embedding outputs
+        item_positions_for_preds_base = windowed.model_start_positions.numpy()
         base_positions_repeated = np.repeat(
             item_positions_for_preds_base, prediction_length
         )
-
-        # The final position is the start + the relative offset within the sequence
-        final_positions = base_positions_repeated + position_offsets_tiled
-
-        sequence_ids_repeated = np.repeat(sequence_ids_for_preds, prediction_length)
-        subsequence_ids_repeated = np.repeat(
-            subsequence_ids_for_preds, prediction_length
+        final_positions = base_positions_repeated + np.tile(
+            base_offsets,
+            len(item_positions_for_preds_base),
         )
-        assert valid_prediction_mask is not None
+        sequence_ids_repeated = np.repeat(
+            windowed.sequence_ids.numpy(),
+            prediction_length,
+        )
+        subsequence_ids_repeated = np.repeat(
+            windowed.subsequence_ids.numpy(),
+            prediction_length,
+        )
+        window_offsets_repeated = np.repeat(
+            windowed.window_start_offsets.numpy(),
+            prediction_length,
+        )
         embeddings = _apply_valid_prediction_mask(
             embeddings, valid_prediction_mask, "embeddings"
         )
@@ -514,12 +650,17 @@ def infer_embedding(
         subsequence_ids_repeated = _apply_valid_prediction_mask(
             subsequence_ids_repeated, valid_prediction_mask, "subsequenceId"
         )
+        window_offsets_repeated = _apply_valid_prediction_mask(
+            window_offsets_repeated,
+            valid_prediction_mask,
+            "windowStartOffset",
+        )
 
-        # Step 3: Build the final DataFrame
         embeddings_df = pl.DataFrame(
             {
                 "sequenceId": sequence_ids_repeated,
-                "subsequenceId": subsequence_ids_repeated,  # <-- ADDED THIS COLUMN
+                "subsequenceId": subsequence_ids_repeated,
+                "windowStartOffset": window_offsets_repeated,
                 "itemPosition": final_positions,
                 **dict(
                     zip(
@@ -530,7 +671,6 @@ def infer_embedding(
             }
         )
 
-        # Step 4: Save the output
         os.makedirs(
             os.path.join(config.project_root, "outputs", "embeddings"),
             exist_ok=True,
@@ -573,201 +713,83 @@ def infer_generative(
         is_folder_input = os.path.isdir(
             normalize_path(config.data_path, config.project_root)
         )
-
-        if config.read_format in ["parquet", "csv"] and not is_folder_input:
-            if config.input_columns is not None:
-                data = subset_to_input_columns(data, config.input_columns)
-            data = apply_inference_column_types(data, config)
-            n_input_cols = data.get_column("inputCol").n_unique()
-            if not config.autoregression:
-                # For the non-autoregressive case, apply inference size logic
-                probs, preds = get_probs_preds_from_df(
-                    config, inferer, data, column_types
-                )
-
-                mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
-
-                # Get base IDs and positions (shape: batch_size)
-                sequence_ids_for_preds_base = data.get_column("sequenceId").filter(mask)
-                item_positions_base_raw = (
-                    data.get_column("startItemPosition").filter(mask).to_numpy()
-                )
-                prediction_length = inferer.prediction_length
-                valid_prediction_mask = _valid_mask_from_preprocessed_data(
-                    config, data, prediction_length
-                )
-
-                # Expand IDs to match model output shape
-                sequence_ids_for_preds = np.repeat(
-                    sequence_ids_for_preds_base, prediction_length
-                )
-
-                # Invoke the unified positioning engine
-                item_positions_for_preds = calculate_item_positions(
-                    item_positions_base_raw,
-                    config.window_view.context_length,
-                    prediction_length,
-                    config.training_objective,
-                )
-
-            else:
-                if inferer.prediction_length != 1:
-                    raise ValueError(
-                        f"prediction_length must be 1 for autoregression, got {inferer.prediction_length}"
-                    )
-                # Unpack the new third return value
-                (
-                    probs,
-                    preds,
-                    sequence_ids_for_preds,
-                    item_positions_for_preds,
-                    valid_prediction_mask,
-                ) = get_probs_preds_autoregression(
-                    config,
-                    inferer,
-                    data,
-                    column_types,
-                    config.window_view.context_length,
-                )
-        elif config.read_format == "parquet" and is_folder_input:
-            # Folder-based Parquet chunk logic
-            if config.input_columns is not None:
-                data = subset_to_input_columns(data, config.input_columns)
-            data = apply_inference_column_types(data, config)
-            n_input_cols = data.get_column("inputCol").n_unique()
-
-            total_steps = (
-                1
-                if config.autoregression_total_steps is None
-                else config.autoregression_total_steps
+        if config.autoregression and isinstance(data, pl.DataFrame):
+            data = _autoregression_seed_dataframe(config, data)
+        windowed = _windowed_inference_batch(config, data, column_types)
+        if config.autoregression and inferer.prediction_length != 1:
+            raise ValueError(
+                "prediction_length must be 1 for autoregression, "
+                f"got {inferer.prediction_length}"
             )
 
-            if total_steps == 1:
-                probs, preds = get_probs_preds_from_df(
-                    config, inferer, data, column_types
-                )
-                mask = pl.arange(0, data.height, eager=True) % n_input_cols == 0
-                sequence_ids_for_preds_base = (
-                    data.get_column("sequenceId").filter(mask).to_numpy()
-                )
-                item_positions_base_raw = (
-                    data.get_column("startItemPosition").filter(mask).to_numpy()
-                )
-                prediction_length = inferer.prediction_length
-                valid_prediction_mask = _valid_mask_from_preprocessed_data(
-                    config, data, prediction_length
-                )
-
-                sequence_ids_for_preds = np.repeat(
-                    sequence_ids_for_preds_base, prediction_length
-                )
-
-                # Invoke the unified positioning engine
-                item_positions_for_preds = calculate_item_positions(
-                    item_positions_base_raw,
-                    config.window_view.context_length,
-                    prediction_length,
-                    config.training_objective,
-                )
-            else:
-                if inferer.prediction_length != 1:
-                    raise ValueError(
-                        f"prediction_length must be 1 for autoregression, got {inferer.prediction_length}"
-                    )
-
-                (
-                    probs,
-                    preds,
-                    sequence_ids_for_preds,
-                    item_positions_for_preds,
-                    valid_prediction_mask,
-                ) = get_probs_preds_autoregression(
-                    config,
-                    inferer,
-                    data,
-                    column_types,
-                    config.window_view.context_length,
-                )
-        elif config.read_format == "pt":
-            (
-                sequences_dict,
-                sequence_ids_tensor,
-                _,
-                start_positions_tensor,
-                left_pad_lengths_tensor,
-            ) = data
-            sequences_dict = apply_inference_tensor_types(sequences_dict, column_types)
-            for tensor in sequences_dict.values():
-                validate_stored_window_width(
-                    tensor, config.storage_layout.stored_context_width
-                )
-            total_steps = (
-                1
-                if config.autoregression_total_steps is None
-                else config.autoregression_total_steps
+        total_steps = (
+            config.autoregression_total_steps
+            if config.autoregression and config.autoregression_total_steps is not None
+            else 1
+        )
+        if (
+            isinstance(data, pl.DataFrame)
+            and total_steps == 1
+            and configured_model_window_stride(config) is None
+        ):
+            probs, preds = get_probs_preds_from_df(
+                config,
+                inferer,
+                data,
+                column_types,
             )
-
-            resolved_view = resolve_window_view(
-                config.storage_layout, config.window_view
-            )
-            sequences_dict = {
-                key: tensor[:, resolved_view.input_slice]
-                for key, tensor in sequences_dict.items()
-                if key in config.input_columns
-            }
-
-            metadata = resolved_view.build_masks(left_pad_lengths_tensor)
-
+        else:
             probs, preds = get_probs_preds_from_dict(
                 config,
                 inferer,
-                sequences_dict,
-                metadata,
+                windowed.inputs,
+                windowed.metadata,
                 column_types,
                 total_steps,
             )
 
-            prediction_length = inferer.prediction_length  # Get prediction_length
+        if total_steps == 1:
+            output_count_per_window = inferer.prediction_length
             valid_prediction_mask = _flatten_valid_mask(
-                config, metadata, prediction_length
+                config,
+                windowed.metadata,
+                inferer.prediction_length,
+            )
+            item_positions_for_preds = calculate_item_positions(
+                windowed.model_start_positions.numpy(),
+                config.window_view.context_length,
+                inferer.prediction_length,
+                config.training_objective,
+                config.window_view.target_offset,
+            )
+        else:
+            output_count_per_window = total_steps
+            valid_prediction_mask = np.repeat(
+                _flatten_valid_mask(config, windowed.metadata, 1),
+                total_steps,
+            )
+            first_positions = (
+                windowed.model_start_positions.numpy()
+                + config.window_view.context_length
+                + config.window_view.target_offset
+                - 1
+            )
+            item_positions_for_preds = np.concatenate(
+                [np.arange(start, start + total_steps) for start in first_positions]
             )
 
-            if total_steps == 1:
-                # Non-autoregressive path: Apply prediction_length logic
-                sequence_ids_for_preds_base = sequence_ids_tensor.numpy()
-                item_positions_base_raw = start_positions_tensor.numpy()
-
-                sequence_ids_for_preds = np.repeat(
-                    sequence_ids_for_preds_base, prediction_length
-                )
-
-                # Invoke the unified positioning engine
-                item_positions_for_preds = calculate_item_positions(
-                    item_positions_base_raw,
-                    config.window_view.context_length,
-                    prediction_length,
-                    config.training_objective,
-                )
-
-            else:
-                sequence_ids_for_preds = np.repeat(
-                    sequence_ids_tensor.numpy(), total_steps
-                )
-                valid_prediction_mask = np.repeat(valid_prediction_mask, total_steps)
-                item_position_boundaries = zip(
-                    list(start_positions_tensor + config.window_view.context_length),
-                    list(
-                        start_positions_tensor
-                        + config.window_view.context_length
-                        + total_steps
-                    ),
-                )
-                item_positions_for_preds = np.concatenate(
-                    [np.arange(start, end) for start, end in item_position_boundaries],
-                    axis=0,
-                )
-        else:
-            raise Exception("impossible")
+        sequence_ids_for_preds = np.repeat(
+            windowed.sequence_ids.numpy(),
+            output_count_per_window,
+        )
+        subsequence_ids_for_preds = np.repeat(
+            windowed.subsequence_ids.numpy(),
+            output_count_per_window,
+        )
+        window_offsets_for_preds = np.repeat(
+            windowed.window_start_offsets.numpy(),
+            output_count_per_window,
+        )
 
         if inferer.map_to_id:
             for target_column, predictions in preds.items():
@@ -786,6 +808,16 @@ def infer_generative(
 
         sequence_ids_for_preds = _apply_valid_prediction_mask(
             sequence_ids_for_preds, valid_prediction_mask, "sequenceId"
+        )
+        subsequence_ids_for_preds = _apply_valid_prediction_mask(
+            subsequence_ids_for_preds,
+            valid_prediction_mask,
+            "subsequenceId",
+        )
+        window_offsets_for_preds = _apply_valid_prediction_mask(
+            window_offsets_for_preds,
+            valid_prediction_mask,
+            "windowStartOffset",
         )
         item_positions_for_preds = _apply_valid_prediction_mask(
             item_positions_for_preds, valid_prediction_mask, "itemPosition"
@@ -836,7 +868,7 @@ def infer_generative(
                         pl.DataFrame(
                             probs[target_column],
                             schema=[
-                                inferer.index_map[target_column][i]
+                                str(inferer.index_map[target_column][i])
                                 for i in range(probs[target_column].shape[1])
                             ],
                         ),
@@ -844,12 +876,12 @@ def infer_generative(
                         config.write_format,
                     )
 
-        n_input_cols = len(config.input_columns)
-
         assert preds is not None
         predictions = pl.DataFrame(
             {
                 "sequenceId": sequence_ids_for_preds,
+                "subsequenceId": subsequence_ids_for_preds,
+                "windowStartOffset": window_offsets_for_preds,
                 "itemPosition": item_positions_for_preds,
                 **{
                     target_column: preds[target_column].flatten()
@@ -1002,20 +1034,15 @@ def get_embeddings(
     column_types: dict[str, torch.dtype],
 ) -> np.ndarray:
     """Infer embeddings from a Polars chunk."""
-    all_columns = sorted(list(set(config.input_columns + config.target_columns)))
-    resolved_view = resolve_window_view(config.storage_layout, config.window_view)
-    X, metadata = numpy_to_pytorch(
+    windowed = _windowed_inference_batch_from_dataframe(
+        config,
         data,
         column_types,
-        all_columns,
-        resolved_view,
     )
-    X = {col: X_col.numpy() for col, X_col in X.items()}
-    metadata_np = {col: metadata_col.numpy() for col, metadata_col in metadata.items()}
-    del data
-
     embeddings = inferer.infer_embedding(
-        X, metadata=metadata_np, column_types=column_types
+        {key: value.numpy() for key, value in windowed.inputs.items()},
+        metadata={key: value.numpy() for key, value in windowed.metadata.items()},
+        column_types=column_types,
     )
 
     return embeddings
@@ -1029,18 +1056,13 @@ def get_probs_preds_from_df(
     column_types: dict[str, torch.dtype],
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """Infer non-autoregressive predictions from a Polars chunk."""
-    all_columns = sorted(list(set(config.input_columns + config.target_columns)))
-
-    resolved_view = resolve_window_view(config.storage_layout, config.window_view)
-    X, metadata = numpy_to_pytorch(
+    windowed = _windowed_inference_batch_from_dataframe(
+        config,
         data,
         column_types,
-        all_columns,
-        resolved_view,
     )
-    X = {col: X_col.numpy() for col, X_col in X.items()}
-    metadata_np = {col: metadata_col.numpy() for col, metadata_col in metadata.items()}
-    del data
+    X = {key: value.numpy() for key, value in windowed.inputs.items()}
+    metadata_np = {key: value.numpy() for key, value in windowed.metadata.items()}
 
     if config.output_probabilities:
         probs = inferer.infer_generative(
@@ -1109,15 +1131,21 @@ def get_probs_preds_autoregression(
         head_data_df.get_column("sequenceId").unique(maintain_order=True).to_numpy()
     )
 
+    resolved_view = resolve_window_view(config.storage_layout, config.window_view)
+    input_start = resolved_view.input_slice.start
+    if input_start is None:
+        raise ValueError("Resolved input slice must have a concrete start")
     aligned_start_positions = (
         head_data_df.group_by("sequenceId", maintain_order=True)
         .agg(pl.col("startItemPosition").max())
         .get_column("startItemPosition")
         .to_numpy()
+        + input_start
         + context_length
+        + config.window_view.target_offset
+        - 1
     )
 
-    resolved_view = resolve_window_view(config.storage_layout, config.window_view)
     head_data, metadata = numpy_to_pytorch(
         head_data_df,
         column_types,
@@ -1182,11 +1210,15 @@ class Inferer:
         device: str,
         args_config: dict[str, Any],
         training_config_path: str,
+        training_objective: Optional[str] = None,
+        normalize_real_columns: bool = True,
     ):
         """Load a PT or ONNX backend and postprocessing state."""
         self.model_type = model_type
+        self.training_objective = training_objective
         self.map_to_id = map_to_id
         self.selected_columns_statistics = selected_columns_statistics
+        self.normalize_real_columns = normalize_real_columns
         target_columns_index_map = [
             c for c in target_columns if target_column_types[c] == "categorical"
         ]
@@ -1241,9 +1273,48 @@ class Inferer:
         self, values: np.ndarray, target_column: str
     ) -> np.ndarray:
         """Invert target-column Z-score normalization."""
+        if not self.normalize_real_columns:
+            return values
         std = self.selected_columns_statistics[target_column]["std"]
         mean = self.selected_columns_statistics[target_column]["mean"]
-        return (values * (std - 1e-9)) + mean
+        return (values * (std + 1e-9)) + mean
+
+    def _exclude_mask_token(
+        self,
+        values: np.ndarray,
+        *,
+        is_log_probabilities: bool,
+    ) -> np.ndarray:
+        """Remove the input-only BERT mask class and renormalize rows."""
+        if self.training_objective != "bert":
+            return values
+
+        mask_id = SPECIAL_TOKEN_IDS.mask
+        if values.ndim != 2 or values.shape[1] <= mask_id:
+            raise ValueError(
+                "BERT categorical outputs must include the configured mask class."
+            )
+
+        adjusted = np.array(values, copy=True)
+        if is_log_probabilities:
+            adjusted[:, mask_id] = -np.inf
+            row_max = np.max(adjusted, axis=1, keepdims=True)
+            if not np.isfinite(row_max).all():
+                raise ValueError(
+                    "BERT categorical outputs contain no generatable classes."
+                )
+            log_normalizers = row_max + np.log(
+                np.exp(adjusted - row_max).sum(axis=1, keepdims=True)
+            )
+            return adjusted - log_normalizers
+
+        adjusted[:, mask_id] = 0.0
+        row_sums = adjusted.sum(axis=1, keepdims=True)
+        if not np.isfinite(row_sums).all() or np.any(row_sums <= 0):
+            raise ValueError(
+                "BERT categorical probabilities contain no generatable classes."
+            )
+        return adjusted / row_sums
 
     @beartype
     def infer_embedding(
@@ -1300,7 +1371,10 @@ class Inferer:
                     if self.target_column_types[target_column] != "categorical"
                 }
                 logits = {
-                    target_column: outputs
+                    target_column: self._exclude_mask_token(
+                        outputs,
+                        is_log_probabilities=True,
+                    )
                     for target_column, outputs in outs.items()
                     if self.target_column_types[target_column] == "categorical"
                 }
@@ -1310,6 +1384,10 @@ class Inferer:
 
         for target_column in self.target_columns:
             if self.target_column_types[target_column] == "categorical":
+                outs[target_column] = self._exclude_mask_token(
+                    outs[target_column],
+                    is_log_probabilities=probs is None,
+                )
                 if (
                     self.sample_from_distribution_columns is None
                     or target_column not in self.sample_from_distribution_columns

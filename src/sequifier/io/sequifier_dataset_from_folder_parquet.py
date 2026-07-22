@@ -13,9 +13,10 @@ from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     columns_from_slice,
+    configured_model_window_stride,
     get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
-    resolve_window_view,
+    resolve_window_sampling_plan,
     stored_window_layout_from_metadata,
 )
 from sequifier.io.batch import SequifierBatch
@@ -26,6 +27,7 @@ from sequifier.io.iteration_state import (
     skip_samples_for_batches,
     write_shared_int,
 )
+from sequifier.io.window_sampling import build_window_batch
 
 
 class SequifierDatasetFromFolderParquet(IterableDataset):
@@ -51,9 +53,11 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
             metadata = json.load(f)
 
         self.folder_layout = stored_window_layout_from_metadata(metadata)
-        self.resolved_view = resolve_window_view(self.folder_layout, config.window_view)
-
-        self.n_samples = metadata["total_samples"]
+        self.sampling_plan = resolve_window_sampling_plan(
+            self.folder_layout,
+            config.window_view,
+            configured_model_window_stride(config),
+        )
 
         logger.info(
             f"[INFO] Loading Parquet folder dataset into memory from '{self.data_dir}'..."
@@ -65,17 +69,12 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         }
 
         # Sequence formatting structures matching long-format schema boundaries
-        input_seq_cols = columns_from_slice(
-            self.resolved_view.input_slice, self.folder_layout.stored_context_width
-        )
-        target_seq_cols = columns_from_slice(
-            self.resolved_view.target_slice, self.folder_layout.stored_context_width
+        sequence_columns = columns_from_slice(
+            slice(0, self.folder_layout.stored_context_width),
+            self.folder_layout.stored_context_width,
         )
         all_sequences: Dict[str, list[torch.Tensor]] = {
-            col: [] for col in config.input_columns
-        }
-        all_targets: Dict[str, list[torch.Tensor]] = {
-            col: [] for col in config.target_columns
+            col: [] for col in set(config.input_columns + config.target_columns)
         }
         all_left_pad_lengths: list[torch.Tensor] = []
 
@@ -92,19 +91,12 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
                 feature_df = df.filter(pl.col("inputCol") == col)
                 if not feature_df.is_empty():
                     tensor_seq = torch.tensor(
-                        feature_df.select(input_seq_cols).to_numpy(),
+                        feature_df.sort(["sequenceId", "subsequenceId"])
+                        .select(sequence_columns)
+                        .to_numpy(),
                         dtype=column_torch_types[col],
                     )
                     all_sequences[col].append(tensor_seq)
-
-            for col in all_targets.keys():
-                feature_df = df.filter(pl.col("inputCol") == col)
-                if not feature_df.is_empty():
-                    tensor_tgt = torch.tensor(
-                        feature_df.select(target_seq_cols).to_numpy(),
-                        dtype=column_torch_types[col],
-                    )
-                    all_targets[col].append(tensor_tgt)
             del df
 
         # Step 2: Consolidate data lists into contiguous blocks
@@ -113,20 +105,16 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
             for col, tensors in all_sequences.items()
             if tensors
         }
-        self.targets: Dict[str, torch.Tensor] = {
-            col: torch.cat(tensors, dim=0)
-            for col, tensors in all_targets.items()
-            if tensors
-        }
         self.left_pad_lengths = torch.cat(all_left_pad_lengths)
+        self.sample_index = self.sampling_plan.build_index(self.left_pad_lengths)
+        self.n_samples = len(self.sample_index)
+        if self.n_samples == 0:
+            raise ValueError("No usable model windows were found in the dataset.")
 
         # Step 3: Prevent serialization duplications across worker forks via shared memory flags
         for tensor in self.sequences.values():
             tensor.share_memory_()
-        for tensor in self.targets.values():
-            tensor.share_memory_()
-        if self.left_pad_lengths is not None:
-            self.left_pad_lengths.share_memory_()
+        self.sample_index.share_memory_()
 
         self.target_samples = self._get_target_samples()
         self.total_batches = self._calculate_total_batches(self.target_samples)
@@ -223,24 +211,11 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
             batch_indices = indices_for_worker[i : i + self.batch_size]
             batch_sample_is_real = sample_is_real_for_worker[i : i + self.batch_size]
 
-            data_batch = {
-                key: tensor[batch_indices] for key, tensor in self.sequences.items()
-            }
-            targets_batch = {
-                key: tensor[batch_indices] for key, tensor in self.targets.items()
-            }
-
-            metadata_batch = {}
-            if self.left_pad_lengths is not None:
-                metadata_batch = self.resolved_view.build_masks(
-                    self.left_pad_lengths[batch_indices]
-                )
-            metadata_batch["sample_valid_mask"] = torch.tensor(
-                batch_sample_is_real, dtype=torch.bool
-            )
-
-            yield SequifierBatch(
-                inputs=data_batch,
-                targets=targets_batch,
-                metadata=metadata_batch,
+            yield build_window_batch(
+                self.sequences,
+                self.config.input_columns,
+                self.config.target_columns,
+                self.sample_index,
+                batch_indices,
+                batch_sample_is_real,
             )

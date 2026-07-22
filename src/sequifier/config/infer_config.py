@@ -149,6 +149,7 @@ class InfererModel(BaseModel):
     device: str
     storage_layout: StoredWindowLayout
     window_view: ModelWindowView
+    model_window_stride: Optional[int] = Field(default=None, gt=0)
     prediction_length: Optional[int] = None
     inference_batch_size: int
 

@@ -30,6 +30,7 @@ target_column_types: # 'criterion' in training_spec must also be adapted
   EXAMPLE_TARGET_COLUMN_NAME: real
 
 context_length: 48
+model_window_stride: null # null loads one right-aligned view; a positive integer loads all contained views at this stride
 inference_batch_size: 10
 
 export_generative_model: PLEASE FILL # true or false
@@ -49,6 +50,9 @@ model_spec:
   positional_encoding: learned
   positional_encoding_scope: per_feature
   prediction_length: 1
+  decoding_support: 1
+  decoding_spec:
+    type: linear
 training_spec:
   training_objective: causal
   device: cuda
@@ -91,6 +95,7 @@ output_probabilities: false
 map_to_id: true
 device: cpu
 context_length: 48
+model_window_stride: null
 inference_batch_size: 10
 
 autoregression: true

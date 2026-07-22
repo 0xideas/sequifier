@@ -231,6 +231,9 @@ class TemporalConvIngestionConfig(BaseModel):
     activation_fn: Literal["relu", "gelu", "silu"] = "gelu"
     dropout: float = Field(0.0, ge=0.0, lt=1.0)
     post_conv_norm: Literal["layer_norm", "rmsnorm", "none"] = "layer_norm"
+    orientation: Literal["within_column", "within_item_position"] = (
+        "within_item_position"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -469,6 +472,68 @@ class IngestionMergeConfig(BaseModel):
 
 
 IngestionSpecConfig = BranchIngestionConfig | dict[str, BranchIngestionConfig]
+
+
+class LinearDecodingConfig(BaseModel):
+    """Project each support window directly to target outputs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["linear"] = "linear"
+    target_columns: Optional[list[str]] = Field(default=None, min_length=1)
+
+    @field_validator("target_columns")
+    @classmethod
+    def validate_target_columns(cls, v):
+        if v is not None:
+            _validate_column_list_unique(v, "linear decoding target_columns")
+        return v
+
+
+class MLPDecodingConfig(BaseModel):
+    """Flatten support windows and decode targets with a shared MLP branch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["mlp"]
+    target_columns: Optional[list[str]] = Field(default=None, min_length=1)
+    hidden_dims: list[int] = Field(..., min_length=1)
+    activation_fn: Literal["relu", "gelu", "silu"] = "relu"
+    dropout: float = Field(0.0, ge=0.0, lt=1.0)
+    hidden_weight_l2: float = Field(
+        0.0,
+        ge=0.0,
+        allow_inf_nan=False,
+    )
+
+    @field_validator("target_columns")
+    @classmethod
+    def validate_target_columns(cls, v):
+        if v is not None:
+            _validate_column_list_unique(v, "mlp decoding target_columns")
+        return v
+
+    @field_validator("hidden_dims")
+    @classmethod
+    def validate_hidden_dims(cls, v):
+        invalid_dims = [dim for dim in v if dim <= 0]
+        if invalid_dims:
+            raise ValueError(
+                f"mlp decoding hidden_dims must be positive: {invalid_dims}"
+            )
+        return v
+
+
+BranchDecodingConfig = Annotated[
+    Union[
+        LinearDecodingConfig,
+        MLPDecodingConfig,
+    ],
+    Field(discriminator="type"),
+]
+
+
+DecodingSpecConfig = BranchDecodingConfig | dict[str, BranchDecodingConfig]
 
 
 def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
@@ -857,7 +922,9 @@ class ModelSpecModel(BaseModel):
 
     activation_fn: str = "swiglu"  # Options: "relu", "gelu", "swiglu"
     normalization: str = "rmsnorm"  # Options: "layer_norm", "rmsnorm"
-    positional_encoding: str = "learned"  # Options: "learned", "rope", "range"
+    positional_encoding: str = (
+        "learned"  # Options: "learned", "rope", "range", "range_concat"
+    )
     positional_encoding_scope: str = "per_feature"  # Options: "per_feature", "global"
     attention_type: str = (
         "mha"  # Options: "mha" (Multi-Head), "mqa" (Multi-Query), "gqa" (Grouped-Query)
@@ -869,27 +936,33 @@ class ModelSpecModel(BaseModel):
     rope_theta: float = 10000.0
 
     prediction_length: int
+    decoding_support: int = Field(1, gt=0)
+    decoding_spec: Optional[DecodingSpecConfig] = None
 
     @model_validator(mode="before")
     @classmethod
-    def default_ingestion_spec(cls, values):
+    def default_specs(cls, values):
         if not isinstance(values, dict):
             return values
+        values = dict(values)
+        positional_encoding = values.get("positional_encoding", "learned")
         if (
-            values.get("positional_encoding") == "range"
+            positional_encoding in {"range", "range_concat"}
             and "positional_encoding_scope" not in values
         ):
-            values = dict(values)
             values["positional_encoding_scope"] = "global"
+        if values.get("decoding_spec") is None:
+            values["decoding_spec"] = {"type": "linear"}
         if values.get("ingestion_spec") is not None:
             return values
         dim_model = values.get("dim_model")
         if dim_model is None:
             return values
-        values = dict(values)
         values["ingestion_spec"] = {
             "type": "direct_embed",
-            "output_dim": dim_model,
+            "output_dim": (
+                dim_model - 1 if positional_encoding == "range_concat" else dim_model
+            ),
         }
         return values
 
@@ -910,16 +983,44 @@ class ModelSpecModel(BaseModel):
                 )
             if self.ingestion_merge is None:
                 self.ingestion_merge = IngestionMergeConfig()
-        elif self.ingestion_spec.output_dim != self.dim_model:
-            raise ValueError(
-                "model_spec.ingestion_spec.output_dim must equal dim_model"
+        else:
+            expected_output_dim = self.dim_model - (
+                self.positional_encoding == "range_concat"
             )
-        elif self.ingestion_merge is not None:
+            if self.ingestion_spec.output_dim != expected_output_dim:
+                if self.positional_encoding == "range_concat":
+                    raise ValueError(
+                        "model_spec.ingestion_spec.output_dim + 1 must equal "
+                        "dim_model when positional_encoding is 'range_concat'"
+                    )
+                raise ValueError(
+                    "model_spec.ingestion_spec.output_dim must equal dim_model"
+                )
+
+        if (
+            not isinstance(self.ingestion_spec, dict)
+            and self.ingestion_merge is not None
+        ):
             raise ValueError(
                 "model_spec.ingestion_merge is only valid when "
                 "ingestion_spec defines multiple named ingestions"
             )
 
+        return self
+
+    @model_validator(mode="after")
+    def validate_decoding_spec_present(self):
+        if self.decoding_spec is None:
+            self.decoding_spec = LinearDecodingConfig()
+        if isinstance(self.decoding_spec, dict):
+            if not self.decoding_spec:
+                raise ValueError(
+                    "model_spec.decoding_spec must define at least one " "named decoder"
+                )
+            for branch_name in self.decoding_spec:
+                _validate_module_dict_key(
+                    branch_name, f"Target decoding branch {branch_name!r}"
+                )
         return self
 
     @model_validator(mode="after")
@@ -975,7 +1076,7 @@ class ModelSpecModel(BaseModel):
     @field_validator("positional_encoding")
     @classmethod
     def validate_pos_encoding(cls, v):
-        if v not in ["learned", "rope", "range"]:
+        if v not in ["learned", "rope", "range", "range_concat"]:
             raise ValueError(f"Invalid positional_encoding: {v}")
         return v
 
@@ -989,11 +1090,11 @@ class ModelSpecModel(BaseModel):
     @model_validator(mode="after")
     def validate_positional_encoding_combination(self):
         if (
-            self.positional_encoding == "range"
+            self.positional_encoding in {"range", "range_concat"}
             and self.positional_encoding_scope != "global"
         ):
             raise ValueError(
-                "positional_encoding 'range' requires "
+                f"positional_encoding {self.positional_encoding!r} requires "
                 "positional_encoding_scope 'global'"
             )
         return self
@@ -1071,6 +1172,7 @@ class TrainModel(BaseModel):
 
     storage_layout: StoredWindowLayout
     window_view: ModelWindowView
+    model_window_stride: Optional[int] = Field(default=None, gt=0)
     n_classes: dict[str, int]
     inference_batch_size: int
     seed: int
@@ -1306,6 +1408,75 @@ class TrainModel(BaseModel):
             raise ValueError(
                 "model_spec.auxiliary_input_columns references unknown input "
                 f"columns: {sorted(missing_columns)}"
+            )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_decoding_spec(self):
+        decoding_support = self.model_spec.decoding_support
+        context_length = self.window_view.context_length
+        if decoding_support > context_length:
+            raise ValueError(
+                "model_spec.decoding_support must be in the range "
+                f"[1, context_length], got decoding_support={decoding_support} "
+                f"and context_length={context_length}."
+            )
+
+        decoded_context_length = context_length - decoding_support + 1
+        if self.model_spec.prediction_length > decoded_context_length:
+            raise ValueError(
+                "model_spec.prediction_length cannot exceed the number of "
+                "decoded positions produced by decoding_support. Got "
+                f"prediction_length={self.model_spec.prediction_length}, "
+                f"decoded_context_length={decoded_context_length}, "
+                f"decoding_support={decoding_support}."
+            )
+
+        decoding_spec = self.model_spec.decoding_spec
+        if decoding_spec is None:
+            raise ValueError("model_spec.decoding_spec must be configured")
+
+        if isinstance(decoding_spec, dict):
+            branch_items = decoding_spec.items()
+            allow_default_targets = False
+        else:
+            branch_items = [("model_spec.decoding_spec", decoding_spec)]
+            allow_default_targets = True
+
+        target_to_branch: dict[str, str] = {}
+        for branch_name, branch_config in branch_items:
+            target_columns = branch_config.target_columns
+            if target_columns is None:
+                if allow_default_targets:
+                    target_columns = self.target_columns
+                else:
+                    raise ValueError(
+                        f"Target decoding branch {branch_name!r} must configure "
+                        "target_columns."
+                    )
+
+            missing_columns = set(target_columns) - set(self.target_columns)
+            if missing_columns:
+                raise ValueError(
+                    f"Target decoding branch {branch_name!r} references unknown "
+                    f"target_columns: {sorted(missing_columns)}"
+                )
+
+            for target_column in target_columns:
+                if target_column in target_to_branch:
+                    raise ValueError(
+                        "Target decoding branches cannot share target columns: "
+                        f"{target_column!r} appears in both "
+                        f"{target_to_branch[target_column]!r} and {branch_name!r}."
+                    )
+                target_to_branch[target_column] = branch_name
+
+        undecoded_columns = set(self.target_columns) - set(target_to_branch)
+        if undecoded_columns:
+            raise ValueError(
+                "model_spec.decoding_spec must decode every target column; "
+                f"missing {sorted(undecoded_columns)}"
             )
 
         return self

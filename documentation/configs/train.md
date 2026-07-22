@@ -32,11 +32,20 @@ The configuration is defined in a YAML file (e.g., `train.yaml`). The file is st
 | `input_columns` | `list[str]` or `null`| **Yes** | `null` | Subset of columns to use as input features. Set to `null` to use all columns available in metadata. |
 | `feature_layout` | `dict` or `null` | No | `null` | Optional annotation registry for structured flat input columns. It does not change preprocessing output or stored files. |
 | `context_length` | `int` | **Yes** | - | Model input context length. It must fit inside the metadata `stored_context_width` with the stored `max_target_offset`. |
+| `model_window_stride` | `int` or `null` | No | `null` | Distance between model-window starts loaded from each stored preprocessing window. `null` preserves one right-aligned sample per stored row; a positive integer loads every contained model view on a right-anchored grid. |
 | `target_offset` | `int` | No | `1` | Future offset used for forward-looking objectives. BERT-style training forces this to `0`. |
 
 ### 3\. Model Architecture (`model_spec`)
 
 These fields determine the size and complexity of the Transformer.
+
+When `stored_context_width` is larger than `context_length + max_target_offset`,
+`model_window_stride` reuses the additional stored capacity without duplicating
+the serialized data. For stored width `W`, context length `L`, stored target
+capacity `M`, and stride `A`, an unpadded row yields
+`floor((W - L - M) / A) + 1` model samples. With
+`decoding_support == context_length`, use `model_window_stride: 1` to train one
+distinct next-position target from every complete contained context.
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
@@ -45,16 +54,18 @@ These fields determine the size and complexity of the Transformer.
 | `num_layers` | `int` | **Yes** | - | Number of transformer encoder layers. |
 | `dim_feedforward` | `int` | **Yes** | - | Dimension of the feedforward network model ($d_{ff}$). |
 | `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
+| `decoding_support` | `int` | No | `1` | Number of consecutive transformer output positions flattened into each decoded target position. Must be between `1` and `context_length`. Values larger than `1` reduce the number of decoded training positions to `context_length - decoding_support + 1`. |
+| `decoding_spec` | `dict` | No | `{type: linear}` | Target decoder definition, or a mapping of named target decoder branches. `linear` preserves the legacy per-target projection. `mlp` adds shared hidden layers before each target projection. |
 | `ingestion_spec` | `dict` | No | `{type: direct_embed, output_dim: dim_model}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |
-| `ingestion_merge` | `dict` or `null` | No | `null` | Merge strategy for named multi-ingestion configs: `concat`, `sum`, `gated`, or `attention`. Defaults to `{type: concat}` when omitted. Merge output width is always `dim_model`. |
+| `ingestion_merge` | `dict` or `null` | No | `null` | Merge strategy for named multi-ingestion configs: `concat`, `sum`, `gated`, or `attention`. Defaults to `{type: concat}` when omitted. The merge produces `dim_model`, except with `range_concat`, where it produces `dim_model - 1` before the position channel is appended. |
 | `allow_shared_ingestion_columns` | `bool` | No | `false` | Allows the same flat input column to be consumed by more than one named ingestion stream. |
 | `auxiliary_input_columns` | `list[str]` | No | `[]` | Input columns that are intentionally kept in `batch.inputs` but must not be consumed by any ingestion branch. All other input columns still need to be consumed. |
 | `allow_unused_input_columns` | `bool` | No | `false` | Broad compatibility escape hatch that allows unused `input_columns` and logs a warning listing them. Prefer `auxiliary_input_columns` for intentional auxiliary inputs. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
 | `n_kv_heads` | `int` | No | `null` | Number of Key/Value heads. `null` is valid for standard MHA; `mqa` requires `1`, and `gqa` requires a divisor of `n_head`. |
-| `positional_encoding` | `str` | No | `learned`| `learned` (standard absolute), `rope` (Rotary Positional Embedding), or `range` (fixed continuous window coordinate). |
-| `positional_encoding_scope` | `str` | No | `per_feature` | `per_feature` keeps the legacy ingestion-time learned position path. `global` injects one shared time coordinate after ingestion and before the transformer. `range` always uses `global`. |
+| `positional_encoding` | `str` | No | `learned`| `learned` (standard absolute), `rope` (Rotary Positional Embedding), `range` (fixed coordinate with a learned projection), or `range_concat` (fixed coordinate appended as one transformer channel). |
+| `positional_encoding_scope` | `str` | No | `per_feature` | `per_feature` keeps the legacy ingestion-time learned position path. `global` injects position after ingestion and before the transformer. `range` and `range_concat` always use `global`. |
 | `rope_theta` | `float` | No | `10000.0` | The base frequency for RoPE. Increase for long-context extrapolation. |
 | `normalization` | `str` | No | `rmsnorm`| `rmsnorm` or `layer_norm`. |
 | `norm_first` | `bool` | No | `true` | If `true` (Pre-LN), applies normalization before attention/FFN. More stable. |
@@ -92,10 +103,12 @@ model_spec:
 ```
 
 If `ingestion_spec` is omitted, training uses `direct_embed` with
-`output_dim: dim_model`. Once an ingestion block is configured explicitly,
-every ingestion type must set `output_dim`. For a single top-level ingestion,
-`output_dim` must equal `dim_model`; for named multi-ingestion configs, each
-branch declares its own `output_dim` and the merge layer produces `dim_model`.
+`output_dim: dim_model` (or `dim_model - 1` for `range_concat`). Once an
+ingestion block is configured explicitly, every ingestion type must set
+`output_dim`. For a single top-level ingestion, `output_dim` must equal
+`dim_model`, except that `range_concat` requires `output_dim + 1 = dim_model`.
+For named multi-ingestion configs, each branch declares its own `output_dim` and
+the merge layer produces the required ingestion width.
 Direct-embed `feature_embedding_dims`, when configured, must contain exactly the
 branch columns and sum to the branch `output_dim`. It is required when a
 direct-embed branch, or a temporal-conv branch using `base_ingestion:
@@ -106,8 +119,11 @@ direct_embed`, mixes real and categorical columns.
 default `learned` + `per_feature` setting preserves Sequifier's legacy behavior:
 position embeddings are added inside the ingestion layer, before temporal
 convolution. Use `learned` + `global` to add one shared learned time embedding
-after ingestion. Use `range` for a fixed scalar coordinate from `-1` to `1` over
-the context window; it is also injected globally after ingestion.
+after ingestion. `range` concatenates a fixed scalar coordinate from `-1` to
+`1`, then applies a learned projection back to `dim_model`. `range_concat`
+directly appends the same coordinate without a projection, permanently
+reserving one transformer channel for position. Its ingestion output must
+therefore have width `dim_model - 1`.
 
 Every non-auxiliary input column must be consumed by `ingestion_spec`. Use
 `auxiliary_input_columns` for columns that should stay available in
@@ -133,6 +149,66 @@ model_spec:
 For migration or experimentation, `allow_unused_input_columns: true` allows any
 unused input columns and emits a warning listing the unused column names.
 
+#### Target Decoding Layers
+
+By default Sequifier preserves the legacy target head: every transformer output
+position is passed through one linear projection per target column. Configure
+`decoding_support` when each decoded value should depend on more than one
+transformer output position. A support of `S` flattens each consecutive window of
+`S` hidden states, so only `context_length - S + 1` decoded positions are
+available for training and inference.
+
+```yaml
+model_spec:
+  decoding_support: 1
+  decoding_spec:
+    type: linear
+```
+
+The `mlp` decoder applies shared hidden layers to the flattened support window,
+then emits one final projection per configured target column.
+
+```yaml
+model_spec:
+  decoding_support: 100
+  decoding_spec:
+    type: mlp
+    hidden_dims: [64]
+    activation_fn: relu
+    dropout: 0.1
+    hidden_weight_l2: 0.0001
+```
+
+This expresses a TransLOB-style head such as transformer output `[100, 15]` ->
+flatten `[1500]` -> dense `64` with ReLU -> dropout -> dense target logits by
+using `context_length: 100`, `dim_model: 15`, and `decoding_support: 100`.
+For categorical targets, Sequifier still applies log-softmax outside the decoder.
+`hidden_weight_l2` is optional and defaults to `0.0`. It adds a coupled L2 loss
+for the MLP branch's hidden linear kernels only. Biases, normalization
+parameters, and final target projections are excluded, and shared hidden
+kernels are counted once. This penalty is added to the optimization loss
+separately from the reported prediction loss; optimizer `weight_decay` remains
+an independent, model-wide setting.
+
+For multiple targets, `decoding_spec` can also be a mapping of named branches.
+Each branch must list its `target_columns`, and every target column must be
+decoded by exactly one branch.
+
+```yaml
+model_spec:
+  decoding_support: 24
+  decoding_spec:
+    direction:
+      type: mlp
+      target_columns: [price_move]
+      hidden_dims: [64]
+      activation_fn: relu
+      dropout: 0.1
+    spread:
+      type: linear
+      target_columns: [next_spread]
+```
+
 ```yaml
 ingestion_spec:
   type: direct_embed
@@ -157,6 +233,10 @@ run across timesteps before the global transformer consumes the sequence.
 After the convolutional stack, `post_conv_norm` applies normalization before any
 model-level positional encoding and transformer attention. It defaults to
 `layer_norm`; set it to `rmsnorm` or `none` to change that behavior.
+`orientation` controls the axis normalized by `post_conv_norm`:
+`within_item_position` (the default) normalizes the feature channels at each
+time step, while `within_column` normalizes each feature channel across the
+context positions.
 
 `causal` defaults to `true`; non-causal temporal convolution requires an odd
 `kernel_size` so the sequence length is preserved. Set `dilation` to either a
@@ -189,6 +269,20 @@ ingestion_spec:
     causal: true
     post_conv_norm: layer_norm
 positional_encoding: range
+positional_encoding_scope: global
+```
+
+For direct, parameter-free concatenation of the range coordinate, reserve one
+transformer channel for position:
+
+```yaml
+ingestion_spec:
+  type: temporal_conv
+  columns: [spread, imbalance, volatility]
+  output_dim: 14
+  post_conv_norm: layer_norm
+dim_model: 15
+positional_encoding: range_concat
 positional_encoding_scope: global
 ```
 

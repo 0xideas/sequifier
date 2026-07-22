@@ -10,8 +10,9 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
+    configured_model_window_stride,
     normalize_path,
-    resolve_window_view,
+    resolve_window_sampling_plan,
     stored_window_layout_from_metadata,
     validate_stored_window_width,
 )
@@ -23,6 +24,7 @@ from sequifier.io.iteration_state import (
     skip_samples_for_batches,
     write_shared_int,
 )
+from sequifier.io.window_sampling import build_window_batch
 
 
 class SequifierDatasetFromFolderPt(IterableDataset):
@@ -48,9 +50,11 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             metadata = json.load(f)
 
         self.folder_layout = stored_window_layout_from_metadata(metadata)
-        self.resolved_view = resolve_window_view(self.folder_layout, config.window_view)
-
-        self.n_samples = metadata["total_samples"]
+        self.sampling_plan = resolve_window_sampling_plan(
+            self.folder_layout,
+            config.window_view,
+            configured_model_window_stride(config),
+        )
 
         logger.info(
             f"[INFO] Loading training dataset into memory from '{self.data_dir}'..."
@@ -82,10 +86,13 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             col: torch.cat(tensors) for col, tensors in all_sequences.items() if tensors
         }
         self.left_pad_lengths = torch.cat(all_left_pad_lengths)
+        self.sample_index = self.sampling_plan.build_index(self.left_pad_lengths)
+        self.n_samples = len(self.sample_index)
+        if self.n_samples == 0:
+            raise ValueError("No usable model windows were found in the dataset.")
         for tensor in self.sequences.values():
             tensor.share_memory_()
-        if self.left_pad_lengths is not None:
-            self.left_pad_lengths.share_memory_()
+        self.sample_index.share_memory_()
 
         self.target_samples = self._get_target_samples()
         self.total_batches = self._calculate_total_batches(self.target_samples)
@@ -182,28 +189,11 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             batch_indices = indices_for_worker[i : i + self.batch_size]
             batch_sample_is_real = sample_is_real_for_worker[i : i + self.batch_size]
 
-            data_batch = {
-                key: tensor[batch_indices, self.resolved_view.input_slice]
-                for key, tensor in self.sequences.items()
-                if key in self.config.input_columns
-            }
-            targets_batch = {
-                key: tensor[batch_indices, self.resolved_view.target_slice]
-                for key, tensor in self.sequences.items()
-                if key in self.config.target_columns
-            }
-
-            metadata_batch = {}
-            if self.left_pad_lengths is not None:
-                metadata_batch = self.resolved_view.build_masks(
-                    self.left_pad_lengths[batch_indices]
-                )
-            metadata_batch["sample_valid_mask"] = torch.tensor(
-                batch_sample_is_real, dtype=torch.bool
-            )
-
-            yield SequifierBatch(
-                inputs=data_batch,
-                targets=targets_batch,
-                metadata=metadata_batch,
+            yield build_window_batch(
+                self.sequences,
+                self.config.input_columns,
+                self.config.target_columns,
+                self.sample_index,
+                batch_indices,
+                batch_sample_is_real,
             )

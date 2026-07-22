@@ -93,8 +93,10 @@ from sequifier.io.sequifier_dataset_from_folder_pt import (  # noqa: E402
 from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
     SequifierDatasetFromFolderPtLazy,
 )
+from sequifier.model.decoders import build_target_decoding  # noqa: E402
 from sequifier.model.dtypes import cast_floating_to_module_dtype  # noqa: E402
 from sequifier.model.ingestions import build_feature_ingestion  # noqa: E402
+from sequifier.model.initialization import initialize_model_weights  # noqa: E402
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.objectives import create_objective  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
@@ -815,18 +817,16 @@ class TransformerModel(nn.Module):
             self.final_norm = nn.Identity()
 
         self.prediction_length = hparams.model_spec.prediction_length
+        self.decoding_support = hparams.model_spec.decoding_support
+        self.decoded_context_length = self.context_length - self.decoding_support + 1
 
-        self.decoder = ModuleDict()
+        self.decoder = build_target_decoding(hparams)
         self.softmax = ModuleDict()
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
-                self.decoder[target_column] = nn.Linear(
-                    self.dim_model,
-                    self.n_classes[target_column],
-                )
                 self.softmax[target_column] = nn.LogSoftmax(dim=-1)
             elif target_column_type == "real":
-                self.decoder[target_column] = nn.Linear(self.dim_model, 1)
+                continue
             else:
                 raise ValueError(
                     f"Target column type {target_column_type} not in ['categorical', 'real']"
@@ -855,7 +855,11 @@ class TransformerModel(nn.Module):
             persistent=False,
         )
 
-        self._init_weights()
+        initialize_model_weights(
+            self,
+            transformer_depth=len(self.layers),
+            decoder_reference_dim=self.dim_model,
+        )
 
         self.scheduler_step_on = hparams.training_spec.scheduler_step_on
 
@@ -948,7 +952,7 @@ class TransformerModel(nn.Module):
 
         for name, module in self.named_modules():
             if isinstance(module, nn.Linear):
-                is_decoder = any(module is m for m in self.decoder.values())
+                is_decoder = name.startswith("decoder.")
                 if is_decoder and "decoder" in layer_config:
                     module.to(dtype=get_torch_dtype(layer_config["decoder"]))
                 elif "linear" in layer_config:
@@ -1023,23 +1027,6 @@ class TransformerModel(nn.Module):
     def _filter_key(dict_: dict[str, Any], key: str) -> dict[str, Any]:
         """Return a copy without key."""
         return {k: v for k, v in dict_.items() if k != key}
-
-    @beartype
-    def _init_weights(self) -> None:
-        """Initialize trainable weights with the model default."""
-        init_std = 0.02
-        self.ingestion.initialize_weights()
-
-        if self.global_position_encoder is not None:
-            self.global_position_encoder.weight.data.normal_(mean=0.0, std=init_std)
-
-        if self.range_position_projection is not None:
-            self.range_position_projection.weight.data.normal_(mean=0.0, std=init_std)
-            self.range_position_projection.bias.data.zero_()
-
-        for target_column in self.target_columns:
-            self.decoder[target_column].bias.data.zero_()
-            self.decoder[target_column].weight.data.normal_(mean=0.0, std=init_std)
 
     @conditional_beartype
     def _recursive_concat(self, srcs: list[Tensor]):
@@ -1130,6 +1117,15 @@ class TransformerModel(nn.Module):
             )
             return self.global_position_drop(positioned)
 
+        if self.positional_encoding == "range_concat":
+            position_channel = self.range_position_values.to(
+                device=x.device, dtype=x.dtype
+            )
+            position_channel = position_channel.view(1, self.context_length, 1).expand(
+                x.shape[0], -1, -1
+            )
+            return torch.cat((x, position_channel), dim=-1)
+
         return x
 
     @conditional_beartype
@@ -1173,26 +1169,39 @@ class TransformerModel(nn.Module):
     ) -> dict[str, Tensor]:
         """Return raw decoded outputs for all target columns."""
         output = self.forward_inner(src, metadata)
-        output = {
-            target_column: self.decode(target_column, output)
-            for target_column in self.target_columns
-        }
+        output = self.decoder(self._decoder_input_windows(output))
 
         return output
 
     @conditional_beartype
+    def _decoder_input_windows(self, output: Tensor) -> Tensor:
+        """Return support-window decoder inputs from sequence-first states."""
+        if output.shape[0] != self.context_length:
+            raise ValueError(
+                f"Decoder expected {self.context_length} hidden-state positions, "
+                f"got {output.shape[0]}."
+            )
+        if self.decoding_support == 1:
+            return output
+
+        batch_first = output.transpose(0, 1)
+        windows = batch_first.unfold(1, self.decoding_support, 1)
+        windows = windows.permute(1, 0, 3, 2).contiguous()
+        return windows.reshape(
+            self.decoded_context_length,
+            output.shape[1],
+            self.decoding_support * self.dim_model,
+        )
+
+    @conditional_beartype
     def decode(self, target_column: str, output: Tensor) -> Tensor:
         """Project hidden states through one target decoder."""
-
-        target_dtype = self.decoder[target_column].weight.dtype
-        decoded = self.decoder[target_column](output.to(target_dtype)).to(torch.float32)
-
-        return decoded
+        return self.decoder.decode(target_column, self._decoder_input_windows(output))
 
     @conditional_beartype
     def apply_softmax(self, target_column: str, output: Tensor) -> Tensor:
         """Apply LogSoftmax only for categorical targets."""
-        if target_column in self.real_columns:
+        if self.target_column_types[target_column] == "real":
             return output
         else:
             return self.softmax[target_column](output.float())
@@ -1316,6 +1325,7 @@ class TransformerModel(nn.Module):
             "fsdp_cpu_offload": training_spec.fsdp_cpu_offload,
             "storage_layout": asdict(self.storage_layout),
             "window_view": asdict(self.window_view),
+            "model_window_stride": self.hparams.model_window_stride,
             "column_types": self.hparams.column_types,
             "categorical_columns": self.categorical_columns,
             "real_columns": self.real_columns,
@@ -2049,6 +2059,11 @@ class TransformerModel(nn.Module):
                 "Loss calculation failed; no loss tensors were generated."
             )
 
+        decoder = getattr(self, "decoder", None)
+        regularization_loss = getattr(decoder, "regularization_loss", None)
+        if callable(regularization_loss):
+            loss = loss + regularization_loss()
+
         return loss, backward_components, local_sums, local_count
 
     @beartype
@@ -2063,31 +2078,39 @@ class TransformerModel(nn.Module):
         if not target_names:
             raise RuntimeError("Loss calculation failed; no target columns were found.")
 
+        valid_mask = self._loss_valid_mask(valid_mask)
         mask = valid_mask.bool().T.contiguous().reshape(-1)
         token_count = mask.sum(dtype=torch.int64)
 
         loss_sums = {}
         for target_column in target_names:
-            target_column_type = self.target_column_types[target_column]
-            if target_column_type == "categorical":
-                output_tensor = (
-                    output[target_column]
-                    .float()
-                    .reshape(-1, self.n_classes[target_column])
-                )
-            elif target_column_type == "real":
-                output_tensor = (
-                    output[target_column].to(dtype=torch.float32).reshape(-1)
-                )
-            else:
-                raise ValueError(
-                    f"Target column type {target_column_type} not in ['categorical', 'real']"
-                )
-
-            target_tensor = self._loss_target_tensor(target_column, targets)
+            output_tensor = self._loss_output_tensor(target_column, output)
+            target_tensor = self._loss_target_tensor(
+                target_column,
+                targets,
+                sequence_length=valid_mask.shape[1],
+            )
 
             if self.target_column_types[target_column] == "real":
                 target_tensor = target_tensor.to(dtype=output_tensor.dtype)
+
+            output_count = (
+                output_tensor.shape[0]
+                if self.target_column_types[target_column] == "categorical"
+                else output_tensor.numel()
+            )
+            if output_count != mask.numel():
+                raise RuntimeError(
+                    "Loss/mask size mismatch for target column "
+                    f"{target_column!r}: output has {output_count} elements "
+                    f"but mask has {mask.numel()}."
+                )
+            if target_tensor.numel() != mask.numel():
+                raise RuntimeError(
+                    "Target/mask size mismatch for target column "
+                    f"{target_column!r}: target has {target_tensor.numel()} "
+                    f"elements but mask has {mask.numel()}."
+                )
 
             raw_loss = self.criterion[target_column](output_tensor, target_tensor)
             if raw_loss.numel() != mask.numel():
@@ -2101,11 +2124,53 @@ class TransformerModel(nn.Module):
         return loss_sums, token_count
 
     @beartype
+    def _loss_valid_mask(self, valid_mask: Tensor) -> Tensor:
+        """Return the suffix of target positions with full decoder support."""
+        decoded_context_length = getattr(
+            self,
+            "decoded_context_length",
+            valid_mask.shape[1],
+        )
+        return valid_mask[:, -decoded_context_length:]
+
+    @beartype
+    def _loss_output_tensor(
+        self,
+        target_column: str,
+        output: dict[str, Tensor],
+    ) -> Tensor:
+        """Return flattened decoder outputs aligned to loss positions."""
+        target_column_type = self.target_column_types[target_column]
+        output_values = output[target_column]
+        decoded_context_length = getattr(
+            self,
+            "decoded_context_length",
+            output_values.shape[0],
+        )
+        if (
+            (target_column_type == "real" and output_values.ndim >= 2)
+            or (target_column_type == "categorical" and output_values.ndim == 3)
+        ) and output_values.shape[0] > decoded_context_length:
+            output_values = output_values[-decoded_context_length:]
+
+        if target_column_type == "categorical":
+            return output_values.float().reshape(-1, self.n_classes[target_column])
+        if target_column_type == "real":
+            return output_values.to(dtype=torch.float32).reshape(-1)
+        raise ValueError(
+            f"Target column type {target_column_type} not in ['categorical', 'real']"
+        )
+
+    @beartype
     def _loss_target_tensor(
-        self, target_column: str, targets: dict[str, Tensor]
+        self,
+        target_column: str,
+        targets: dict[str, Tensor],
+        sequence_length: int,
     ) -> Tensor:
         """Return flattened targets for the configured training objective."""
         target_values = self.objective.target_values_for_loss(target_column, targets)
+        target_values = target_values[:, -sequence_length:]
         target_tensor = target_values.T.contiguous().reshape(-1)
         if self.target_column_types[target_column] == "categorical":
             target_tensor = _class_index_tensor(target_tensor)
@@ -2274,11 +2339,12 @@ class TransformerModel(nn.Module):
     def _transform_val(self, col: str, val: Tensor) -> Tensor:
         """Transform targets into baseline-loss output shape."""
         if self.target_column_types[col] == "categorical":
-            target_dtype = self.decoder[col].weight.dtype
-            return (
-                one_hot(_class_index_tensor(val), self.n_classes[col])
-                .reshape(-1, self.n_classes[col])
-                .to(dtype=target_dtype)
+            if hasattr(self.decoder, "target_dtype"):
+                target_dtype = self.decoder.target_dtype(col)
+            else:
+                target_dtype = self.decoder[col].weight.dtype
+            return one_hot(_class_index_tensor(val), self.n_classes[col]).to(
+                dtype=target_dtype
             )
         else:
             if self.target_column_types[col] != "real":
@@ -2395,7 +2461,7 @@ class TransformerModel(nn.Module):
                     accumulate_class_counts(
                         local_class_counts,
                         output,
-                        valid_mask,
+                        self._loss_valid_mask(valid_mask),
                         self.n_classes,
                     )
 
