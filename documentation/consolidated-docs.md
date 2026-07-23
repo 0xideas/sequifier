@@ -368,11 +368,26 @@ The configuration is defined in a YAML file (e.g., `train.yaml`). The file is st
 | :--- | :--- | :--- | :--- | :--- |
 | `target_columns` | `list[str]`| **Yes** | - | The specific column(s) the model should learn to predict. |
 | `target_column_types`| `dict` | **Yes** | - | Map of target columns to their type: `'categorical'` or `'real'`. The key order in target_column_types must exactly match the list order in target_columns |
+| `categorical_decoder_special_tokens` | `dict[str, list[str]]` | No | `{}` | Per-categorical-target override selecting which of `unknown`, `other`, and `mask` occupy decoder classes. Omitted targets retain all three classes. |
 | `input_columns` | `list[str]` or `null`| **Yes** | `null` | Subset of columns to use as input features. Set to `null` to use all columns available in metadata. |
 | `feature_layout` | `dict` or `null` | No | `null` | Optional annotation registry for structured flat input columns. It does not change preprocessing output or stored files. |
 | `context_length` | `int` | **Yes** | - | Model input context length. It must fit inside the metadata `stored_context_width` with the stored `max_target_offset`. |
 | `model_window_stride` | `int` or `null` | No | `null` | Distance between model-window starts loaded from each stored preprocessing window. `null` preserves one right-aligned sample per stored row; a positive integer loads every contained model view on a right-anchored grid. |
 | `target_offset` | `int` | No | `1` | Future offset used for forward-looking objectives. BERT-style training forces this to `0`. |
+
+Special-token overrides change only the corresponding decoder width. Input
+embeddings and preprocessed data continue using the global categorical IDs.
+
+```yaml
+categorical_decoder_special_tokens:
+  item_id: [other]
+  event_type: []
+```
+
+With global IDs `unknown=0`, `other=1`, `mask=2`, and ordinary IDs beginning at
+`3`, the `item_id` decoder above represents `[1, 3, 4, ...]`, while the
+`event_type` decoder represents `[3, 4, ...]`. Predictions are mapped back to
+global IDs before autoregression or output ID mapping.
 
 ### 3\. Model Architecture (`model_spec`)
 
@@ -1180,6 +1195,7 @@ Sequifier allows you to search not just for model parameters, but for the best *
 | `context_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
 | `model_window_stride` | `int` or `null` | No | `null` | Fixed model-window stride used by every trial. `null` preserves one right-aligned sample per stored row. |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
+| `categorical_decoder_special_tokens` | `dict[str, list[str]]` | No | Fixed per-target overrides selecting which of `unknown`, `other`, and `mask` occupy categorical decoder classes. |
 | `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
 | `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_spec` references a structured layout. |
 

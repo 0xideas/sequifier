@@ -748,6 +748,9 @@ class HyperparameterSearchConfig(BaseModel):
     target_columns: list[str]
     target_column_types: dict[str, str]
     id_maps: dict[str, dict[str | int, int]]
+    categorical_decoder_special_tokens: dict[str, list[str]] = Field(
+        default_factory=dict
+    )
 
     context_length: list[int]
     storage_layout: StoredWindowLayout
@@ -926,6 +929,7 @@ class HyperparameterSearchConfig(BaseModel):
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
             id_maps=self.id_maps,
+            categorical_decoder_special_tokens=self.categorical_decoder_special_tokens,
             storage_layout=self.storage_layout,
             window_view=window_view,
             model_window_stride=self.model_window_stride,

@@ -203,12 +203,18 @@ def _branch_hidden_dims(branch_config: Any) -> list[int]:
     raise ValueError(f"Unknown target decoder type: {branch_config.type}")
 
 
-def build_target_decoding(hparams: Any) -> TargetDecoding:
+def build_target_decoding(
+    hparams: Any,
+    target_n_classes: Optional[dict[str, int]] = None,
+) -> TargetDecoding:
     model_spec = hparams.model_spec
     decoding_spec = model_spec.decoding_spec
     if decoding_spec is None:
         raise ValueError("decoding_spec must be configured")
 
+    decoder_n_classes = (
+        hparams.n_classes if target_n_classes is None else target_n_classes
+    )
     input_dim = model_spec.dim_model * model_spec.decoding_support
 
     if isinstance(decoding_spec, dict):
@@ -229,7 +235,7 @@ def build_target_decoding(hparams: Any) -> TargetDecoding:
         branches[branch_name] = TargetDecoderBranch(
             target_columns=target_columns,
             target_column_types=hparams.target_column_types,
-            n_classes=hparams.n_classes,
+            n_classes=decoder_n_classes,
             input_dim=input_dim,
             hidden_dims=_branch_hidden_dims(branch_config),
             activation_fn=getattr(branch_config, "activation_fn", "relu"),

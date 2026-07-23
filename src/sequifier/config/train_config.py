@@ -41,7 +41,12 @@ from sequifier.objectives import (
     get_objective_class,
     target_offset_for_objective,
 )
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
+from sequifier.special_tokens import (
+    SPECIAL_TOKEN_IDS,
+    SPECIAL_TOKEN_NAMES,
+    resolve_categorical_decoder_ids,
+    validate_special_token_ids,
+)
 
 AnyType = str | int | float
 NextOccurrenceTargetValue: TypeAlias = StrictInt | StrictStr
@@ -1169,6 +1174,9 @@ class TrainModel(BaseModel):
     special_token_ids: dict[str, int] = Field(
         default_factory=lambda: SPECIAL_TOKEN_IDS.ids_by_label
     )
+    categorical_decoder_special_tokens: dict[
+        str, list[Literal["unknown", "other", "mask"]]
+    ] = Field(default_factory=dict)
 
     storage_layout: StoredWindowLayout
     window_view: ModelWindowView
@@ -1191,6 +1199,39 @@ class TrainModel(BaseModel):
     @classmethod
     def validate_special_token_ids_match_runtime(cls, v):
         return validate_special_token_ids(v, source="TrainModel")
+
+    @field_validator("categorical_decoder_special_tokens")
+    @classmethod
+    def validate_decoder_special_token_lists(cls, v):
+        if any(len(tokens) != len(set(tokens)) for tokens in v.values()):
+            raise ValueError(
+                "categorical_decoder_special_tokens cannot contain duplicate tokens."
+            )
+        return {
+            column: [name for name in SPECIAL_TOKEN_NAMES if name in tokens]
+            for column, tokens in v.items()
+        }
+
+    @model_validator(mode="after")
+    def validate_decoder_special_token_columns(self):
+        categorical_targets = {
+            col
+            for col in self.target_columns
+            if self.target_column_types[col] == "categorical"
+        }
+        invalid = set(self.categorical_decoder_special_tokens) - categorical_targets
+        if invalid:
+            raise ValueError(
+                "categorical_decoder_special_tokens may only reference categorical "
+                f"target columns, found {sorted(invalid)}."
+            )
+        resolve_categorical_decoder_ids(
+            self.target_columns,
+            self.target_column_types,
+            self.n_classes,
+            self.categorical_decoder_special_tokens,
+        )
+        return self
 
     @model_validator(mode="after")
     def validate_bert_prediction_length_matches_context_length(self):

@@ -14,6 +14,7 @@ from beartype.typing import Iterator
 from loguru import logger
 
 from sequifier.config.infer_config import InfererModel, load_inferer_config
+from sequifier.config.train_config import load_train_config
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configure_determinism,
@@ -30,7 +31,11 @@ from sequifier.helpers import (
     write_data,
 )
 from sequifier.objectives import get_objective_class
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
+from sequifier.special_tokens import (
+    SPECIAL_TOKEN_IDS,
+    resolve_categorical_decoder_ids,
+    validate_special_token_ids,
+)
 from sequifier.train import (
     infer_with_embedding_model,
     infer_with_generative_model,
@@ -357,6 +362,21 @@ def infer_worker(
 ):
     """Load data, instantiate models, and run the configured inference mode."""
     logger.info(f"[INFO] Reading data from '{config.data_path}'...")
+    training_config = load_train_config(
+        config.training_config_path,
+        {
+            key: value
+            for key, value in args_config.items()
+            if key not in ["model_path", "data_path"]
+        },
+        args_config.get("skip_metadata", False),
+    )
+    target_decoder_ids = resolve_categorical_decoder_ids(
+        training_config.target_columns,
+        training_config.target_column_types,
+        training_config.n_classes,
+        training_config.categorical_decoder_special_tokens,
+    )
 
     is_folder_input = os.path.isdir(
         normalize_path(config.data_path, config.project_root)
@@ -425,6 +445,7 @@ def infer_worker(
             training_config_path=config.training_config_path,
             training_objective=config.training_objective,
             normalize_real_columns=normalize_real_columns,
+            target_decoder_ids=target_decoder_ids,
         )
 
         column_types = _torch_column_types(config)
@@ -868,8 +889,11 @@ def infer_generative(
                         pl.DataFrame(
                             probs[target_column],
                             schema=[
-                                str(inferer.index_map[target_column][i])
-                                for i in range(probs[target_column].shape[1])
+                                str(inferer.index_map[target_column][global_id])
+                                for global_id in inferer.target_decoder_ids.get(
+                                    target_column,
+                                    range(probs[target_column].shape[1]),
+                                )
                             ],
                         ),
                         probabilities_path,
@@ -1212,6 +1236,7 @@ class Inferer:
         training_config_path: str,
         training_objective: Optional[str] = None,
         normalize_real_columns: bool = True,
+        target_decoder_ids: Optional[dict[str, list[int]]] = None,
     ):
         """Load a PT or ONNX backend and postprocessing state."""
         self.model_type = model_type
@@ -1240,6 +1265,7 @@ class Inferer:
         self.inference_model_type = model_path.split(".")[-1]
         self.args_config = args_config
         self.training_config_path = training_config_path
+        self.target_decoder_ids = target_decoder_ids or {}
 
         if self.inference_model_type == "onnx":
             execution_providers = [
@@ -1284,16 +1310,18 @@ class Inferer:
         values: np.ndarray,
         *,
         is_log_probabilities: bool,
+        target_column: Optional[str] = None,
     ) -> np.ndarray:
         """Remove the input-only BERT mask class and renormalize rows."""
         if self.training_objective != "bert":
             return values
 
-        mask_id = SPECIAL_TOKEN_IDS.mask
-        if values.ndim != 2 or values.shape[1] <= mask_id:
-            raise ValueError(
-                "BERT categorical outputs must include the configured mask class."
-            )
+        decoder_ids = self.target_decoder_ids.get(
+            target_column or "", list(range(values.shape[1]))
+        )
+        if SPECIAL_TOKEN_IDS.mask not in decoder_ids:
+            return values
+        mask_id = decoder_ids.index(SPECIAL_TOKEN_IDS.mask)
 
         adjusted = np.array(values, copy=True)
         if is_log_probabilities:
@@ -1374,6 +1402,7 @@ class Inferer:
                     target_column: self._exclude_mask_token(
                         outputs,
                         is_log_probabilities=True,
+                        target_column=target_column,
                     )
                     for target_column, outputs in outs.items()
                     if self.target_column_types[target_column] == "categorical"
@@ -1387,6 +1416,7 @@ class Inferer:
                 outs[target_column] = self._exclude_mask_token(
                     outs[target_column],
                     is_log_probabilities=probs is None,
+                    target_column=target_column,
                 )
                 if (
                     self.sample_from_distribution_columns is None
@@ -1397,6 +1427,10 @@ class Inferer:
                     outs[target_column] = sample_with_cumsum(
                         outs[target_column], is_log_probs=(probs is None)
                     )
+                if target_column in self.target_decoder_ids:
+                    outs[target_column] = np.asarray(
+                        self.target_decoder_ids[target_column]
+                    )[outs[target_column]]
 
         return outs
 

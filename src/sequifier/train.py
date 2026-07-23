@@ -100,6 +100,7 @@ from sequifier.model.initialization import initialize_model_weights  # noqa: E40
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.objectives import create_objective  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
+from sequifier.special_tokens import resolve_categorical_decoder_ids  # noqa: E402
 
 
 def cleanup():
@@ -762,6 +763,23 @@ class TransformerModel(nn.Module):
         self.window_view = hparams.window_view
         self.context_length = hparams.window_view.context_length
         self.n_classes = hparams.n_classes
+        self.target_decoder_ids = resolve_categorical_decoder_ids(
+            self.target_columns,
+            self.target_column_types,
+            self.n_classes,
+            getattr(hparams, "categorical_decoder_special_tokens", {}),
+        )
+        self.target_n_classes = {
+            col: len(ids) for col, ids in self.target_decoder_ids.items()
+        }
+        self.target_global_to_decoder = {}
+        for col, ids in self.target_decoder_ids.items():
+            inverse = {
+                global_id: decoder_id for decoder_id, global_id in enumerate(ids)
+            }
+            self.target_global_to_decoder[col] = [
+                inverse.get(global_id, -1) for global_id in range(self.n_classes[col])
+            ]
         self.inference_batch_size = hparams.inference_batch_size
         self.log_interval = hparams.training_spec.log_interval
         self.class_share_log_columns = hparams.training_spec.class_share_log_columns
@@ -820,7 +838,9 @@ class TransformerModel(nn.Module):
         self.decoding_support = hparams.model_spec.decoding_support
         self.decoded_context_length = self.context_length - self.decoding_support + 1
 
-        self.decoder = build_target_decoding(hparams)
+        self.decoder = build_target_decoding(
+            hparams, target_n_classes=self.target_n_classes
+        )
         self.softmax = ModuleDict()
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
@@ -1002,9 +1022,19 @@ class TransformerModel(nn.Module):
                 hparams.training_spec.class_weights is not None
                 and target_column in hparams.training_spec.class_weights
             ):
-                criterion_kwargs["weight"] = Tensor(
+                class_weights = Tensor(
                     hparams.training_spec.class_weights[target_column]
                 )
+                if self.target_column_types[target_column] == "categorical":
+                    if class_weights.numel() == self.n_classes[target_column]:
+                        class_weights = class_weights[
+                            self.target_decoder_ids[target_column]
+                        ]
+                    elif class_weights.numel() != self.target_n_classes[target_column]:
+                        raise ValueError(
+                            f"class_weights[{target_column!r}] has incompatible length."
+                        )
+                criterion_kwargs["weight"] = class_weights
 
             criterion_kwargs["reduction"] = "none"
 
@@ -1332,6 +1362,10 @@ class TransformerModel(nn.Module):
             "input_columns": self.input_columns,
             "target_columns": self.target_columns,
             "target_column_types": self.target_column_types,
+            "categorical_decoder_special_tokens": getattr(
+                self.hparams, "categorical_decoder_special_tokens", {}
+            ),
+            "categorical_target_codecs": self.target_decoder_ids,
             "n_classes": self.n_classes,
             "id_maps": self.hparams.id_maps,
             "special_token_ids": self.hparams.special_token_ids,
@@ -2089,6 +2123,7 @@ class TransformerModel(nn.Module):
                 target_column,
                 targets,
                 sequence_length=valid_mask.shape[1],
+                valid_mask=mask,
             )
 
             if self.target_column_types[target_column] == "real":
@@ -2154,7 +2189,9 @@ class TransformerModel(nn.Module):
             output_values = output_values[-decoded_context_length:]
 
         if target_column_type == "categorical":
-            return output_values.float().reshape(-1, self.n_classes[target_column])
+            return output_values.float().reshape(
+                -1, getattr(self, "target_n_classes", self.n_classes)[target_column]
+            )
         if target_column_type == "real":
             return output_values.to(dtype=torch.float32).reshape(-1)
         raise ValueError(
@@ -2167,6 +2204,7 @@ class TransformerModel(nn.Module):
         target_column: str,
         targets: dict[str, Tensor],
         sequence_length: int,
+        valid_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """Return flattened targets for the configured training objective."""
         target_values = self.objective.target_values_for_loss(target_column, targets)
@@ -2174,6 +2212,21 @@ class TransformerModel(nn.Module):
         target_tensor = target_values.T.contiguous().reshape(-1)
         if self.target_column_types[target_column] == "categorical":
             target_tensor = _class_index_tensor(target_tensor)
+            if not hasattr(self, "target_global_to_decoder"):
+                return target_tensor
+            lookup = torch.tensor(
+                self.target_global_to_decoder[target_column],
+                device=target_tensor.device,
+            )
+            target_tensor = lookup[target_tensor]
+            excluded = target_tensor < 0
+            checked = excluded if valid_mask is None else excluded & valid_mask
+            if bool(checked.any()):
+                raise ValueError(
+                    f"Categorical target {target_column!r} contains excluded "
+                    "special tokens at valid loss positions."
+                )
+            target_tensor = target_tensor.masked_fill(excluded, 0)
         return target_tensor
 
     @beartype
@@ -2343,9 +2396,15 @@ class TransformerModel(nn.Module):
                 target_dtype = self.decoder.target_dtype(col)
             else:
                 target_dtype = self.decoder[col].weight.dtype
-            return one_hot(_class_index_tensor(val), self.n_classes[col]).to(
+            global_ids = _class_index_tensor(val)
+            if not hasattr(self, "target_global_to_decoder"):
+                return one_hot(global_ids, self.n_classes[col]).to(dtype=target_dtype)
+            mapped = torch.tensor(
+                self.target_global_to_decoder[col], device=global_ids.device
+            )[global_ids]
+            return one_hot(mapped.clamp_min(0), self.target_n_classes[col]).to(
                 dtype=target_dtype
-            )
+            ) * (mapped >= 0).unsqueeze(-1)
         else:
             if self.target_column_types[col] != "real":
                 raise ValueError(f"Column {col} must be 'real' if not 'categorical'.")
@@ -2360,11 +2419,13 @@ class TransformerModel(nn.Module):
         model_to_call = ddp_model if ddp_model is not None else self
         target_names = self._loss_target_names()
         class_count_columns = list(dict.fromkeys(self.class_share_log_columns))
+        target_decoder_ids = getattr(self, "target_decoder_ids", {})
+        target_n_classes = getattr(self, "target_n_classes", self.n_classes)
 
         for col in class_count_columns:
             missing_class_ids = [
                 class_id
-                for class_id in range(self.n_classes[col])
+                for class_id in target_decoder_ids.get(col, range(self.n_classes[col]))
                 if class_id not in self.index_maps[col]
             ]
             if missing_class_ids:
@@ -2375,7 +2436,7 @@ class TransformerModel(nn.Module):
 
         local_class_counts: ClassCounts = {
             col: torch.zeros(
-                self.n_classes[col],
+                target_n_classes[col],
                 dtype=torch.int64,
                 device=self.device,
             )
@@ -2462,7 +2523,7 @@ class TransformerModel(nn.Module):
                         local_class_counts,
                         output,
                         self._loss_valid_mask(valid_mask),
-                        self.n_classes,
+                        target_n_classes,
                     )
 
             total_loss_global, total_losses_global = self._finalize_loss_components(
@@ -2925,7 +2986,7 @@ class TransformerModel(nn.Module):
                 shares = counts.to(share_dtype) / total
 
                 value_shares = " | ".join(
-                    f"{self.index_maps[categorical_column][class_id]}: "
+                    f"{self.index_maps[categorical_column][self.target_decoder_ids[categorical_column][class_id]]}: "
                     f"{shares[class_id].item():5.5f}"
                     for class_id in range(counts.numel())
                     if counts[class_id].item() > 0
