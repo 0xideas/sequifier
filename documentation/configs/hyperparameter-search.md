@@ -165,7 +165,7 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `training_objective` | `list[str]` or `str` | No | `['causal']` | Objectives to sample from: `causal`, `bert`, `final_value`, or `next_occurrence`. |
 | `batch_size` | `list` or `Distribution` | **Yes** | - | Batch sizes to test. |
 | `accumulation_steps` | `list` or `Distribution` | **Yes** | - | Gradient accumulation steps. |
-| `gradient_clip` | `Optional[float]` | No | `null` | Fixed maximum gradient norm for all trials. Set to `null` to disable gradient clipping. |
+| `gradient_clip` | `float`, `null`, `list`, or `Distribution` | No | `null` | Fixed or sampled maximum gradient norm. A list may include `null` to sample disabled clipping; float distributions sample enabled clipping thresholds. |
 | `dropout` | `list` or `Distribution` | No | `[0.0]` | Dropout probabilities. |
 | `criterion` | `dict` | **Yes** | - | Map of target columns to loss functions. |
 | `bert_spec` | `dict` | Conditional | `null` | Required if `training_objective` includes `bert`; samples BERT masking settings. |
@@ -226,7 +226,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 All other parameters are considered **Independent**. Sequifier will test every value in these lists against every combination of the linked groups above.
 
   * **Model:** `num_layers`, `dim_feedforward`, `activation_fn`, `normalization`, `norm_first`, `positional_encoding`, `attention_type`, `attention_output_projection`, `rope_theta`.
-  * **Training:** `training_objective`, `batch_size`, `dropout`, `accumulation_steps`, `optimizer`.
+  * **Training:** `training_objective`, `batch_size`, `dropout`, `gradient_clip`, `accumulation_steps`, `optimizer`.
   * **Data:** `context_length`.
 
 `shared_layer_groups` is fixed for every sampled model rather than sampled as a

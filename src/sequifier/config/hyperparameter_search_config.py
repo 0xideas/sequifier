@@ -81,6 +81,7 @@ class IntDistribution(BaseModel):
 
 OptunaFloat = Union[list[float], FloatDistribution]
 OptunaInt = Union[list[int], IntDistribution]
+OptionalOptunaFloat = Union[float, list[Optional[float]], FloatDistribution, None]
 
 
 def sample_param(
@@ -273,7 +274,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
     accumulation_steps: OptunaInt
-    gradient_clip: Optional[float] = None
+    gradient_clip: OptionalOptunaFloat = None
     dropout: OptunaFloat = [0.0]
 
     loss_weights: Optional[dict[str, float]] = None
@@ -303,6 +304,11 @@ class TrainingSpecHyperparameterSampling(BaseModel):
 
     def grid_size(self) -> int:
         """Return the number of training-spec grid combinations."""
+        gradient_clip_combinations = (
+            grid_space_size("gradient_clip", self.gradient_clip)
+            if isinstance(self.gradient_clip, (list, FloatDistribution))
+            else 1
+        )
         objective_combinations = sum(
             self.bert_spec.grid_size()
             if (
@@ -319,6 +325,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             * grid_space_size("batch_size", self.batch_size)
             * grid_space_size("dropout", self.dropout)
             * grid_space_size("accumulation_steps", self.accumulation_steps)
+            * gradient_clip_combinations
         )
 
     def __init__(self, **kwargs):
@@ -485,9 +492,14 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         accumulation_steps = sample_param(
             trial, "accumulation_steps", self.accumulation_steps
         )
+        gradient_clip = (
+            sample_param(trial, "gradient_clip", self.gradient_clip)
+            if isinstance(self.gradient_clip, (list, FloatDistribution))
+            else self.gradient_clip
+        )
 
         logger.info(
-            f"{training_objective = } - {learning_rate = } - {batch_size = } - {dropout = } - {optimizer = }"
+            f"{training_objective = } - {learning_rate = } - {batch_size = } - {dropout = } - {gradient_clip = } - {optimizer = }"
         )
 
         return TrainingSpecModel(
@@ -510,7 +522,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             bert_spec=bert_spec,
             next_occurrence_config=next_occurrence_config,
             accumulation_steps=accumulation_steps,
-            gradient_clip=self.gradient_clip,
+            gradient_clip=gradient_clip,
             dropout=dropout,
             loss_weights=self.loss_weights,
             optimizer=optimizer,
