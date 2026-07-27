@@ -32,6 +32,7 @@ from sequifier.helpers import (
 )
 from sequifier.objectives import get_objective_class
 from sequifier.special_tokens import (
+    ONNX_CATEGORICAL_TARGET_CODECS_KEY,
     SPECIAL_TOKEN_IDS,
     resolve_categorical_decoder_ids,
     validate_special_token_ids,
@@ -56,6 +57,88 @@ ONNX_NUMPY_DTYPES = {
     "tensor(uint64)": np.uint64,
     "tensor(bool)": np.bool_,
 }
+
+
+@beartype
+def load_onnx_target_decoder_ids(
+    session: onnxruntime.InferenceSession,
+    target_columns: list[str],
+    target_column_types: dict[str, str],
+    model_type: str,
+) -> dict[str, list[int]]:
+    """Load and validate categorical decoder-index mappings from ONNX metadata."""
+    raw_codecs = session.get_modelmeta().custom_metadata_map.get(
+        ONNX_CATEGORICAL_TARGET_CODECS_KEY
+    )
+    if raw_codecs is None:
+        raise ValueError(
+            "ONNX model is missing required metadata "
+            f"{ONNX_CATEGORICAL_TARGET_CODECS_KEY!r}."
+        )
+
+    try:
+        loaded_codecs = json.loads(raw_codecs)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "ONNX categorical target codec metadata must be valid JSON."
+        ) from exc
+
+    if not isinstance(loaded_codecs, dict):
+        raise ValueError("ONNX categorical target codec metadata must be an object.")
+
+    categorical_targets = {
+        column
+        for column in target_columns
+        if target_column_types[column] == "categorical"
+    }
+    if set(loaded_codecs) != categorical_targets:
+        raise ValueError(
+            "ONNX categorical target codecs must match the configured categorical "
+            f"targets: expected {sorted(categorical_targets)}, "
+            f"found {sorted(loaded_codecs)}."
+        )
+
+    target_decoder_ids: dict[str, list[int]] = {}
+    for column, decoder_ids in loaded_codecs.items():
+        if not isinstance(decoder_ids, list) or not decoder_ids:
+            raise ValueError(
+                f"ONNX categorical target codec for {column!r} must be a non-empty list."
+            )
+        if not all(
+            isinstance(decoder_id, int) and not isinstance(decoder_id, bool)
+            for decoder_id in decoder_ids
+        ):
+            raise ValueError(
+                f"ONNX categorical target codec for {column!r} must contain integers."
+            )
+        if any(decoder_id < 0 for decoder_id in decoder_ids):
+            raise ValueError(
+                f"ONNX categorical target codec for {column!r} contains a negative ID."
+            )
+        if len(decoder_ids) != len(set(decoder_ids)):
+            raise ValueError(
+                f"ONNX categorical target codec for {column!r} contains duplicate IDs."
+            )
+        target_decoder_ids[column] = decoder_ids
+
+    if model_type == "generative":
+        outputs_by_name = {output.name: output for output in session.get_outputs()}
+        for column, decoder_ids in target_decoder_ids.items():
+            output = outputs_by_name.get(column)
+            if output is None:
+                output = outputs_by_name.get(f"{column}_out")
+            if output is None:
+                raise ValueError(
+                    f"ONNX model has no output for categorical target {column!r}."
+                )
+            output_width = output.shape[-1]
+            if isinstance(output_width, int) and output_width != len(decoder_ids):
+                raise ValueError(
+                    f"ONNX output for {column!r} has width {output_width}, but its "
+                    f"categorical target codec contains {len(decoder_ids)} IDs."
+                )
+
+    return target_decoder_ids
 
 
 @beartype
@@ -362,22 +445,6 @@ def infer_worker(
 ):
     """Load data, instantiate models, and run the configured inference mode."""
     logger.info(f"[INFO] Reading data from '{config.data_path}'...")
-    training_config = load_train_config(
-        config.training_config_path,
-        {
-            key: value
-            for key, value in args_config.items()
-            if key not in ["model_path", "data_path"]
-        },
-        args_config.get("skip_metadata", False),
-    )
-    target_decoder_ids = resolve_categorical_decoder_ids(
-        training_config.target_columns,
-        training_config.target_column_types,
-        training_config.n_classes,
-        training_config.categorical_decoder_special_tokens,
-    )
-
     is_folder_input = os.path.isdir(
         normalize_path(config.data_path, config.project_root)
     )
@@ -395,6 +462,26 @@ def infer_worker(
         else [config.model_path]
     )
     for model_path in model_paths:
+        target_decoder_ids = None
+        if model_path.lower().endswith(".pt"):
+            if config.training_config_path is None:
+                raise ValueError("training_config_path is required for PyTorch models")
+            training_config = load_train_config(
+                config.training_config_path,
+                {
+                    key: value
+                    for key, value in args_config.items()
+                    if key not in ["model_path", "data_path"]
+                },
+                args_config.get("skip_metadata", False),
+            )
+            target_decoder_ids = resolve_categorical_decoder_ids(
+                training_config.target_columns,
+                training_config.target_column_types,
+                training_config.n_classes,
+                training_config.categorical_decoder_special_tokens,
+            )
+
         if is_folder_input:
             if percentage_limits is None:
                 raise ValueError(
@@ -1233,7 +1320,7 @@ class Inferer:
         inference_batch_size: int,
         device: str,
         args_config: dict[str, Any],
-        training_config_path: str,
+        training_config_path: Optional[str],
         training_objective: Optional[str] = None,
         normalize_real_columns: bool = True,
         target_decoder_ids: Optional[dict[str, list[int]]] = None,
@@ -1284,7 +1371,15 @@ class Inferer:
                 providers=execution_providers,
                 **kwargs,
             )
+            self.target_decoder_ids = load_onnx_target_decoder_ids(
+                self.ort_session,
+                self.target_columns,
+                self.target_column_types,
+                self.model_type,
+            )
         if self.inference_model_type == "pt":
+            if self.training_config_path is None:
+                raise ValueError("training_config_path is required for PyTorch models")
             self.inference_model = load_inference_model(
                 self.model_type,
                 normalize_path(model_path, project_root),

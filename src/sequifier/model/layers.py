@@ -109,6 +109,7 @@ class SelfAttention(nn.Module):
         context_length,
         use_rope=False,
         rope_theta=10000.0,
+        output_projection=True,
     ):
         super().__init__()
         self.n_head = n_head
@@ -121,7 +122,11 @@ class SelfAttention(nn.Module):
         self.wq = nn.Linear(dim_model, n_head * self.head_dim, bias=False)
         self.wk = nn.Linear(dim_model, self.n_kv_heads * self.head_dim, bias=False)
         self.wv = nn.Linear(dim_model, self.n_kv_heads * self.head_dim, bias=False)
-        self.wo = nn.Linear(n_head * self.head_dim, dim_model, bias=False)
+        self.wo = (
+            nn.Linear(n_head * self.head_dim, dim_model, bias=False)
+            if output_projection
+            else nn.Identity()
+        )
 
         self.dropout = nn.Dropout(dropout)
 
@@ -191,8 +196,9 @@ class SequifierEncoderLayer(nn.Module):
 
         # Normalization
         NormClass = RMSNorm if config.normalization == "rmsnorm" else nn.LayerNorm
-        self.norm1 = NormClass(dim_model)
-        self.norm2 = NormClass(dim_model)
+        norm_eps = 1e-6 if config.normalization == "rmsnorm" else 1e-3
+        self.norm1 = NormClass(dim_model, eps=norm_eps)
+        self.norm2 = NormClass(dim_model, eps=norm_eps)
 
         # Attention
         self.attn = SelfAttention(
@@ -202,6 +208,7 @@ class SequifierEncoderLayer(nn.Module):
             attention_type=config.attention_type,
             dropout=dropout,
             context_length=context_length,
+            output_projection=config.attention_output_projection,
             use_rope=(config.positional_encoding == "rope"),
             rope_theta=config.rope_theta,
         )

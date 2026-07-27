@@ -33,8 +33,10 @@ The configuration is defined in a YAML file. To define the search space, fields 
 | `model_config_write_path` | `str` | **Yes** | - | Directory to save the generated config files for each run (e.g., `configs/hp_search/`). |
 | `search_strategy` | `str` | No | `bayesian` | `bayesian` (TPE sampler), `sample` (Random Search), or `grid` (Brute Force Grid Search). |
 | `n_samples` | `int` | *Conditional* | - | Number of distinct runs to execute. Required unless `search_strategy: grid`. |
-| `seed` | `int` | No | `null` | Seed passed to the Optuna sampler. |
+| `seed` | `list[int]` | No | `null` | Training seeds to search. Random and Bayesian search sample from the list; grid search iterates through every value. When `null`, every run uses seed `101`. |
 | `prune_trials` | `bool` | No | `true` | Enables cooperative early stopping of unpromising trials via Optuna. *Beta notice: Pruning with distributed training is currently experimental.* |
+| `pruning_warmup_epochs` | `int` | No | `null` | Number of complete training epochs required before Optuna may prune a trial. Mutually exclusive with `pruning_warmup_batches`. |
+| `pruning_warmup_batches` | `int` | No | `null` | Number of training batches required before Optuna may prune a trial. Mutually exclusive with `pruning_warmup_epochs`. |
 | `override_input` | `bool` | No | `false` | Parsed for compatibility; the current search runner does not use this field. |
 | `training_data_path` | `str` | No | Metadata split 0 | Path to training data. |
 | `validation_data_path` | `str` | No | Metadata split 1 | Path to validation data. |
@@ -127,7 +129,8 @@ dim_feedforward:
 | `decoding_support` | `int`, `list[int]`, `Distribution` | No | Fixed or sampled number of consecutive transformer output positions flattened into each decoded target position. Defaults to `1`. |
 | `decoding_spec` | `dict`, `list[dict]`, or `null` | No | Fixed target decoder config or a list of decoder configs sampled by index. Defaults to `{type: linear}`. Use `{type: mlp, hidden_dims: [...]}` for a shared MLP target head. |
 | `activation_fn` | `list[str]` | **Yes** | E.g., `['swiglu', 'gelu']`. |
-| `attention_type` | `list[str]` | **Yes** | E.g., `['mha', 'mqa']`. |
+| `attention_type` | `list[str]` | **Yes** | One or more of `mha`, `mqa`, or `gqa`. |
+| `attention_output_projection` | `list[bool]` | No | Whether sampled attention blocks apply a bias-free output projection. Defaults to `[true]`; use `[true, false]` to sample both variants. |
 | `n_kv_heads` | `list[int or null]` | **Yes** | Number of KV heads. Use `1` for MQA, a divisor of `n_head` for GQA, and `null` only with MHA. Invalid values are filtered for each sampled `n_head`. |
 | `normalization` | `list[str]` | **Yes** | E.g., `['rmsnorm']`. |
 | `norm_first` | `list[bool]` | **Yes** | Pre-LN vs Post-LN. |
@@ -162,6 +165,7 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `training_objective` | `list[str]` or `str` | No | `['causal']` | Objectives to sample from: `causal`, `bert`, `final_value`, or `next_occurrence`. |
 | `batch_size` | `list` or `Distribution` | **Yes** | - | Batch sizes to test. |
 | `accumulation_steps` | `list` or `Distribution` | **Yes** | - | Gradient accumulation steps. |
+| `gradient_clip` | `Optional[float]` | No | `null` | Fixed maximum gradient norm for all trials. Set to `null` to disable gradient clipping. |
 | `dropout` | `list` or `Distribution` | No | `[0.0]` | Dropout probabilities. |
 | `criterion` | `dict` | **Yes** | - | Map of target columns to loss functions. |
 | `bert_spec` | `dict` | Conditional | `null` | Required if `training_objective` includes `bert`; samples BERT masking settings. |
@@ -221,7 +225,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 All other parameters are considered **Independent**. Sequifier will test every value in these lists against every combination of the linked groups above.
 
-  * **Model:** `num_layers`, `dim_feedforward`, `activation_fn`, `normalization`, `norm_first`, `positional_encoding`, `attention_type`, `rope_theta`.
+  * **Model:** `num_layers`, `dim_feedforward`, `activation_fn`, `normalization`, `norm_first`, `positional_encoding`, `attention_type`, `attention_output_projection`, `rope_theta`.
   * **Training:** `training_objective`, `batch_size`, `dropout`, `accumulation_steps`, `optimizer`.
   * **Data:** `context_length`.
 
@@ -263,6 +267,8 @@ Sequifier uniquely allows you to treat "data" as a hyperparameter.
 ### 3. Cooperative Trial Pruning (`prune_trials: true`)
 
 Optuna monitors intermediate validation loss at validation loss calculation, which is every epoch and optionally every configured number of minutes. If the trajectory of the current run is definitively worse than previously completed trials, the searcher will issue a `SIGTERM` signal to the subprocess, aborting the run early.
+
+Set either `pruning_warmup_epochs` or `pruning_warmup_batches` to defer pruning. They are mutually exclusive, and configuration validation rejects setting both. `pruning_warmup_epochs: 10` allows the first pruning decision after the epoch-10 validation result. Batch warm-up uses the training `global_step`, so `pruning_warmup_batches: 1000` allows pruning at the first validation report at or after batch 1000. Intermediate validation losses are still reported to Optuna during either warm-up. When both settings are omitted, immediate pruning remains enabled, including pruning from the initial epoch-0 validation result.
 
 * *Pros:* Saves massive amounts of compute time.
 * *Cons:* Can occasionally prune a "late bloomer" model.

@@ -26,14 +26,14 @@ from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 
 def create_sampler(config: Any) -> optuna.samplers.BaseSampler:
     strategy = getattr(config, "search_strategy", "bayesian")
-    seed = getattr(config, "seed", None)
+    global_seed = getattr(config, "global_seed", None)
     if strategy in ["sample"]:
-        return optuna.samplers.RandomSampler(seed=seed)
+        return optuna.samplers.RandomSampler(seed=global_seed)
     if strategy == "grid":
         if hasattr(optuna.samplers, "BruteForceSampler"):
-            return optuna.samplers.BruteForceSampler(seed=seed)
+            return optuna.samplers.BruteForceSampler(seed=global_seed)
         raise RuntimeError("Grid search requires Optuna >= 3.1 for BruteForceSampler.")
-    return optuna.samplers.TPESampler(seed=seed)
+    return optuna.samplers.TPESampler(seed=global_seed)
 
 
 def set_pdeathsig():
@@ -82,8 +82,11 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
 
     last_read_pos = 0
     best_val_loss = float("inf")
+    completed_epochs = 0
 
-    def consume_metrics(last_read_pos: int, best_val_loss: float) -> tuple[int, float]:
+    def consume_metrics(
+        last_read_pos: int, best_val_loss: float, completed_epochs: int
+    ) -> tuple[int, float, int]:
         """Read complete metric lines; report/prune single-objective trials."""
         if os.path.exists(metrics_path):
             with open(metrics_path, "r") as f:
@@ -96,6 +99,10 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
                         data = json.loads(line)
                         val_loss = data.get("val_loss")
                         global_step = data.get("global_step")
+                        metric_epoch = data.get("epoch")
+
+                        if metric_epoch is not None:
+                            completed_epochs = max(completed_epochs, int(metric_epoch))
 
                         if global_step is not None and val_loss is not None:
                             is_multi_objective = (
@@ -106,7 +113,22 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
                                 trial.report(val_loss, global_step)
                                 best_val_loss = min(best_val_loss, val_loss)
 
-                                if config.prune_trials and trial.should_prune():
+                                if config.pruning_warmup_batches is not None:
+                                    warmup_complete = (
+                                        global_step >= config.pruning_warmup_batches
+                                    )
+                                else:
+                                    pruning_warmup_epochs = (
+                                        config.pruning_warmup_epochs or 0
+                                    )
+                                    warmup_complete = (
+                                        completed_epochs >= pruning_warmup_epochs
+                                    )
+                                if (
+                                    config.prune_trials
+                                    and warmup_complete
+                                    and trial.should_prune()
+                                ):
                                     open(prune_path, "w").close()
                                     try:
                                         try:
@@ -128,13 +150,17 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
 
                     except json.JSONDecodeError:
                         break
-        return last_read_pos, best_val_loss
+        return last_read_pos, best_val_loss, completed_epochs
 
     while process.poll() is None:
-        last_read_pos, best_val_loss = consume_metrics(last_read_pos, best_val_loss)
+        last_read_pos, best_val_loss, completed_epochs = consume_metrics(
+            last_read_pos, best_val_loss, completed_epochs
+        )
         time.sleep(2)
 
-    _, best_val_loss = consume_metrics(last_read_pos, best_val_loss)
+    _, best_val_loss, _ = consume_metrics(
+        last_read_pos, best_val_loss, completed_epochs
+    )
 
     exit_code = process.returncode
     if exit_code == 143:

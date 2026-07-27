@@ -735,6 +735,7 @@ class TrainingSpecModel(BaseModel):
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
     accumulation_steps: Optional[int] = None
+    gradient_clip: Optional[float] = None
     dropout: float = 0.0
     loss_weights: Optional[dict[str, float]] = None
     optimizer: DotDict = Field(default_factory=lambda: DotDict({"name": "Adam"}))
@@ -931,9 +932,8 @@ class ModelSpecModel(BaseModel):
         "learned"  # Options: "learned", "rope", "range", "range_concat"
     )
     positional_encoding_scope: str = "per_feature"  # Options: "per_feature", "global"
-    attention_type: str = (
-        "mha"  # Options: "mha" (Multi-Head), "mqa" (Multi-Query), "gqa" (Grouped-Query)
-    )
+    attention_type: str = "mha"  # Options: "mha", "mqa", "gqa"
+    attention_output_projection: bool = True
 
     norm_first: bool = True
     shared_layer_groups: list[list[int]] = Field(default_factory=list)

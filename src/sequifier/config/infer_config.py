@@ -131,7 +131,7 @@ class InfererModel(BaseModel):
     model_type: str
     training_objective: str
     data_path: str
-    training_config_path: str = Field(default="configs/train.yaml")
+    training_config_path: Optional[str] = Field(default="configs/train.yaml")
     read_format: str = Field(default="parquet")
     write_format: str = Field(default="csv")
 
@@ -207,12 +207,20 @@ class InfererModel(BaseModel):
             )
         return v
 
-    @field_validator("training_config_path")
-    @classmethod
-    def validate_training_config_path(cls, v: str) -> str:
-        if not (v is None or os.path.exists(v)):
-            raise ValueError(f"{v} does not exist")
-        return v
+    @model_validator(mode="after")
+    def validate_training_config_path(self):
+        model_paths = (
+            self.model_path if isinstance(self.model_path, list) else [self.model_path]
+        )
+        if not any(path.lower().endswith(".pt") for path in model_paths):
+            return self
+
+        if self.training_config_path is None:
+            raise ValueError("training_config_path is required for PyTorch models")
+
+        if not os.path.exists(self.training_config_path):
+            raise ValueError(f"{self.training_config_path} does not exist")
+        return self
 
     @field_validator("autoregression_total_steps")
     @classmethod

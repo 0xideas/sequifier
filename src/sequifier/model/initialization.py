@@ -14,7 +14,6 @@ from sequifier.model.ingestions import (
 from sequifier.model.layers import FeedForward, RMSNorm, SelfAttention
 
 EMBEDDING_INIT_STD = 0.02
-DECODER_REFERENCE_STD = 0.02
 CONVOLUTION_TYPES = (nn.Conv1d, nn.Conv2d, nn.Conv3d)
 Convolution = nn.Conv1d | nn.Conv2d | nn.Conv3d
 
@@ -53,7 +52,7 @@ class _ModelWeightInitializer:
         self.model = model
         self.transformer_depth = transformer_depth
         self.decoder_reference_dim = decoder_reference_dim
-        self.residual_scale = 1.0 / math.sqrt(2.0 * transformer_depth)
+        self.residual_scale = 1.0
         self.initialized_parameter_ids: set[int] = set()
 
     def initialize(self) -> None:
@@ -166,7 +165,8 @@ class _ModelWeightInitializer:
                 self._zero_(module.wq.bias)
                 self._zero_(module.wk.bias)
                 self._zero_(module.wv.bias)
-                self._initialize_linear_xavier(module.wo, residual=True)
+                if isinstance(module.wo, nn.Linear):
+                    self._initialize_linear_xavier(module.wo, residual=True)
             elif isinstance(module, FeedForward):
                 self._initialize_feed_forward(module)
 
@@ -181,7 +181,7 @@ class _ModelWeightInitializer:
             return
 
         if feed_forward.activation_fn == "relu":
-            self._initialize_linear_kaiming_relu(feed_forward.linear1)
+            self._initialize_linear_xavier(feed_forward.linear1)
         else:
             self._initialize_linear_xavier(feed_forward.linear1)
         self._initialize_linear_xavier(feed_forward.linear2, residual=True)
@@ -194,10 +194,7 @@ class _ModelWeightInitializer:
         for module in cast(nn.Module, decoder).modules():
             if not isinstance(module, nn.Linear):
                 continue
-            std = DECODER_REFERENCE_STD * math.sqrt(
-                self.decoder_reference_dim / module.in_features
-            )
-            self._normal_(module.weight, std)
+            self._xavier_uniform_(module.weight)
             self._zero_(module.bias)
 
     def _initialize_range_position_projection(self) -> None:
@@ -231,7 +228,7 @@ class _ModelWeightInitializer:
     def _initialize_real_feature_projections(self) -> None:
         for module in self.model.modules():
             if isinstance(module, RealFeatureProjection):
-                self._initialize_linear_fan_in(module)
+                self._initialize_linear_xavier(module)
 
     def _initialize_temporal_convolutions(self) -> None:
         for module in self.model.modules():
@@ -241,7 +238,7 @@ class _ModelWeightInitializer:
                 if not isinstance(layer, CONVOLUTION_TYPES):
                     continue
                 if isinstance(module.activation, nn.ReLU):
-                    self._initialize_conv_kaiming_relu(layer)
+                    self._initialize_conv_xavier(layer)
                 else:
                     self._initialize_conv_xavier(layer)
 
@@ -313,12 +310,9 @@ def initialize_model_weights(
     """Initialize all model parameters according to Sequifier's unified policy.
 
     Q/K/V projections use Glorot uniform with the logical packed projection's
-    joint fan-out. Transformer residual projections are additionally scaled by
-    ``1 / sqrt(2 * transformer_depth)``. ReLU paths use Kaiming initialization;
-    scalar real-feature projections use fan-in-preserving linear initialization,
-    and other linear and convolutional paths use Glorot. Embeddings and free
-    learned vectors use a small normal distribution. Decoder weights retain a
-    small initial output scale while compensating for their configured fan-in.
+    joint fan-out. Linear and convolution kernels use Glorot, including
+    transformer residual projections and decoder layers. Embeddings and free
+    learned vectors retain their small normal initialization.
     """
 
     _ModelWeightInitializer(

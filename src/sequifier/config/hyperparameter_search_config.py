@@ -1,6 +1,7 @@
 import json
 import os
 import warnings
+from decimal import Decimal
 from typing import Any, Optional, Union
 
 import yaml
@@ -100,6 +101,27 @@ def sample_param(
     raise TypeError(f"Unsupported hyperparameter search space for {name}: {space}")
 
 
+def grid_space_size(
+    name: str, space: Union[list, FloatDistribution, IntDistribution]
+) -> int:
+    """Return the number of discrete values in an Optuna search space."""
+    if isinstance(space, list):
+        return len(space)
+    if isinstance(space, IntDistribution):
+        return (space.high - space.low) // space.step + 1
+    if isinstance(space, FloatDistribution):
+        if space.step is None:
+            raise ValueError(
+                f"{name}.step must be configured for grid search because an "
+                "unstepped float distribution has infinitely many combinations."
+            )
+        low = Decimal(str(space.low))
+        high = Decimal(str(space.high))
+        step = Decimal(str(space.step))
+        return int((high - low) // step) + 1
+    raise TypeError(f"Unsupported hyperparameter search space for {name}: {space}")
+
+
 class BERTSpecHyperparameterSampling(BaseModel):
     """Search space for BERT objective masking parameters."""
 
@@ -108,6 +130,14 @@ class BERTSpecHyperparameterSampling(BaseModel):
     masking_probability: OptunaFloat
     replacement_distribution: list[ReplacementDistribution]
     span_masking: list[ProbabilityDistribution]
+
+    def grid_size(self) -> int:
+        """Return the number of BERT-specific grid combinations."""
+        return (
+            grid_space_size("bert_spec.masking_probability", self.masking_probability)
+            * len(self.replacement_distribution)
+            * len(self.span_masking)
+        )
 
     def sample_trial(self, trial: Any) -> BERTSpecModel:
         masking_probability = sample_param(
@@ -243,6 +273,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
     accumulation_steps: OptunaInt
+    gradient_clip: Optional[float] = None
     dropout: OptunaFloat = [0.0]
 
     loss_weights: Optional[dict[str, float]] = None
@@ -269,6 +300,26 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     fsdp_cpu_offload: Optional[bool] = None
     torch_compile: str = "outer"
     float32_matmul_precision: str = "highest"
+
+    def grid_size(self) -> int:
+        """Return the number of training-spec grid combinations."""
+        objective_combinations = sum(
+            self.bert_spec.grid_size()
+            if (
+                issubclass(get_objective_class(objective_name), BERTObjective)
+                and self.bert_spec is not None
+            )
+            else 1
+            for objective_name in self.training_objective
+        )
+        return (
+            len(self.learning_rate)
+            * len(self.optimizer)
+            * objective_combinations
+            * grid_space_size("batch_size", self.batch_size)
+            * grid_space_size("dropout", self.dropout)
+            * grid_space_size("accumulation_steps", self.accumulation_steps)
+        )
 
     def __init__(self, **kwargs):
         """Normalize optimizer/scheduler dicts after Pydantic validation."""
@@ -459,6 +510,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             bert_spec=bert_spec,
             next_occurrence_config=next_occurrence_config,
             accumulation_steps=accumulation_steps,
+            gradient_clip=self.gradient_clip,
             dropout=dropout,
             loss_weights=self.loss_weights,
             optimizer=optimizer,
@@ -510,11 +562,48 @@ class ModelSpecHyperparameterSampling(BaseModel):
         default_factory=lambda: ["per_feature"]
     )
     attention_type: list[str]
+    attention_output_projection: list[bool] = Field(default_factory=lambda: [True])
 
     norm_first: list[bool]
     shared_layer_groups: list[list[int]] = Field(default_factory=list)
     n_kv_heads: list[Optional[int]]
     rope_theta: OptunaFloat
+
+    def grid_size(self) -> int:
+        """Return the number of model-spec grid combinations."""
+        width_and_kv_head_combinations = sum(
+            max(
+                1,
+                sum(
+                    kv_head is None or (n_head % kv_head == 0 and kv_head <= n_head)
+                    for kv_head in self.n_kv_heads
+                ),
+            )
+            for n_head in self.n_head
+        )
+        decoding_support_combinations = (
+            1
+            if isinstance(self.decoding_support, int)
+            else grid_space_size("decoding_support", self.decoding_support)
+        )
+        decoding_spec_combinations = (
+            len(self.decoding_spec) if isinstance(self.decoding_spec, list) else 1
+        )
+        return (
+            width_and_kv_head_combinations
+            * decoding_support_combinations
+            * decoding_spec_combinations
+            * grid_space_size("dim_feedforward", self.dim_feedforward)
+            * grid_space_size("num_layers", self.num_layers)
+            * grid_space_size("rope_theta", self.rope_theta)
+            * len(self.activation_fn)
+            * len(self.normalization)
+            * len(self.positional_encoding)
+            * len(self.positional_encoding_scope)
+            * len(self.attention_type)
+            * len(self.attention_output_projection)
+            * len(self.norm_first)
+        )
 
     @field_validator("decoding_support")
     @classmethod
@@ -541,6 +630,20 @@ class ModelSpecHyperparameterSampling(BaseModel):
     def validate_decoding_spec_candidates(cls, v):
         if isinstance(v, list) and not v:
             raise ValueError("decoding_spec candidates cannot be empty")
+        return v
+
+    @field_validator("attention_type")
+    @classmethod
+    def validate_attention_type_candidates(cls, v):
+        invalid_attention_types = [
+            attention_type
+            for attention_type in v
+            if attention_type not in ["mha", "mqa", "gqa"]
+        ]
+        if invalid_attention_types:
+            raise ValueError(
+                "Invalid attention_type candidates: " f"{invalid_attention_types}"
+            )
         return v
 
     @field_validator("n_head")
@@ -672,6 +775,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
         attention_type = trial.suggest_categorical(
             "attention_type", self.attention_type
         )
+        attention_output_projection = trial.suggest_categorical(
+            "attention_output_projection", self.attention_output_projection
+        )
         norm_first = trial.suggest_categorical("norm_first", self.norm_first)
 
         valid_kv_heads = [
@@ -689,7 +795,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             n_kv_heads = trial.suggest_categorical("n_kv_heads", valid_kv_heads)
 
         logger.info(
-            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {positional_encoding_scope = } - {attention_type = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
+            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {positional_encoding_scope = } - {attention_type = } - {attention_output_projection = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
         )
 
         model_spec_kwargs = {
@@ -702,6 +808,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             "positional_encoding": positional_encoding,
             "positional_encoding_scope": positional_encoding_scope,
             "attention_type": attention_type,
+            "attention_output_projection": attention_output_projection,
             "norm_first": norm_first,
             "shared_layer_groups": self.shared_layer_groups,
             "n_kv_heads": n_kv_heads,
@@ -729,13 +836,18 @@ class ModelSpecHyperparameterSampling(BaseModel):
 class HyperparameterSearchConfig(BaseModel):
     """Top-level Optuna search config."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
     project_root: str
     metadata_config_path: str
     hp_search_name: str
     search_strategy: str = "bayesian"
-    seed: Optional[int] = None
+    global_seed: Optional[int] = None
+    seed: Optional[list[int]] = None
     n_trials: Optional[int] = Field(None, alias="n_samples")
     prune_trials: Optional[bool] = True
+    pruning_warmup_epochs: Optional[int] = Field(default=None, ge=0)
+    pruning_warmup_batches: Optional[int] = Field(default=None, ge=0)
     model_config_write_path: str
     training_data_path: str
     validation_data_path: str
@@ -808,6 +920,41 @@ class HyperparameterSearchConfig(BaseModel):
         if self.prune_trials and self.training_hyperparameter_sampling.distributed:
             warnings.warn(
                 "Trial pruning in distributed training settings is in beta mode."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_pruning_warmup(self):
+        if (
+            self.pruning_warmup_epochs is not None
+            and self.pruning_warmup_batches is not None
+        ):
+            raise ValueError(
+                "Only one of pruning_warmup_epochs and pruning_warmup_batches "
+                "can be set."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_grid_n_trials_matches_combinations(self):
+        """Require an explicit grid trial limit to cover the complete grid."""
+        if self.search_strategy != "grid" or self.n_trials is None:
+            return self
+
+        seed_combinations = 1 if self.seed is None else len(self.seed)
+        configured_combinations = (
+            self.model_hyperparameter_sampling.grid_size()
+            * self.training_hyperparameter_sampling.grid_size()
+            * seed_combinations
+            * len(self.input_columns)
+            * len(self.context_length)
+        )
+        if self.n_trials != configured_combinations:
+            raise ValueError(
+                "For search_strategy='grid', n_samples must equal the number of "
+                f"configured combinations ({configured_combinations}), got "
+                f"{self.n_trials}. Remove n_samples to let the grid run until "
+                "exhaustion, or set it to the configured combination count."
             )
         return self
 
@@ -890,6 +1037,9 @@ class HyperparameterSearchConfig(BaseModel):
         """Sample a concrete TrainModel for one trial/run index."""
         model_spec = self.model_hyperparameter_sampling.sample_trial(trial)
 
+        seed = (
+            101 if self.seed is None else trial.suggest_categorical("seed", self.seed)
+        )
         input_columns_index = trial.suggest_categorical(
             "input_columns_index", list(range(len(self.input_columns)))
         )
@@ -913,7 +1063,7 @@ class HyperparameterSearchConfig(BaseModel):
         )
         resolve_window_view(self.storage_layout, window_view)
 
-        logger.info(f"{input_columns_index = } - {context_length = }")
+        logger.info(f"{seed = } - {input_columns_index = } - {context_length = }")
 
         return TrainModel(
             project_root=self.project_root,
@@ -935,7 +1085,7 @@ class HyperparameterSearchConfig(BaseModel):
             model_window_stride=self.model_window_stride,
             n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
-            seed=101,
+            seed=seed,
             export_embedding_model=self.export_embedding_model,
             export_generative_model=self.export_generative_model,
             export_onnx=self.export_onnx,

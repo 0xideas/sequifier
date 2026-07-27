@@ -62,6 +62,7 @@ training_spec:
   log_interval: 10
   learning_rate: 0.0001
   accumulation_steps: 1
+  gradient_clip: null
   dropout: 0.2
   criterion:
     EXAMPLE_TARGET_COLUMN_NAME: MSELoss

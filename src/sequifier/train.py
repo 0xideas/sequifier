@@ -18,6 +18,7 @@ import warnings  # noqa: E402
 from typing import Any, Optional, Union, cast  # noqa: E402
 
 import numpy as np  # noqa: E402
+import onnx  # noqa: E402
 import torch  # noqa: E402
 import torch._dynamo  # noqa: E402
 import torch.distributed as dist  # noqa: E402
@@ -100,7 +101,10 @@ from sequifier.model.initialization import initialize_model_weights  # noqa: E40
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.objectives import create_objective  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
-from sequifier.special_tokens import resolve_categorical_decoder_ids  # noqa: E402
+from sequifier.special_tokens import (  # noqa: E402
+    ONNX_CATEGORICAL_TARGET_CODECS_KEY,
+    resolve_categorical_decoder_ids,
+)
 
 
 def cleanup():
@@ -830,7 +834,8 @@ class TransformerModel(nn.Module):
                 if hparams.model_spec.normalization == "rmsnorm"
                 else nn.LayerNorm
             )
-            self.final_norm = NormClass(self.dim_model)
+            norm_eps = 1e-6 if hparams.model_spec.normalization == "rmsnorm" else 1e-3
+            self.final_norm = NormClass(self.dim_model, eps=norm_eps)
         else:
             self.final_norm = nn.Identity()
 
@@ -1882,7 +1887,11 @@ class TransformerModel(nn.Module):
                 if optimizer_step_due:
                     self.scaler.unscale_(self.optimizer)
 
-                    torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                    if self.hparams.training_spec.gradient_clip is not None:
+                        torch.nn.utils.clip_grad_norm_(
+                            self.parameters(),
+                            self.hparams.training_spec.gradient_clip,
+                        )
 
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
@@ -2779,6 +2788,12 @@ class TransformerModel(nn.Module):
                     output_names=output_names,
                     training=training_mode,
                 )
+
+            onnx_model = onnx.load(export_path)
+            codec_metadata = onnx_model.metadata_props.add()
+            codec_metadata.key = ONNX_CATEGORICAL_TARGET_CODECS_KEY
+            codec_metadata.value = json.dumps(self.target_decoder_ids)
+            onnx.save(onnx_model, export_path)
 
         if self.export_pt:
             export_path = os.path.join(

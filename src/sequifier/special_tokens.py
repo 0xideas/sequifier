@@ -30,6 +30,7 @@ SPECIAL_TOKEN_IDS = SpecialTokenIds()
 SPECIAL_TOKEN_LABELS = frozenset(SPECIAL_TOKEN_IDS.ids_by_label.keys())
 SPECIAL_TOKEN_ID_VALUES = frozenset(SPECIAL_TOKEN_IDS.labels_by_id.keys())
 SPECIAL_TOKEN_NAMES = ("unknown", "other", "mask")
+ONNX_CATEGORICAL_TARGET_CODECS_KEY = "sequifier.categorical_target_codecs"
 
 
 def validate_special_token_ids(

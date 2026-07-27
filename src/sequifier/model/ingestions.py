@@ -382,7 +382,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
     @staticmethod
     def _norm(name: str, output_dim: int) -> nn.Module:
         if name == "layer_norm":
-            return nn.LayerNorm(output_dim)
+            return nn.LayerNorm(output_dim, eps=1e-3)
         if name == "rmsnorm":
             return RMSNorm(output_dim)
         if name == "none":

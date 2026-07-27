@@ -78,6 +78,7 @@ distinct next-position target from every complete contained context.
 | `allow_unused_input_columns` | `bool` | No | `false` | Broad compatibility escape hatch that allows unused `input_columns` and logs a warning listing them. Prefer `auxiliary_input_columns` for intentional auxiliary inputs. |
 | `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
 | `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
+| `attention_output_projection` | `bool` | No | `true` | If `true`, applies a bias-free linear projection after concatenating attention heads. Set to `false` to return concatenated heads directly, as in TransLOB. |
 | `n_kv_heads` | `int` | No | `null` | Number of Key/Value heads. `null` is valid for standard MHA; `mqa` requires `1`, and `gqa` requires a divisor of `n_head`. |
 | `positional_encoding` | `str` | No | `learned`| `learned` (standard absolute), `rope` (Rotary Positional Embedding), `range` (fixed coordinate with a learned projection), or `range_concat` (fixed coordinate appended as one transformer channel). |
 | `positional_encoding_scope` | `str` | No | `per_feature` | `per_feature` keeps the legacy ingestion-time learned position path. `global` injects position after ingestion and before the transformer. `range` and `range_concat` always use `global`. |
@@ -366,6 +367,7 @@ ingestion_spec:
 | `batch_size` | `int` | **Yes** | - | Samples per batch. |
 | `learning_rate` | `float` | **Yes** | - | Initial learning rate. |
 | `accumulation_steps` | `Optional[int]` | No | `null` | Accumulation steps between weight updates, to increase effective batch size. |
+| `gradient_clip` | `Optional[float]` | No | `null` | Maximum gradient norm. Set to `null` to disable gradient clipping. |
 | `dropout` | `float` | No | `0.0` | Dropout probability. |
 | `optimizer` | `dict` | **Yes** | - | Optimizer config. Supports `Adam`, `AdamW`, `AdEMAMix`, etc. |
 | `scheduler` | `dict` | **Yes** | - | LR Scheduler config (e.g., `StepLR` or `CosineAnnealingLR`). `scheduler.step()` is only called if < total_steps, so correct configuration is essential. |
