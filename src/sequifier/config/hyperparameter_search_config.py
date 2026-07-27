@@ -1,13 +1,23 @@
+import copy
 import json
 import os
 import warnings
 from decimal import Decimal
-from typing import Any, Optional, Union
+from typing import Any, ClassVar, Optional, Union, cast
 
 import yaml
 from beartype import beartype
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    RootModel,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.config.train_config import (
@@ -22,6 +32,7 @@ from sequifier.config.train_config import (
     ReplacementDistribution,
     TrainingSpecModel,
     TrainModel,
+    load_train_config_with_source,
 )
 from sequifier.helpers import (
     ModelWindowView,
@@ -40,11 +51,13 @@ from sequifier.objectives import (
     get_objective_class,
     target_offset_for_objective,
 )
-from sequifier.special_tokens import validate_special_token_ids
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 
 
 class FloatDistribution(BaseModel):
     """Optuna float range with optional step/log sampling."""
+
+    model_config = ConfigDict(extra="forbid")
 
     low: float
     high: float
@@ -53,6 +66,14 @@ class FloatDistribution(BaseModel):
 
     @model_validator(mode="after")
     def validate_step_and_log(self):
+        if self.low > self.high:
+            raise ValueError(
+                f"distribution low must be <= high, got {self.low} > {self.high}"
+            )
+        if self.step is not None and self.step <= 0:
+            raise ValueError(f"distribution step must be positive, got {self.step}")
+        if self.log and self.low <= 0:
+            raise ValueError(f"log distributions require low > 0, got low={self.low}")
         if self.log and self.step is not None:
             raise ValueError(
                 f"Optuna does not support setting step when log=True. "
@@ -64,6 +85,8 @@ class FloatDistribution(BaseModel):
 class IntDistribution(BaseModel):
     """Optuna integer range with step/log sampling."""
 
+    model_config = ConfigDict(extra="forbid")
+
     low: int
     high: int
     step: int = 1
@@ -71,6 +94,14 @@ class IntDistribution(BaseModel):
 
     @model_validator(mode="after")
     def validate_step_and_log(self):
+        if self.low > self.high:
+            raise ValueError(
+                f"distribution low must be <= high, got {self.low} > {self.high}"
+            )
+        if self.step <= 0:
+            raise ValueError(f"distribution step must be positive, got {self.step}")
+        if self.log and self.low <= 0:
+            raise ValueError(f"log distributions require low > 0, got low={self.low}")
         if self.log and self.step != 1:
             raise ValueError(
                 f"Optuna does not support setting step != 1 when log=True. "
@@ -81,7 +112,32 @@ class IntDistribution(BaseModel):
 
 OptunaFloat = Union[list[float], FloatDistribution]
 OptunaInt = Union[list[int], IntDistribution]
+OptionalOptunaInt = Union[list[Optional[int]], IntDistribution]
 OptionalOptunaFloat = Union[float, list[Optional[float]], FloatDistribution, None]
+_DEFAULT_KV_HEADS = object()
+
+
+def _validation_space_values(
+    name: str,
+    space: Union[list, FloatDistribution, IntDistribution],
+) -> list:
+    """Return every categorical value or the extrema of a numeric range."""
+    if isinstance(space, list):
+        if not space:
+            raise ValueError(f"{name} candidates cannot be empty")
+        return space
+    if isinstance(space, IntDistribution):
+        sampled_high = space.low + ((space.high - space.low) // space.step) * space.step
+        return [space.low] if space.low == sampled_high else [space.low, sampled_high]
+    if isinstance(space, FloatDistribution):
+        sampled_high = space.high
+        if space.step is not None:
+            low = Decimal(str(space.low))
+            high = Decimal(str(space.high))
+            step = Decimal(str(space.step))
+            sampled_high = float(low + ((high - low) // step) * step)
+        return [space.low] if space.low == sampled_high else [space.low, sampled_high]
+    raise TypeError(f"Unsupported hyperparameter search space for {name}: {space}")
 
 
 def sample_param(
@@ -109,7 +165,10 @@ def grid_space_size(
     if isinstance(space, list):
         return len(space)
     if isinstance(space, IntDistribution):
-        return (space.high - space.low) // space.step + 1
+        step = space.step
+        if step is None:
+            raise ValueError(f"{name}.step cannot be null for an integer distribution.")
+        return int((space.high - space.low) // step + 1)
     if isinstance(space, FloatDistribution):
         if space.step is None:
             raise ValueError(
@@ -131,6 +190,44 @@ class BERTSpecHyperparameterSampling(BaseModel):
     masking_probability: OptunaFloat
     replacement_distribution: list[ReplacementDistribution]
     span_masking: list[ProbabilityDistribution]
+
+    @model_validator(mode="after")
+    def validate_concrete_candidates(self):
+        masking_probabilities = _validation_space_values(
+            "bert_spec.masking_probability",
+            self.masking_probability,
+        )
+        if not self.replacement_distribution:
+            raise ValueError("bert_spec.replacement_distribution cannot be empty")
+        if not self.span_masking:
+            raise ValueError("bert_spec.span_masking cannot be empty")
+
+        replacement_distribution = self.replacement_distribution[0]
+        span_masking = self.span_masking[0]
+        for masking_probability in masking_probabilities:
+            try:
+                BERTSpecModel(
+                    masking_probability=masking_probability,
+                    replacement_distribution=replacement_distribution,
+                    span_masking=span_masking,
+                )
+            except ValidationError as error:
+                raise ValueError(
+                    "bert_spec can sample an invalid configuration for "
+                    f"masking_probability={masking_probability!r}:\n{error}"
+                ) from error
+        return self
+
+    def validation_model(self) -> BERTSpecModel:
+        """Build one already-validated representative BERT specification."""
+        return BERTSpecModel(
+            masking_probability=_validation_space_values(
+                "bert_spec.masking_probability",
+                self.masking_probability,
+            )[0],
+            replacement_distribution=self.replacement_distribution[0],
+            span_masking=self.span_masking[0],
+        )
 
     def grid_size(self) -> int:
         """Return the number of BERT-specific grid combinations."""
@@ -176,16 +273,57 @@ def load_hyperparameter_search_config(
     with open(config_path, "r") as f:
         config_values = yaml.safe_load(f)
 
+    if not isinstance(config_values, dict):
+        raise ValueError(
+            f"Hyperparameter search config '{config_path}' must contain a YAML mapping."
+        )
+
+    if "overrides" in config_values:
+        if not config_values.get("base_config_path"):
+            raise ValueError(
+                f"Hyperparameter search config '{config_path}' uses the override "
+                "format because it contains 'overrides', but 'base_config_path' "
+                "is missing or empty."
+            )
+        return compile_hyperparameter_search_override_config(
+            config_path,
+            config_values,
+            skip_metadata,
+        )
+
+    return _load_legacy_hyperparameter_search_config(
+        config_path,
+        config_values,
+        skip_metadata,
+    )
+
+
+def _load_legacy_hyperparameter_search_config(
+    config_path: str,
+    config_values: dict[str, Any],
+    skip_metadata: bool,
+) -> "HyperparameterSearchConfig":
+    """Load the original self-contained hyperparameter-search format."""
+    config_values = copy.deepcopy(config_values)
+
     if not skip_metadata:
         metadata_config_path = config_values.get("metadata_config_path")
+        if not isinstance(metadata_config_path, str) or not metadata_config_path:
+            raise ValueError(
+                f"Hyperparameter search config '{config_path}' must define a "
+                "non-empty metadata_config_path when metadata loading is enabled."
+            )
 
         with open(
             normalize_path(metadata_config_path, config_values["project_root"]), "r"
         ) as f:
             metadata_config = json.loads(f.read())
 
-        validate_special_token_ids(
-            metadata_config["special_token_ids"],
+        config_values["special_token_ids"] = validate_special_token_ids(
+            metadata_config.get(
+                "special_token_ids",
+                SPECIAL_TOKEN_IDS.ids_by_label,
+            ),
             source=f"metadata config '{metadata_config_path}'",
         )
 
@@ -273,7 +411,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
-    accumulation_steps: OptunaInt
+    accumulation_steps: OptionalOptunaInt
     gradient_clip: OptionalOptunaFloat = None
     dropout: OptunaFloat = [0.0]
 
@@ -302,6 +440,105 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     torch_compile: str = "outer"
     float32_matmul_precision: str = "highest"
 
+    def _build_training_spec(
+        self,
+        *,
+        schedule_index: int,
+        optimizer_index: int,
+        training_objective: str,
+        batch_size: int,
+        dropout: float,
+        accumulation_steps: Optional[int],
+        gradient_clip: Optional[float],
+        bert_spec: Optional[BERTSpecModel] = None,
+    ) -> TrainingSpecModel:
+        objective_class = get_objective_class(training_objective)
+        next_occurrence_config = (
+            self.next_occurrence_config
+            if issubclass(objective_class, NextOccurrenceObjective)
+            else None
+        )
+        return TrainingSpecModel(
+            training_objective=training_objective,
+            device=self.device,
+            epochs=self.epochs[schedule_index],
+            log_interval=self.log_interval,
+            class_share_log_columns=self.class_share_log_columns,
+            early_stopping_epochs=self.early_stopping_epochs,
+            save_interval_epochs=self.save_interval_epochs,
+            save_latest_interval_minutes=self.save_latest_interval_minutes,
+            save_interval_minutes=self.save_interval_minutes,
+            save_interval_batches=self.save_interval_batches,
+            save_interval_val_loss=self.save_interval_val_loss,
+            calculate_validation_loss_on_initialization=self.calculate_validation_loss_on_initialization,
+            batch_size=batch_size,
+            learning_rate=self.learning_rate[schedule_index],
+            criterion=self.criterion,
+            class_weights=self.class_weights,
+            bert_spec=bert_spec,
+            next_occurrence_config=next_occurrence_config,
+            accumulation_steps=accumulation_steps,
+            gradient_clip=gradient_clip,
+            dropout=dropout,
+            loss_weights=self.loss_weights,
+            optimizer=self.optimizer[optimizer_index],
+            scheduler=self.scheduler[schedule_index],
+            continue_training=self.continue_training,
+            enforce_determinism=True,
+            scheduler_step_on=self.scheduler_step_on,
+            distributed=self.distributed,
+            load_full_data_to_ram=self.load_full_data_to_ram,
+            max_ram_gb=self.max_ram_gb,
+            device_max_concat_length=self.device_max_concat_length,
+            world_size=self.world_size,
+            num_workers=self.num_workers,
+            backend=self.backend,
+            layer_type_dtypes=self.layer_type_dtypes,
+            layer_autocast=self.layer_autocast,
+            data_parallelism=self.data_parallelism,
+            fsdp_cpu_offload=self.fsdp_cpu_offload,
+            torch_compile=self.torch_compile,
+            float32_matmul_precision=self.float32_matmul_precision,
+        )
+
+    def validation_model(
+        self,
+        *,
+        schedule_index: int = 0,
+        optimizer_index: int = 0,
+        training_objective: Optional[str] = None,
+    ) -> TrainingSpecModel:
+        """Build a representative concrete training specification."""
+        objective = training_objective or self.training_objective[0]
+        objective_class = get_objective_class(objective)
+        bert_spec = (
+            self.bert_spec.validation_model()
+            if (
+                issubclass(objective_class, BERTObjective)
+                and self.bert_spec is not None
+            )
+            else None
+        )
+        gradient_clip = self.gradient_clip
+        if isinstance(gradient_clip, (list, FloatDistribution)):
+            gradient_clip = _validation_space_values(
+                "gradient_clip",
+                gradient_clip,
+            )[0]
+        return self._build_training_spec(
+            schedule_index=schedule_index,
+            optimizer_index=optimizer_index,
+            training_objective=objective,
+            batch_size=_validation_space_values("batch_size", self.batch_size)[0],
+            dropout=_validation_space_values("dropout", self.dropout)[0],
+            accumulation_steps=_validation_space_values(
+                "accumulation_steps",
+                self.accumulation_steps,
+            )[0],
+            gradient_clip=gradient_clip,
+            bert_spec=bert_spec,
+        )
+
     def grid_size(self) -> int:
         """Return the number of training-spec grid combinations."""
         gradient_clip_combinations = (
@@ -329,22 +566,19 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         )
 
     def __init__(self, **kwargs):
-        """Normalize optimizer/scheduler dicts after Pydantic validation."""
-        super().__init__(
-            **{k: v for k, v in kwargs.items() if k not in ["optimizer", "scheduler"]}
-        )
-
-        self.optimizer = [
-            DotDict(optimizer_config) for optimizer_config in kwargs["optimizer"]
-        ]
-        if not len(self.learning_rate) == len(kwargs["scheduler"]):
-            raise ValueError(
-                f"{len(self.learning_rate) = } != {len(kwargs['scheduler']) = }"
-            )
-
-        self.scheduler = [
-            DotDict(scheduler_config) for scheduler_config in kwargs["scheduler"]
-        ]
+        """Normalize optimizer/scheduler dicts before Pydantic validation."""
+        normalized_kwargs = dict(kwargs)
+        if "optimizer" in normalized_kwargs:
+            normalized_kwargs["optimizer"] = [
+                DotDict(optimizer_config)
+                for optimizer_config in normalized_kwargs["optimizer"]
+            ]
+        if "scheduler" in normalized_kwargs:
+            normalized_kwargs["scheduler"] = [
+                DotDict(scheduler_config)
+                for scheduler_config in normalized_kwargs["scheduler"]
+            ]
+        super().__init__(**normalized_kwargs)
 
     @field_validator("training_objective", mode="before")
     @classmethod
@@ -381,6 +615,11 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             raise ValueError(
                 "If 'bert' is in training_objective, bert_spec must be configured."
             )
+        if not has_bert_objective and self.bert_spec is not None:
+            raise ValueError(
+                "bert_spec should only be configured if 'bert' is in "
+                "training_objective."
+            )
         if has_next_occurrence_objective and self.next_occurrence_config is None:
             raise ValueError(
                 "If 'next_occurrence' is in training_objective, "
@@ -394,6 +633,51 @@ class TrainingSpecHyperparameterSampling(BaseModel):
                 "next_occurrence_config should only be configured if "
                 "'next_occurrence' is in training_objective."
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_concrete_candidates(self):
+        if not self.epochs:
+            raise ValueError("epochs candidates cannot be empty")
+        if not self.learning_rate:
+            raise ValueError("learning_rate candidates cannot be empty")
+        if not self.optimizer:
+            raise ValueError("optimizer candidates cannot be empty")
+        if not self.scheduler:
+            raise ValueError("scheduler candidates cannot be empty")
+        if not self.training_objective:
+            raise ValueError("training_objective candidates cannot be empty")
+
+        _validation_space_values("batch_size", self.batch_size)
+        _validation_space_values("dropout", self.dropout)
+        _validation_space_values("accumulation_steps", self.accumulation_steps)
+        if isinstance(self.gradient_clip, (list, FloatDistribution)):
+            _validation_space_values("gradient_clip", self.gradient_clip)
+
+        candidates: list[tuple[int, int, str]] = [
+            (schedule_index, 0, self.training_objective[0])
+            for schedule_index in range(len(self.epochs))
+        ]
+        candidates.extend(
+            (0, optimizer_index, self.training_objective[0])
+            for optimizer_index in range(len(self.optimizer))
+        )
+        candidates.extend((0, 0, objective) for objective in self.training_objective)
+        for schedule_index, optimizer_index, objective in candidates:
+            try:
+                self.validation_model(
+                    schedule_index=schedule_index,
+                    optimizer_index=optimizer_index,
+                    training_objective=objective,
+                )
+            except (ValidationError, ValueError) as error:
+                raise ValueError(
+                    "training_hyperparameter_sampling can produce an invalid "
+                    "TrainingSpecModel for "
+                    f"schedule_index={schedule_index}, "
+                    f"optimizer_index={optimizer_index}, "
+                    f"training_objective={objective!r}:\n{error}"
+                ) from error
         return self
 
     @field_validator("layer_type_dtypes")
@@ -441,6 +725,12 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     @field_validator("scheduler")
     @classmethod
     def validate_scheduler_config(cls, v, info_dict):
+        learning_rate = info_dict.data.get("learning_rate")
+        if learning_rate is not None and len(learning_rate) != len(v):
+            raise ValueError(
+                "learning_rate and scheduler must have the same number of "
+                f"paired candidates, got {len(learning_rate)} and {len(v)}"
+            )
         for i, scheduler_config in enumerate(v):
             if "total_steps" in scheduler_config:
                 if info_dict.data.get("scheduler_step_on") == "epoch":
@@ -460,9 +750,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         lr_sched_index = trial.suggest_categorical(
             "lr_sched_index", list(range(len(self.learning_rate)))
         )
-        epochs = self.epochs[lr_sched_index]
         learning_rate = self.learning_rate[lr_sched_index]
-        scheduler = self.scheduler[lr_sched_index]
 
         opt_index = trial.suggest_categorical(
             "optimizer_index", list(range(len(self.optimizer)))
@@ -481,12 +769,6 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             )
             else None
         )
-        next_occurrence_config = (
-            self.next_occurrence_config
-            if issubclass(objective_class, NextOccurrenceObjective)
-            else None
-        )
-
         batch_size = sample_param(trial, "batch_size", self.batch_size)
         dropout = sample_param(trial, "dropout", self.dropout)
         accumulation_steps = sample_param(
@@ -502,52 +784,22 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             f"{training_objective = } - {learning_rate = } - {batch_size = } - {dropout = } - {gradient_clip = } - {optimizer = }"
         )
 
-        return TrainingSpecModel(
+        return self._build_training_spec(
+            schedule_index=lr_sched_index,
+            optimizer_index=opt_index,
             training_objective=training_objective,
-            device=self.device,
-            epochs=epochs,
-            log_interval=self.log_interval,
-            class_share_log_columns=self.class_share_log_columns,
-            early_stopping_epochs=self.early_stopping_epochs,
-            save_interval_epochs=self.save_interval_epochs,
-            save_latest_interval_minutes=self.save_latest_interval_minutes,
-            save_interval_minutes=self.save_interval_minutes,
-            save_interval_batches=self.save_interval_batches,
-            save_interval_val_loss=self.save_interval_val_loss,
-            calculate_validation_loss_on_initialization=self.calculate_validation_loss_on_initialization,
             batch_size=batch_size,
-            learning_rate=learning_rate,
-            criterion=self.criterion,
-            class_weights=self.class_weights,
-            bert_spec=bert_spec,
-            next_occurrence_config=next_occurrence_config,
+            dropout=dropout,
             accumulation_steps=accumulation_steps,
             gradient_clip=gradient_clip,
-            dropout=dropout,
-            loss_weights=self.loss_weights,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            continue_training=self.continue_training,
-            enforce_determinism=True,
-            scheduler_step_on=self.scheduler_step_on,
-            distributed=self.distributed,
-            load_full_data_to_ram=self.load_full_data_to_ram,
-            max_ram_gb=self.max_ram_gb,
-            device_max_concat_length=self.device_max_concat_length,
-            world_size=self.world_size,
-            num_workers=self.num_workers,
-            backend=self.backend,
-            layer_type_dtypes=self.layer_type_dtypes,
-            layer_autocast=self.layer_autocast,
-            data_parallelism=self.data_parallelism,
-            fsdp_cpu_offload=self.fsdp_cpu_offload,
-            torch_compile=self.torch_compile,
-            float32_matmul_precision=self.float32_matmul_precision,
+            bert_spec=bert_spec,
         )
 
 
 class ModelSpecHyperparameterSampling(BaseModel):
     """Model-architecture search space with paired width choices."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     dim_model: list[int]
     ingestion_spec: Optional[Union[IngestionSpecConfig, list[IngestionSpecConfig]]] = (
@@ -580,6 +832,170 @@ class ModelSpecHyperparameterSampling(BaseModel):
     shared_layer_groups: list[list[int]] = Field(default_factory=list)
     n_kv_heads: list[Optional[int]]
     rope_theta: OptunaFloat
+
+    def _ingestion_spec_for_width(self, width_index: int):
+        if isinstance(self.ingestion_spec, list):
+            return self.ingestion_spec[width_index]
+        return self.ingestion_spec
+
+    def _ingestion_merge_for_width(self, width_index: int):
+        if isinstance(self.ingestion_merge, list):
+            return self.ingestion_merge[width_index]
+        return self.ingestion_merge
+
+    def _valid_kv_heads_for_width(self, width_index: int) -> list[Optional[int]]:
+        n_head = self.n_head[width_index]
+        valid_kv_heads = [
+            kv
+            for kv in self.n_kv_heads
+            if kv is None or (n_head % kv == 0 and kv <= n_head)
+        ]
+        return valid_kv_heads or [None]
+
+    def _decoding_spec_for_index(
+        self,
+        decoding_spec_index: int,
+    ) -> Optional[DecodingSpecConfig]:
+        if isinstance(self.decoding_spec, list):
+            return self.decoding_spec[decoding_spec_index]
+        return cast(Optional[DecodingSpecConfig], self.decoding_spec)
+
+    def _build_model_spec(
+        self,
+        *,
+        width_index: int,
+        dim_feedforward: int,
+        num_layers: int,
+        decoding_support: int,
+        decoding_spec: Optional[DecodingSpecConfig],
+        activation_fn: str,
+        normalization: str,
+        positional_encoding: str,
+        positional_encoding_scope: str,
+        attention_type: str,
+        attention_output_projection: bool,
+        norm_first: bool,
+        n_kv_heads: Optional[int],
+        rope_theta: float,
+    ) -> ModelSpecModel:
+        model_spec_kwargs = {
+            "dim_model": self.dim_model[width_index],
+            "n_head": self.n_head[width_index],
+            "dim_feedforward": dim_feedforward,
+            "num_layers": num_layers,
+            "activation_fn": activation_fn,
+            "normalization": normalization,
+            "positional_encoding": positional_encoding,
+            "positional_encoding_scope": positional_encoding_scope,
+            "attention_type": attention_type,
+            "attention_output_projection": attention_output_projection,
+            "norm_first": norm_first,
+            "shared_layer_groups": self.shared_layer_groups,
+            "n_kv_heads": n_kv_heads,
+            "rope_theta": rope_theta,
+            "prediction_length": self.prediction_length,
+            "decoding_support": decoding_support,
+            "allow_shared_ingestion_columns": self.allow_shared_ingestion_columns,
+            "allow_unused_input_columns": self.allow_unused_input_columns,
+            "auxiliary_input_columns": self.auxiliary_input_columns,
+        }
+        ingestion_spec = self._ingestion_spec_for_width(width_index)
+        ingestion_merge = self._ingestion_merge_for_width(width_index)
+        if decoding_spec is not None:
+            model_spec_kwargs["decoding_spec"] = decoding_spec
+        if ingestion_spec is not None:
+            model_spec_kwargs["ingestion_spec"] = ingestion_spec
+        if ingestion_merge is not None:
+            model_spec_kwargs["ingestion_merge"] = ingestion_merge
+        return ModelSpecModel(**model_spec_kwargs)
+
+    def validation_model(
+        self,
+        *,
+        width_index: int = 0,
+        dim_feedforward: Optional[int] = None,
+        num_layers: Optional[int] = None,
+        decoding_support: Optional[int] = None,
+        decoding_spec_index: int = 0,
+        activation_fn: Optional[str] = None,
+        normalization: Optional[str] = None,
+        positional_encoding: Optional[str] = None,
+        positional_encoding_scope: Optional[str] = None,
+        attention_type: Optional[str] = None,
+        attention_output_projection: Optional[bool] = None,
+        norm_first: Optional[bool] = None,
+        n_kv_heads: object = _DEFAULT_KV_HEADS,
+        rope_theta: Optional[float] = None,
+    ) -> ModelSpecModel:
+        """Build a representative concrete model specification."""
+        selected_positional_encoding = (
+            self.positional_encoding[0]
+            if positional_encoding is None
+            else positional_encoding
+        )
+        sampled_scope = (
+            self.positional_encoding_scope[0]
+            if positional_encoding_scope is None
+            else positional_encoding_scope
+        )
+        selected_scope = (
+            "global"
+            if selected_positional_encoding in {"range", "range_concat"}
+            else sampled_scope
+        )
+        if n_kv_heads is _DEFAULT_KV_HEADS:
+            selected_kv_heads = self._valid_kv_heads_for_width(width_index)[0]
+        elif n_kv_heads is None or isinstance(n_kv_heads, int):
+            selected_kv_heads = n_kv_heads
+        else:
+            raise TypeError(
+                f"n_kv_heads must be an integer or null, got {n_kv_heads!r}"
+            )
+        selected_decoding_support = decoding_support
+        if selected_decoding_support is None:
+            selected_decoding_support = (
+                self.decoding_support
+                if isinstance(self.decoding_support, int)
+                else _validation_space_values(
+                    "decoding_support",
+                    self.decoding_support,
+                )[0]
+            )
+        return self._build_model_spec(
+            width_index=width_index,
+            dim_feedforward=(
+                _validation_space_values(
+                    "dim_feedforward",
+                    self.dim_feedforward,
+                )[0]
+                if dim_feedforward is None
+                else dim_feedforward
+            ),
+            num_layers=(
+                _validation_space_values("num_layers", self.num_layers)[0]
+                if num_layers is None
+                else num_layers
+            ),
+            decoding_support=selected_decoding_support,
+            decoding_spec=self._decoding_spec_for_index(decoding_spec_index),
+            activation_fn=activation_fn or self.activation_fn[0],
+            normalization=normalization or self.normalization[0],
+            positional_encoding=selected_positional_encoding,
+            positional_encoding_scope=selected_scope,
+            attention_type=attention_type or self.attention_type[0],
+            attention_output_projection=(
+                self.attention_output_projection[0]
+                if attention_output_projection is None
+                else attention_output_projection
+            ),
+            norm_first=self.norm_first[0] if norm_first is None else norm_first,
+            n_kv_heads=selected_kv_heads,
+            rope_theta=(
+                _validation_space_values("rope_theta", self.rope_theta)[0]
+                if rope_theta is None
+                else rope_theta
+            ),
+        )
 
     def grid_size(self) -> int:
         """Return the number of model-spec grid combinations."""
@@ -661,25 +1077,47 @@ class ModelSpecHyperparameterSampling(BaseModel):
     @field_validator("n_head")
     @classmethod
     def validate_model_spec(cls, v, info):
+        dim_model = info.data.get("dim_model")
+        if dim_model is None:
+            return v
+        invalid_dim_models = [value for value in dim_model or [] if value <= 0]
+        if invalid_dim_models:
+            raise ValueError(
+                f"dim_model candidates must be positive: {invalid_dim_models}"
+            )
+        invalid_n_heads = [value for value in v if value <= 0]
+        if invalid_n_heads:
+            raise ValueError(f"n_head candidates must be positive: {invalid_n_heads}")
+
         ingestion_spec = info.data.get("ingestion_spec")
         if isinstance(ingestion_spec, list):
-            if len(info.data.get("dim_model")) != len(ingestion_spec):
+            if len(dim_model) != len(ingestion_spec):
                 raise ValueError(
                     "dim_model and ingestion_spec must have the same number of candidate values, that are paired"
                 )
 
         ingestion_merge = info.data.get("ingestion_merge")
         if isinstance(ingestion_merge, list):
-            if len(info.data.get("dim_model")) != len(ingestion_merge):
+            if len(dim_model) != len(ingestion_merge):
                 raise ValueError(
                     "dim_model and ingestion_merge must have the same number of candidate values, that are paired"
                 )
 
-        if not (len(info.data.get("dim_model")) == len(v)):
+        if not (len(dim_model) == len(v)):
             raise ValueError(
                 "dim_model and n_head must have the same number of candidate values, that are paired"
             )
 
+        return v
+
+    @field_validator("n_kv_heads")
+    @classmethod
+    def validate_n_kv_head_candidates(cls, v):
+        invalid_values = [value for value in v if value is not None and value <= 0]
+        if invalid_values:
+            raise ValueError(
+                f"n_kv_heads candidates must be positive or null: {invalid_values}"
+            )
         return v
 
     @model_validator(mode="after")
@@ -738,6 +1176,124 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
         return self
 
+    @model_validator(mode="after")
+    def validate_concrete_candidates(self):
+        list_fields = {
+            "dim_model": self.dim_model,
+            "n_head": self.n_head,
+            "activation_fn": self.activation_fn,
+            "normalization": self.normalization,
+            "positional_encoding": self.positional_encoding,
+            "positional_encoding_scope": self.positional_encoding_scope,
+            "attention_type": self.attention_type,
+            "attention_output_projection": self.attention_output_projection,
+            "norm_first": self.norm_first,
+            "n_kv_heads": self.n_kv_heads,
+        }
+        empty_fields = [name for name, values in list_fields.items() if not values]
+        if empty_fields:
+            raise ValueError(
+                "model hyperparameter candidate lists cannot be empty: "
+                f"{empty_fields}"
+            )
+
+        dim_feedforward_values = _validation_space_values(
+            "dim_feedforward",
+            self.dim_feedforward,
+        )
+        num_layer_values = _validation_space_values("num_layers", self.num_layers)
+        rope_theta_values = _validation_space_values("rope_theta", self.rope_theta)
+        decoding_support_values = (
+            [self.decoding_support]
+            if isinstance(self.decoding_support, int)
+            else _validation_space_values(
+                "decoding_support",
+                self.decoding_support,
+            )
+        )
+        decoding_specs = (
+            self.decoding_spec
+            if isinstance(self.decoding_spec, list)
+            else [self.decoding_spec]
+        )
+
+        candidates: list[tuple[str, dict[str, Any]]] = []
+        candidates.extend(
+            (f"width_index={width_index}", {"width_index": width_index})
+            for width_index in range(len(self.dim_model))
+        )
+        candidates.extend(
+            (f"dim_feedforward={value!r}", {"dim_feedforward": value})
+            for value in dim_feedforward_values
+        )
+        candidates.extend(
+            (f"num_layers={value!r}", {"num_layers": value})
+            for value in num_layer_values
+        )
+        candidates.extend(
+            (f"decoding_support={value!r}", {"decoding_support": value})
+            for value in decoding_support_values
+        )
+        candidates.extend(
+            (
+                f"decoding_spec_index={index}",
+                {"decoding_spec_index": index},
+            )
+            for index in range(len(decoding_specs))
+        )
+        for field_name, values in (
+            ("activation_fn", self.activation_fn),
+            ("normalization", self.normalization),
+            ("attention_output_projection", self.attention_output_projection),
+            ("norm_first", self.norm_first),
+        ):
+            candidates.extend(
+                (f"{field_name}={value!r}", {field_name: value}) for value in values
+            )
+        candidates.extend(
+            (f"rope_theta={value!r}", {"rope_theta": value})
+            for value in rope_theta_values
+        )
+
+        for width_index in range(len(self.dim_model)):
+            for positional_encoding in self.positional_encoding:
+                for positional_encoding_scope in self.positional_encoding_scope:
+                    candidates.append(
+                        (
+                            "width/positional encoding combination "
+                            f"({width_index}, {positional_encoding!r}, "
+                            f"{positional_encoding_scope!r})",
+                            {
+                                "width_index": width_index,
+                                "positional_encoding": positional_encoding,
+                                "positional_encoding_scope": positional_encoding_scope,
+                            },
+                        )
+                    )
+            for attention_type in self.attention_type:
+                for n_kv_heads in self._valid_kv_heads_for_width(width_index):
+                    candidates.append(
+                        (
+                            "width/attention/KV-head combination "
+                            f"({width_index}, {attention_type!r}, {n_kv_heads!r})",
+                            {
+                                "width_index": width_index,
+                                "attention_type": attention_type,
+                                "n_kv_heads": n_kv_heads,
+                            },
+                        )
+                    )
+
+        for description, candidate_kwargs in candidates:
+            try:
+                self.validation_model(**candidate_kwargs)
+            except (ValidationError, ValueError) as error:
+                raise ValueError(
+                    "model_hyperparameter_sampling can produce an invalid "
+                    f"ModelSpecModel for {description}:\n{error}"
+                ) from error
+        return self
+
     def sample_trial(self, trial: Any) -> ModelSpecModel:
         """Sample architecture hyperparameters for one Optuna trial."""
         dim_model_idx = trial.suggest_categorical(
@@ -746,14 +1302,6 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
         dim_model = self.dim_model[dim_model_idx]
         n_head = self.n_head[dim_model_idx]
-        if isinstance(self.ingestion_spec, list):
-            ingestion_spec = self.ingestion_spec[dim_model_idx]
-        else:
-            ingestion_spec = self.ingestion_spec
-        if isinstance(self.ingestion_merge, list):
-            ingestion_merge = self.ingestion_merge[dim_model_idx]
-        else:
-            ingestion_merge = self.ingestion_merge
         decoding_support = (
             self.decoding_support
             if isinstance(self.decoding_support, int)
@@ -763,9 +1311,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
             decoding_spec_idx = trial.suggest_categorical(
                 "decoding_spec_idx", list(range(len(self.decoding_spec)))
             )
-            decoding_spec = self.decoding_spec[decoding_spec_idx]
+            decoding_spec = self._decoding_spec_for_index(decoding_spec_idx)
         else:
-            decoding_spec = self.decoding_spec
+            decoding_spec = self._decoding_spec_for_index(0)
 
         dim_feedforward = sample_param(trial, "dim_feedforward", self.dim_feedforward)
         num_layers = sample_param(trial, "num_layers", self.num_layers)
@@ -810,39 +1358,22 @@ class ModelSpecHyperparameterSampling(BaseModel):
             f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {positional_encoding_scope = } - {attention_type = } - {attention_output_projection = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
         )
 
-        model_spec_kwargs = {
-            "dim_model": dim_model,
-            "n_head": n_head,
-            "dim_feedforward": dim_feedforward,
-            "num_layers": num_layers,
-            "activation_fn": activation_fn,
-            "normalization": normalization,
-            "positional_encoding": positional_encoding,
-            "positional_encoding_scope": positional_encoding_scope,
-            "attention_type": attention_type,
-            "attention_output_projection": attention_output_projection,
-            "norm_first": norm_first,
-            "shared_layer_groups": self.shared_layer_groups,
-            "n_kv_heads": n_kv_heads,
-            "rope_theta": rope_theta,
-            "prediction_length": self.prediction_length,
-            "decoding_support": decoding_support,
-        }
-        if decoding_spec is not None:
-            model_spec_kwargs["decoding_spec"] = decoding_spec
-        if ingestion_spec is not None:
-            model_spec_kwargs["ingestion_spec"] = ingestion_spec
-        if ingestion_merge is not None:
-            model_spec_kwargs["ingestion_merge"] = ingestion_merge
-        model_spec_kwargs["allow_shared_ingestion_columns"] = (
-            self.allow_shared_ingestion_columns
+        return self._build_model_spec(
+            width_index=dim_model_idx,
+            dim_feedforward=dim_feedforward,
+            num_layers=num_layers,
+            decoding_support=decoding_support,
+            decoding_spec=decoding_spec,
+            activation_fn=activation_fn,
+            normalization=normalization,
+            positional_encoding=positional_encoding,
+            positional_encoding_scope=positional_encoding_scope,
+            attention_type=attention_type,
+            attention_output_projection=attention_output_projection,
+            norm_first=norm_first,
+            n_kv_heads=n_kv_heads,
+            rope_theta=rope_theta,
         )
-        model_spec_kwargs["allow_unused_input_columns"] = (
-            self.allow_unused_input_columns
-        )
-        model_spec_kwargs["auxiliary_input_columns"] = self.auxiliary_input_columns
-
-        return ModelSpecModel(**model_spec_kwargs)
 
 
 class HyperparameterSearchConfig(BaseModel):
@@ -872,11 +1403,15 @@ class HyperparameterSearchConfig(BaseModel):
     target_columns: list[str]
     target_column_types: dict[str, str]
     id_maps: dict[str, dict[str | int, int]]
+    special_token_ids: dict[str, int] = Field(
+        default_factory=lambda: SPECIAL_TOKEN_IDS.ids_by_label
+    )
     categorical_decoder_special_tokens: dict[str, list[str]] = Field(
         default_factory=dict
     )
 
     context_length: list[int]
+    target_offset: int = Field(default=1, ge=0)
     storage_layout: StoredWindowLayout
     model_window_stride: Optional[int] = Field(default=None, gt=0)
     n_classes: dict[str, int]
@@ -899,6 +1434,69 @@ class HyperparameterSearchConfig(BaseModel):
     training_hyperparameter_sampling: TrainingSpecHyperparameterSampling
 
     override_input: bool = False
+
+    def _build_train_model(
+        self,
+        *,
+        model_spec: ModelSpecModel,
+        training_spec: TrainingSpecModel,
+        input_columns_index: int,
+        context_length: int,
+        seed: int,
+        run_index: int,
+    ) -> TrainModel:
+        objective_class = get_objective_class(training_spec.training_objective)
+        if not objective_class.forward_looking:
+            model_spec = model_spec.model_copy(
+                update={"prediction_length": context_length}
+            )
+
+        window_view = ModelWindowView(
+            context_length=context_length,
+            objective=training_spec.training_objective,
+            target_offset=target_offset_for_objective(
+                training_spec.training_objective,
+                self.target_offset,
+            ),
+        )
+        resolve_window_view(self.storage_layout, window_view)
+
+        return TrainModel(
+            project_root=self.project_root,
+            metadata_config_path=self.metadata_config_path,
+            model_name=f"{self.hp_search_name}-run-{run_index}",
+            training_data_path=self.training_data_path,
+            validation_data_path=self.validation_data_path,
+            read_format=self.read_format,
+            input_columns=self.input_columns[input_columns_index],
+            column_types=self.column_types[input_columns_index],
+            categorical_columns=self.categorical_columns[input_columns_index],
+            real_columns=self.real_columns[input_columns_index],
+            target_columns=self.target_columns,
+            target_column_types=self.target_column_types,
+            id_maps=self.id_maps,
+            special_token_ids=self.special_token_ids,
+            categorical_decoder_special_tokens=self.categorical_decoder_special_tokens,
+            storage_layout=self.storage_layout,
+            window_view=window_view,
+            model_window_stride=self.model_window_stride,
+            n_classes=self.n_classes,
+            inference_batch_size=self.inference_batch_size,
+            seed=seed,
+            export_embedding_model=self.export_embedding_model,
+            export_generative_model=self.export_generative_model,
+            export_onnx=self.export_onnx,
+            export_pt=self.export_pt,
+            export_with_dropout=self.export_with_dropout,
+            feature_layout=self.feature_layout,
+            model_spec=model_spec,
+            training_spec=training_spec,
+        )
+
+    @field_validator("special_token_ids")
+    @classmethod
+    def validate_special_token_ids_match_runtime(cls, v):
+        return validate_special_token_ids(v, source="HyperparameterSearchConfig")
 
     @model_validator(mode="after")
     def validate_sequence_layout(self):
@@ -924,6 +1522,18 @@ class HyperparameterSearchConfig(BaseModel):
                     "but the preprocessed dataset has max_target_offset=0. "
                     "Causal, final_value, and next_occurrence modeling require "
                     "max_target_offset >= 1."
+                )
+        for objective_name in self.training_hyperparameter_sampling.training_objective:
+            target_offset = target_offset_for_objective(
+                objective_name,
+                self.target_offset,
+            )
+            if target_offset > self.storage_layout.max_target_offset:
+                raise ValueError(
+                    f"Hyperparameter search target_offset={target_offset} for "
+                    f"training objective {objective_name!r} exceeds the stored "
+                    "dataset's max_target_offset="
+                    f"{self.storage_layout.max_target_offset}."
                 )
         return self
 
@@ -968,6 +1578,122 @@ class HyperparameterSearchConfig(BaseModel):
                 f"{self.n_trials}. Remove n_samples to let the grid run until "
                 "exhaustion, or set it to the configured combination count."
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_concrete_train_models(self):
+        candidate_lengths = {
+            "input_columns": len(self.input_columns),
+            "column_types": len(self.column_types),
+            "categorical_columns": len(self.categorical_columns),
+            "real_columns": len(self.real_columns),
+        }
+        if not self.input_columns:
+            raise ValueError("input_columns candidates cannot be empty")
+        if len(set(candidate_lengths.values())) != 1:
+            raise ValueError(
+                "input_columns, column_types, categorical_columns, and "
+                "real_columns must have the same number of paired candidates; "
+                + ", ".join(
+                    f"{name}={length}" for name, length in candidate_lengths.items()
+                )
+            )
+        if not self.context_length:
+            raise ValueError("context_length candidates cannot be empty")
+        if self.seed is not None and not self.seed:
+            raise ValueError("seed candidates cannot be empty")
+
+        model_sampling = self.model_hyperparameter_sampling
+        training_sampling = self.training_hyperparameter_sampling
+        baseline_seed = 101 if self.seed is None else self.seed[0]
+        baseline_context = self.context_length[0]
+        baseline_model = model_sampling.validation_model()
+        baseline_training = training_sampling.validation_model()
+
+        candidates: list[tuple[str, ModelSpecModel, TrainingSpecModel, int, int]] = [
+            (
+                "the baseline candidate",
+                baseline_model,
+                baseline_training,
+                0,
+                baseline_context,
+            )
+        ]
+
+        for input_columns_index in range(len(self.input_columns)):
+            for width_index in range(len(model_sampling.dim_model)):
+                candidates.append(
+                    (
+                        "input/model-width combination "
+                        f"({input_columns_index}, {width_index})",
+                        model_sampling.validation_model(width_index=width_index),
+                        baseline_training,
+                        input_columns_index,
+                        baseline_context,
+                    )
+                )
+
+        decoding_specs = (
+            model_sampling.decoding_spec
+            if isinstance(model_sampling.decoding_spec, list)
+            else [model_sampling.decoding_spec]
+        )
+        for decoding_spec_index in range(len(decoding_specs)):
+            candidates.append(
+                (
+                    f"decoding_spec_index={decoding_spec_index}",
+                    model_sampling.validation_model(
+                        decoding_spec_index=decoding_spec_index
+                    ),
+                    baseline_training,
+                    0,
+                    baseline_context,
+                )
+            )
+
+        decoding_support_values = (
+            [model_sampling.decoding_support]
+            if isinstance(model_sampling.decoding_support, int)
+            else _validation_space_values(
+                "decoding_support",
+                model_sampling.decoding_support,
+            )
+        )
+        for context_length in self.context_length:
+            for objective in training_sampling.training_objective:
+                training_spec = training_sampling.validation_model(
+                    training_objective=objective
+                )
+                for decoding_support in decoding_support_values:
+                    candidates.append(
+                        (
+                            "context/objective/decoding-support combination "
+                            f"({context_length}, {objective!r}, "
+                            f"{decoding_support})",
+                            model_sampling.validation_model(
+                                decoding_support=decoding_support
+                            ),
+                            training_spec,
+                            0,
+                            context_length,
+                        )
+                    )
+
+        for description, model_spec, training_spec, input_index, context in candidates:
+            try:
+                self._build_train_model(
+                    model_spec=model_spec,
+                    training_spec=training_spec,
+                    input_columns_index=input_index,
+                    context_length=context,
+                    seed=baseline_seed,
+                    run_index=0,
+                )
+            except (ValidationError, ValueError) as error:
+                raise ValueError(
+                    "Hyperparameter search can produce an invalid TrainModel for "
+                    f"{description}:\n{error}"
+                ) from error
         return self
 
     @field_validator("evaluation_metrics")
@@ -1030,11 +1756,11 @@ class HyperparameterSearchConfig(BaseModel):
     @field_validator("column_types")
     @classmethod
     def validate_model_spec(cls, v, info):
-        if v is not None:
-            if not (len(info.data.get("input_columns")) == len(v)):
-                raise ValueError(
-                    "input_columns and column_types must have the same number of candidate values, that are paired"
-                )
+        input_columns = info.data.get("input_columns")
+        if input_columns is not None and len(input_columns) != len(v):
+            raise ValueError(
+                "input_columns and column_types must have the same number of candidate values, that are paired"
+            )
         return v
 
     @field_validator("search_strategy")
@@ -1059,51 +1785,873 @@ class HyperparameterSearchConfig(BaseModel):
             "context_length", self.context_length
         )
         training_spec = self.training_hyperparameter_sampling.sample_trial(trial)
-        objective_class = get_objective_class(training_spec.training_objective)
-        if not objective_class.forward_looking:
-            model_spec = model_spec.model_copy(
-                update={"prediction_length": context_length}
-            )
-
-        window_view = ModelWindowView(
-            context_length=context_length,
-            objective=training_spec.training_objective,
-            target_offset=target_offset_for_objective(
-                training_spec.training_objective,
-                1,
-            ),
-        )
-        resolve_window_view(self.storage_layout, window_view)
-
         logger.info(f"{seed = } - {input_columns_index = } - {context_length = }")
 
-        return TrainModel(
-            project_root=self.project_root,
-            metadata_config_path=self.metadata_config_path,
-            model_name=f"{self.hp_search_name}-run-{run_index}",
-            training_data_path=self.training_data_path,
-            validation_data_path=self.validation_data_path,
-            read_format=self.read_format,
-            input_columns=self.input_columns[input_columns_index],
-            column_types=self.column_types[input_columns_index],
-            categorical_columns=self.categorical_columns[input_columns_index],
-            real_columns=self.real_columns[input_columns_index],
-            target_columns=self.target_columns,
-            target_column_types=self.target_column_types,
-            id_maps=self.id_maps,
-            categorical_decoder_special_tokens=self.categorical_decoder_special_tokens,
-            storage_layout=self.storage_layout,
-            window_view=window_view,
-            model_window_stride=self.model_window_stride,
-            n_classes=self.n_classes,
-            inference_batch_size=self.inference_batch_size,
-            seed=seed,
-            export_embedding_model=self.export_embedding_model,
-            export_generative_model=self.export_generative_model,
-            export_onnx=self.export_onnx,
-            export_pt=self.export_pt,
-            export_with_dropout=self.export_with_dropout,
-            feature_layout=self.feature_layout,
+        return self._build_train_model(
             model_spec=model_spec,
             training_spec=training_spec,
+            input_columns_index=input_columns_index,
+            context_length=context_length,
+            seed=seed,
+            run_index=run_index,
         )
+
+
+class _TypedPartialOverride(BaseModel):
+    """Shared explicit-null validation for typed partial override models."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    non_nullable_fields: ClassVar[frozenset[str]] = frozenset()
+
+    @model_validator(mode="after")
+    def reject_explicit_null_for_non_nullable_fields(self):
+        invalid_fields = sorted(
+            field_name
+            for field_name in self.model_fields_set & self.non_nullable_fields
+            if getattr(self, field_name) is None
+        )
+        if invalid_fields:
+            raise ValueError(
+                "explicit null is only valid for nullable fields; cannot clear "
+                + ", ".join(repr(field_name) for field_name in invalid_fields)
+            )
+        return self
+
+
+class BERTSpecHyperparameterSamplingOverride(_TypedPartialOverride):
+    """Partial BERT search space layered over a training BERT specification."""
+
+    non_nullable_fields = frozenset(
+        {"masking_probability", "replacement_distribution", "span_masking"}
+    )
+
+    masking_probability: Optional[OptunaFloat] = None
+    replacement_distribution: Optional[list[ReplacementDistribution]] = None
+    span_masking: Optional[list[ProbabilityDistribution]] = None
+
+
+class NamedComponentConfigOverride(RootModel[dict[str, JsonValue]]):
+    """Typed open parameter mapping for an optimizer or scheduler candidate."""
+
+    @model_validator(mode="after")
+    def validate_name(self):
+        name = self.root.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("must define a non-empty string 'name'")
+        return self
+
+
+class TrainingSpecHyperparameterSamplingOverride(_TypedPartialOverride):
+    """Typed partial override for a training specification."""
+
+    non_nullable_fields = frozenset(
+        {
+            "device",
+            "epochs",
+            "log_interval",
+            "class_share_log_columns",
+            "save_interval_epochs",
+            "save_interval_val_loss",
+            "calculate_validation_loss_on_initialization",
+            "training_objective",
+            "batch_size",
+            "learning_rate",
+            "criterion",
+            "dropout",
+            "optimizer",
+            "scheduler",
+            "continue_training",
+            "scheduler_step_on",
+            "distributed",
+            "load_full_data_to_ram",
+            "max_ram_gb",
+            "device_max_concat_length",
+            "world_size",
+            "num_workers",
+            "backend",
+            "torch_compile",
+            "float32_matmul_precision",
+        }
+    )
+
+    device: Optional[str] = None
+    epochs: Optional[list[int]] = None
+    log_interval: Optional[int] = None
+    class_share_log_columns: Optional[list[str]] = None
+    early_stopping_epochs: Optional[int] = None
+    save_interval_epochs: Optional[int] = None
+    save_latest_interval_minutes: Optional[float] = None
+    save_interval_minutes: Optional[float] = None
+    save_interval_val_loss: Optional[bool] = None
+    save_interval_batches: Optional[int] = None
+    calculate_validation_loss_on_initialization: Optional[bool] = None
+
+    training_objective: Optional[list[str]] = None
+    batch_size: Optional[OptunaInt] = None
+    learning_rate: Optional[list[float]] = None
+    bert_spec: Optional[BERTSpecHyperparameterSamplingOverride] = None
+    next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
+    criterion: Optional[dict[str, str]] = None
+    class_weights: Optional[dict[str, list[float]]] = None
+    accumulation_steps: Optional[OptionalOptunaInt] = None
+    gradient_clip: OptionalOptunaFloat = None
+    dropout: Optional[OptunaFloat] = None
+
+    loss_weights: Optional[dict[str, float]] = None
+    optimizer: Optional[list[NamedComponentConfigOverride]] = None
+    scheduler: Optional[list[NamedComponentConfigOverride]] = None
+    continue_training: Optional[bool] = None
+    scheduler_step_on: Optional[str] = None
+    distributed: Optional[bool] = None
+    load_full_data_to_ram: Optional[bool] = None
+    max_ram_gb: Optional[Union[int, float]] = None
+    device_max_concat_length: Optional[int] = None
+    world_size: Optional[int] = None
+    num_workers: Optional[int] = None
+    backend: Optional[str] = None
+    layer_type_dtypes: Optional[dict[str, str]] = None
+    layer_autocast: Optional[bool] = None
+    data_parallelism: Optional[str] = None
+    fsdp_cpu_offload: Optional[bool] = None
+    torch_compile: Optional[str] = None
+    float32_matmul_precision: Optional[str] = None
+
+    @field_validator("training_objective", mode="before")
+    @classmethod
+    def normalize_training_objective(cls, v):
+        if isinstance(v, str):
+            return [v]
+        return v
+
+
+class ModelSpecHyperparameterSamplingOverride(_TypedPartialOverride):
+    """Typed partial override for a model specification."""
+
+    non_nullable_fields = frozenset(
+        {
+            "dim_model",
+            "allow_shared_ingestion_columns",
+            "allow_unused_input_columns",
+            "auxiliary_input_columns",
+            "n_head",
+            "dim_feedforward",
+            "num_layers",
+            "prediction_length",
+            "decoding_support",
+            "activation_fn",
+            "normalization",
+            "positional_encoding",
+            "positional_encoding_scope",
+            "attention_type",
+            "attention_output_projection",
+            "norm_first",
+            "shared_layer_groups",
+            "n_kv_heads",
+            "rope_theta",
+        }
+    )
+
+    dim_model: Optional[list[int]] = None
+    ingestion_spec: Optional[Union[IngestionSpecConfig, list[IngestionSpecConfig]]] = (
+        None
+    )
+    ingestion_merge: Optional[
+        Union[IngestionMergeConfig, list[IngestionMergeConfig]]
+    ] = None
+    allow_shared_ingestion_columns: Optional[bool] = None
+    allow_unused_input_columns: Optional[bool] = None
+    auxiliary_input_columns: Optional[list[str]] = None
+    n_head: Optional[list[int]] = None
+
+    dim_feedforward: Optional[OptunaInt] = None
+    num_layers: Optional[OptunaInt] = None
+    prediction_length: Optional[int] = None
+    decoding_support: Optional[Union[int, OptunaInt]] = None
+    decoding_spec: Optional[Union[DecodingSpecConfig, list[DecodingSpecConfig]]] = None
+
+    activation_fn: Optional[list[str]] = None
+    normalization: Optional[list[str]] = None
+    positional_encoding: Optional[list[str]] = None
+    positional_encoding_scope: Optional[list[str]] = None
+    attention_type: Optional[list[str]] = None
+    attention_output_projection: Optional[list[bool]] = None
+
+    norm_first: Optional[list[bool]] = None
+    shared_layer_groups: Optional[list[list[int]]] = None
+    n_kv_heads: Optional[list[Optional[int]]] = None
+    rope_theta: Optional[OptunaFloat] = None
+
+
+class HyperparameterSearchOverrides(_TypedPartialOverride):
+    """Training-config fields that may be replaced by an override search."""
+
+    non_nullable_fields = frozenset(
+        {
+            "project_root",
+            "metadata_config_path",
+            "training_data_path",
+            "validation_data_path",
+            "read_format",
+            "column_types",
+            "target_columns",
+            "target_column_types",
+            "id_maps",
+            "special_token_ids",
+            "categorical_decoder_special_tokens",
+            "context_length",
+            "target_offset",
+            "storage_layout",
+            "n_classes",
+            "inference_batch_size",
+            "export_generative_model",
+            "export_embedding_model",
+            "export_onnx",
+            "export_pt",
+            "export_with_dropout",
+            "model_spec",
+            "training_spec",
+        }
+    )
+
+    project_root: Optional[str] = None
+    metadata_config_path: Optional[str] = None
+    training_data_path: Optional[str] = None
+    validation_data_path: Optional[str] = None
+    read_format: Optional[str] = None
+
+    input_columns: Optional[list[list[str]]] = None
+    column_types: Optional[list[dict[str, str]]] = None
+    target_columns: Optional[list[str]] = None
+    target_column_types: Optional[dict[str, str]] = None
+    id_maps: Optional[dict[str, dict[str | int, int]]] = None
+    special_token_ids: Optional[dict[str, int]] = None
+    categorical_decoder_special_tokens: Optional[dict[str, list[str]]] = None
+
+    context_length: Optional[list[int]] = None
+    target_offset: Optional[int] = None
+    storage_layout: Optional[StoredWindowLayout] = None
+    model_window_stride: Optional[int] = None
+    n_classes: Optional[dict[str, int]] = None
+    inference_batch_size: Optional[int] = None
+    seed: Optional[list[int]] = None
+
+    export_generative_model: Optional[bool] = None
+    export_embedding_model: Optional[bool] = None
+    export_onnx: Optional[bool] = None
+    export_pt: Optional[bool] = None
+    export_with_dropout: Optional[bool] = None
+
+    feature_layout: Optional[FeatureLayoutRegistryModel] = None
+    model_spec: Optional[ModelSpecHyperparameterSamplingOverride] = None
+    training_spec: Optional[TrainingSpecHyperparameterSamplingOverride] = None
+
+
+class PartialHyperparameterSearchConfig(BaseModel):
+    """Search controls plus a typed partial override of a training config."""
+
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    base_config_path: str
+    overrides: HyperparameterSearchOverrides
+
+    hp_search_name: str
+    search_strategy: str = "bayesian"
+    global_seed: Optional[int] = None
+    n_trials: Optional[int] = Field(None, alias="n_samples")
+    prune_trials: Optional[bool] = True
+    pruning_warmup_epochs: Optional[int] = Field(default=None, ge=0)
+    pruning_warmup_batches: Optional[int] = Field(default=None, ge=0)
+    model_config_write_path: str
+
+    evaluation_inference_config: Optional[str] = None
+    evaluation_script: Optional[str] = None
+    evaluation_metric_directions: Optional[list[str]] = None
+    evaluation_metrics: Optional[list[str]] = None
+    override_input: bool = False
+
+
+def _is_configured(model: BaseModel, field_name: str) -> bool:
+    return field_name in model.model_fields_set
+
+
+def _configured_or_base(
+    overrides: HyperparameterSearchOverrides,
+    field_name: str,
+    base_value: Any,
+):
+    if _is_configured(overrides, field_name):
+        return copy.deepcopy(getattr(overrides, field_name))
+    return copy.deepcopy(base_value)
+
+
+def _coupled_candidate_count(
+    config_path: str,
+    group_name: str,
+    configured_candidates: dict[str, Optional[list]],
+) -> int:
+    lengths = {
+        name: len(values)
+        for name, values in configured_candidates.items()
+        if values is not None
+    }
+    empty_fields = [name for name, length in lengths.items() if length == 0]
+    if empty_fields:
+        raise ValueError(
+            f"Override config '{config_path}' configures empty candidate lists "
+            f"for coupled group {group_name!r}: {empty_fields}."
+        )
+    if len(set(lengths.values())) > 1:
+        details = ", ".join(f"{name}={length}" for name, length in lengths.items())
+        raise ValueError(
+            f"Override config '{config_path}' configures incompatible candidate "
+            f"counts for coupled group {group_name!r}: {details}. Only "
+            "non-overridden members can be repeated automatically."
+        )
+    return next(iter(lengths.values()), 1)
+
+
+def _compile_bert_sampling(
+    base_bert_spec: Optional[BERTSpecModel],
+    override: BERTSpecHyperparameterSamplingOverride,
+) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    if base_bert_spec is not None:
+        base_values = base_bert_spec.model_dump(mode="python")
+        values = {
+            "masking_probability": [base_values["masking_probability"]],
+            "replacement_distribution": [base_values["replacement_distribution"]],
+            "span_masking": [base_values["span_masking"]],
+        }
+    values.update(override.model_dump(exclude_unset=True, mode="python"))
+    return values
+
+
+def _compile_training_sampling(
+    config_path: str,
+    base_training_spec: TrainingSpecModel,
+    override: Optional[TrainingSpecHyperparameterSamplingOverride],
+) -> dict[str, Any]:
+    base = base_training_spec.model_dump(mode="python")
+    override = override or TrainingSpecHyperparameterSamplingOverride()
+    override_values = override.model_dump(exclude_unset=True, mode="python")
+
+    coupled_overrides = {
+        name: getattr(override, name)
+        if _is_configured(override, name) and getattr(override, name) is not None
+        else None
+        for name in ("learning_rate", "epochs", "scheduler")
+    }
+    candidate_count = _coupled_candidate_count(
+        config_path,
+        "training schedule (learning_rate, epochs, scheduler)",
+        coupled_overrides,
+    )
+
+    values: dict[str, Any] = {
+        "device": base["device"],
+        "epochs": [base["epochs"]] * candidate_count,
+        "log_interval": base["log_interval"],
+        "class_share_log_columns": base["class_share_log_columns"],
+        "early_stopping_epochs": base["early_stopping_epochs"],
+        "save_interval_epochs": base["save_interval_epochs"],
+        "save_latest_interval_minutes": base["save_latest_interval_minutes"],
+        "save_interval_minutes": base["save_interval_minutes"],
+        "save_interval_val_loss": base["save_interval_val_loss"],
+        "save_interval_batches": base["save_interval_batches"],
+        "calculate_validation_loss_on_initialization": base[
+            "calculate_validation_loss_on_initialization"
+        ],
+        "training_objective": [base["training_objective"]],
+        "batch_size": [base["batch_size"]],
+        "learning_rate": [base["learning_rate"]] * candidate_count,
+        "next_occurrence_config": base["next_occurrence_config"],
+        "criterion": base["criterion"],
+        "class_weights": base["class_weights"],
+        "accumulation_steps": [base["accumulation_steps"]],
+        "gradient_clip": [base["gradient_clip"]],
+        "dropout": [base["dropout"]],
+        "loss_weights": base["loss_weights"],
+        "optimizer": [base["optimizer"]],
+        "scheduler": [copy.deepcopy(base["scheduler"]) for _ in range(candidate_count)],
+        "continue_training": base["continue_training"],
+        "scheduler_step_on": base["scheduler_step_on"],
+        "distributed": base["distributed"],
+        "load_full_data_to_ram": base["load_full_data_to_ram"],
+        "max_ram_gb": base["max_ram_gb"],
+        "device_max_concat_length": base["device_max_concat_length"],
+        "world_size": base["world_size"],
+        "num_workers": base["num_workers"],
+        "backend": base["backend"],
+        "layer_type_dtypes": base["layer_type_dtypes"],
+        "layer_autocast": base["layer_autocast"],
+        "data_parallelism": base["data_parallelism"],
+        "fsdp_cpu_offload": base["fsdp_cpu_offload"],
+        "torch_compile": base["torch_compile"],
+        "float32_matmul_precision": base["float32_matmul_precision"],
+    }
+
+    for field_name, field_value in override_values.items():
+        if field_name not in {"learning_rate", "epochs", "scheduler", "bert_spec"}:
+            values[field_name] = field_value
+    for field_name in ("learning_rate", "epochs", "scheduler"):
+        if _is_configured(override, field_name):
+            values[field_name] = override_values[field_name]
+
+    if _is_configured(override, "accumulation_steps"):
+        accumulation_steps = override.accumulation_steps
+        values["accumulation_steps"] = (
+            [None] if accumulation_steps is None else accumulation_steps
+        )
+
+    if _is_configured(override, "bert_spec"):
+        values["bert_spec"] = (
+            None
+            if override.bert_spec is None
+            else _compile_bert_sampling(
+                base_training_spec.bert_spec,
+                override.bert_spec,
+            )
+        )
+    elif base_training_spec.bert_spec is not None:
+        values["bert_spec"] = _compile_bert_sampling(
+            base_training_spec.bert_spec,
+            BERTSpecHyperparameterSamplingOverride(),
+        )
+    else:
+        values["bert_spec"] = None
+
+    objective_classes = [
+        get_objective_class(objective_name)
+        for objective_name in values["training_objective"]
+    ]
+    has_bert_objective = any(
+        issubclass(objective_class, BERTObjective)
+        for objective_class in objective_classes
+    )
+    has_next_occurrence_objective = any(
+        issubclass(objective_class, NextOccurrenceObjective)
+        for objective_class in objective_classes
+    )
+    if not has_bert_objective and not _is_configured(override, "bert_spec"):
+        values["bert_spec"] = None
+    if not has_next_occurrence_objective and not _is_configured(
+        override, "next_occurrence_config"
+    ):
+        values["next_occurrence_config"] = None
+
+    return values
+
+
+def _compile_model_sampling(
+    config_path: str,
+    base_model_spec: ModelSpecModel,
+    source_model_spec: dict[str, Any],
+    override: Optional[ModelSpecHyperparameterSamplingOverride],
+) -> dict[str, Any]:
+    base = base_model_spec.model_dump(mode="python")
+    override = override or ModelSpecHyperparameterSamplingOverride()
+    override_values = override.model_dump(exclude_unset=True, mode="python")
+
+    coupled_overrides: dict[str, Optional[list]] = {}
+    for field_name in ("dim_model", "n_head", "ingestion_spec", "ingestion_merge"):
+        field_value = getattr(override, field_name)
+        coupled_overrides[field_name] = (
+            field_value
+            if _is_configured(override, field_name) and isinstance(field_value, list)
+            else None
+        )
+    candidate_count = _coupled_candidate_count(
+        config_path,
+        "model width (dim_model, n_head, ingestion_spec, ingestion_merge)",
+        coupled_overrides,
+    )
+
+    inherited_ingestion = (
+        base["ingestion_spec"]
+        if source_model_spec.get("ingestion_spec") is not None
+        else None
+    )
+    inherited_merge = (
+        base["ingestion_merge"]
+        if source_model_spec.get("ingestion_merge") is not None
+        else None
+    )
+    inherited_decoding = (
+        base["decoding_spec"]
+        if source_model_spec.get("decoding_spec") is not None
+        else None
+    )
+
+    values: dict[str, Any] = {
+        "dim_model": [base["dim_model"]] * candidate_count,
+        "ingestion_spec": (
+            [copy.deepcopy(inherited_ingestion) for _ in range(candidate_count)]
+            if inherited_ingestion is not None and candidate_count > 1
+            else inherited_ingestion
+        ),
+        "ingestion_merge": (
+            [copy.deepcopy(inherited_merge) for _ in range(candidate_count)]
+            if inherited_merge is not None and candidate_count > 1
+            else inherited_merge
+        ),
+        "allow_shared_ingestion_columns": base["allow_shared_ingestion_columns"],
+        "allow_unused_input_columns": base["allow_unused_input_columns"],
+        "auxiliary_input_columns": base["auxiliary_input_columns"],
+        "n_head": [base["n_head"]] * candidate_count,
+        "dim_feedforward": [base["dim_feedforward"]],
+        "num_layers": [base["num_layers"]],
+        "prediction_length": base["prediction_length"],
+        "decoding_support": [base["decoding_support"]],
+        "decoding_spec": (
+            [inherited_decoding] if inherited_decoding is not None else None
+        ),
+        "activation_fn": [base["activation_fn"]],
+        "normalization": [base["normalization"]],
+        "positional_encoding": [base["positional_encoding"]],
+        "positional_encoding_scope": [base["positional_encoding_scope"]],
+        "attention_type": [base["attention_type"]],
+        "attention_output_projection": [base["attention_output_projection"]],
+        "norm_first": [base["norm_first"]],
+        "shared_layer_groups": base["shared_layer_groups"],
+        "n_kv_heads": [base["n_kv_heads"]],
+        "rope_theta": [base["rope_theta"]],
+    }
+
+    for field_name, field_value in override_values.items():
+        values[field_name] = field_value
+    return values
+
+
+def _resolve_base_config_path(config_path: str, base_config_path: str) -> str:
+    if os.path.isabs(base_config_path) or os.path.exists(base_config_path):
+        return base_config_path
+    return os.path.join(os.path.dirname(os.path.abspath(config_path)), base_config_path)
+
+
+def compile_hyperparameter_search_override_config(
+    config_path: str,
+    config_values: dict[str, Any],
+    skip_metadata: bool,
+) -> HyperparameterSearchConfig:
+    """Compile a training config and typed partial override to the legacy model."""
+    try:
+        partial = PartialHyperparameterSearchConfig.model_validate(config_values)
+    except ValidationError as error:
+        raise ValueError(
+            f"Invalid override hyperparameter search config '{config_path}':\n{error}"
+        ) from error
+
+    base_config_path = _resolve_base_config_path(
+        config_path,
+        partial.base_config_path,
+    )
+    try:
+        loaded_base = load_train_config_with_source(
+            base_config_path,
+            {},
+            skip_metadata,
+        )
+    except Exception as error:
+        raise ValueError(
+            f"Unable to load base training config '{base_config_path}' referenced "
+            f"by override config '{config_path}': {error}"
+        ) from error
+
+    base_model = loaded_base.model
+    source_values = loaded_base.source_values
+    overrides = partial.overrides
+
+    project_root = _configured_or_base(
+        overrides,
+        "project_root",
+        base_model.project_root,
+    )
+    metadata_config_path = _configured_or_base(
+        overrides,
+        "metadata_config_path",
+        base_model.metadata_config_path,
+    )
+
+    metadata_changed = (
+        project_root != base_model.project_root
+        or metadata_config_path != base_model.metadata_config_path
+    )
+    metadata_config = (
+        None if skip_metadata else copy.deepcopy(loaded_base.metadata_values)
+    )
+    if not skip_metadata and metadata_changed:
+        effective_metadata_path = normalize_path(
+            metadata_config_path,
+            project_root,
+        )
+        try:
+            with open(effective_metadata_path, "r") as f:
+                metadata_config = json.loads(f.read())
+        except Exception as error:
+            raise ValueError(
+                f"Override config '{config_path}' changes project_root or "
+                f"metadata_config_path, but metadata could not be loaded from "
+                f"'{effective_metadata_path}': {error}"
+            ) from error
+
+    if metadata_config is not None:
+        storage_layout = stored_window_layout_from_metadata(metadata_config)
+        if storage_layout.version != 2:
+            raise ValueError(
+                f"Override config '{config_path}' requires metadata "
+                "stored_window_layout_version=2, got "
+                f"{storage_layout.version}."
+            )
+        base_column_types = source_values.get(
+            "column_types",
+            metadata_config["column_types"],
+        )
+        base_n_classes = source_values.get(
+            "n_classes",
+            metadata_config["n_classes"],
+        )
+        base_id_maps = metadata_config["id_maps"]
+        base_special_token_ids = validate_special_token_ids(
+            metadata_config.get(
+                "special_token_ids",
+                SPECIAL_TOKEN_IDS.ids_by_label,
+            ),
+            source=f"metadata config '{metadata_config_path}'",
+        )
+        split_paths = metadata_config["split_paths"]
+        raw_training_path = source_values.get("training_data_path", split_paths[0])
+        raw_validation_path = source_values.get(
+            "validation_data_path",
+            split_paths[min(1, len(split_paths) - 1)],
+        )
+        base_training_path = normalize_path(raw_training_path, project_root)
+        base_validation_path = normalize_path(raw_validation_path, project_root)
+        source_input_columns = source_values.get("input_columns")
+        base_input_columns = (
+            list(base_column_types)
+            if source_input_columns is None
+            else source_input_columns
+        )
+    else:
+        storage_layout = base_model.storage_layout
+        base_column_types = base_model.column_types
+        base_n_classes = base_model.n_classes
+        base_id_maps = base_model.id_maps
+        base_special_token_ids = base_model.special_token_ids
+        base_training_path = base_model.training_data_path
+        base_validation_path = base_model.validation_data_path
+        base_input_columns = base_model.input_columns
+
+    training_data_path = _configured_or_base(
+        overrides,
+        "training_data_path",
+        base_training_path,
+    )
+    validation_data_path = _configured_or_base(
+        overrides,
+        "validation_data_path",
+        base_validation_path,
+    )
+    if _is_configured(overrides, "training_data_path"):
+        training_data_path = normalize_path(training_data_path, project_root)
+    if _is_configured(overrides, "validation_data_path"):
+        validation_data_path = normalize_path(validation_data_path, project_root)
+
+    input_override = (
+        overrides.input_columns if _is_configured(overrides, "input_columns") else None
+    )
+    column_override = (
+        overrides.column_types if _is_configured(overrides, "column_types") else None
+    )
+    if _is_configured(overrides, "column_types") and column_override is None:
+        raise ValueError(
+            f"Override config '{config_path}' explicitly clears "
+            "'overrides.column_types', but column_types is not nullable. "
+            "Omit the field to inherit it from the base training config."
+        )
+    data_candidate_count = _coupled_candidate_count(
+        config_path,
+        "data schema (input_columns, column_types)",
+        {
+            "input_columns": input_override,
+            "column_types": column_override,
+        },
+    )
+    if _is_configured(overrides, "column_types") and column_override is not None:
+        column_types = copy.deepcopy(column_override)
+    else:
+        column_types = [
+            copy.deepcopy(base_column_types) for _ in range(data_candidate_count)
+        ]
+
+    if _is_configured(overrides, "input_columns"):
+        if input_override is None:
+            input_columns = [list(candidate) for candidate in column_types]
+        else:
+            input_columns = copy.deepcopy(input_override)
+    else:
+        input_columns = [
+            copy.deepcopy(base_input_columns) for _ in range(data_candidate_count)
+        ]
+
+    categorical_columns = [
+        [
+            column
+            for column in input_candidate
+            if "int" in column_candidate.get(column, "").lower()
+        ]
+        for input_candidate, column_candidate in zip(input_columns, column_types)
+    ]
+    real_columns = [
+        [
+            column
+            for column in input_candidate
+            if "float" in column_candidate.get(column, "").lower()
+        ]
+        for input_candidate, column_candidate in zip(input_columns, column_types)
+    ]
+
+    source_model_spec = source_values.get("model_spec", {})
+    source_window_view = source_values.get("window_view", {})
+    inherited_target_offset = source_values.get(
+        "target_offset",
+        source_window_view.get("target_offset", 1),
+    )
+    model_sampling = (
+        None
+        if _is_configured(overrides, "model_spec") and overrides.model_spec is None
+        else _compile_model_sampling(
+            config_path,
+            base_model.model_spec,
+            source_model_spec,
+            overrides.model_spec,
+        )
+    )
+    training_sampling = (
+        None
+        if _is_configured(overrides, "training_spec")
+        and overrides.training_spec is None
+        else _compile_training_sampling(
+            config_path,
+            base_model.training_spec,
+            overrides.training_spec,
+        )
+    )
+
+    search_values = partial.model_dump(
+        exclude={"base_config_path", "overrides"},
+        mode="python",
+        by_alias=True,
+    )
+    compiled_values: dict[str, Any] = {
+        **search_values,
+        "project_root": project_root,
+        "metadata_config_path": metadata_config_path,
+        "training_data_path": training_data_path,
+        "validation_data_path": validation_data_path,
+        "read_format": _configured_or_base(
+            overrides,
+            "read_format",
+            base_model.read_format,
+        ),
+        "input_columns": input_columns,
+        "column_types": column_types,
+        "categorical_columns": categorical_columns,
+        "real_columns": real_columns,
+        "target_columns": _configured_or_base(
+            overrides,
+            "target_columns",
+            base_model.target_columns,
+        ),
+        "target_column_types": _configured_or_base(
+            overrides,
+            "target_column_types",
+            base_model.target_column_types,
+        ),
+        "id_maps": _configured_or_base(overrides, "id_maps", base_id_maps),
+        "special_token_ids": _configured_or_base(
+            overrides,
+            "special_token_ids",
+            base_special_token_ids,
+        ),
+        "categorical_decoder_special_tokens": _configured_or_base(
+            overrides,
+            "categorical_decoder_special_tokens",
+            base_model.categorical_decoder_special_tokens,
+        ),
+        "context_length": _configured_or_base(
+            overrides,
+            "context_length",
+            [base_model.window_view.context_length],
+        ),
+        "target_offset": _configured_or_base(
+            overrides,
+            "target_offset",
+            inherited_target_offset,
+        ),
+        "storage_layout": _configured_or_base(
+            overrides,
+            "storage_layout",
+            storage_layout,
+        ),
+        "model_window_stride": _configured_or_base(
+            overrides,
+            "model_window_stride",
+            base_model.model_window_stride,
+        ),
+        "n_classes": _configured_or_base(
+            overrides,
+            "n_classes",
+            base_n_classes,
+        ),
+        "inference_batch_size": _configured_or_base(
+            overrides,
+            "inference_batch_size",
+            base_model.inference_batch_size,
+        ),
+        "seed": _configured_or_base(overrides, "seed", [base_model.seed]),
+        "export_generative_model": _configured_or_base(
+            overrides,
+            "export_generative_model",
+            base_model.export_generative_model,
+        ),
+        "export_embedding_model": _configured_or_base(
+            overrides,
+            "export_embedding_model",
+            base_model.export_embedding_model,
+        ),
+        "export_onnx": _configured_or_base(
+            overrides,
+            "export_onnx",
+            base_model.export_onnx,
+        ),
+        "export_pt": _configured_or_base(
+            overrides,
+            "export_pt",
+            base_model.export_pt,
+        ),
+        "export_with_dropout": _configured_or_base(
+            overrides,
+            "export_with_dropout",
+            base_model.export_with_dropout,
+        ),
+        "feature_layout": _configured_or_base(
+            overrides,
+            "feature_layout",
+            base_model.feature_layout,
+        ),
+        "model_hyperparameter_sampling": model_sampling,
+        "training_hyperparameter_sampling": training_sampling,
+    }
+
+    try:
+        return HyperparameterSearchConfig.model_validate(compiled_values)
+    except ValidationError as error:
+        raise ValueError(
+            f"Failed to compile override hyperparameter search config "
+            f"'{config_path}' with base training config '{base_config_path}':\n{error}"
+        ) from error

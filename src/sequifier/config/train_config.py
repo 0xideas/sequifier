@@ -3,6 +3,7 @@ import json
 import math
 import os
 import warnings
+from dataclasses import dataclass
 from itertools import product
 from typing import Annotated, Any, Literal, Optional, TypeAlias, Union
 
@@ -24,6 +25,7 @@ from pydantic import (
 )
 
 import sequifier
+import sequifier.optimizers
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.helpers import (
     ModelWindowView,
@@ -561,27 +563,50 @@ def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
             )
 
 
+@dataclass(frozen=True)
+class LoadedTrainConfig:
+    """User-authored training values together with their resolved model."""
+
+    source_values: dict[str, Any]
+    model: "TrainModel"
+    metadata_values: Optional[dict[str, Any]] = None
+
+
 @beartype
-def load_train_config(
+def load_train_config_with_source(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
-) -> "TrainModel":
-    """Load train YAML plus CLI overrides and optional metadata-derived fields."""
+) -> LoadedTrainConfig:
+    """Load training YAML while retaining the effective user-authored values."""
     with open(config_path, "r") as f:
         config_values = yaml.safe_load(f)
 
+    if not isinstance(config_values, dict):
+        raise ValueError(
+            f"Training config '{config_path}' must contain a YAML mapping."
+        )
+
     config_values.update(args_config)
+    source_values = copy.deepcopy(config_values)
+    config_values = copy.deepcopy(source_values)
+    metadata_config: Optional[dict[str, Any]] = None
 
     config_values["seed"] = config_values.get("seed", 1010)
 
     if not skip_metadata:
         metadata_config_path = config_values.get("metadata_config_path")
+        if not isinstance(metadata_config_path, str) or not metadata_config_path:
+            raise ValueError(
+                f"Training config '{config_path}' must define a non-empty "
+                "metadata_config_path when metadata loading is enabled."
+            )
 
         with open(
             normalize_path(metadata_config_path, config_values["project_root"]), "r"
         ) as f:
-            metadata_config = json.loads(f.read())
+            loaded_metadata: dict[str, Any] = json.loads(f.read())
+        metadata_config = loaded_metadata
 
-        storage_layout = stored_window_layout_from_metadata(metadata_config)
+        storage_layout = stored_window_layout_from_metadata(loaded_metadata)
         if storage_layout.version != 2:
             raise ValueError(
                 "Training requires metadata stored_window_layout_version=2, "
@@ -616,10 +641,10 @@ def load_train_config(
         for key in ("target_offset", "stored_context_width", "max_target_offset"):
             config_values.get("training_spec", {}).pop(key, None)
 
-        split_paths = metadata_config["split_paths"]
+        split_paths = loaded_metadata["split_paths"]
 
         config_values["column_types"] = config_values.get(
-            "column_types", metadata_config["column_types"]
+            "column_types", loaded_metadata["column_types"]
         )
 
         if config_values["input_columns"] is None:
@@ -627,12 +652,12 @@ def load_train_config(
 
         config_values["categorical_columns"] = [
             col
-            for col, type_ in metadata_config["column_types"].items()
+            for col, type_ in loaded_metadata["column_types"].items()
             if "int" in type_.lower() and col in config_values["input_columns"]
         ]
         config_values["real_columns"] = [
             col
-            for col, type_ in metadata_config["column_types"].items()
+            for col, type_ in loaded_metadata["column_types"].items()
             if "float" in type_.lower() and col in config_values["input_columns"]
         ]
         if not (
@@ -641,7 +666,7 @@ def load_train_config(
         ):
             raise ValueError("No columns found in config_values")
         config_values["n_classes"] = config_values.get(
-            "n_classes", metadata_config["n_classes"]
+            "n_classes", loaded_metadata["n_classes"]
         )
         config_values["training_data_path"] = normalize_path(
             config_values.get("training_data_path", split_paths[0]),
@@ -655,9 +680,9 @@ def load_train_config(
             config_values["project_root"],
         )
 
-        config_values["id_maps"] = metadata_config["id_maps"]
+        config_values["id_maps"] = loaded_metadata["id_maps"]
         config_values["special_token_ids"] = validate_special_token_ids(
-            metadata_config.get(
+            loaded_metadata.get(
                 "special_token_ids",
                 SPECIAL_TOKEN_IDS.ids_by_label,
             ),
@@ -666,7 +691,24 @@ def load_train_config(
 
         _validate_class_share_log_columns(config_values)
 
-    return try_catch_excess_keys(config_path, TrainModel, config_values)
+    model = try_catch_excess_keys(config_path, TrainModel, config_values)
+    return LoadedTrainConfig(
+        source_values=source_values,
+        model=model,
+        metadata_values=copy.deepcopy(metadata_config),
+    )
+
+
+@beartype
+def load_train_config(
+    config_path: str, args_config: dict[str, Any], skip_metadata: bool
+) -> "TrainModel":
+    """Load train YAML plus CLI overrides and optional metadata-derived fields."""
+    return load_train_config_with_source(
+        config_path,
+        args_config,
+        skip_metadata,
+    ).model
 
 
 class DotDict(dict):

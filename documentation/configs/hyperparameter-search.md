@@ -9,6 +9,58 @@ sequifier hyperparameter-search --config-path configs/hyperparameter_search.yaml
 
 ```
 
+## Base Training Config with Partial Overrides
+
+Hyperparameter search can be configured as a normal training config plus a
+typed partial search config. The presence of the top-level `overrides` field
+selects this format. `base_config_path` is then required; a missing or empty
+path is reported as an override-format configuration error rather than falling
+back to the legacy format.
+
+```yaml
+base_config_path: configs/train.yaml
+hp_search_name: transformer-width-search
+model_config_write_path: configs/hp-search
+search_strategy: bayesian
+n_samples: 40
+
+overrides:
+  context_length: [64, 128]
+  model_spec:
+    dim_model: [128, 256]
+    # n_head is inherited from train.yaml and repeated for both widths.
+    dim_feedforward:
+      low: 256
+      high: 1024
+      step: 256
+  training_spec:
+    batch_size: [16, 32]
+    learning_rate: [0.001, 0.0005]
+    # epochs and scheduler are inherited and repeated to match both rates.
+```
+
+Fields omitted from `overrides` inherit their training-config values. Inherited
+sampleable fields become singleton search spaces. For index-coupled fields, an
+inherited value is repeated to match the configured candidate count. If two or
+more explicitly overridden members of a coupled group have different lengths,
+configuration loading fails instead of repeating an explicitly configured
+value.
+
+Configured override fields replace their corresponding base fields. Lists are
+replaced, never merged by index. Explicit `null` clears nullable fields. Typed
+structures such as ingestion and decoding specifications are replaced as
+complete values, so changing a discriminator such as `type: mlp` to
+`type: linear` cannot retain fields that are invalid for the new type.
+
+The partial `model_spec`, `training_spec`, and BERT override models use the same
+list and distribution grammar documented below. Unknown fields are rejected
+with their complete override path. Relative project paths continue to use the
+compiled config's `project_root`; `base_config_path` itself follows normal
+config-path resolution and may also be written relative to the partial config.
+
+The original self-contained hyperparameter-search format remains supported
+when `overrides` is absent.
+
 ## CLI Overrides
 
 The search runner reads most configuration from YAML. The config-related CLI flag currently used by this command is:
@@ -34,6 +86,7 @@ The configuration is defined in a YAML file. To define the search space, fields 
 | `search_strategy` | `str` | No | `bayesian` | `bayesian` (TPE sampler), `sample` (Random Search), or `grid` (Brute Force Grid Search). |
 | `n_samples` | `int` | *Conditional* | - | Number of distinct runs to execute. Required unless `search_strategy: grid`. |
 | `seed` | `list[int]` | No | `null` | Training seeds to search. Random and Bayesian search sample from the list; grid search iterates through every value. When `null`, every run uses seed `101`. |
+| `target_offset` | `int` | No | `1` | Fixed target offset for forward-looking objectives. In the partial format it inherits the authored training value unless explicitly overridden; it is not sampled. |
 | `prune_trials` | `bool` | No | `true` | Enables cooperative early stopping of unpromising trials via Optuna. *Beta notice: Pruning with distributed training is currently experimental.* |
 | `pruning_warmup_epochs` | `int` | No | `null` | Number of complete training epochs required before Optuna may prune a trial. Mutually exclusive with `pruning_warmup_batches`. |
 | `pruning_warmup_batches` | `int` | No | `null` | Number of training batches required before Optuna may prune a trial. Mutually exclusive with `pruning_warmup_epochs`. |
@@ -77,6 +130,7 @@ Sequifier allows you to search not just for model parameters, but for the best *
 | `model_window_stride` | `int` or `null` | No | `null` | Fixed model-window stride used by every trial. `null` preserves one right-aligned sample per stored row. |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
 | `categorical_decoder_special_tokens` | `dict[str, list[str]]` | No | Fixed per-target overrides selecting which of `unknown`, `other`, and `mask` occupy categorical decoder classes. |
+| `special_token_ids` | `dict[str, int]` | No | Fixed special-token IDs passed to every generated training config. In the partial format these inherit from the resolved base training config and metadata. |
 | `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
 | `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_spec` references a structured layout. |
 
