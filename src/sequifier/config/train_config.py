@@ -757,7 +757,7 @@ class TrainingSpecModel(BaseModel):
     num_workers: int = 0
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
-    layer_autocast: Optional[bool] = True
+    layer_autocast: Optional[bool] = False
     data_parallelism: Optional[str] = None
     fsdp_cpu_offload: Optional[bool] = None
     torch_compile: str = "outer"
