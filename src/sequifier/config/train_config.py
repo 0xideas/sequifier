@@ -26,6 +26,7 @@ from pydantic import (
 
 import sequifier
 import sequifier.optimizers
+from sequifier.config.initialization_config import ModelInitializationConfig
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.helpers import (
     ModelWindowView,
@@ -963,6 +964,9 @@ class ModelSpecModel(BaseModel):
     allow_shared_ingestion_columns: bool = False
     allow_unused_input_columns: bool = False
     auxiliary_input_columns: list[str] = Field(default_factory=list)
+    initialization: ModelInitializationConfig = Field(
+        default_factory=ModelInitializationConfig
+    )
     dim_model: int
     n_head: int
     dim_feedforward: int

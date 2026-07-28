@@ -38,6 +38,7 @@ export_embedding_model: PLEASE FILL # true or false
 export_onnx: true
 
 model_spec:
+  initialization: {} # optional per-layer-group initialization overrides
   ingestion_spec:
     type: direct_embed
     output_dim: 128

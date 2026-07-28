@@ -73,6 +73,7 @@ distinct next-position target from every complete contained context.
 | `decoding_spec` | `dict` | No | `{type: linear}` | Target decoder definition, or a mapping of named target decoder branches. `linear` preserves the legacy per-target projection. `mlp` adds shared hidden layers before each target projection. |
 | `ingestion_spec` | `dict` | No | `{type: direct_embed, output_dim: dim_model}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |
 | `ingestion_merge` | `dict` or `null` | No | `null` | Merge strategy for named multi-ingestion configs: `concat`, `sum`, `gated`, or `attention`. Defaults to `{type: concat}` when omitted. The merge produces `dim_model`, except with `range_concat`, where it produces `dim_model - 1` before the position channel is appended. |
+| `initialization` | `dict` | No | `{}` | Per-layer-group weight and bias initialization overrides. Omitted groups retain Sequifier's current initialization behavior. |
 | `allow_shared_ingestion_columns` | `bool` | No | `false` | Allows the same flat input column to be consumed by more than one named ingestion stream. |
 | `auxiliary_input_columns` | `list[str]` | No | `[]` | Input columns that are intentionally kept in `batch.inputs` but must not be consumed by any ingestion branch. All other input columns still need to be consumed. |
 | `allow_unused_input_columns` | `bool` | No | `false` | Broad compatibility escape hatch that allows unused `input_columns` and logs a warning listing them. Prefer `auxiliary_input_columns` for intentional auxiliary inputs. |
@@ -86,6 +87,79 @@ distinct next-position target from every complete contained context.
 | `normalization` | `str` | No | `rmsnorm`| `rmsnorm` or `layer_norm`. |
 | `norm_first` | `bool` | No | `true` | If `true` (Pre-LN), applies normalization before attention/FFN. More stable. |
 | `shared_layer_groups` | `list[list[int]]` | No | `[]` | Groups of transformer layer indices that should reuse one `SequifierEncoderLayer` instance, e.g. `[[0, 1], [6, 7]]`. Each group must contain at least two unique, in-range indices, and groups cannot overlap. |
+
+#### Model Initialization
+
+`model_spec.initialization` maps semantic layer groups directly to optional
+`weight` and `bias` initialization methods. There is no named overall scheme:
+the current Sequifier behavior remains the default, and each configured entry
+overrides only that group and parameter kind.
+
+```yaml
+model_spec:
+  initialization:
+    decoder.output:
+      weight:
+        method: normal
+        mean: 0.0
+        std: 0.02
+      bias:
+        method: zeros
+    real_feature_projection:
+      weight:
+        method: uniform
+        low: -0.1
+        high: 0.1
+```
+
+Supported groups are `embedding.input`, `embedding.position`,
+`ingestion.output_projection`, `real_feature_projection`,
+`temporal_convolution`, `attention.qkv`, `attention.output`,
+`feed_forward.input`, `feed_forward.output`, `decoder.hidden`,
+`decoder.output`, `normalization`, `position.range_projection`,
+`fallback.linear`, `fallback.convolution`, and `free_parameter`.
+
+Supported methods are `preserve`, `normal`, `uniform`, `xavier_uniform`,
+`xavier_normal`, `kaiming_uniform`, `kaiming_normal`, `constant`, `zeros`,
+`ones`, and `identity_plus_normal`. `xavier` and `glorot` are aliases for
+`xavier_uniform`; `glorot_uniform` and `glorot_normal` are also accepted.
+Xavier methods accept `gain` and `fan_mode` (`per_tensor` or `joint`). Kaiming
+methods accept `a`, `mode`, and `nonlinearity`. `preserve` leaves the value
+created by the PyTorch module constructor unchanged.
+
+For a model using the architecture available at commit `7af13f2a`, the
+historical initialization behavior can be recreated with individual overrides:
+
+```yaml
+model_spec:
+  initialization:
+    attention.qkv:
+      weight: {method: preserve}
+      bias: {method: preserve}
+    attention.output:
+      weight: {method: preserve}
+      bias: {method: preserve}
+    feed_forward.input:
+      weight: {method: preserve}
+      bias: {method: preserve}
+    feed_forward.output:
+      weight: {method: preserve}
+      bias: {method: preserve}
+    real_feature_projection:
+      weight: {method: preserve}
+      bias: {method: preserve}
+    ingestion.output_projection:
+      weight: {method: normal, mean: 0.0, std: 0.02}
+      bias: {method: zeros}
+    decoder.output:
+      weight: {method: normal, mean: 0.0, std: 0.02}
+      bias: {method: zeros}
+```
+
+Input and position embeddings need no override because their current
+zero-mean normal initialization with standard deviation `0.02` already matches
+that commit. Components that did not exist at the historical commit retain
+their current defaults unless overridden separately.
 
 #### Feature Layout And Ingestion Layers
 

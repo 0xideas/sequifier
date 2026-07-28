@@ -19,6 +19,10 @@ from pydantic import (
     model_validator,
 )
 
+from sequifier.config.initialization_config import (
+    ModelInitializationConfig,
+    ModelInitializationSamplingConfig,
+)
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.config.train_config import (
     BERTSpecModel,
@@ -811,6 +815,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
     allow_shared_ingestion_columns: bool = False
     allow_unused_input_columns: bool = False
     auxiliary_input_columns: list[str] = Field(default_factory=list)
+    initialization: ModelInitializationSamplingConfig = Field(
+        default_factory=ModelInitializationSamplingConfig
+    )
     n_head: list[int]
 
     dim_feedforward: OptunaInt
@@ -877,6 +884,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         norm_first: bool,
         n_kv_heads: Optional[int],
         rope_theta: float,
+        initialization: ModelInitializationConfig,
     ) -> ModelSpecModel:
         model_spec_kwargs = {
             "dim_model": self.dim_model[width_index],
@@ -898,6 +906,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             "allow_shared_ingestion_columns": self.allow_shared_ingestion_columns,
             "allow_unused_input_columns": self.allow_unused_input_columns,
             "auxiliary_input_columns": self.auxiliary_input_columns,
+            "initialization": initialization,
         }
         ingestion_spec = self._ingestion_spec_for_width(width_index)
         ingestion_merge = self._ingestion_merge_for_width(width_index)
@@ -995,6 +1004,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
                 if rope_theta is None
                 else rope_theta
             ),
+            initialization=self.initialization.validation_config(),
         )
 
     def grid_size(self) -> int:
@@ -1031,6 +1041,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             * len(self.attention_type)
             * len(self.attention_output_projection)
             * len(self.norm_first)
+            * self.initialization.grid_size()
         )
 
     @field_validator("decoding_support")
@@ -1318,6 +1329,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         dim_feedforward = sample_param(trial, "dim_feedforward", self.dim_feedforward)
         num_layers = sample_param(trial, "num_layers", self.num_layers)
         rope_theta = sample_param(trial, "rope_theta", self.rope_theta)
+        initialization = self.initialization.sample_trial(trial)
 
         activation_fn = trial.suggest_categorical("activation_fn", self.activation_fn)
         normalization = trial.suggest_categorical("normalization", self.normalization)
@@ -1373,6 +1385,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             norm_first=norm_first,
             n_kv_heads=n_kv_heads,
             rope_theta=rope_theta,
+            initialization=initialization,
         )
 
 
@@ -1933,6 +1946,7 @@ class ModelSpecHyperparameterSamplingOverride(_TypedPartialOverride):
             "allow_shared_ingestion_columns",
             "allow_unused_input_columns",
             "auxiliary_input_columns",
+            "initialization",
             "n_head",
             "dim_feedforward",
             "num_layers",
@@ -1961,6 +1975,7 @@ class ModelSpecHyperparameterSamplingOverride(_TypedPartialOverride):
     allow_shared_ingestion_columns: Optional[bool] = None
     allow_unused_input_columns: Optional[bool] = None
     auxiliary_input_columns: Optional[list[str]] = None
+    initialization: Optional[ModelInitializationSamplingConfig] = None
     n_head: Optional[list[int]] = None
 
     dim_feedforward: Optional[OptunaInt] = None
@@ -2301,6 +2316,7 @@ def _compile_model_sampling(
         "allow_shared_ingestion_columns": base["allow_shared_ingestion_columns"],
         "allow_unused_input_columns": base["allow_unused_input_columns"],
         "auxiliary_input_columns": base["auxiliary_input_columns"],
+        "initialization": base["initialization"],
         "n_head": [base["n_head"]] * candidate_count,
         "dim_feedforward": [base["dim_feedforward"]],
         "num_layers": [base["num_layers"]],

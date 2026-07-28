@@ -880,11 +880,12 @@ class TransformerModel(nn.Module):
             persistent=False,
         )
 
-        initialize_model_weights(
-            self,
-            transformer_depth=len(self.layers),
-            decoder_reference_dim=self.dim_model,
-        )
+        if hparams.model_spec.initialization.root:
+            self.logger.info(
+                "[INFO] Applying model initialization overrides: "
+                f"{hparams.model_spec.initialization.model_dump(mode='json')}"
+            )
+        initialize_model_weights(self, hparams.model_spec.initialization)
 
         self.scheduler_step_on = hparams.training_spec.scheduler_step_on
 
