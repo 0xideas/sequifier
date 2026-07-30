@@ -627,12 +627,6 @@ def load_train_config_with_source(
         config_values["storage_layout"] = storage_layout
         config_values["window_view"] = window_view
         for key in (
-            "stored_context_width",
-            "max_target_offset",
-            "stored_window_layout_version",
-        ):
-            config_values.pop(key, None)
-        for key in (
             "target_offset",
             "stored_context_width",
             "max_target_offset",
