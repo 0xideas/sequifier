@@ -43,9 +43,9 @@ class SequifierDatasetFromFile(IterableDataset):
         )
         data_df = read_data(data_path, config.read_format)
 
-        column_types = {
-            col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
-            for col in config.column_types
+        column_data_types = {
+            col: PANDAS_TO_TORCH_TYPES[config.column_data_types[col]]
+            for col in config.column_data_types
         }
 
         sampling_plan = resolve_window_sampling_plan(
@@ -55,7 +55,7 @@ class SequifierDatasetFromFile(IterableDataset):
         )
         all_tensors, left_pad_lengths = numpy_storage_to_pytorch(
             data=data_df,
-            column_types=column_types,
+            column_data_types=column_data_types,
             all_columns=all_columns,
             stored_context_width=config.storage_layout.stored_context_width,
         )
@@ -68,7 +68,7 @@ class SequifierDatasetFromFile(IterableDataset):
 
         self.sequences = all_tensors
 
-        if config.training_spec.device.startswith("cuda"):
+        if config.device.startswith("cuda"):
             for key in self.sequences:
                 self.sequences[key] = self.sequences[key].pin_memory()
 

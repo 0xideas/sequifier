@@ -50,7 +50,7 @@
     "documentation/example_inputs/data/preprocessing_input-split1.parquet",
     "documentation/example_inputs/data/preprocessing_input-split2.parquet"
   ],
-  "column_types": {
+  "column_data_types": {
     "itemId": "Int64",
     "optionalCategorialVariable": "Int64",
     "optionalRealVariable": "Float64"

@@ -91,7 +91,7 @@ The configuration is defined in a YAML file. To define the search space, fields 
 | `pruning_warmup_epochs` | `int` | No | `null` | Number of complete training epochs required before Optuna may prune a trial. Mutually exclusive with `pruning_warmup_batches`. |
 | `pruning_warmup_batches` | `int` | No | `null` | Number of training batches required before Optuna may prune a trial. Mutually exclusive with `pruning_warmup_epochs`. |
 | `override_input` | `bool` | No | `false` | Parsed for compatibility; the current search runner does not use this field. |
-| `training_data_path` | `str` | No | Metadata split 0 | Path to training data. |
+| `data_path` | `str` | No | Metadata split 0 | Path to training data. |
 | `validation_data_path` | `str` | No | Metadata split 1 | Path to validation data. |
 | `read_format` | `str` | No | `parquet` | Format of preprocessed training data (`parquet`, `csv`, or `pt`). |
 
@@ -124,14 +124,14 @@ Sequifier allows you to search not just for model parameters, but for the best *
 
 | Field | Type | Mandatory | Description |
 | --- | --- | --- | --- |
-| `input_columns` | `list[list[str]]` or `null` | **Yes** | A list of input sets. E.g., `[['col1'], ['col1', 'col2']]`. Set to `null` to derive one input set from `column_types`. |
+| `input_columns` | `list[list[str]]` or `null` | **Yes** | A list of input sets. E.g., `[['col1'], ['col1', 'col2']]`. Set to `null` to derive one input set from `column_data_types`. |
 | `target_columns` | `list[str]` | **Yes** | The target column(s) to predict. Fixed across all runs. |
 | `context_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
 | `model_window_stride` | `int` or `null` | No | `null` | Fixed model-window stride used by every trial. `null` preserves one right-aligned sample per stored row. |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
 | `categorical_decoder_special_tokens` | `dict[str, list[str]]` | No | Fixed per-target overrides selecting which of `unknown`, `other`, and `mask` occupy categorical decoder classes. |
 | `special_token_ids` | `dict[str, int]` | No | Fixed special-token IDs passed to every generated training config. In the partial format these inherit from the resolved base training config and metadata. |
-| `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
+| `column_data_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
 | `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_spec` references a structured layout. |
 
 ---
@@ -290,7 +290,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 | :--- | :--- | :--- | :--- |
 | **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_spec` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion and merge lists intentionally select different complete frontends by width; fixed frontends are reused and projected automatically. |
 | **Training Schedule** | `learning_rate` | `epochs`<br>`scheduler` | The magnitude of the learning rate often dictates how many epochs are needed. Schedulers often require `T_max` to match `epochs`. |
-| **Data Schema** | `input_columns` | `column_types` | Different subsets of columns require specific data type definitions. |
+| **Data Schema** | `input_columns` | `column_data_types` | Different subsets of columns require specific data type definitions. |
 
 > **Example:**
 > If `dim_model: [64, 128]` and `n_head: [4, 8]`:

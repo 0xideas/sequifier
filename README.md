@@ -135,14 +135,14 @@ pip install sequifier
 sequifier make YOUR_PROJECT_NAME
 ```
 
-3.  cd into the `YOUR_PROJECT_NAME` folder, create a `data` folder and add your data and adapt the config file `preprocess.yaml` in the configs folder to take the path to the data
+3.  cd into the `YOUR_PROJECT_NAME` folder, create a `data` folder and add your data and adapt `preprocessing_data_path` in `preprocess.yaml` to point to the data
 4.  run
 
 ```console
 sequifier preprocess
 ```
 
-5.  the preprocessing step outputs a metadata config at `configs/metadata_configs/[FILE NAME]`. Adapt the `metadata_config_path` parameter in `train.yaml` and `infer.yaml` to the path `configs/metadata_configs/[FILE NAME]`
+5.  the preprocessing step outputs metadata at `configs/metadata_configs/[FILE NAME]`. Set `preprocessing_data_path` in `train.yaml` and `infer.yaml` to derive this path and the generated split paths automatically, or set `metadata_config_path` explicitly
 6.  Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 
 
@@ -150,7 +150,7 @@ sequifier preprocess
 sequifier train
 ```
 
-7.  adapt `data_path` in `infer.yaml` to one of the files output in the preprocessing step
+7.  optionally override `data_path` in `infer.yaml`; otherwise it defaults to the inference/test split from preprocessing metadata
 8.  run
 
 

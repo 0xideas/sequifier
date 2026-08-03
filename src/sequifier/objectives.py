@@ -309,7 +309,7 @@ def get_objective_class(name: str) -> type[Objective]:
 
 
 def create_objective(config: Any) -> Objective:
-    return get_objective_class(config.training_spec.training_objective)(config)
+    return get_objective_class(config.training_objective)(config)
 
 
 def target_offset_for_objective(name: str, configured_target_offset: int = 1) -> int:

@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import warnings
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Optional, Union, cast
 
@@ -128,7 +129,10 @@ def _validation_space_values(
             raise ValueError(f"{name} candidates cannot be empty")
         return space
     if isinstance(space, IntDistribution):
-        sampled_high = space.low + ((space.high - space.low) // space.step) * space.step
+        step = space.step
+        if step is None:
+            raise ValueError(f"{name} integer distribution step cannot be None")
+        sampled_high = space.low + ((space.high - space.low) // step) * step
         return [space.low] if space.low == sampled_high else [space.low, sampled_high]
     if isinstance(space, FloatDistribution):
         sampled_high = space.high
@@ -334,20 +338,20 @@ def _load_legacy_hyperparameter_search_config(
             source=f"metadata config '{metadata_config_path}'",
         )
 
-        config_values["column_types"] = config_values.get(
-            "column_types", [metadata_config["column_types"]]
+        config_values["column_data_types"] = config_values.get(
+            "column_data_types", [metadata_config["column_data_types"]]
         )
 
         if config_values["input_columns"] is None:
             config_values["input_columns"] = [
                 list(config_vals.keys())
-                for config_vals in config_values["column_types"]
+                for config_vals in config_values["column_data_types"]
             ]
 
         config_values["categorical_columns"] = [
             [
                 col
-                for col, type_ in metadata_config["column_types"].items()
+                for col, type_ in metadata_config["column_data_types"].items()
                 if "int" in type_.lower() and col in input_columns
             ]
             for input_columns in config_values["input_columns"]
@@ -356,7 +360,7 @@ def _load_legacy_hyperparameter_search_config(
         config_values["real_columns"] = [
             [
                 col
-                for col, type_ in metadata_config["column_types"].items()
+                for col, type_ in metadata_config["column_data_types"].items()
                 if "float" in type_.lower() and col in input_columns
             ]
             for input_columns in config_values["input_columns"]
@@ -375,8 +379,8 @@ def _load_legacy_hyperparameter_search_config(
 
         config_values["storage_layout"] = storage_layout
 
-        config_values["training_data_path"] = normalize_path(
-            config_values.get("training_data_path", metadata_config["split_paths"][0]),
+        config_values["data_path"] = normalize_path(
+            config_values.get("data_path", metadata_config["split_paths"][0]),
             config_values["project_root"],
         )
         config_values["validation_data_path"] = normalize_path(
@@ -392,6 +396,15 @@ def _load_legacy_hyperparameter_search_config(
         config_values["id_maps"] = metadata_config["id_maps"]
 
     return try_catch_excess_keys(config_path, HyperparameterSearchConfig, config_values)
+
+
+@dataclass(frozen=True)
+class SampledTrainingConfig:
+    """A concrete training spec plus its top-level objective and device."""
+
+    training_spec: TrainingSpecModel
+    training_objective: str
+    device: str
 
 
 class TrainingSpecHyperparameterSampling(BaseModel):
@@ -458,16 +471,14 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         accumulation_steps: Optional[int],
         gradient_clip: Optional[float],
         bert_spec: Optional[BERTSpecModel] = None,
-    ) -> TrainingSpecModel:
+    ) -> SampledTrainingConfig:
         objective_class = get_objective_class(training_objective)
         next_occurrence_config = (
             self.next_occurrence_config
             if issubclass(objective_class, NextOccurrenceObjective)
             else None
         )
-        return TrainingSpecModel(
-            training_objective=training_objective,
-            device=self.device,
+        training_spec = TrainingSpecModel(
             epochs=self.epochs[schedule_index],
             log_interval=self.log_interval,
             class_share_log_columns=self.class_share_log_columns,
@@ -507,6 +518,11 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             torch_compile=self.torch_compile,
             float32_matmul_precision=self.float32_matmul_precision,
         )
+        return SampledTrainingConfig(
+            training_spec=training_spec,
+            training_objective=training_objective,
+            device=self.device,
+        )
 
     def validation_model(
         self,
@@ -514,7 +530,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         schedule_index: int = 0,
         optimizer_index: int = 0,
         training_objective: Optional[str] = None,
-    ) -> TrainingSpecModel:
+    ) -> SampledTrainingConfig:
         """Build a representative concrete training specification."""
         objective = training_objective or self.training_objective[0]
         objective_class = get_objective_class(objective)
@@ -752,7 +768,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
                     )
         return v
 
-    def sample_trial(self, trial: Any) -> TrainingSpecModel:
+    def sample_trial(self, trial: Any) -> SampledTrainingConfig:
         """Sample training hyperparameters for one Optuna trial."""
         lr_sched_index = trial.suggest_categorical(
             "lr_sched_index", list(range(len(self.learning_rate)))
@@ -1352,12 +1368,12 @@ class HyperparameterSearchConfig(BaseModel):
     pruning_warmup_epochs: Optional[int] = Field(default=None, ge=0)
     pruning_warmup_batches: Optional[int] = Field(default=None, ge=0)
     model_config_write_path: str
-    training_data_path: str
+    data_path: str
     validation_data_path: str
     read_format: str = "parquet"
 
     input_columns: list[list[str]]
-    column_types: list[dict[str, str]]
+    column_data_types: list[dict[str, str]]
     categorical_columns: list[list[str]]
     real_columns: list[list[str]]
     target_columns: list[str]
@@ -1399,13 +1415,15 @@ class HyperparameterSearchConfig(BaseModel):
         self,
         *,
         model_spec: ModelSpecModel,
-        training_spec: TrainingSpecModel,
+        training_config: SampledTrainingConfig,
         input_columns_index: int,
         context_length: int,
         seed: int,
         run_index: int,
     ) -> TrainModel:
-        objective_class = get_objective_class(training_spec.training_objective)
+        training_spec = training_config.training_spec
+        training_objective = training_config.training_objective
+        objective_class = get_objective_class(training_objective)
         if not objective_class.forward_looking:
             model_spec = model_spec.model_copy(
                 update={"prediction_length": context_length}
@@ -1413,9 +1431,9 @@ class HyperparameterSearchConfig(BaseModel):
 
         window_view = ModelWindowView(
             context_length=context_length,
-            objective=training_spec.training_objective,
+            objective=training_objective,
             target_offset=target_offset_for_objective(
-                training_spec.training_objective,
+                training_objective,
                 self.target_offset,
             ),
         )
@@ -1425,11 +1443,13 @@ class HyperparameterSearchConfig(BaseModel):
             project_root=self.project_root,
             metadata_config_path=self.metadata_config_path,
             model_name=f"{self.hp_search_name}-run-{run_index}",
-            training_data_path=self.training_data_path,
+            training_objective=training_objective,
+            device=training_config.device,
+            data_path=self.data_path,
             validation_data_path=self.validation_data_path,
             read_format=self.read_format,
             input_columns=self.input_columns[input_columns_index],
-            column_types=self.column_types[input_columns_index],
+            column_data_types=self.column_data_types[input_columns_index],
             categorical_columns=self.categorical_columns[input_columns_index],
             real_columns=self.real_columns[input_columns_index],
             target_columns=self.target_columns,
@@ -1544,7 +1564,7 @@ class HyperparameterSearchConfig(BaseModel):
     def validate_concrete_train_models(self):
         candidate_lengths = {
             "input_columns": len(self.input_columns),
-            "column_types": len(self.column_types),
+            "column_data_types": len(self.column_data_types),
             "categorical_columns": len(self.categorical_columns),
             "real_columns": len(self.real_columns),
         }
@@ -1552,7 +1572,7 @@ class HyperparameterSearchConfig(BaseModel):
             raise ValueError("input_columns candidates cannot be empty")
         if len(set(candidate_lengths.values())) != 1:
             raise ValueError(
-                "input_columns, column_types, categorical_columns, and "
+                "input_columns, column_data_types, categorical_columns, and "
                 "real_columns must have the same number of paired candidates; "
                 + ", ".join(
                     f"{name}={length}" for name, length in candidate_lengths.items()
@@ -1570,7 +1590,9 @@ class HyperparameterSearchConfig(BaseModel):
         baseline_model = model_sampling.validation_model()
         baseline_training = training_sampling.validation_model()
 
-        candidates: list[tuple[str, ModelSpecModel, TrainingSpecModel, int, int]] = [
+        candidates: list[
+            tuple[str, ModelSpecModel, SampledTrainingConfig, int, int]
+        ] = [
             (
                 "the baseline candidate",
                 baseline_model,
@@ -1621,7 +1643,7 @@ class HyperparameterSearchConfig(BaseModel):
         )
         for context_length in self.context_length:
             for objective in training_sampling.training_objective:
-                training_spec = training_sampling.validation_model(
+                training_config = training_sampling.validation_model(
                     training_objective=objective
                 )
                 for decoding_support in decoding_support_values:
@@ -1633,17 +1655,23 @@ class HyperparameterSearchConfig(BaseModel):
                             model_sampling.validation_model(
                                 decoding_support=decoding_support
                             ),
-                            training_spec,
+                            training_config,
                             0,
                             context_length,
                         )
                     )
 
-        for description, model_spec, training_spec, input_index, context in candidates:
+        for (
+            description,
+            model_spec,
+            training_config,
+            input_index,
+            context,
+        ) in candidates:
             try:
                 self._build_train_model(
                     model_spec=model_spec,
-                    training_spec=training_spec,
+                    training_config=training_config,
                     input_columns_index=input_index,
                     context_length=context,
                     seed=baseline_seed,
@@ -1713,13 +1741,13 @@ class HyperparameterSearchConfig(BaseModel):
                 raise ValueError(f"evaluation_inference_config '{v}' does not exist")
         return v
 
-    @field_validator("column_types")
+    @field_validator("column_data_types")
     @classmethod
     def validate_model_spec(cls, v, info):
         input_columns = info.data.get("input_columns")
         if input_columns is not None and len(input_columns) != len(v):
             raise ValueError(
-                "input_columns and column_types must have the same number of candidate values, that are paired"
+                "input_columns and column_data_types must have the same number of candidate values, that are paired"
             )
         return v
 
@@ -1744,12 +1772,12 @@ class HyperparameterSearchConfig(BaseModel):
         context_length = trial.suggest_categorical(
             "context_length", self.context_length
         )
-        training_spec = self.training_hyperparameter_sampling.sample_trial(trial)
+        training_config = self.training_hyperparameter_sampling.sample_trial(trial)
         logger.info(f"{seed = } - {input_columns_index = } - {context_length = }")
 
         return self._build_train_model(
             model_spec=model_spec,
-            training_spec=training_spec,
+            training_config=training_config,
             input_columns_index=input_columns_index,
             context_length=context_length,
             seed=seed,

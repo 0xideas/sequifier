@@ -135,14 +135,14 @@ pip install sequifier
 sequifier make YOUR_PROJECT_NAME
 ```
 
-3.  cd into the `YOUR_PROJECT_NAME` folder, create a `data` folder and add your data and adapt the config file `preprocess.yaml` in the configs folder to take the path to the data
+3.  cd into the `YOUR_PROJECT_NAME` folder, create a `data` folder and add your data and adapt `preprocessing_data_path` in `preprocess.yaml` to point to the data
 4.  run
 
 ```console
 sequifier preprocess
 ```
 
-5.  the preprocessing step outputs a metadata config at `configs/metadata_configs/[FILE NAME]`. Adapt the `metadata_config_path` parameter in `train.yaml` and `infer.yaml` to the path `configs/metadata_configs/[FILE NAME]`
+5.  the preprocessing step outputs metadata at `configs/metadata_configs/[FILE NAME]`. Set `preprocessing_data_path` in `train.yaml` and `infer.yaml` to derive this path and the generated split paths automatically, or set `metadata_config_path` explicitly
 6.  Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 
 
@@ -150,7 +150,7 @@ sequifier preprocess
 sequifier train
 ```
 
-7.  adapt `data_path` in `infer.yaml` to one of the files output in the preprocessing step
+7.  optionally override `data_path` in `infer.yaml`; otherwise it defaults to the inference/test split from preprocessing metadata
 8.  run
 
 
@@ -220,7 +220,7 @@ Values passed on the command line override the YAML before validation.
 | Flag | Overrides / Action |
 | :--- | :--- |
 | `-r`, `--randomize` | Generates a random `seed`. The seed affects `between_sequence` split assignment. |
-| `-dp`, `--data-path` | Overrides `data_path`. |
+| `-dp`, `--data-path` | Overrides `preprocessing_data_path`. |
 | `-sc`, `--selected-columns` | Overrides `selected_columns` with a space-separated list. Use `None` to process all columns. |
 
 ## Configuration Fields
@@ -232,7 +232,7 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
-| `data_path` | `str` | **Yes** | - | Path to the raw input file or folder. |
+| `preprocessing_data_path` | `str` | **Yes** | - | Path to the raw input file or folder. |
 | `read_format` | `str` | No | `csv` | Format of input data (`csv`, `parquet`). |
 | `write_format` | `str` | No | `parquet` | Format of output data (`csv`, `parquet`, `pt`). |
 | `merge_output` | `bool` | No | `true` | Whether to merge split files into single files or keep them sharded. |
@@ -251,7 +251,7 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `selected_columns` | `list[str]` | No | `null` | A specific list of columns to process. If `null`, all columns (except metadata) are processed. |
-| `column_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
+| `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
 | `normalize_real_columns` | `bool` | No | `true` | If `true`, Z-score normalizes real-valued columns. Set to `false` to preserve their original values. Statistics are still recorded in metadata. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
 | `metadata_config_path` | `Optional[str]` | No | `null` | Use a preexisting metadata config for tokenizing discrete columns and, when enabled, standardizing real-valued columns. |
@@ -334,7 +334,7 @@ After running `preprocess`, the following are generated:
 1.  **Data Files:** Located in `data/`. Depending on your configuration, these will be merged files such as `[NAME]-split0.parquet` (Training), `[NAME]-split1.parquet` (Validation), etc., or split folders such as `[NAME]-split0/` containing `.pt` or `.parquet` shards.
 2.  **Metadata Config:** Located in `configs/metadata_configs/[NAME].json`.
       * **Crucial:** This file contains the integer mappings for categorical variables (`id_maps`), statistics for real variables (`selected_columns_statistics`), and whether those variables were normalized (`normalize_real_columns`).
-      * **Next Step:** You must link this file path in your `train.yaml` and `infer.yaml` under `metadata_config_path`.
+      * **Next Step:** Set `preprocessing_data_path` in `train.yaml` and `infer.yaml` to derive this metadata path and the appropriate split paths automatically. You can still set `metadata_config_path` explicitly.
 
 
 # Train Command Guide
@@ -356,9 +356,12 @@ The configuration is defined in a YAML file (e.g., `train.yaml`). The file is st
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
-| `metadata_config_path`| `str` | **Yes** | - | Path to the JSON file generated by `preprocess`. E.g., `configs/metadata_configs/data.json`. |
+| `preprocessing_data_path` | `str` | Conditional | `null` | Raw preprocessing input path. When set, Sequifier derives `metadata_config_path`, `data_path`, and `validation_data_path` from preprocessing output. |
+| `metadata_config_path`| `str` | Conditional | Derived from `preprocessing_data_path` | Path to the JSON file generated by `preprocess`. Required when `preprocessing_data_path` is omitted. |
 | `model_name` | `str` | **Yes** | - | A unique identifier for this training run. Used for naming logs and output files. Must not contain the substring `embedding`. |
-| `training_data_path` | `str` | No | Metadata split 0 | Path to training data. Defaults to split 0 from metadata. |
+| `training_objective` | `str` | **Yes** | - | Objective to train: `causal`, `bert`, `final_value`, or `next_occurrence`. |
+| `device` | `str` | **Yes** | - | `cuda`, `cpu`, or `mps`. |
+| `data_path` | `str` | No | Metadata split 0 | Path to training data. Defaults to split 0 from metadata. |
 | `validation_data_path`| `str` | No | Metadata split 1, or last split | Path to validation data. Defaults to split 1 from metadata, or the last available split if fewer than two splits exist. |
 | `read_format` | `str` | No | `parquet` | Format of input data (`parquet`, `csv`, `pt`). Must match `preprocess` output. |
 
@@ -367,7 +370,8 @@ The configuration is defined in a YAML file (e.g., `train.yaml`). The file is st
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `target_columns` | `list[str]`| **Yes** | - | The specific column(s) the model should learn to predict. |
-| `target_column_types`| `dict` | **Yes** | - | Map of target columns to their type: `'categorical'` or `'real'`. The key order in target_column_types must exactly match the list order in target_columns |
+| `column_data_types` | `dict[str, str]` | No | Metadata data types | Physical data types for configured columns. Usually derived from preprocessing metadata. |
+| `target_column_types`| `dict` | Conditional | Derived from `column_data_types` | Map of target columns to `'categorical'` or `'real'`. Integer dtypes derive as categorical and floating dtypes derive as real. |
 | `categorical_decoder_special_tokens` | `dict[str, list[str]]` | No | `{}` | Per-categorical-target override selecting which of `unknown`, `other`, and `mask` occupy decoder classes. Omitted targets retain all three classes. |
 | `input_columns` | `list[str]` or `null`| **Yes** | `null` | Subset of columns to use as input features. Set to `null` to use all columns available in metadata. |
 | `feature_layout` | `dict` or `null` | No | `null` | Optional annotation registry for structured flat input columns. It does not change preprocessing output or stored files. |
@@ -774,8 +778,6 @@ ingestion_spec:
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `training_objective` | `str` | **Yes** | - | Objective to train: `causal`, `bert`, `final_value`, or `next_occurrence`. |
-| `device` | `str` | **Yes** | - | `cuda`, `cpu`, or `mps`. |
 | `epochs` | `int` | **Yes** | - | Maximum number of training epochs. |
 | `batch_size` | `int` | **Yes** | - | Samples per batch. |
 | `learning_rate` | `float` | **Yes** | - | Initial learning rate. |
@@ -837,6 +839,7 @@ Values passed on the command line override the YAML before validation.
 | Flag | Overrides / Action |
 | :--- | :--- |
 | `-r`, `--randomize` | Generates a random `seed`, taking precedence over `--seed`. |
+| `-dp`, `--data-path` | Overrides the training `data_path`. |
 | `-ic`, `--input-columns` | Overrides `input_columns` with a space-separated list. Use `None` to derive all columns from metadata. |
 | `-mc`, `--metadata-config-path` | Overrides `metadata_config_path`. |
 | `-sm`, `--skip-metadata` | Skips loading metadata-derived config values. All required schema fields must then be supplied directly. |
@@ -907,12 +910,12 @@ Example:
 
 ```yaml
 context_length: 48
+training_objective: bert
 
 model_spec:
   prediction_length: 48
 
 training_spec:
-  training_objective: bert
   bert_spec:
     masking_probability: 0.15
     replacement_distribution:
@@ -1039,10 +1042,11 @@ The configuration is defined in a YAML file (e.g., `infer.yaml`).
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
+| `preprocessing_data_path` | `str` | Conditional | `null` | Raw preprocessing input path. When set, Sequifier derives `metadata_config_path` and defaults `data_path` to the inference/test preprocessing split. |
 | `data_path` | `str` | No | Metadata split 2 | Path to the input data file (`csv` or `parquet`) or folder (`pt` or `parquet`). Defaults to split 2 from metadata, or the last available split if fewer than three splits exist. |
 | `model_path` | `str` or `list[str]` | **Yes** | - | Path to a specific model file, or a list of paths to process sequentially. (e.g., `models/sequifier-[NAME]-best-[EPOCH].pt`). |
 | `training_config_path`| `str` | No | `configs/train.yaml`| Path to the config used to train the model. Required only to reconstruct PyTorch `.pt` exports; ONNX models load categorical target codecs from model metadata. |
-| `metadata_config_path`| `str` | **Yes** | - | Path to the JSON metadata file generated during preprocessing. Used for ID mapping and normalization. |
+| `metadata_config_path`| `str` | Conditional | Derived from `preprocessing_data_path` | Path to the JSON metadata file generated during preprocessing. Required when `preprocessing_data_path` is omitted. |
 | `read_format` | `str` | No | `parquet` | Format of input data. Single-file inference supports `csv` and `parquet`; folder inference supports `parquet` and `pt`. |
 | `write_format` | `str` | No | `csv` | Format for output predictions (`csv`, `parquet`). |
 
@@ -1054,8 +1058,8 @@ These fields tell the inference engine which columns to extract from the new dat
 | :--- | :--- | :--- | :--- | :--- |
 | `input_columns` | `list[str]` or `null`| **Yes** | `null` | List of feature columns. Must match the columns the model was trained on. Set to `null` to use all metadata columns. |
 | `target_columns` | `list[str]`| **Yes** | - | The column(s) to predict. |
-| `column_types` | `dict` | No | Metadata column types | Map of all columns to their type (e.g., `Int64`, `Float64`). Usually copied from metadata. |
-| `target_column_types`| `dict` | **Yes** | - | Map of target columns to `categorical` or `real`. |
+| `column_data_types` | `dict` | No | Metadata column types | Map of all columns to their type (e.g., `Int64`, `Float64`). Usually copied from metadata. |
+| `target_column_types`| `dict` | Conditional | Derived from `column_data_types` | Map of target columns to `categorical` or `real`. Integer dtypes derive as categorical and floating dtypes derive as real. |
 
 ### 3\. Inference Logic & Modes
 
@@ -1085,7 +1089,7 @@ start plus this model-window offset.
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `device` | `str` | **Yes** | - | `cuda`, `cpu`, or `mps`. |
-| `enforce_determinism` | `bool` | No | `false` | Forces PyTorch to use deterministic algorithms. |
+| `enforce_deterministic_inference` | `bool` | No | `false` | Forces PyTorch inference to use deterministic algorithms. |
 -----
 
 ## Key Trade-offs and Decisions
@@ -1288,7 +1292,7 @@ The configuration is defined in a YAML file. To define the search space, fields 
 | `pruning_warmup_epochs` | `int` | No | `null` | Number of complete training epochs required before Optuna may prune a trial. Mutually exclusive with `pruning_warmup_batches`. |
 | `pruning_warmup_batches` | `int` | No | `null` | Number of training batches required before Optuna may prune a trial. Mutually exclusive with `pruning_warmup_epochs`. |
 | `override_input` | `bool` | No | `false` | Parsed for compatibility; the current search runner does not use this field. |
-| `training_data_path` | `str` | No | Metadata split 0 | Path to training data. |
+| `data_path` | `str` | No | Metadata split 0 | Path to training data. |
 | `validation_data_path` | `str` | No | Metadata split 1 | Path to validation data. |
 | `read_format` | `str` | No | `parquet` | Format of preprocessed training data (`parquet`, `csv`, or `pt`). |
 
@@ -1321,14 +1325,14 @@ Sequifier allows you to search not just for model parameters, but for the best *
 
 | Field | Type | Mandatory | Description |
 | --- | --- | --- | --- |
-| `input_columns` | `list[list[str]]` or `null` | **Yes** | A list of input sets. E.g., `[['col1'], ['col1', 'col2']]`. Set to `null` to derive one input set from `column_types`. |
+| `input_columns` | `list[list[str]]` or `null` | **Yes** | A list of input sets. E.g., `[['col1'], ['col1', 'col2']]`. Set to `null` to derive one input set from `column_data_types`. |
 | `target_columns` | `list[str]` | **Yes** | The target column(s) to predict. Fixed across all runs. |
 | `context_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
 | `model_window_stride` | `int` or `null` | No | `null` | Fixed model-window stride used by every trial. `null` preserves one right-aligned sample per stored row. |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
 | `categorical_decoder_special_tokens` | `dict[str, list[str]]` | No | Fixed per-target overrides selecting which of `unknown`, `other`, and `mask` occupy categorical decoder classes. |
 | `special_token_ids` | `dict[str, int]` | No | Fixed special-token IDs passed to every generated training config. In the partial format these inherit from the resolved base training config and metadata. |
-| `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
+| `column_data_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
 | `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_spec` references a structured layout. |
 
 ---
@@ -1487,7 +1491,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 | :--- | :--- | :--- | :--- |
 | **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_spec` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion and merge lists intentionally select different complete frontends by width; fixed frontends are reused and projected automatically. |
 | **Training Schedule** | `learning_rate` | `epochs`<br>`scheduler` | The magnitude of the learning rate often dictates how many epochs are needed. Schedulers often require `T_max` to match `epochs`. |
-| **Data Schema** | `input_columns` | `column_types` | Different subsets of columns require specific data type definitions. |
+| **Data Schema** | `input_columns` | `column_data_types` | Different subsets of columns require specific data type definitions. |
 
 > **Example:**
 > If `dim_model: [64, 128]` and `n_head: [4, 8]`:

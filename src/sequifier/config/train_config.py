@@ -31,6 +31,8 @@ from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
+    derive_target_column_types,
+    metadata_config_path_from_preprocessing_data_path,
     normalize_path,
     resolve_window_view,
     stored_window_layout_from_metadata,
@@ -587,6 +589,12 @@ def load_train_config_with_source(
         )
 
     config_values.update(args_config)
+
+    preprocessing_data_path = config_values.get("preprocessing_data_path")
+    if config_values.get("metadata_config_path") is None and preprocessing_data_path:
+        config_values["metadata_config_path"] = (
+            metadata_config_path_from_preprocessing_data_path(preprocessing_data_path)
+        )
     source_values = copy.deepcopy(config_values)
     config_values = copy.deepcopy(source_values)
     metadata_config: Optional[dict[str, Any]] = None
@@ -597,8 +605,8 @@ def load_train_config_with_source(
         metadata_config_path = config_values.get("metadata_config_path")
         if not isinstance(metadata_config_path, str) or not metadata_config_path:
             raise ValueError(
-                f"Training config '{config_path}' must define a non-empty "
-                "metadata_config_path when metadata loading is enabled."
+                f"Training config '{config_path}' must define metadata_config_path "
+                "or preprocessing_data_path when metadata loading is enabled."
             )
 
         with open(
@@ -613,7 +621,7 @@ def load_train_config_with_source(
                 "Training requires metadata stored_window_layout_version=2, "
                 f"got {storage_layout.version}."
             )
-        training_objective = config_values["training_spec"]["training_objective"]
+        training_objective = config_values["training_objective"]
         target_offset = target_offset_for_objective(
             training_objective,
             int(config_values.pop("target_offset", 1)),
@@ -638,21 +646,24 @@ def load_train_config_with_source(
 
         split_paths = loaded_metadata["split_paths"]
 
-        config_values["column_types"] = config_values.get(
-            "column_types", loaded_metadata["column_types"]
+        config_values["column_data_types"] = config_values.get(
+            "column_data_types", loaded_metadata["column_data_types"]
         )
 
         if config_values["input_columns"] is None:
-            config_values["input_columns"] = list(config_values["column_types"].keys())
+            config_values["input_columns"] = list(
+                config_values["column_data_types"].keys()
+            )
 
+        configured_column_data_types = config_values["column_data_types"]
         config_values["categorical_columns"] = [
             col
-            for col, type_ in loaded_metadata["column_types"].items()
+            for col, type_ in configured_column_data_types.items()
             if "int" in type_.lower() and col in config_values["input_columns"]
         ]
         config_values["real_columns"] = [
             col
-            for col, type_ in loaded_metadata["column_types"].items()
+            for col, type_ in configured_column_data_types.items()
             if "float" in type_.lower() and col in config_values["input_columns"]
         ]
         if not (
@@ -663,8 +674,8 @@ def load_train_config_with_source(
         config_values["n_classes"] = config_values.get(
             "n_classes", loaded_metadata["n_classes"]
         )
-        config_values["training_data_path"] = normalize_path(
-            config_values.get("training_data_path", split_paths[0]),
+        config_values["data_path"] = normalize_path(
+            config_values.get("data_path") or split_paths[0],
             config_values["project_root"],
         )
         config_values["validation_data_path"] = normalize_path(
@@ -684,7 +695,22 @@ def load_train_config_with_source(
             source=f"metadata config '{metadata_config_path}'",
         )
 
+        if config_values.get("target_column_types") is None:
+            config_values["target_column_types"] = derive_target_column_types(
+                config_values["target_columns"],
+                config_values["column_data_types"],
+            )
+
         _validate_class_share_log_columns(config_values)
+
+    elif (
+        config_values.get("target_column_types") is None
+        and config_values.get("column_data_types") is not None
+    ):
+        config_values["target_column_types"] = derive_target_column_types(
+            config_values["target_columns"],
+            config_values["column_data_types"],
+        )
 
     model = try_catch_excess_keys(config_path, TrainModel, config_values)
     return LoadedTrainConfig(
@@ -754,8 +780,6 @@ class TrainingSpecModel(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    training_objective: str
-    device: str
     device_max_concat_length: int = 12
     epochs: int
     log_interval: int = 10
@@ -904,39 +928,6 @@ class TrainingSpecModel(BaseModel):
                 f"scheduler_step_on must be in ['epoch', 'batch'], {v} isn't"
             )
         return v
-
-    @field_validator("training_objective")
-    @classmethod
-    def validate_training_objective(cls, v):
-        if v not in ALLOWED_OBJECTIVE_NAMES:
-            raise ValueError(f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {v}")
-        return v
-
-    @model_validator(mode="after")
-    def validate_objective_specific_config(self):
-        objective_class = get_objective_class(self.training_objective)
-        is_bert_objective = issubclass(objective_class, BERTObjective)
-        is_next_occurrence_objective = issubclass(
-            objective_class,
-            NextOccurrenceObjective,
-        )
-        if self.bert_spec is not None and not is_bert_objective:
-            raise ValueError(
-                "The BERT hyperparameters should only be configured if the training objective is 'bert'"
-            )
-        if self.bert_spec is None and is_bert_objective:
-            raise ValueError(
-                "If the training_objective is 'bert', the BERT hyperparameters must be set"
-            )
-        if self.next_occurrence_config is not None and not is_next_occurrence_objective:
-            raise ValueError(
-                "next_occurrence_config should only be configured if the training objective is 'next_occurrence'"
-            )
-        if self.next_occurrence_config is None and is_next_occurrence_objective:
-            raise ValueError(
-                "If the training_objective is 'next_occurrence', next_occurrence_config must be set"
-            )
-        return self
 
     @field_validator("data_parallelism")
     @classmethod
@@ -1184,18 +1175,21 @@ class TrainModel(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     project_root: str
-    metadata_config_path: str
+    preprocessing_data_path: Optional[str] = None
+    metadata_config_path: Optional[str] = None
     model_name: str
-    training_data_path: str
+    training_objective: str
+    device: str
+    data_path: Optional[str] = None
     validation_data_path: str
     read_format: str = "parquet"
 
     input_columns: list[str]
-    column_types: dict[str, str]
+    column_data_types: dict[str, str]
     categorical_columns: list[str]
     real_columns: list[str]
     target_columns: list[str]
-    target_column_types: dict[str, str]
+    target_column_types: Optional[dict[str, str]] = None
     id_maps: dict[str, dict[str | int, int]]
     special_token_ids: dict[str, int] = Field(
         default_factory=lambda: SPECIAL_TOKEN_IDS.ids_by_label
@@ -1221,6 +1215,81 @@ class TrainModel(BaseModel):
     model_spec: ModelSpecModel
     training_spec: TrainingSpecModel
 
+    @model_validator(mode="before")
+    @classmethod
+    def derive_optional_config_values(cls, values):
+        if not isinstance(values, dict):
+            return values
+        values = dict(values)
+        preprocessing_data_path = values.get("preprocessing_data_path")
+        if values.get("metadata_config_path") is None and preprocessing_data_path:
+            values["metadata_config_path"] = (
+                metadata_config_path_from_preprocessing_data_path(
+                    preprocessing_data_path
+                )
+            )
+        if (
+            values.get("target_column_types") is None
+            and values.get("column_data_types") is not None
+        ):
+            values["target_column_types"] = derive_target_column_types(
+                values.get("target_columns", []),
+                values["column_data_types"],
+            )
+        return values
+
+    @model_validator(mode="after")
+    def validate_required_paths(self):
+        if self.metadata_config_path is None:
+            raise ValueError(
+                "metadata_config_path is required when preprocessing_data_path "
+                "is not provided"
+            )
+        if self.data_path is None:
+            raise ValueError(
+                "data_path must be provided or resolved from preprocessing metadata"
+            )
+        return self
+
+    @field_validator("training_objective")
+    @classmethod
+    def validate_training_objective(cls, v):
+        if v not in ALLOWED_OBJECTIVE_NAMES:
+            raise ValueError(f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {v}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_objective_specific_config(self):
+        objective_class = get_objective_class(self.training_objective)
+        is_bert_objective = issubclass(objective_class, BERTObjective)
+        is_next_occurrence_objective = issubclass(
+            objective_class,
+            NextOccurrenceObjective,
+        )
+        bert_spec = self.training_spec.bert_spec
+        next_occurrence_config = self.training_spec.next_occurrence_config
+        if bert_spec is not None and not is_bert_objective:
+            raise ValueError(
+                "The BERT hyperparameters should only be configured if the "
+                "training objective is 'bert'"
+            )
+        if bert_spec is None and is_bert_objective:
+            raise ValueError(
+                "If the training_objective is 'bert', the BERT hyperparameters "
+                "must be set"
+            )
+        if next_occurrence_config is not None and not is_next_occurrence_objective:
+            raise ValueError(
+                "next_occurrence_config should only be configured if the "
+                "training objective is 'next_occurrence'"
+            )
+        if next_occurrence_config is None and is_next_occurrence_objective:
+            raise ValueError(
+                "If the training_objective is 'next_occurrence', "
+                "next_occurrence_config must be set"
+            )
+        return self
+
     @field_validator("special_token_ids")
     @classmethod
     def validate_special_token_ids_match_runtime(cls, v):
@@ -1240,10 +1309,13 @@ class TrainModel(BaseModel):
 
     @model_validator(mode="after")
     def validate_decoder_special_token_columns(self):
+        target_column_types = self.target_column_types
+        if target_column_types is None:
+            raise ValueError("target_column_types must be provided or derived")
         categorical_targets = {
             col
             for col in self.target_columns
-            if self.target_column_types[col] == "categorical"
+            if target_column_types[col] == "categorical"
         }
         invalid = set(self.categorical_decoder_special_tokens) - categorical_targets
         if invalid:
@@ -1253,7 +1325,7 @@ class TrainModel(BaseModel):
             )
         resolve_categorical_decoder_ids(
             self.target_columns,
-            self.target_column_types,
+            target_column_types,
             self.n_classes,
             self.categorical_decoder_special_tokens,
         )
@@ -1261,15 +1333,13 @@ class TrainModel(BaseModel):
 
     @model_validator(mode="after")
     def validate_bert_prediction_length_matches_context_length(self):
-        if self.window_view.objective != self.training_spec.training_objective:
+        if self.window_view.objective != self.training_objective:
             raise ValueError(
-                "window_view objective must match training_spec.training_objective "
-                f"({self.window_view.objective} != {self.training_spec.training_objective})."
+                "window_view objective must match training_objective "
+                f"({self.window_view.objective} != {self.training_objective})."
             )
         resolve_window_view(self.storage_layout, self.window_view)
-        get_objective_class(
-            self.training_spec.training_objective
-        ).validate_prediction_length(
+        get_objective_class(self.training_objective).validate_prediction_length(
             self.model_spec.prediction_length,
             self.window_view.context_length,
             usage="training",
@@ -1278,7 +1348,10 @@ class TrainModel(BaseModel):
 
     @model_validator(mode="after")
     def validate_next_occurrence_config_matches_targets(self):
-        objective_class = get_objective_class(self.training_spec.training_objective)
+        target_column_types = self.target_column_types
+        if target_column_types is None:
+            raise ValueError("target_column_types must be provided or derived")
+        objective_class = get_objective_class(self.training_objective)
         if issubclass(objective_class, NextOccurrenceObjective):
             next_occurrence_config = self.training_spec.next_occurrence_config
             if next_occurrence_config is None:
@@ -1292,7 +1365,7 @@ class TrainModel(BaseModel):
                     "next_occurrence_config.column_name must be one of target_columns, "
                     f"got {column_name!r}."
                 )
-            if self.target_column_types.get(column_name) != "categorical":
+            if target_column_types.get(column_name) != "categorical":
                 raise ValueError(
                     "next_occurrence_config.column_name must refer to a categorical target column."
                 )
@@ -1441,7 +1514,7 @@ class TrainModel(BaseModel):
 
         return v
 
-    @field_validator("column_types")
+    @field_validator("column_data_types")
     @classmethod
     def validate_column_types(cls, v, info):
         target_columns = info.data.get("target_columns", [])

@@ -1,11 +1,11 @@
 import os
 
 preprocess_config_string = """project_root: .
-data_path: PLEASE FILL
+preprocessing_data_path: PLEASE FILL
 read_format: csv
 write_format: parquet
 selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
-column_types: null # optional map of selected columns to output dtypes, e.g. {EXAMPLE_INPUT_COLUMN_NAME: Float32}
+column_data_types: null # optional map of selected columns to output dtypes, e.g. {EXAMPLE_INPUT_COLUMN_NAME: Float32}
 mask_column: null
 
 split_ratios:
@@ -19,9 +19,11 @@ max_rows: null
 """
 
 train_config_string = """project_root: .
+preprocessing_data_path: PLEASE FILL
 model_name: PLEASE FILL
+training_objective: causal
+device: cuda
 read_format: parquet
-metadata_config_path: PLEASE FILL
 
 input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
 feature_layout: null # optional structure annotations for flat input columns
@@ -55,8 +57,6 @@ model_spec:
   decoding_spec:
     type: linear
 training_spec:
-  training_objective: causal
-  device: cuda
   epochs: 10
   save_interval_epochs: 10
   batch_size: 10
@@ -82,10 +82,9 @@ training_spec:
 """
 
 infer_config_string = """project_root: .
-metadata_config_path: PLEASE FILL
+preprocessing_data_path: PLEASE FILL
 model_type: PLEASE FILL # generative or embedding
 model_path: PLEASE FILL
-data_path: PLEASE FILL
 
 input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
 target_columns: [EXAMPLE_TARGET_COLUMN_NAME]

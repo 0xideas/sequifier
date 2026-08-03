@@ -64,8 +64,8 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         )
 
         column_torch_types = {
-            col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
-            for col in config.column_types
+            col: PANDAS_TO_TORCH_TYPES[config.column_data_types[col]]
+            for col in config.column_data_types
         }
 
         # Sequence formatting structures matching long-format schema boundaries

@@ -18,6 +18,8 @@ from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
     canonicalize_polars_dtype_name,
+    derive_target_column_types,
+    metadata_config_path_from_preprocessing_data_path,
     normalize_path,
     resolve_window_view,
     stored_window_layout_from_metadata,
@@ -43,8 +45,19 @@ def load_inferer_config(
 
     config_values["seed"] = config_values.get("seed", 1010)
 
+    preprocessing_data_path = config_values.get("preprocessing_data_path")
+    if config_values.get("metadata_config_path") is None and preprocessing_data_path:
+        config_values["metadata_config_path"] = (
+            metadata_config_path_from_preprocessing_data_path(preprocessing_data_path)
+        )
+
     if not skip_metadata:
         metadata_config_path = config_values.get("metadata_config_path")
+        if not isinstance(metadata_config_path, str) or not metadata_config_path:
+            raise ValueError(
+                f"Inference config '{config_path}' must define metadata_config_path "
+                "or preprocessing_data_path when metadata loading is enabled."
+            )
 
         with open(
             normalize_path(metadata_config_path, config_values["project_root"]), "r"
@@ -82,23 +95,25 @@ def load_inferer_config(
         ):
             config_values.pop(key, None)
 
-        config_values["column_types"] = config_values.get(
-            "column_types", metadata_config["column_types"]
+        config_values["column_data_types"] = config_values.get(
+            "column_data_types", metadata_config["column_data_types"]
         )
 
         if config_values["input_columns"] is None:
-            config_values["input_columns"] = list(config_values["column_types"].keys())
+            config_values["input_columns"] = list(
+                config_values["column_data_types"].keys()
+            )
 
-        configured_column_types = config_values["column_types"]
+        configured_column_data_types = config_values["column_data_types"]
 
         config_values["categorical_columns"] = [
             col
-            for col, type_ in configured_column_types.items()
+            for col, type_ in configured_column_data_types.items()
             if "int" in type_.lower() and col in config_values["input_columns"]
         ]
         config_values["real_columns"] = [
             col
-            for col, type_ in configured_column_types.items()
+            for col, type_ in configured_column_data_types.items()
             if "float" in type_.lower() and col in config_values["input_columns"]
         ]
 
@@ -108,13 +123,26 @@ def load_inferer_config(
         ):
             raise ValueError("No columns found in config")
         config_values["data_path"] = normalize_path(
-            config_values.get(
-                "data_path",
-                metadata_config["split_paths"][
-                    min(2, len(metadata_config["split_paths"]) - 1)
-                ],
-            ),
+            config_values.get("data_path")
+            or metadata_config["split_paths"][
+                min(2, len(metadata_config["split_paths"]) - 1)
+            ],
             config_values["project_root"],
+        )
+
+        if config_values.get("target_column_types") is None:
+            config_values["target_column_types"] = derive_target_column_types(
+                config_values["target_columns"],
+                config_values["column_data_types"],
+            )
+
+    elif (
+        config_values.get("target_column_types") is None
+        and config_values.get("column_data_types") is not None
+    ):
+        config_values["target_column_types"] = derive_target_column_types(
+            config_values["target_columns"],
+            config_values["column_data_types"],
         )
 
     return try_catch_excess_keys(config_path, InfererModel, config_values)
@@ -126,11 +154,12 @@ class InfererModel(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     project_root: str
-    metadata_config_path: str
+    preprocessing_data_path: Optional[str] = None
+    metadata_config_path: Optional[str] = None
     model_path: Union[str, list[str]]
     model_type: str
     training_objective: str
-    data_path: str
+    data_path: Optional[str] = None
     training_config_path: Optional[str] = Field(default="configs/train.yaml")
     read_format: str = Field(default="parquet")
     write_format: str = Field(default="csv")
@@ -139,10 +168,10 @@ class InfererModel(BaseModel):
     categorical_columns: list[str]
     real_columns: list[str]
     target_columns: list[str]
-    column_types: dict[str, str]
-    target_column_types: dict[str, str]
+    column_data_types: dict[str, str]
+    target_column_types: Optional[dict[str, str]] = None
 
-    enforce_determinism: bool = Field(default=False)
+    enforce_deterministic_inference: bool = Field(default=False)
     output_probabilities: bool = Field(default=False)
     map_to_id: bool = Field(default=True)
     seed: int
@@ -157,6 +186,42 @@ class InfererModel(BaseModel):
     infer_with_dropout: bool = Field(default=False)
     autoregression: bool = Field(default=False)
     autoregression_total_steps: Optional[int] = Field(default=None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_optional_config_values(cls, values):
+        if not isinstance(values, dict):
+            return values
+        values = dict(values)
+        preprocessing_data_path = values.get("preprocessing_data_path")
+        if values.get("metadata_config_path") is None and preprocessing_data_path:
+            values["metadata_config_path"] = (
+                metadata_config_path_from_preprocessing_data_path(
+                    preprocessing_data_path
+                )
+            )
+        if (
+            values.get("target_column_types") is None
+            and values.get("column_data_types") is not None
+        ):
+            values["target_column_types"] = derive_target_column_types(
+                values.get("target_columns", []),
+                values["column_data_types"],
+            )
+        return values
+
+    @model_validator(mode="after")
+    def validate_required_paths(self):
+        if self.metadata_config_path is None:
+            raise ValueError(
+                "metadata_config_path is required when preprocessing_data_path "
+                "is not provided"
+            )
+        if self.data_path is None:
+            raise ValueError(
+                "data_path must be provided or resolved from preprocessing metadata"
+            )
+        return self
 
     @model_validator(mode="after")
     def normalize_prediction_length(self):
@@ -285,23 +350,34 @@ class InfererModel(BaseModel):
 
     @field_validator("data_path")
     @classmethod
-    def validate_data_path(cls, v: str, info: ValidationInfo) -> str:
-        if isinstance(v, str):
-            v2 = normalize_path(v, info.data.get("project_root"))
-            if not os.path.exists(v2):
-                raise ValueError(f"{v2} does not exist")
-        if isinstance(v, list):
-            for vv in v:
-                v2 = normalize_path(v, info.data.get("project_root"))
-                if not os.path.exists(v2):
-                    raise ValueError(f"{v2} does not exist")
+    def validate_data_path(
+        cls, v: Optional[str], info: ValidationInfo
+    ) -> Optional[str]:
+        if v is None:
+            return v
+        v2 = normalize_path(v, info.data.get("project_root"))
+        if not os.path.exists(v2):
+            raise ValueError(f"{v2} does not exist")
         return v
 
-    @field_validator("read_format", "write_format")
+    @field_validator("read_format")
     @classmethod
-    def validate_format(cls, v: str) -> str:
+    def validate_read_format(cls, v: str) -> str:
         if v not in ["csv", "parquet", "pt"]:
-            raise ValueError("Currently only 'csv', 'parquet' and 'pt' are supported")
+            raise ValueError(
+                "Currently only 'csv', 'parquet' and 'pt' are supported for "
+                "inference input"
+            )
+        return v
+
+    @field_validator("write_format")
+    @classmethod
+    def validate_write_format(cls, v: str) -> str:
+        if v not in ["csv", "parquet"]:
+            raise ValueError(
+                "Currently only 'csv' and 'parquet' are supported for "
+                "inference output"
+            )
         return v
 
     @field_validator("target_column_types")
@@ -317,7 +393,7 @@ class InfererModel(BaseModel):
             )
         return v
 
-    @field_validator("column_types")
+    @field_validator("column_data_types")
     @classmethod
     def validate_column_types(cls, v: dict, info: ValidationInfo) -> dict:
         normalized = {
@@ -329,7 +405,7 @@ class InfererModel(BaseModel):
         ]
         if missing_input_columns:
             raise ValueError(
-                "column_types must include every input column. "
+                "column_data_types must include every input column. "
                 f"Missing: {missing_input_columns}"
             )
         return normalized
@@ -348,7 +424,7 @@ class InfererModel(BaseModel):
 
     def __init__(self, **data):
         super().__init__(**data)
-        column_ordered = list(self.column_types.keys())
+        column_ordered = list(self.column_data_types.keys())
         columns_ordered_filtered = [
             c for c in column_ordered if c in self.target_columns
         ]

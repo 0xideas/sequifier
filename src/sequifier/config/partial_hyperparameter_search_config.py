@@ -219,8 +219,8 @@ class CoupledCandidateGroup:
 
 COUPLED_CANDIDATE_GROUPS = (
     CoupledCandidateGroup(
-        "data schema (input_columns, column_types)",
-        (("input_columns",), ("column_types",)),
+        "data schema (input_columns, column_data_types)",
+        (("input_columns",), ("column_data_types",)),
     ),
     CoupledCandidateGroup(
         "model width (dim_model, n_head, ingestion_spec, ingestion_merge)",
@@ -494,8 +494,11 @@ def _compile_sampling_section(
     prefix: ConfigPath,
     target_model: type[BaseModel],
     coupled_group: CoupledCandidateGroup,
+    inherited_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     base_values = base_model.model_dump(mode="python")
+    if inherited_values is not None:
+        base_values.update(copy.deepcopy(inherited_values))
     override_values = _get_path(overrides, prefix)
     if override_values is _MISSING:
         override_values = {}
@@ -662,8 +665,8 @@ def compile_hyperparameter_search_override_config(
                 f"{storage_layout.version}."
             )
         base_column_types = source_values.get(
-            "column_types",
-            metadata_config["column_types"],
+            "column_data_types",
+            metadata_config["column_data_types"],
         )
         base_n_classes = source_values.get(
             "n_classes",
@@ -678,7 +681,7 @@ def compile_hyperparameter_search_override_config(
             source=f"metadata config '{metadata_config_path}'",
         )
         split_paths = metadata_config["split_paths"]
-        raw_training_path = source_values.get("training_data_path", split_paths[0])
+        raw_training_path = source_values.get("data_path") or split_paths[0]
         raw_validation_path = source_values.get(
             "validation_data_path",
             split_paths[min(1, len(split_paths) - 1)],
@@ -693,17 +696,17 @@ def compile_hyperparameter_search_override_config(
         )
     else:
         storage_layout = base_model.storage_layout
-        base_column_types = base_model.column_types
+        base_column_types = base_model.column_data_types
         base_n_classes = base_model.n_classes
         base_id_maps = base_model.id_maps
         base_special_token_ids = base_model.special_token_ids
-        base_training_path = base_model.training_data_path
+        base_training_path = base_model.data_path
         base_validation_path = base_model.validation_data_path
         base_input_columns = base_model.input_columns
 
-    training_data_path = _configured_or_base(
+    data_path = _configured_or_base(
         overrides,
-        ("training_data_path",),
+        ("data_path",),
         base_training_path,
     )
     validation_data_path = _configured_or_base(
@@ -711,27 +714,27 @@ def compile_hyperparameter_search_override_config(
         ("validation_data_path",),
         base_validation_path,
     )
-    if _is_configured(overrides, ("training_data_path",)):
-        training_data_path = normalize_path(training_data_path, project_root)
+    if _is_configured(overrides, ("data_path",)):
+        data_path = normalize_path(data_path, project_root)
     if _is_configured(overrides, ("validation_data_path",)):
         validation_data_path = normalize_path(validation_data_path, project_root)
 
     input_override = _get_path(overrides, ("input_columns",))
-    column_override = _get_path(overrides, ("column_types",))
+    column_override = _get_path(overrides, ("column_data_types",))
     data_candidate_count = _coupled_candidate_count(
         config_path,
         overrides,
         _DATA_GROUP,
     )
     if column_override is not _MISSING:
-        column_types = copy.deepcopy(column_override)
+        column_data_types = copy.deepcopy(column_override)
     else:
-        column_types = [
+        column_data_types = [
             copy.deepcopy(base_column_types) for _ in range(data_candidate_count)
         ]
 
     if input_override is None:
-        input_columns = [list(candidate) for candidate in column_types]
+        input_columns = [list(candidate) for candidate in column_data_types]
     elif input_override is not _MISSING:
         input_columns = copy.deepcopy(input_override)
     else:
@@ -745,7 +748,7 @@ def compile_hyperparameter_search_override_config(
             for column in input_candidate
             if "int" in column_candidate.get(column, "").lower()
         ]
-        for input_candidate, column_candidate in zip(input_columns, column_types)
+        for input_candidate, column_candidate in zip(input_columns, column_data_types)
     ]
     real_columns = [
         [
@@ -753,11 +756,19 @@ def compile_hyperparameter_search_override_config(
             for column in input_candidate
             if "float" in column_candidate.get(column, "").lower()
         ]
-        for input_candidate, column_candidate in zip(input_columns, column_types)
+        for input_candidate, column_candidate in zip(input_columns, column_data_types)
     ]
 
     source_model_spec = source_values.get("model_spec", {})
-    source_training_spec = source_values.get("training_spec", {})
+    source_training_spec = copy.deepcopy(source_values.get("training_spec", {}))
+    source_training_spec.update(
+        {
+            "training_objective": source_values.get(
+                "training_objective", base_model.training_objective
+            ),
+            "device": source_values.get("device", base_model.device),
+        }
+    )
     source_window_view = source_values.get("window_view", {})
     inherited_target_offset = source_values.get(
         "target_offset",
@@ -780,6 +791,10 @@ def compile_hyperparameter_search_override_config(
         ("training_spec",),
         TrainingSpecHyperparameterSampling,
         _TRAINING_SCHEDULE_GROUP,
+        inherited_values={
+            "training_objective": base_model.training_objective,
+            "device": base_model.device,
+        },
     )
 
     search_values = partial.model_dump(
@@ -792,10 +807,10 @@ def compile_hyperparameter_search_override_config(
         {
             "project_root": project_root,
             "metadata_config_path": metadata_config_path,
-            "training_data_path": training_data_path,
+            "data_path": data_path,
             "validation_data_path": validation_data_path,
             "input_columns": input_columns,
-            "column_types": column_types,
+            "column_data_types": column_data_types,
             "categorical_columns": categorical_columns,
             "real_columns": real_columns,
             "id_maps": base_id_maps,
@@ -810,12 +825,12 @@ def compile_hyperparameter_search_override_config(
     compiled_values: dict[str, Any] = dict(search_values)
     special_top_fields = {
         "categorical_columns",
-        "column_types",
+        "column_data_types",
         "input_columns",
         "model_hyperparameter_sampling",
         "real_columns",
         "training_hyperparameter_sampling",
-        "training_data_path",
+        "data_path",
         "validation_data_path",
     }
     for field_name in HyperparameterSearchConfig.model_fields:
@@ -835,10 +850,10 @@ def compile_hyperparameter_search_override_config(
 
     compiled_values.update(
         {
-            "training_data_path": training_data_path,
+            "data_path": data_path,
             "validation_data_path": validation_data_path,
             "input_columns": input_columns,
-            "column_types": column_types,
+            "column_data_types": column_data_types,
             "categorical_columns": categorical_columns,
             "real_columns": real_columns,
             "model_hyperparameter_sampling": model_sampling,

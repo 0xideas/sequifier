@@ -99,32 +99,34 @@ def _stable_json_digest(value: Any) -> str:
 
 @beartype
 def _normalize_column_types(
-    column_types: Optional[dict[str, str]],
+    column_data_types: Optional[dict[str, str]],
 ) -> Optional[dict[str, str]]:
-    if column_types is None:
+    if column_data_types is None:
         return None
     return {
         column: canonicalize_polars_dtype_name(dtype)
-        for column, dtype in column_types.items()
+        for column, dtype in column_data_types.items()
     }
 
 
 @beartype
 def _configured_column_types_for_data_columns(
-    column_types: Optional[dict[str, str]],
+    column_data_types: Optional[dict[str, str]],
     data_columns: list[str],
 ) -> Optional[dict[str, str]]:
-    if column_types is None:
+    if column_data_types is None:
         return None
 
-    missing_columns = [column for column in data_columns if column not in column_types]
+    missing_columns = [
+        column for column in data_columns if column not in column_data_types
+    ]
     if missing_columns:
         raise ValueError(
-            "column_types must include every to-be-processed column. "
+            "column_data_types must include every to-be-processed column. "
             f"Missing: {missing_columns}"
         )
 
-    return {column: column_types[column] for column in data_columns}
+    return {column: column_data_types[column] for column in data_columns}
 
 
 @beartype
@@ -136,10 +138,12 @@ def _dtype_is_numeric(dtype: Any) -> bool:
 def _apply_configured_input_casting(
     data: pl.DataFrame,
     data_columns: list[str],
-    column_types: Optional[dict[str, str]],
+    column_data_types: Optional[dict[str, str]],
 ) -> pl.DataFrame:
     """Cast input columns early when the requested type defines processing semantics."""
-    configured = _configured_column_types_for_data_columns(column_types, data_columns)
+    configured = _configured_column_types_for_data_columns(
+        column_data_types, data_columns
+    )
     if configured is None:
         return data
 
@@ -215,12 +219,12 @@ def _resolve_integer_sequence_type(integer_types: list[str]) -> Any:
 
 
 @beartype
-def _resolve_unified_parquet_type(column_types: dict[str, str]) -> Any:
-    if not column_types:
-        raise ValueError("column_types cannot be empty")
+def _resolve_unified_parquet_type(column_data_types: dict[str, str]) -> Any:
+    if not column_data_types:
+        raise ValueError("column_data_types cannot be empty")
 
     normalized_types = [
-        canonicalize_polars_dtype_name(type_) for type_ in column_types.values()
+        canonicalize_polars_dtype_name(type_) for type_ in column_data_types.values()
     ]
     float_types = [type_ for type_ in normalized_types if is_float_dtype_name(type_)]
     integer_types = [
@@ -230,7 +234,7 @@ def _resolve_unified_parquet_type(column_types: dict[str, str]) -> Any:
     if not float_types:
         if len(set(integer_types)) > 1:
             logger.warning(
-                "Multiple integer column_types were specified for Parquet output; "
+                "Multiple integer column_data_types were specified for Parquet output; "
                 "using a unified integer schema."
             )
         return _resolve_integer_sequence_type(integer_types)
@@ -238,7 +242,7 @@ def _resolve_unified_parquet_type(column_types: dict[str, str]) -> Any:
     resolved_float = _highest_ranked_type(float_types, FLOAT_TYPE_ORDER)
     if len(set(normalized_types)) > 1:
         logger.warning(
-            "Multiple column_types were specified for Parquet output; "
+            "Multiple column_data_types were specified for Parquet output; "
             f"using unified sequence dtype {resolved_float}."
         )
 
@@ -264,9 +268,9 @@ def _resolve_unified_parquet_type(column_types: dict[str, str]) -> Any:
 
 
 @beartype
-def _resolve_pt_extraction_type(column_types: dict[str, str]) -> Any:
+def _resolve_pt_extraction_type(column_data_types: dict[str, str]) -> Any:
     normalized_types = [
-        canonicalize_polars_dtype_name(type_) for type_ in column_types.values()
+        canonicalize_polars_dtype_name(type_) for type_ in column_data_types.values()
     ]
     if any(is_float_dtype_name(type_) for type_ in normalized_types):
         return pl.Float64
@@ -291,7 +295,7 @@ class Preprocessor:
         self,
         project_root: str,
         continue_preprocessing: bool,
-        data_path: str,
+        preprocessing_data_path: str,
         read_format: str,
         write_format: str,
         merge_output: bool,
@@ -310,18 +314,20 @@ class Preprocessor:
         metadata_config_path: Optional[str],
         max_target_offset: int = 1,
         mask_column: Optional[str] = None,
-        column_types: Optional[dict[str, str]] = None,
+        column_data_types: Optional[dict[str, str]] = None,
         split_method: str = "within_sequence",
         normalize_real_columns: bool = True,
     ):
         """Initialize and run preprocessing from validated config fields."""
         self.project_root = project_root
         self.batches_per_file = batches_per_file
-        self.data_path = data_path
+        self.preprocessing_data_path = preprocessing_data_path
         self.read_format = read_format
         self.write_format = write_format
 
-        self.data_name_root = os.path.splitext(os.path.basename(data_path))[0]
+        self.data_name_root = os.path.splitext(
+            os.path.basename(preprocessing_data_path)
+        )[0]
         self.merge_output = merge_output
         if self.merge_output:
             self.target_dir = "temp"
@@ -347,7 +353,7 @@ class Preprocessor:
         self.max_rows = max_rows
         self.process_by_file = process_by_file
         self.subsequence_start_mode = subsequence_start_mode
-        self.column_types = _normalize_column_types(column_types)
+        self.column_data_types = _normalize_column_types(column_data_types)
         self.normalize_real_columns = normalize_real_columns
         if self.mask_column is not None and self.metadata_config_path is None:
             raise ValueError("metadata_config_path must be set when mask_column is set")
@@ -391,9 +397,9 @@ class Preprocessor:
                 self._cleanup(write_format)
                 return
 
-        if os.path.isfile(data_path):
+        if os.path.isfile(preprocessing_data_path):
             data = _load_and_preprocess_data(
-                data_path,
+                preprocessing_data_path,
                 read_format,
                 selected_columns,
                 max_rows,
@@ -401,7 +407,7 @@ class Preprocessor:
             )
             data_columns = _get_data_columns(data, self.mask_column)
             configured_col_types = _configured_column_types_for_data_columns(
-                self.column_types, data_columns
+                self.column_data_types, data_columns
             )
             data = _apply_configured_input_casting(
                 data, data_columns, configured_col_types
@@ -423,7 +429,7 @@ class Preprocessor:
                     "selected_columns_statistics"
                 ]
                 n_classes = preexisting_metadata["n_classes"]
-                col_types = preexisting_metadata["column_types"]
+                col_types = preexisting_metadata["column_data_types"]
             else:
                 id_maps, selected_columns_statistics = {}, {}
 
@@ -536,7 +542,7 @@ class Preprocessor:
                     "selected_columns_statistics"
                 ]
                 n_classes = preexisting_metadata["n_classes"]
-                col_types = preexisting_metadata["column_types"]
+                col_types = preexisting_metadata["column_data_types"]
 
                 # Reconstruct data_columns from the provided col_types
                 data_columns = [
@@ -545,14 +551,14 @@ class Preprocessor:
                     if col not in _reserved_input_columns(self.mask_column)
                 ]
                 configured_col_types = _configured_column_types_for_data_columns(
-                    self.column_types, data_columns
+                    self.column_data_types, data_columns
                 )
                 if configured_col_types is not None:
                     col_types = configured_col_types
 
                 # We still need to find the files to process
                 files_to_process = []
-                for root, dirs, files in os.walk(data_path):
+                for root, dirs, files in os.walk(preprocessing_data_path):
                     for file in sorted(list(files)):
                         if file.endswith(read_format):
                             files_to_process.append(os.path.join(root, file))
@@ -565,14 +571,14 @@ class Preprocessor:
                     col_types,
                     data_columns,
                 ) = self._get_column_metadata_across_files(
-                    data_path,
+                    preprocessing_data_path,
                     read_format,
                     max_rows,
                     selected_columns,
-                    self.column_types,
+                    self.column_data_types,
                 )
                 for col in id_maps:
-                    if self.column_types is None:
+                    if self.column_data_types is None:
                         col_types[col] = "Int64"
 
             self._write_or_validate_resume_manifest(
@@ -647,7 +653,7 @@ class Preprocessor:
         read_format: str,
         max_rows: Optional[int],
         selected_columns: Optional[list[str]],
-        column_types: Optional[dict[str, str]],
+        column_data_types: Optional[dict[str, str]],
     ) -> tuple[
         list[str],
         dict[str, int],
@@ -693,7 +699,7 @@ class Preprocessor:
                     current_file_cols = _get_data_columns(data, self.mask_column)
                     current_configured_col_types = (
                         _configured_column_types_for_data_columns(
-                            column_types, current_file_cols
+                            column_data_types, current_file_cols
                         )
                     )
                     data = _apply_configured_input_casting(
@@ -723,7 +729,7 @@ class Preprocessor:
                                 f"Extra: {extra}"
                             )
 
-                        if column_types is None:
+                        if column_data_types is None:
                             for col in current_file_cols:
                                 if str(data.schema[col]) != col_types[col]:
                                     raise ValueError(
@@ -1010,7 +1016,7 @@ class Preprocessor:
                 "use_precomputed_maps": self.use_precomputed_maps,
                 "n_classes": n_classes,
                 "id_maps": id_maps,
-                "column_types": col_types,
+                "column_data_types": col_types,
                 "selected_columns_statistics": selected_columns_statistics,
                 "normalize_real_columns": self.normalize_real_columns,
                 "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
@@ -1068,7 +1074,7 @@ class Preprocessor:
                 os.path.splitext(split_path)[0] if not self.merge_output else split_path
                 for split_path in self.split_paths
             ],
-            "column_types": col_types,
+            "column_data_types": col_types,
             "selected_columns_statistics": {
                 col: {"mean": stats["mean"], "std": stats["std"]}
                 for col, stats in selected_columns_statistics.items()
@@ -1991,7 +1997,7 @@ def process_and_write_data_pt(
     data: pl.DataFrame,
     stored_context_width: int,
     path: str,
-    column_types: dict[str, str],
+    column_data_types: dict[str, str],
 ):
     """Write long-format sequences as packed PT tensors."""
     if data.is_empty():
@@ -2036,7 +2042,7 @@ def process_and_write_data_pt(
     sequences_dict = {}
 
     for col_name in all_feature_cols:
-        torch_dtype = PANDAS_TO_TORCH_TYPES[column_types[col_name]]
+        torch_dtype = PANDAS_TO_TORCH_TYPES[column_data_types[col_name]]
 
         sequences_np = np.vstack(
             aggregated_data.get_column(f"seq_{col_name}").to_numpy(writable=True)

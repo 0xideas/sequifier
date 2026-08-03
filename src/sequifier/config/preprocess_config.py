@@ -38,13 +38,13 @@ class PreprocessorModel(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     project_root: str
-    data_path: str
+    preprocessing_data_path: str
     read_format: str = "csv"
     write_format: str = "parquet"
     merge_output: bool = True
     allow_sequence_splitting: bool = False
     selected_columns: Optional[list[str]] = None
-    column_types: Optional[dict[str, str]] = None
+    column_data_types: Optional[dict[str, str]] = None
     normalize_real_columns: bool = True
 
     split_ratios: list[float]
@@ -63,20 +63,32 @@ class PreprocessorModel(BaseModel):
     metadata_config_path: Optional[str] = None
     mask_column: Optional[str] = None
 
-    @field_validator("data_path")
+    @field_validator("preprocessing_data_path")
     @classmethod
-    def validate_data_path(cls, v: str) -> str:
+    def validate_preprocessing_data_path(cls, v: str) -> str:
         if not os.path.exists(v):
             raise ValueError(f"{v} does not exist")
         return v
 
-    @field_validator("read_format", "write_format")
+    @field_validator("read_format")
     @classmethod
-    def validate_format(cls, v: str) -> str:
+    def validate_read_format(cls, v: str) -> str:
+        supported_formats = ["csv", "parquet"]
+        if v not in supported_formats:
+            raise ValueError(
+                f"Currently only {', '.join(supported_formats)} are supported "
+                "for preprocessing input"
+            )
+        return v
+
+    @field_validator("write_format")
+    @classmethod
+    def validate_write_format(cls, v: str) -> str:
         supported_formats = ["csv", "parquet", "pt"]
         if v not in supported_formats:
             raise ValueError(
-                f"Currently only {', '.join(supported_formats)} are supported"
+                f"Currently only {', '.join(supported_formats)} are supported "
+                "for preprocessing output"
             )
         return v
 
@@ -150,7 +162,7 @@ class PreprocessorModel(BaseModel):
             raise ValueError("batches_per_file must be a positive integer")
         return v
 
-    @field_validator("column_types")
+    @field_validator("column_data_types")
     @classmethod
     def validate_column_types(
         cls, v: Optional[dict[str, str]], info: ValidationInfo
@@ -168,7 +180,7 @@ class PreprocessorModel(BaseModel):
             ]
             if missing_columns:
                 raise ValueError(
-                    "column_types must include every selected column. "
+                    "column_data_types must include every selected column. "
                     f"Missing: {missing_columns}"
                 )
 
@@ -177,9 +189,10 @@ class PreprocessorModel(BaseModel):
     @field_validator("continue_preprocessing")
     @classmethod
     def validate_continue_preprocessing(cls, v: bool, info: ValidationInfo) -> bool:
-        if v and info.data.get("merge_data"):
+        if v and info.data.get("merge_output"):
             raise ValueError(
-                "'continue_preprocessing' can only be set to true if merge_data is False, not single files "
+                "'continue_preprocessing' can only be set to true if "
+                "merge_output is False, not single files"
             )
         return v
 

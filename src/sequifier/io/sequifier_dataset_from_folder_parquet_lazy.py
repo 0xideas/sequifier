@@ -93,8 +93,8 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             raise ValueError("No usable model windows were found in the dataset.")
 
         self.column_torch_types = {
-            col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
-            for col in config.column_types
+            col: PANDAS_TO_TORCH_TYPES[config.column_data_types[col]]
+            for col in config.column_data_types
         }
 
         self.target_samples = self._get_target_samples()

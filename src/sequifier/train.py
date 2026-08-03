@@ -166,9 +166,12 @@ def train_worker(
 ):
     """Run one local distributed-training worker."""
     logger = configure_logger(config.project_root, config.model_name, global_rank)
+    data_path = config.data_path
+    if data_path is None:
+        raise ValueError("data_path must be provided or resolved from metadata")
 
     if config.training_spec.distributed:
-        if config.training_spec.device.startswith("cuda"):
+        if config.device.startswith("cuda"):
             torch.cuda.set_device(local_rank)
         setup_distributed_env(
             global_rank, local_rank, world_size, config.training_spec.backend
@@ -177,31 +180,23 @@ def train_worker(
     if from_folder:
         if config.read_format == "pt":
             if config.training_spec.load_full_data_to_ram:
-                train_dataset = SequifierDatasetFromFolderPt(
-                    config.training_data_path, config
-                )
+                train_dataset = SequifierDatasetFromFolderPt(data_path, config)
                 valid_dataset = SequifierDatasetFromFolderPt(
                     config.validation_data_path, config
                 )
             else:
-                train_dataset = SequifierDatasetFromFolderPtLazy(
-                    config.training_data_path, config
-                )
+                train_dataset = SequifierDatasetFromFolderPtLazy(data_path, config)
                 valid_dataset = SequifierDatasetFromFolderPtLazy(
                     config.validation_data_path, config
                 )
         elif config.read_format == "parquet":
             if config.training_spec.load_full_data_to_ram:
-                train_dataset = SequifierDatasetFromFolderParquet(
-                    config.training_data_path, config
-                )
+                train_dataset = SequifierDatasetFromFolderParquet(data_path, config)
                 valid_dataset = SequifierDatasetFromFolderParquet(
                     config.validation_data_path, config
                 )
             else:
-                train_dataset = SequifierDatasetFromFolderParquetLazy(
-                    config.training_data_path, config
-                )
+                train_dataset = SequifierDatasetFromFolderParquetLazy(data_path, config)
                 valid_dataset = SequifierDatasetFromFolderParquetLazy(
                     config.validation_data_path, config
                 )
@@ -213,7 +208,7 @@ def train_worker(
             raise ValueError(
                 "Distributed training is not supported with single-file datasets."
             )
-        train_dataset = SequifierDatasetFromFile(config.training_data_path, config)
+        train_dataset = SequifierDatasetFromFile(data_path, config)
         valid_dataset = SequifierDatasetFromFile(config.validation_data_path, config)
 
     configure_determinism(config.seed, config.training_spec.enforce_determinism)
@@ -228,7 +223,7 @@ def train_worker(
         batch_size=None,  # Batching is handled natively by the IterableDataset
         sampler=None,  # Sharding is handled natively by the IterableDataset
         num_workers=config.training_spec.num_workers,
-        pin_memory=config.training_spec.device not in ["mps", "cpu"],
+        pin_memory=config.device not in ["mps", "cpu"],
         prefetch_factor=4 if config.training_spec.num_workers > 0 else None,
         persistent_workers=(config.training_spec.num_workers > 0),
         generator=train_loader_generator,
@@ -239,7 +234,7 @@ def train_worker(
         batch_size=None,
         sampler=None,
         num_workers=config.training_spec.num_workers,
-        pin_memory=config.training_spec.device not in ["mps", "cpu"],
+        pin_memory=config.device not in ["mps", "cpu"],
         prefetch_factor=4 if config.training_spec.num_workers > 0 else None,
         persistent_workers=(config.training_spec.num_workers > 0),
         generator=valid_loader_generator,
@@ -287,7 +282,7 @@ def train_worker(
                 f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
             )
 
-        if config.training_spec.device.startswith("cuda"):
+        if config.device.startswith("cuda"):
             if torch_compile == "outer":
                 model = torch.compile(model)
             elif torch_compile == "inner":
@@ -440,12 +435,12 @@ def train_worker(
                 f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
             )
 
-        if config.training_spec.device.startswith("cuda"):
+        if config.device.startswith("cuda"):
             if torch_compile == "inner":
                 for i in range(len(model.layers)):
                     model.layers[i] = torch.compile(model.layers[i])
 
-        if config.training_spec.device.startswith("cuda"):
+        if config.device.startswith("cuda"):
             dummy_data, dummy_metadata = create_dummy_data_and_metadata(
                 config, local_rank
             )
@@ -490,16 +485,14 @@ def train_worker(
                 f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
             )
 
-        if config.training_spec.device.startswith("cuda"):
+        if config.device.startswith("cuda"):
             if torch_compile == "outer":
                 model = torch.compile(model)
 
-        device_ids = (
-            [local_rank] if config.training_spec.device.startswith("cuda") else None
-        )
+        device_ids = [local_rank] if config.device.startswith("cuda") else None
         ddp_model = DDP(model, device_ids=device_ids, find_unused_parameters=False)
 
-        if config.training_spec.device.startswith("cuda"):
+        if config.device.startswith("cuda"):
             dummy_data, dummy_metadata = create_dummy_data_and_metadata(
                 config, local_rank
             )
@@ -546,13 +539,14 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
     """Load train config and launch local or distributed training."""
     config_path = args.config_path or "configs/train.yaml"
     config = load_train_config(config_path, args_config, args.skip_metadata)
+    data_path = config.data_path
+    if data_path is None:
+        raise ValueError("data_path must be provided or resolved from metadata")
 
     torch.set_float32_matmul_precision(config.training_spec.float32_matmul_precision)
 
     world_size = config.training_spec.world_size
-    from_folder = os.path.isdir(
-        normalize_path(config.training_data_path, config.project_root)
-    )
+    from_folder = os.path.isdir(normalize_path(data_path, config.project_root))
 
     if config.training_spec.distributed:
         if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
@@ -866,18 +860,18 @@ class TransformerModel(nn.Module):
                     f"Target column type {target_column_type} not in ['categorical', 'real']"
                 )
 
-        self.device = hparams.training_spec.device
+        self.device = hparams.device
         self.device_max_concat_length = hparams.training_spec.device_max_concat_length
 
-        if hparams.training_spec.device.startswith("cuda"):
+        if hparams.device.startswith("cuda"):
             if local_rank is not None:
                 self.device = f"cuda:{local_rank}"
             elif self.rank is not None:  # Backwards compatibility
                 self.device = f"cuda:{self.rank}"
             else:
-                self.device = hparams.training_spec.device
+                self.device = hparams.device
         else:
-            self.device = hparams.training_spec.device
+            self.device = hparams.device
 
         self.criterion = self._init_criterion(hparams=hparams)
         self.batch_size = hparams.training_spec.batch_size
@@ -1358,7 +1352,7 @@ class TransformerModel(nn.Module):
                 if self._distributed_is_initialized()
                 else training_spec.world_size
             ),
-            "training_objective": training_spec.training_objective,
+            "training_objective": self.hparams.training_objective,
             "seed": self.hparams.seed,
             "dropout": training_spec.dropout,
             "bert_spec": bert_spec,
@@ -1374,7 +1368,7 @@ class TransformerModel(nn.Module):
             "storage_layout": asdict(self.storage_layout),
             "window_view": asdict(self.window_view),
             "model_window_stride": self.hparams.model_window_stride,
-            "column_types": self.hparams.column_types,
+            "column_data_types": self.hparams.column_data_types,
             "categorical_columns": self.categorical_columns,
             "real_columns": self.real_columns,
             "input_columns": self.input_columns,
@@ -1395,9 +1389,7 @@ class TransformerModel(nn.Module):
             "model_spec": self.hparams.model_spec.model_dump(mode="json"),
         }
         provenance = {
-            "training_data_path": normalize_path(
-                self.hparams.training_data_path, self.project_root
-            ),
+            "data_path": normalize_path(self.hparams.data_path, self.project_root),
             "validation_data_path": normalize_path(
                 self.hparams.validation_data_path, self.project_root
             ),
@@ -3090,7 +3082,7 @@ def infer_with_embedding_model(
     size: int,
     target_columns: list[str],
     metadata: list[dict[str, np.ndarray]],
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
 ) -> np.ndarray:
     """Run batched embedding inference and concatenate CPU outputs."""
     outs0 = []
@@ -3110,7 +3102,7 @@ def infer_with_embedding_model(
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
                 else:
                     data_gpu[col] = torch.from_numpy(x_).to(
-                        device, dtype=column_types.get(col, ref_dtype)
+                        device, dtype=column_data_types.get(col, ref_dtype)
                     )
             metadata_gpu = (
                 {
@@ -3142,7 +3134,7 @@ def infer_with_generative_model(
     size: int,
     target_columns: list[str],
     metadata: list[dict[str, np.ndarray]],
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
 ) -> dict[str, np.ndarray]:
     """Run batched generative inference and trim CPU outputs."""
     outs0 = []
@@ -3160,7 +3152,7 @@ def infer_with_generative_model(
                     data_gpu[col] = torch.from_numpy(x_).to(device, dtype=torch.int64)
                 else:
                     data_gpu[col] = torch.from_numpy(x_).to(
-                        device, dtype=column_types.get(col, ref_dtype)
+                        device, dtype=column_data_types.get(col, ref_dtype)
                     )
             metadata_gpu = (
                 {
