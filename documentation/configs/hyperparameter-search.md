@@ -9,6 +9,58 @@ sequifier hyperparameter-search --config-path configs/hyperparameter_search.yaml
 
 ```
 
+## Base Training Config with Partial Overrides
+
+Hyperparameter search can be configured as a normal training config plus a
+typed partial search config. The presence of the top-level `overrides` field
+selects this format. `base_config_path` is then required; a missing or empty
+path is reported as an override-format configuration error rather than falling
+back to the legacy format.
+
+```yaml
+base_config_path: configs/train.yaml
+hp_search_name: transformer-width-search
+model_config_write_path: configs/hp-search
+search_strategy: bayesian
+n_samples: 40
+
+overrides:
+  context_length: [64, 128]
+  model_spec:
+    dim_model: [128, 256]
+    # n_head is inherited from train.yaml and repeated for both widths.
+    dim_feedforward:
+      low: 256
+      high: 1024
+      step: 256
+  training_spec:
+    batch_size: [16, 32]
+    learning_rate: [0.001, 0.0005]
+    # epochs and scheduler are inherited and repeated to match both rates.
+```
+
+Fields omitted from `overrides` inherit their training-config values. Inherited
+sampleable fields become singleton search spaces. For index-coupled fields, an
+inherited value is repeated to match the configured candidate count. If two or
+more explicitly overridden members of a coupled group have different lengths,
+configuration loading fails instead of repeating an explicitly configured
+value.
+
+Configured override fields replace their corresponding base fields. Lists are
+replaced, never merged by index. Explicit `null` clears nullable fields. Typed
+structures such as ingestion and decoding specifications are replaced as
+complete values, so changing a discriminator such as `type: mlp` to
+`type: linear` cannot retain fields that are invalid for the new type.
+
+The partial `model_spec`, `training_spec`, and BERT override models use the same
+list and distribution grammar documented below. Unknown fields are rejected
+with their complete override path. Relative project paths continue to use the
+compiled config's `project_root`; `base_config_path` itself follows normal
+config-path resolution and may also be written relative to the partial config.
+
+The original self-contained hyperparameter-search format remains supported
+when `overrides` is absent.
+
 ## CLI Overrides
 
 The search runner reads most configuration from YAML. The config-related CLI flag currently used by this command is:
@@ -33,8 +85,11 @@ The configuration is defined in a YAML file. To define the search space, fields 
 | `model_config_write_path` | `str` | **Yes** | - | Directory to save the generated config files for each run (e.g., `configs/hp_search/`). |
 | `search_strategy` | `str` | No | `bayesian` | `bayesian` (TPE sampler), `sample` (Random Search), or `grid` (Brute Force Grid Search). |
 | `n_samples` | `int` | *Conditional* | - | Number of distinct runs to execute. Required unless `search_strategy: grid`. |
-| `seed` | `int` | No | `null` | Seed passed to the Optuna sampler. |
+| `seed` | `list[int]` | No | `null` | Training seeds to search. Random and Bayesian search sample from the list; grid search iterates through every value. When `null`, every run uses seed `101`. |
+| `target_offset` | `int` | No | `1` | Fixed target offset for forward-looking objectives. In the partial format it inherits the authored training value unless explicitly overridden; it is not sampled. |
 | `prune_trials` | `bool` | No | `true` | Enables cooperative early stopping of unpromising trials via Optuna. *Beta notice: Pruning with distributed training is currently experimental.* |
+| `pruning_warmup_epochs` | `int` | No | `null` | Number of complete training epochs required before Optuna may prune a trial. Mutually exclusive with `pruning_warmup_batches`. |
+| `pruning_warmup_batches` | `int` | No | `null` | Number of training batches required before Optuna may prune a trial. Mutually exclusive with `pruning_warmup_epochs`. |
 | `override_input` | `bool` | No | `false` | Parsed for compatibility; the current search runner does not use this field. |
 | `training_data_path` | `str` | No | Metadata split 0 | Path to training data. |
 | `validation_data_path` | `str` | No | Metadata split 1 | Path to validation data. |
@@ -72,7 +127,10 @@ Sequifier allows you to search not just for model parameters, but for the best *
 | `input_columns` | `list[list[str]]` or `null` | **Yes** | A list of input sets. E.g., `[['col1'], ['col1', 'col2']]`. Set to `null` to derive one input set from `column_types`. |
 | `target_columns` | `list[str]` | **Yes** | The target column(s) to predict. Fixed across all runs. |
 | `context_length` | `list[int]` | **Yes** | List of sequence lengths to test (e.g., `[24, 48]`). |
+| `model_window_stride` | `int` or `null` | No | `null` | Fixed model-window stride used by every trial. `null` preserves one right-aligned sample per stored row. |
 | `target_column_types` | `dict` | **Yes** | Map of target columns to `categorical` or `real`. |
+| `categorical_decoder_special_tokens` | `dict[str, list[str]]` | No | Fixed per-target overrides selecting which of `unknown`, `other`, and `mask` occupy categorical decoder classes. |
+| `special_token_ids` | `dict[str, int]` | No | Fixed special-token IDs passed to every generated training config. In the partial format these inherit from the resolved base training config and metadata. |
 | `column_types` | `list[dict]` | *Conditional* | Required if `input_columns` varies. List of type maps corresponding to the input sets. |
 | `feature_layout` | `dict` or `null` | No | Optional cartesian layout registry passed through to every sampled train config. Required when `ingestion_spec` references a structured layout. |
 
@@ -115,17 +173,64 @@ dim_feedforward:
 | `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
-| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. |
-| `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. If omitted for multiple ingestions, defaults to `{type: concat}`. Merge output width is always `dim_model`. |
-| `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. |
+| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A fixed dict is reused across transformer widths and projected at the model boundary. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. |
+| `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. Supports `concat`, `sum`, `gated`, or `attention`. If omitted for multiple ingestions, defaults to `{type: concat}`. The merge produces `dim_model`, except in `range_concat` trials, where it produces `dim_model - 1` before the position channel is appended. |
+| `initialization` | `dict` | No | Per-layer-group initialization configuration. Each `weight` or `bias` entry may be one fixed method or a `candidates` list sampled independently. Uses the same direct group mapping as `sequifier train`. |
+| `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. Defaults to `false`. |
+| `auxiliary_input_columns` | `list[str]` | No | Input columns that are intentionally kept in `batch.inputs` but must not be consumed by sampled ingestion configs. Defaults to `[]`. |
+| `allow_unused_input_columns` | `bool` | No | Allows sampled train configs to leave input columns unused and log the unused names. Defaults to `false`; prefer `auxiliary_input_columns` for intentional auxiliary inputs. |
+| `shared_layer_groups` | `list[list[int]]` | No | Fixed transformer layer-sharing groups applied to every sampled model, e.g. `[[0, 1], [6, 7]]`. Defaults to `[]`. Each group must contain at least two unique, in-range indices, and groups cannot overlap. |
 | `prediction_length` | `int` | **Yes** | Number of steps to predict simultaneously. BERT trials override this to the sampled `context_length`. |
+| `decoding_support` | `int`, `list[int]`, `Distribution` | No | Fixed or sampled number of consecutive transformer output positions flattened into each decoded target position. Defaults to `1`. |
+| `decoding_spec` | `dict`, `list[dict]`, or `null` | No | Fixed target decoder config or a list of decoder configs sampled by index. Defaults to `{type: linear}`. Use `{type: mlp, hidden_dims: [...]}` for a shared MLP target head. |
 | `activation_fn` | `list[str]` | **Yes** | E.g., `['swiglu', 'gelu']`. |
-| `attention_type` | `list[str]` | **Yes** | E.g., `['mha', 'mqa']`. |
-| `n_kv_heads` | `list[int or null]` | **Yes** | Number of KV heads. Use `1` for MQA, a divisor of `n_head` for GQA, and `null` only with MHA. |
+| `attention_type` | `list[str]` | **Yes** | One or more of `mha`, `mqa`, or `gqa`. |
+| `attention_output_projection` | `list[bool]` | No | Whether sampled attention blocks apply a bias-free output projection. Defaults to `[true]`; use `[true, false]` to sample both variants. |
+| `n_kv_heads` | `list[int or null]` | **Yes** | Number of KV heads. Use `1` for MQA, a divisor of `n_head` for GQA, and `null` only with MHA. Invalid values are filtered for each sampled `n_head`. |
 | `normalization` | `list[str]` | **Yes** | E.g., `['rmsnorm']`. |
 | `norm_first` | `list[bool]` | **Yes** | Pre-LN vs Post-LN. |
-| `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope']`. |
+| `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope', 'range', 'range_concat']`. For `range_concat`, the model boundary projects ingestion output to `dim_model - 1` before appending the range channel. |
+| `positional_encoding_scope` | `list[str]` | No | `['per_feature']`. Use `['global']` for shared learned positions; `range` and `range_concat` trials force `global`. |
 | `rope_theta` | `list` or `Distribution` | **Yes** | Base frequency for RoPE. |
+
+`ingestion_spec` accepts the same ingestion definitions as `sequifier train`.
+For `temporal_conv`, this includes `base_ingestion` (`direct_embed` or
+`pass_through`), `post_conv_norm` (`layer_norm`, `rmsnorm`, or `none`), and
+`orientation` (`within_item_position` or `within_column`). The default
+`within_item_position` normalizes feature channels independently at each time
+step; `within_column` normalizes each feature channel across context positions.
+`base_ingestion: pass_through` is useful for raw real-valued temporal features:
+the first Conv1D maps from the raw feature width to the branch `output_dim`.
+
+`decoding_spec` accepts the same target decoder definitions as `sequifier train`,
+including optional decoder-hidden-kernel regularization via `hidden_weight_l2`
+on `mlp` branches. A list samples one complete decoder definition per trial.
+`decoding_support` accepts a fixed integer, categorical list, or integer
+distribution. When it is larger than `1`, sampled configs must still satisfy
+`prediction_length <= context_length - decoding_support + 1`.
+
+Initialization methods can be held fixed or sampled as complete method
+configurations. Candidate lists are configured at the individual `weight` or
+`bias` entry; there is no additional `overrides` level:
+
+```yaml
+model_hyperparameter_sampling:
+  initialization:
+    decoder.output:
+      weight:
+        candidates:
+          - {method: normal, mean: 0.0, std: 0.02}
+          - {method: xavier_uniform, gain: 1.0}
+      bias: {method: zeros}
+    attention.qkv:
+      weight: {method: preserve}
+```
+
+Here Optuna samples the decoder output weight method while the decoder bias and
+attention weights remain fixed. Candidate lists on different groups and
+parameter kinds are sampled independently and contribute their cartesian
+product to grid-search sizing. Each sampled training config contains only the
+selected concrete methods, in the regular `model_spec.initialization` format.
 
 ### 6. Training Hyperparameters (`training_hyperparameter_sampling`)
 Most fields here are lists for sampling, but some are scalar values fixed for all runs.
@@ -138,6 +243,7 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `training_objective` | `list[str]` or `str` | No | `['causal']` | Objectives to sample from: `causal`, `bert`, `final_value`, or `next_occurrence`. |
 | `batch_size` | `list` or `Distribution` | **Yes** | - | Batch sizes to test. |
 | `accumulation_steps` | `list` or `Distribution` | **Yes** | - | Gradient accumulation steps. |
+| `gradient_clip` | `float`, `null`, `list`, or `Distribution` | No | `null` | Fixed or sampled maximum gradient norm. A list may include `null` to sample disabled clipping; float distributions sample enabled clipping thresholds. |
 | `dropout` | `list` or `Distribution` | No | `[0.0]` | Dropout probabilities. |
 | `criterion` | `dict` | **Yes** | - | Map of target columns to loss functions. |
 | `bert_spec` | `dict` | Conditional | `null` | Required if `training_objective` includes `bert`; samples BERT masking settings. |
@@ -163,9 +269,9 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `max_ram_gb` | `int` or `float`| No | `16` | RAM limit (GB) for the cache when using lazy loading. |
 | `load_full_data_to_ram` | `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt` or `read_format: parquet` and folder-style sharded data. |
-| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `conv`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float64`, `float8_e4m3fn`, `float8_e5m2`). |
-| `layer_autocast` | `bool` | No | `true` | Enable `torch.autocast`. |
-| `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`. |
+| `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `conv`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float64`, `float8_e4m3fn`, `float8_e5m2`). Must be `null` with FSDP. |
+| `layer_autocast` | `bool` | No | `false` | Enable `torch.autocast`. |
+| `data_parallelism` | `Optional[str]` | No | `null` | Set data parallelism approach, one of `DDP` and `FSDP`. Required when `distributed: true`. |
 | `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly `true` or `false` if data\_parallelism is 'FSDP'. |
 | `torch_compile` | `str` | No | `outer` | Controls torch.compile. Options are "outer", "inner", or "none". |
 | `float32_matmul_precision` | `str` | No | `highest` | Sets the internal PyTorch matmul precision. Options are "highest", "high", or "medium". |
@@ -182,7 +288,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 | Group | Anchor Field | Linked Fields (Must match index) | Reason for Linkage |
 | :--- | :--- | :--- | :--- |
-| **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_spec` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion configs with explicit branch output dimensions often need the same pairing. |
+| **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_spec` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion and merge lists intentionally select different complete frontends by width; fixed frontends are reused and projected automatically. |
 | **Training Schedule** | `learning_rate` | `epochs`<br>`scheduler` | The magnitude of the learning rate often dictates how many epochs are needed. Schedulers often require `T_max` to match `epochs`. |
 | **Data Schema** | `input_columns` | `column_types` | Different subsets of columns require specific data type definitions. |
 
@@ -197,9 +303,13 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 All other parameters are considered **Independent**. Sequifier will test every value in these lists against every combination of the linked groups above.
 
-  * **Model:** `num_layers`, `dim_feedforward`, `activation_fn`, `normalization`, `norm_first`, `positional_encoding`, `attention_type`, `rope_theta`.
-  * **Training:** `training_objective`, `batch_size`, `dropout`, `accumulation_steps`, `optimizer`.
+  * **Model:** `num_layers`, `dim_feedforward`, `activation_fn`, `normalization`, `norm_first`, `positional_encoding`, `attention_type`, `attention_output_projection`, `rope_theta`.
+  * **Training:** `training_objective`, `batch_size`, `dropout`, `gradient_clip`, `accumulation_steps`, `optimizer`.
   * **Data:** `context_length`.
+
+`shared_layer_groups` is fixed for every sampled model rather than sampled as a
+list of alternatives. If `num_layers` is sampled, make sure every configured
+sharing group is valid for every possible sampled layer count.
 
 ### 3\. Special Case: `n_kv_heads`
 
@@ -235,6 +345,8 @@ Sequifier uniquely allows you to treat "data" as a hyperparameter.
 ### 3. Cooperative Trial Pruning (`prune_trials: true`)
 
 Optuna monitors intermediate validation loss at validation loss calculation, which is every epoch and optionally every configured number of minutes. If the trajectory of the current run is definitively worse than previously completed trials, the searcher will issue a `SIGTERM` signal to the subprocess, aborting the run early.
+
+Set either `pruning_warmup_epochs` or `pruning_warmup_batches` to defer pruning. They are mutually exclusive, and configuration validation rejects setting both. `pruning_warmup_epochs: 10` allows the first pruning decision after the epoch-10 validation result. Batch warm-up uses the training `global_step`, so `pruning_warmup_batches: 1000` allows pruning at the first validation report at or after batch 1000. Intermediate validation losses are still reported to Optuna during either warm-up. When both settings are omitted, immediate pruning remains enabled, including pruning from the initial epoch-0 validation result.
 
 * *Pros:* Saves massive amounts of compute time.
 * *Cons:* Can occasionally prune a "late bloomer" model.

@@ -3,6 +3,7 @@ import json
 import math
 import os
 import warnings
+from dataclasses import dataclass
 from itertools import product
 from typing import Annotated, Any, Literal, Optional, TypeAlias, Union
 
@@ -24,6 +25,8 @@ from pydantic import (
 )
 
 import sequifier
+import sequifier.optimizers
+from sequifier.config.initialization_config import ModelInitializationConfig
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.helpers import (
     ModelWindowView,
@@ -41,7 +44,12 @@ from sequifier.objectives import (
     get_objective_class,
     target_offset_for_objective,
 )
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
+from sequifier.special_tokens import (
+    SPECIAL_TOKEN_IDS,
+    SPECIAL_TOKEN_NAMES,
+    resolve_categorical_decoder_ids,
+    validate_special_token_ids,
+)
 
 AnyType = str | int | float
 NextOccurrenceTargetValue: TypeAlias = StrictInt | StrictStr
@@ -222,13 +230,29 @@ class TemporalConvIngestionConfig(BaseModel):
     type: Literal["temporal_conv"]
     columns: list[str] = Field(..., min_length=1)
     output_dim: int = Field(..., gt=0)
+    base_ingestion: Literal["direct_embed", "pass_through"] = "direct_embed"
     feature_embedding_dims: Optional[dict[str, int]] = None
     kernel_size: int = Field(3, gt=0)
-    dilation: int = Field(1, gt=0)
+    dilation: int | list[int] = 1
     num_layers: int = Field(1, gt=0)
     causal: bool = True
     activation_fn: Literal["relu", "gelu", "silu"] = "gelu"
     dropout: float = Field(0.0, ge=0.0, lt=1.0)
+    post_conv_norm: Literal["layer_norm", "rmsnorm", "none"] = "layer_norm"
+    orientation: Literal["within_column", "within_item_position"] = (
+        "within_item_position"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_num_layers_from_dilation_schedule(cls, values):
+        if not isinstance(values, dict):
+            return values
+        dilation = values.get("dilation")
+        if isinstance(dilation, list) and "num_layers" not in values:
+            values = dict(values)
+            values["num_layers"] = len(dilation)
+        return values
 
     @model_validator(mode="after")
     def validate_temporal_conv(self):
@@ -236,11 +260,36 @@ class TemporalConvIngestionConfig(BaseModel):
         _validate_feature_embedding_dims(
             self.feature_embedding_dims, "temporal_conv feature_embedding_dims"
         )
+        if self.base_ingestion == "pass_through" and self.feature_embedding_dims:
+            raise ValueError(
+                "temporal_conv feature_embedding_dims is only valid when "
+                "base_ingestion is 'direct_embed'"
+            )
+        if isinstance(self.dilation, list):
+            invalid_dilation_values = [d for d in self.dilation if d <= 0]
+            if invalid_dilation_values:
+                raise ValueError(
+                    "temporal_conv dilation schedule must contain positive "
+                    f"integers: {invalid_dilation_values}"
+                )
+            if len(self.dilation) != self.num_layers:
+                raise ValueError(
+                    "temporal_conv dilation schedule length must equal "
+                    f"num_layers: {len(self.dilation)} != {self.num_layers}"
+                )
+        elif self.dilation <= 0:
+            raise ValueError("temporal_conv dilation must be positive")
         if not self.causal and self.kernel_size % 2 == 0:
             raise ValueError(
                 "temporal_conv kernel_size must be odd when causal is false"
             )
         return self
+
+    @property
+    def dilation_schedule(self) -> list[int]:
+        if isinstance(self.dilation, list):
+            return self.dilation
+        return [self.dilation] * self.num_layers
 
 
 class AxisProjectionBlockModel(BaseModel):
@@ -433,6 +482,68 @@ class IngestionMergeConfig(BaseModel):
 IngestionSpecConfig = BranchIngestionConfig | dict[str, BranchIngestionConfig]
 
 
+class LinearDecodingConfig(BaseModel):
+    """Project each support window directly to target outputs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["linear"] = "linear"
+    target_columns: Optional[list[str]] = Field(default=None, min_length=1)
+
+    @field_validator("target_columns")
+    @classmethod
+    def validate_target_columns(cls, v):
+        if v is not None:
+            _validate_column_list_unique(v, "linear decoding target_columns")
+        return v
+
+
+class MLPDecodingConfig(BaseModel):
+    """Flatten support windows and decode targets with a shared MLP branch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["mlp"]
+    target_columns: Optional[list[str]] = Field(default=None, min_length=1)
+    hidden_dims: list[int] = Field(..., min_length=1)
+    activation_fn: Literal["relu", "gelu", "silu"] = "relu"
+    dropout: float = Field(0.0, ge=0.0, lt=1.0)
+    hidden_weight_l2: float = Field(
+        0.0,
+        ge=0.0,
+        allow_inf_nan=False,
+    )
+
+    @field_validator("target_columns")
+    @classmethod
+    def validate_target_columns(cls, v):
+        if v is not None:
+            _validate_column_list_unique(v, "mlp decoding target_columns")
+        return v
+
+    @field_validator("hidden_dims")
+    @classmethod
+    def validate_hidden_dims(cls, v):
+        invalid_dims = [dim for dim in v if dim <= 0]
+        if invalid_dims:
+            raise ValueError(
+                f"mlp decoding hidden_dims must be positive: {invalid_dims}"
+            )
+        return v
+
+
+BranchDecodingConfig = Annotated[
+    Union[
+        LinearDecodingConfig,
+        MLPDecodingConfig,
+    ],
+    Field(discriminator="type"),
+]
+
+
+DecodingSpecConfig = BranchDecodingConfig | dict[str, BranchDecodingConfig]
+
+
 def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
     training_spec = config_values.get("training_spec", {})
 
@@ -453,27 +564,50 @@ def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
             )
 
 
+@dataclass(frozen=True)
+class LoadedTrainConfig:
+    """User-authored training values together with their resolved model."""
+
+    source_values: dict[str, Any]
+    model: "TrainModel"
+    metadata_values: Optional[dict[str, Any]] = None
+
+
 @beartype
-def load_train_config(
+def load_train_config_with_source(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
-) -> "TrainModel":
-    """Load train YAML plus CLI overrides and optional metadata-derived fields."""
+) -> LoadedTrainConfig:
+    """Load training YAML while retaining the effective user-authored values."""
     with open(config_path, "r") as f:
         config_values = yaml.safe_load(f)
 
+    if not isinstance(config_values, dict):
+        raise ValueError(
+            f"Training config '{config_path}' must contain a YAML mapping."
+        )
+
     config_values.update(args_config)
+    source_values = copy.deepcopy(config_values)
+    config_values = copy.deepcopy(source_values)
+    metadata_config: Optional[dict[str, Any]] = None
 
     config_values["seed"] = config_values.get("seed", 1010)
 
     if not skip_metadata:
         metadata_config_path = config_values.get("metadata_config_path")
+        if not isinstance(metadata_config_path, str) or not metadata_config_path:
+            raise ValueError(
+                f"Training config '{config_path}' must define a non-empty "
+                "metadata_config_path when metadata loading is enabled."
+            )
 
         with open(
             normalize_path(metadata_config_path, config_values["project_root"]), "r"
         ) as f:
-            metadata_config = json.loads(f.read())
+            loaded_metadata: dict[str, Any] = json.loads(f.read())
+        metadata_config = loaded_metadata
 
-        storage_layout = stored_window_layout_from_metadata(metadata_config)
+        storage_layout = stored_window_layout_from_metadata(loaded_metadata)
         if storage_layout.version != 2:
             raise ValueError(
                 "Training requires metadata stored_window_layout_version=2, "
@@ -493,12 +627,6 @@ def load_train_config(
         config_values["storage_layout"] = storage_layout
         config_values["window_view"] = window_view
         for key in (
-            "stored_context_width",
-            "max_target_offset",
-            "stored_window_layout_version",
-        ):
-            config_values.pop(key, None)
-        for key in (
             "target_offset",
             "stored_context_width",
             "max_target_offset",
@@ -508,10 +636,10 @@ def load_train_config(
         for key in ("target_offset", "stored_context_width", "max_target_offset"):
             config_values.get("training_spec", {}).pop(key, None)
 
-        split_paths = metadata_config["split_paths"]
+        split_paths = loaded_metadata["split_paths"]
 
         config_values["column_types"] = config_values.get(
-            "column_types", metadata_config["column_types"]
+            "column_types", loaded_metadata["column_types"]
         )
 
         if config_values["input_columns"] is None:
@@ -519,12 +647,12 @@ def load_train_config(
 
         config_values["categorical_columns"] = [
             col
-            for col, type_ in metadata_config["column_types"].items()
+            for col, type_ in loaded_metadata["column_types"].items()
             if "int" in type_.lower() and col in config_values["input_columns"]
         ]
         config_values["real_columns"] = [
             col
-            for col, type_ in metadata_config["column_types"].items()
+            for col, type_ in loaded_metadata["column_types"].items()
             if "float" in type_.lower() and col in config_values["input_columns"]
         ]
         if not (
@@ -533,7 +661,7 @@ def load_train_config(
         ):
             raise ValueError("No columns found in config_values")
         config_values["n_classes"] = config_values.get(
-            "n_classes", metadata_config["n_classes"]
+            "n_classes", loaded_metadata["n_classes"]
         )
         config_values["training_data_path"] = normalize_path(
             config_values.get("training_data_path", split_paths[0]),
@@ -547,9 +675,9 @@ def load_train_config(
             config_values["project_root"],
         )
 
-        config_values["id_maps"] = metadata_config["id_maps"]
+        config_values["id_maps"] = loaded_metadata["id_maps"]
         config_values["special_token_ids"] = validate_special_token_ids(
-            metadata_config.get(
+            loaded_metadata.get(
                 "special_token_ids",
                 SPECIAL_TOKEN_IDS.ids_by_label,
             ),
@@ -558,7 +686,24 @@ def load_train_config(
 
         _validate_class_share_log_columns(config_values)
 
-    return try_catch_excess_keys(config_path, TrainModel, config_values)
+    model = try_catch_excess_keys(config_path, TrainModel, config_values)
+    return LoadedTrainConfig(
+        source_values=source_values,
+        model=model,
+        metadata_values=copy.deepcopy(metadata_config),
+    )
+
+
+@beartype
+def load_train_config(
+    config_path: str, args_config: dict[str, Any], skip_metadata: bool
+) -> "TrainModel":
+    """Load train YAML plus CLI overrides and optional metadata-derived fields."""
+    return load_train_config_with_source(
+        config_path,
+        args_config,
+        skip_metadata,
+    ).model
 
 
 class DotDict(dict):
@@ -627,6 +772,7 @@ class TrainingSpecModel(BaseModel):
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
     accumulation_steps: Optional[int] = None
+    gradient_clip: Optional[float] = None
     dropout: float = 0.0
     loss_weights: Optional[dict[str, float]] = None
     optimizer: DotDict = Field(default_factory=lambda: DotDict({"name": "Adam"}))
@@ -648,7 +794,7 @@ class TrainingSpecModel(BaseModel):
     num_workers: int = 0
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
-    layer_autocast: Optional[bool] = True
+    layer_autocast: Optional[bool] = False
     data_parallelism: Optional[str] = None
     fsdp_cpu_offload: Optional[bool] = None
     torch_compile: str = "outer"
@@ -810,6 +956,11 @@ class ModelSpecModel(BaseModel):
     ingestion_spec: Optional[IngestionSpecConfig] = None
     ingestion_merge: Optional[IngestionMergeConfig] = None
     allow_shared_ingestion_columns: bool = False
+    allow_unused_input_columns: bool = False
+    auxiliary_input_columns: list[str] = Field(default_factory=list)
+    initialization: ModelInitializationConfig = Field(
+        default_factory=ModelInitializationConfig
+    )
     dim_model: int
     n_head: int
     dim_feedforward: int
@@ -817,36 +968,51 @@ class ModelSpecModel(BaseModel):
 
     activation_fn: str = "swiglu"  # Options: "relu", "gelu", "swiglu"
     normalization: str = "rmsnorm"  # Options: "layer_norm", "rmsnorm"
-    positional_encoding: str = "learned"  # Options: "learned", "rope" (Rotary)
-    attention_type: str = (
-        "mha"  # Options: "mha" (Multi-Head), "mqa" (Multi-Query), "gqa" (Grouped-Query)
+    positional_encoding: str = (
+        "learned"  # Options: "learned", "rope", "range", "range_concat"
     )
+    positional_encoding_scope: str = "per_feature"  # Options: "per_feature", "global"
+    attention_type: str = "mha"  # Options: "mha", "mqa", "gqa"
+    attention_output_projection: bool = True
 
     norm_first: bool = True
+    shared_layer_groups: list[list[int]] = Field(default_factory=list)
     n_kv_heads: Optional[int] = None
     rope_theta: float = 10000.0
 
     prediction_length: int
+    decoding_support: int = Field(1, gt=0)
+    decoding_spec: Optional[DecodingSpecConfig] = None
 
     @model_validator(mode="before")
     @classmethod
-    def default_ingestion_spec(cls, values):
+    def default_specs(cls, values):
         if not isinstance(values, dict):
             return values
+        values = dict(values)
+        positional_encoding = values.get("positional_encoding", "learned")
+        if (
+            positional_encoding in {"range", "range_concat"}
+            and "positional_encoding_scope" not in values
+        ):
+            values["positional_encoding_scope"] = "global"
+        if values.get("decoding_spec") is None:
+            values["decoding_spec"] = {"type": "linear"}
         if values.get("ingestion_spec") is not None:
             return values
         dim_model = values.get("dim_model")
         if dim_model is None:
             return values
-        values = dict(values)
         values["ingestion_spec"] = {
             "type": "direct_embed",
-            "output_dim": dim_model,
+            "output_dim": (
+                dim_model - 1 if positional_encoding == "range_concat" else dim_model
+            ),
         }
         return values
 
     @model_validator(mode="after")
-    def validate_ingestion_spec_output_dim(self):
+    def validate_ingestion_spec_shape(self):
         if self.ingestion_spec is None:
             self.ingestion_spec = DirectEmbedIngestionConfig(output_dim=self.dim_model)
 
@@ -862,15 +1028,65 @@ class ModelSpecModel(BaseModel):
                 )
             if self.ingestion_merge is None:
                 self.ingestion_merge = IngestionMergeConfig()
-        elif self.ingestion_spec.output_dim != self.dim_model:
-            raise ValueError(
-                "model_spec.ingestion_spec.output_dim must equal dim_model"
-            )
-        elif self.ingestion_merge is not None:
+        if (
+            not isinstance(self.ingestion_spec, dict)
+            and self.ingestion_merge is not None
+        ):
             raise ValueError(
                 "model_spec.ingestion_merge is only valid when "
                 "ingestion_spec defines multiple named ingestions"
             )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_decoding_spec_present(self):
+        if self.decoding_spec is None:
+            self.decoding_spec = LinearDecodingConfig()
+        if isinstance(self.decoding_spec, dict):
+            if not self.decoding_spec:
+                raise ValueError(
+                    "model_spec.decoding_spec must define at least one " "named decoder"
+                )
+            for branch_name in self.decoding_spec:
+                _validate_module_dict_key(
+                    branch_name, f"Target decoding branch {branch_name!r}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def validate_shared_layer_groups(self):
+        seen_layers: set[int] = set()
+        for group in self.shared_layer_groups:
+            if len(group) < 2:
+                raise ValueError(
+                    "model_spec.shared_layer_groups entries must contain at "
+                    "least two layer indices"
+                )
+
+            group_layers = set(group)
+            if len(group_layers) != len(group):
+                raise ValueError(
+                    "model_spec.shared_layer_groups entries cannot contain "
+                    f"duplicate layer indices: {group}"
+                )
+
+            invalid_layers = [
+                layer for layer in group if layer < 0 or layer >= self.num_layers
+            ]
+            if invalid_layers:
+                raise ValueError(
+                    "model_spec.shared_layer_groups references layer indices "
+                    f"outside [0, {self.num_layers - 1}]: {invalid_layers}"
+                )
+
+            overlapping_layers = group_layers & seen_layers
+            if overlapping_layers:
+                raise ValueError(
+                    "model_spec.shared_layer_groups cannot reference a layer "
+                    f"in multiple groups: {sorted(overlapping_layers)}"
+                )
+            seen_layers.update(group_layers)
 
         return self
 
@@ -891,15 +1107,40 @@ class ModelSpecModel(BaseModel):
     @field_validator("positional_encoding")
     @classmethod
     def validate_pos_encoding(cls, v):
-        if v not in ["learned", "rope"]:
+        if v not in ["learned", "rope", "range", "range_concat"]:
             raise ValueError(f"Invalid positional_encoding: {v}")
         return v
+
+    @field_validator("positional_encoding_scope")
+    @classmethod
+    def validate_pos_encoding_scope(cls, v):
+        if v not in ["per_feature", "global"]:
+            raise ValueError(f"Invalid positional_encoding_scope: {v}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_positional_encoding_combination(self):
+        if (
+            self.positional_encoding in {"range", "range_concat"}
+            and self.positional_encoding_scope != "global"
+        ):
+            raise ValueError(
+                f"positional_encoding {self.positional_encoding!r} requires "
+                "positional_encoding_scope 'global'"
+            )
+        return self
 
     @field_validator("attention_type")
     @classmethod
     def validate_attention_type(cls, v):
         if v not in ["mha", "mqa", "gqa"]:
             raise ValueError(f"Invalid attention_type: {v}")
+        return v
+
+    @field_validator("auxiliary_input_columns")
+    @classmethod
+    def validate_auxiliary_input_columns(cls, v):
+        _validate_column_list_unique(v, "model_spec.auxiliary_input_columns")
         return v
 
     @field_validator("n_head")
@@ -959,9 +1200,13 @@ class TrainModel(BaseModel):
     special_token_ids: dict[str, int] = Field(
         default_factory=lambda: SPECIAL_TOKEN_IDS.ids_by_label
     )
+    categorical_decoder_special_tokens: dict[
+        str, list[Literal["unknown", "other", "mask"]]
+    ] = Field(default_factory=dict)
 
     storage_layout: StoredWindowLayout
     window_view: ModelWindowView
+    model_window_stride: Optional[int] = Field(default=None, gt=0)
     n_classes: dict[str, int]
     inference_batch_size: int
     seed: int
@@ -980,6 +1225,39 @@ class TrainModel(BaseModel):
     @classmethod
     def validate_special_token_ids_match_runtime(cls, v):
         return validate_special_token_ids(v, source="TrainModel")
+
+    @field_validator("categorical_decoder_special_tokens")
+    @classmethod
+    def validate_decoder_special_token_lists(cls, v):
+        if any(len(tokens) != len(set(tokens)) for tokens in v.values()):
+            raise ValueError(
+                "categorical_decoder_special_tokens cannot contain duplicate tokens."
+            )
+        return {
+            column: [name for name in SPECIAL_TOKEN_NAMES if name in tokens]
+            for column, tokens in v.items()
+        }
+
+    @model_validator(mode="after")
+    def validate_decoder_special_token_columns(self):
+        categorical_targets = {
+            col
+            for col in self.target_columns
+            if self.target_column_types[col] == "categorical"
+        }
+        invalid = set(self.categorical_decoder_special_tokens) - categorical_targets
+        if invalid:
+            raise ValueError(
+                "categorical_decoder_special_tokens may only reference categorical "
+                f"target columns, found {sorted(invalid)}."
+            )
+        resolve_categorical_decoder_ids(
+            self.target_columns,
+            self.target_column_types,
+            self.n_classes,
+            self.categorical_decoder_special_tokens,
+        )
+        return self
 
     @model_validator(mode="after")
     def validate_bert_prediction_length_matches_context_length(self):
@@ -1190,353 +1468,49 @@ class TrainModel(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_ingestion_spec_branches(self):
-        ingestion_spec = self.model_spec.ingestion_spec
-        if ingestion_spec is None:
-            raise ValueError("model_spec.ingestion_spec must be configured")
-        if not isinstance(ingestion_spec, dict):
-            columns = self._branch_columns(
-                ingestion_spec,
-                default_columns=self.input_columns,
-            )
-            self._validate_ingestion_columns(
-                "model_spec.ingestion_spec",
-                columns,
-            )
-            self._validate_all_input_columns_used(
-                columns,
-                "model_spec.ingestion_spec",
-            )
-            if isinstance(ingestion_spec, StructuredIngestionConfig):
-                layout = self._layout_for_branch(ingestion_spec)
-                output_dim = self._resolved_branch_output_dim(
-                    ingestion_spec,
-                    columns,
-                    usage="model_spec.ingestion_spec",
-                )
-                self._validate_structured_axis_embeddings(
-                    ingestion_spec, layout, output_dim
-                )
-                self._validate_structured_processing_blocks(
-                    ingestion_spec, layout, output_dim
-                )
-            if isinstance(
-                ingestion_spec,
-                (DirectEmbedIngestionConfig, TemporalConvIngestionConfig),
-            ):
-                self._validate_direct_embed_ingestion(
-                    "model_spec.ingestion_spec",
-                    columns,
-                    ingestion_spec,
-                )
-            if isinstance(ingestion_spec, PassThroughIngestionConfig):
-                self._validate_pass_through_ingestion(
-                    columns,
-                    ingestion_spec,
-                    usage="model_spec.ingestion_spec",
-                )
-            return self
-
-        ingestion_merge = self.model_spec.ingestion_merge
-        if ingestion_merge is None:
-            raise ValueError(
-                "model_spec.ingestion_merge must be configured for multiple ingestions"
-            )
-
-        used_columns: dict[str, str] = {}
-        consumed_columns: set[str] = set()
-        for branch_name, ingestion in ingestion_spec.items():
-            columns = self._branch_columns(ingestion)
-            if not columns:
-                raise ValueError(
-                    f"Ingestion branch {branch_name!r} must resolve to at "
-                    "least one input column"
-                )
-            self._validate_ingestion_columns(branch_name, columns)
-            consumed_columns.update(columns)
-
-            if not self.model_spec.allow_shared_ingestion_columns:
-                overlapping_columns = [
-                    column for column in columns if column in used_columns
-                ]
-                if overlapping_columns:
-                    raise ValueError(
-                        "Ingestion branches cannot share columns unless "
-                        "allow_shared_ingestion_columns is true: "
-                        f"{sorted(overlapping_columns)}"
-                    )
-                for column in columns:
-                    used_columns[column] = branch_name
-
-            if isinstance(ingestion, StructuredIngestionConfig):
-                layout = self._layout_for_branch(ingestion)
-                output_dim = self._resolved_branch_output_dim(
-                    ingestion,
-                    columns,
-                    usage=f"Composite ingestion branch {branch_name!r}",
-                )
-                self._validate_structured_axis_embeddings(ingestion, layout, output_dim)
-                self._validate_structured_processing_blocks(
-                    ingestion, layout, output_dim
-                )
-            if isinstance(
-                ingestion,
-                (DirectEmbedIngestionConfig, TemporalConvIngestionConfig),
-            ):
-                self._validate_direct_embed_ingestion(
-                    f"Composite ingestion branch {branch_name!r}",
-                    columns,
-                    ingestion,
-                )
-            if isinstance(ingestion, PassThroughIngestionConfig):
-                self._validate_pass_through_ingestion(
-                    columns,
-                    ingestion,
-                    usage=f"Composite ingestion branch {branch_name!r}",
-                )
-            self._resolved_branch_output_dim(
-                ingestion,
-                columns,
-                usage=f"Composite ingestion branch {branch_name!r}",
-            )
-        self._validate_all_input_columns_used(
-            consumed_columns,
-            "model_spec.ingestion_spec",
-        )
-        return self
-
-    def _validate_ingestion_columns(self, usage: str, columns: list[str]) -> None:
-        missing_columns = set(columns) - set(self.input_columns)
+    def validate_auxiliary_input_columns(self):
+        auxiliary_columns = set(self.model_spec.auxiliary_input_columns)
+        missing_columns = auxiliary_columns - set(self.input_columns)
         if missing_columns:
             raise ValueError(
-                f"{usage} references unknown input columns: {sorted(missing_columns)}"
+                "model_spec.auxiliary_input_columns references unknown input "
+                f"columns: {sorted(missing_columns)}"
             )
 
-        typed_columns = set(self.categorical_columns) | set(self.real_columns)
-        untyped_columns = set(columns) - typed_columns
-        if untyped_columns:
+        return self
+
+    @model_validator(mode="after")
+    def validate_decoding_spec(self):
+        decoding_support = self.model_spec.decoding_support
+        context_length = self.window_view.context_length
+        if decoding_support > context_length:
             raise ValueError(
-                f"{usage} references columns that must be declared in "
-                f"categorical_columns or real_columns: {sorted(untyped_columns)}"
+                "model_spec.decoding_support must be in the range "
+                f"[1, context_length], got decoding_support={decoding_support} "
+                f"and context_length={context_length}."
             )
 
-    def _validate_all_input_columns_used(
-        self, columns: list[str] | set[str], usage: str
-    ) -> None:
-        unused_columns = set(self.input_columns) - set(columns)
-        if unused_columns:
+        decoded_context_length = context_length - decoding_support + 1
+        if self.model_spec.prediction_length > decoded_context_length:
             raise ValueError(
-                f"{usage} must consume every input column; unused columns: "
-                f"{sorted(unused_columns)}"
+                "model_spec.prediction_length cannot exceed the number of "
+                "decoded positions produced by decoding_support. Got "
+                f"prediction_length={self.model_spec.prediction_length}, "
+                f"decoded_context_length={decoded_context_length}, "
+                f"decoding_support={decoding_support}."
             )
 
-    def _layout_for_branch(
-        self,
-        ingestion: StructuredIngestionConfig,
-    ) -> CartesianLayoutModel:
-        if self.feature_layout is None:
-            raise ValueError(
-                f"Ingestion layout {ingestion.layout!r} requires top-level feature_layout"
-            )
-        if ingestion.layout not in self.feature_layout:
-            raise ValueError(f"Unknown feature_layout {ingestion.layout!r}")
-        return self.feature_layout[ingestion.layout]
+        from sequifier.model.decoders import resolve_decoding_plan
 
-    def _validate_structured_axis_embeddings(
-        self,
-        ingestion: StructuredIngestionConfig,
-        layout: CartesianLayoutModel,
-        output_dim: int,
-    ) -> None:
-        unknown_axes = [
-            axis for axis in ingestion.axis_embeddings.axes if axis not in layout.axes
-        ]
-        if unknown_axes:
-            raise ValueError(
-                "Structured ingestion axis_embeddings references unavailable axes: "
-                f"{unknown_axes}"
-            )
+        resolve_decoding_plan(self)
+        return self
 
-        if (
-            ingestion.axis_embeddings.type == "rope"
-            and (ingestion.cell_dim or output_dim) % 2 != 0
-        ):
-            raise ValueError(
-                "Structured ingestion axis_embeddings type 'rope' requires an even "
-                "cell_dim/output_dim"
-            )
+    @model_validator(mode="after")
+    def validate_ingestion_spec_branches(self):
+        # Keep public configuration models independent from runtime modules while
+        # using the same resolver for cross-field validation and construction.
+        # The local import avoids a config/model import cycle at module load time.
+        from sequifier.model.ingestion_compiler import resolve_ingestion_plan
 
-    def _validate_structured_processing_blocks(
-        self,
-        ingestion: StructuredIngestionConfig,
-        layout: CartesianLayoutModel,
-        output_dim: int,
-    ) -> None:
-        active_axes = list(layout.axes)
-        channel_dim = ingestion.cell_dim or output_dim
-
-        for block in ingestion.processing_blocks:
-            unknown_axes = [axis for axis in block.axes if axis not in active_axes]
-            if unknown_axes:
-                raise ValueError(
-                    f"Structured ingestion block references unavailable axes: "
-                    f"{unknown_axes}"
-                )
-
-            if isinstance(
-                block,
-                (
-                    AxisProjectionBlockModel,
-                    AxisConvBlockModel,
-                    AxisAttentionBlockModel,
-                ),
-            ):
-                available_unshared_axes = [
-                    axis for axis in active_axes if axis not in block.axes
-                ]
-                invalid_unshared_axes = [
-                    axis
-                    for axis in block.unshared_axes
-                    if axis not in available_unshared_axes
-                ]
-                if invalid_unshared_axes:
-                    raise ValueError(
-                        "Structured ingestion block unshared_axes must be a subset "
-                        "of non-swept active axes: "
-                        f"{invalid_unshared_axes}"
-                    )
-
-                channel_dim = block.output_dim
-
-            if isinstance(block, (AxisProjectionBlockModel, AxisPoolBlockModel)):
-                active_axes = [axis for axis in active_axes if axis not in block.axes]
-
-        if channel_dim != output_dim:
-            raise ValueError(
-                "Structured ingestion processing_blocks must produce output_dim "
-                f"{output_dim}, got {channel_dim}"
-            )
-
-    def _branch_columns(
-        self,
-        ingestion: BranchIngestionConfig,
-        default_columns: Optional[list[str]] = None,
-    ) -> list[str]:
-        if isinstance(ingestion, StructuredIngestionConfig):
-            layout = self._layout_for_branch(ingestion)
-            return list(layout.columns)
-
-        if isinstance(ingestion, GroupedIngestionConfig):
-            return [
-                column
-                for group_columns in ingestion.groups.values()
-                for column in group_columns
-            ]
-
-        if (
-            isinstance(
-                ingestion,
-                (DirectEmbedIngestionConfig, PassThroughIngestionConfig),
-            )
-            and ingestion.columns is None
-        ):
-            if default_columns is None:
-                raise ValueError(
-                    f"{ingestion.type} ingestion branches must configure columns"
-                )
-            return default_columns
-
-        return ingestion.columns  # type: ignore
-
-    def _validate_pass_through_ingestion(
-        self,
-        columns: list[str],
-        ingestion: PassThroughIngestionConfig,
-        *,
-        usage: str,
-    ) -> None:
-        categorical_columns = [
-            col for col in columns if col in self.categorical_columns
-        ]
-        real_columns = [col for col in columns if col in self.real_columns]
-        if categorical_columns:
-            raise ValueError(
-                f"{usage} type 'pass_through' only supports real columns; "
-                f"got categorical columns {categorical_columns}"
-            )
-        if not real_columns:
-            raise ValueError(f"{usage} type 'pass_through' requires real columns")
-
-        output_dim = self._resolved_branch_output_dim(
-            ingestion,
-            columns,
-            usage=usage,
-        )
-        if output_dim <= 0:
-            raise ValueError(f"{usage} output_dim must be positive")
-
-    def _resolved_branch_output_dim(
-        self,
-        ingestion: BranchIngestionConfig,
-        columns: list[str],
-        *,
-        usage: str,
-    ) -> int:
-        configured_output_dim = getattr(ingestion, "output_dim", None)
-        if configured_output_dim is not None:
-            return configured_output_dim
-        raise ValueError(f"{usage} must configure output_dim")
-
-    def _validate_direct_embed_ingestion(
-        self,
-        usage: str,
-        columns: list[str],
-        ingestion: DirectEmbedIngestionConfig | TemporalConvIngestionConfig,
-    ) -> None:
-        feature_embedding_dims = ingestion.feature_embedding_dims
-        output_dim = self._resolved_branch_output_dim(
-            ingestion,
-            columns,
-            usage=usage,
-        )
-        if feature_embedding_dims is not None and set(feature_embedding_dims) != set(
-            columns
-        ):
-            raise ValueError(
-                f"{usage} feature_embedding_dims must contain exactly its input "
-                f"columns. Expected {columns}, got {list(feature_embedding_dims)}"
-            )
-
-        if feature_embedding_dims is not None:
-            embedding_dim = sum(feature_embedding_dims.values())
-            if embedding_dim != output_dim:
-                raise ValueError(
-                    f"{usage} feature_embedding_dims sum ({embedding_dim}) must "
-                    f"equal output_dim ({output_dim})"
-                )
-            return
-
-        embedding_size = output_dim
-        categorical_columns = [
-            col for col in columns if col in self.categorical_columns
-        ]
-        real_columns = [col for col in columns if col in self.real_columns]
-
-        if categorical_columns and real_columns:
-            raise ValueError(
-                f"{usage} must configure feature_embedding_dims when both real "
-                "and categorical variables are present."
-            )
-
-        if real_columns and embedding_size < len(real_columns):
-            raise ValueError(
-                f"{usage} output_dim ({embedding_size}) must be at least the "
-                f"number of real variables ({len(real_columns)})."
-            )
-
-        if categorical_columns and embedding_size % len(categorical_columns) != 0:
-            raise ValueError(
-                f"{usage} output_dim ({embedding_size}) must be a multiple of "
-                f"the number of categorical variables ({len(categorical_columns)}: "
-                f"{categorical_columns})."
-            )
+        resolve_ingestion_plan(self)
+        return self

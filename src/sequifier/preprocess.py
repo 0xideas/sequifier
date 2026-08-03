@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import warnings
+from collections import Counter
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -311,6 +312,7 @@ class Preprocessor:
         mask_column: Optional[str] = None,
         column_types: Optional[dict[str, str]] = None,
         split_method: str = "within_sequence",
+        normalize_real_columns: bool = True,
     ):
         """Initialize and run preprocessing from validated config fields."""
         self.project_root = project_root
@@ -346,6 +348,7 @@ class Preprocessor:
         self.process_by_file = process_by_file
         self.subsequence_start_mode = subsequence_start_mode
         self.column_types = _normalize_column_types(column_types)
+        self.normalize_real_columns = normalize_real_columns
         if self.mask_column is not None and self.metadata_config_path is None:
             raise ValueError("metadata_config_path must be set when mask_column is set")
 
@@ -447,6 +450,7 @@ class Preprocessor:
                 data_columns,
                 id_maps,
                 selected_columns_statistics,
+                normalize_real_columns=self.normalize_real_columns,
                 n_classes=n_classes,
                 col_types=configured_col_types or col_types,
             )
@@ -845,6 +849,7 @@ class Preprocessor:
                 mask_column=mask_column,
                 split_method=self.split_method,
                 seed=self.seed,
+                normalize_real_columns=self.normalize_real_columns,
             )
             input_files = create_file_paths_for_multiple_files2(
                 self.project_root,
@@ -893,6 +898,7 @@ class Preprocessor:
                 "mask_column": mask_column,
                 "split_method": self.split_method,
                 "seed": self.seed,
+                "normalize_real_columns": self.normalize_real_columns,
             }
 
             job_params = [
@@ -1006,6 +1012,7 @@ class Preprocessor:
                 "id_maps": id_maps,
                 "column_types": col_types,
                 "selected_columns_statistics": selected_columns_statistics,
+                "normalize_real_columns": self.normalize_real_columns,
                 "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             },
         }
@@ -1066,6 +1073,9 @@ class Preprocessor:
                 col: {"mean": stats["mean"], "std": stats["std"]}
                 for col, stats in selected_columns_statistics.items()
             },
+            "normalize_real_columns": self.normalize_real_columns,
+            "stride_by_split": self.stride_by_split,
+            "subsequence_start_mode": self.subsequence_start_mode,
             **self._layout_metadata(),
         }
         os.makedirs(
@@ -1104,7 +1114,7 @@ class Preprocessor:
         for file_path in files:
             try:
                 if write_format == "pt":
-                    sequences_dict, _, _, _, _ = torch.load(
+                    sequences_dict, _, _, _, left_pad_lengths = torch.load(
                         file_path, weights_only=False
                     )
                     if sequences_dict:
@@ -1112,7 +1122,16 @@ class Preprocessor:
                             list(sequences_dict.keys())[0]
                         ].shape[0]
                         batch_files_metadata.append(
-                            {"path": file_path.name, "samples": n_samples}
+                            {
+                                "path": file_path.name,
+                                "samples": n_samples,
+                                "left_pad_length_histogram": {
+                                    str(value): count
+                                    for value, count in Counter(
+                                        left_pad_lengths.tolist()
+                                    ).items()
+                                },
+                            }
                         )
                         total_samples += n_samples
                 elif write_format == "parquet":
@@ -1125,8 +1144,25 @@ class Preprocessor:
 
                     if n_cols > 0:
                         n_samples = n_rows // n_cols
+                        left_pad_lengths = (
+                            lazy_df.group_by(["sequenceId", "subsequenceId"])
+                            .agg(pl.col("leftPadLength").first())
+                            .select("leftPadLength")
+                            .collect()
+                            .get_column("leftPadLength")
+                            .to_list()
+                        )
                         batch_files_metadata.append(
-                            {"path": file_path.name, "samples": n_samples}
+                            {
+                                "path": file_path.name,
+                                "samples": n_samples,
+                                "left_pad_length_histogram": {
+                                    str(value): count
+                                    for value, count in Counter(
+                                        left_pad_lengths
+                                    ).items()
+                                },
+                            }
                         )
                         total_samples += n_samples
             except Exception as e:
@@ -1246,10 +1282,11 @@ def _apply_column_statistics(
     data_columns: list[str],
     id_maps: dict[str, dict[Union[str, int], int]],
     selected_columns_statistics: dict[str, dict[str, float]],
+    normalize_real_columns: bool,
     n_classes: Optional[dict[str, int]] = None,
     col_types: Optional[dict[str, str]] = None,
 ) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
-    """Apply categorical maps and numeric standardization."""
+    """Apply categorical maps and optional numeric standardization."""
     col_types_was_provided = col_types is not None
 
     if n_classes is None:
@@ -1274,7 +1311,7 @@ def _apply_column_statistics(
             data = data.with_columns(pl.col(col).replace(id_maps[col], default=1))
             if not col_types_was_provided:
                 col_types[col] = "Int64"
-        elif col in selected_columns_statistics:
+        elif col in selected_columns_statistics and normalize_real_columns:
             data = data.with_columns(
                 (
                     (pl.col(col) - selected_columns_statistics[col]["mean"])
@@ -1582,6 +1619,7 @@ def _process_batches_multiple_files_inner(
     mask_column: Optional[str],
     split_method: str,
     seed: int,
+    normalize_real_columns: bool,
 ):
     """Process this worker's file shard."""
 
@@ -1648,6 +1686,7 @@ def _process_batches_multiple_files_inner(
                 data_columns,
                 id_maps,
                 selected_columns_statistics,
+                normalize_real_columns,
                 n_classes,
                 col_types,
             )

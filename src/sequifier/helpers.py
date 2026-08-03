@@ -4,6 +4,7 @@ import os
 import random
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional, Union
@@ -272,6 +273,192 @@ class ResolvedWindowView:
         }
 
 
+@dataclass(frozen=True)
+class ModelWindowSamplingPlan:
+    """Resolve logical model windows contained in one stored window."""
+
+    resolved_view: ResolvedWindowView
+    stride: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if self.stride is not None and self.stride < 1:
+            raise ValueError("model_window_stride must be a positive integer")
+
+    @property
+    def legacy_single_window(self) -> bool:
+        return self.stride is None
+
+    @property
+    def max_input_start(self) -> int:
+        start = self.resolved_view.input_slice.start
+        if start is None:
+            raise ValueError("Resolved input slice must have a concrete start")
+        return start
+
+    @property
+    def candidate_input_starts(self) -> Tensor:
+        """Return chronological starts, anchored to include the rightmost view."""
+        max_start = self.max_input_start
+        if self.legacy_single_window:
+            return torch.tensor([max_start], dtype=torch.int64)
+
+        assert self.stride is not None
+        first_start = max_start % self.stride
+        return torch.arange(
+            first_start,
+            max_start + 1,
+            self.stride,
+            dtype=torch.int64,
+        )
+
+    def first_eligible_start_indices(self, left_pad_lengths: Tensor) -> Tensor:
+        """Return the first candidate with at least one valid target position."""
+        left_pad_lengths = left_pad_lengths.to(dtype=torch.int64, device="cpu")
+        if self.legacy_single_window:
+            return torch.zeros_like(left_pad_lengths)
+
+        assert self.stride is not None
+        first_candidate = self.max_input_start % self.stride
+        candidate_count = self.max_input_start // self.stride + 1
+        target_last_offset = (
+            self.resolved_view.view.target_offset
+            + self.resolved_view.view.context_length
+            - 1
+        )
+        minimum_starts = left_pad_lengths - target_last_offset
+        first_indices = torch.div(
+            minimum_starts - first_candidate + self.stride - 1,
+            self.stride,
+            rounding_mode="floor",
+        )
+        return first_indices.clamp(0, candidate_count)
+
+    def sample_counts(self, left_pad_lengths: Tensor) -> Tensor:
+        """Return the number of usable logical samples in each stored row."""
+        left_pad_lengths = left_pad_lengths.to(dtype=torch.int64, device="cpu")
+        if self.legacy_single_window:
+            return torch.ones_like(left_pad_lengths)
+
+        assert self.stride is not None
+        candidate_count = self.max_input_start // self.stride + 1
+        first_indices = self.first_eligible_start_indices(left_pad_lengths)
+        return (candidate_count - first_indices).clamp_min(0)
+
+    def sample_count_for_left_pad(self, left_pad_length: int) -> int:
+        count = self.sample_counts(torch.tensor([left_pad_length], dtype=torch.int64))
+        return int(count.item())
+
+    def sample_count_from_histogram(
+        self,
+        histogram: Mapping[Any, int],
+    ) -> int:
+        return sum(
+            int(frequency) * self.sample_count_for_left_pad(int(left_pad_length))
+            for left_pad_length, frequency in histogram.items()
+        )
+
+    def build_index(self, left_pad_lengths: Tensor) -> "WindowSampleIndex":
+        return WindowSampleIndex(self, left_pad_lengths)
+
+    def gather(
+        self,
+        tensor: Tensor,
+        stored_row_indices: Tensor,
+        input_starts: Tensor,
+        *,
+        target: bool = False,
+    ) -> Tensor:
+        """Gather input or target windows without materializing all overlaps."""
+        stored_row_indices = stored_row_indices.to(dtype=torch.int64, device="cpu")
+        input_starts = input_starts.to(dtype=torch.int64, device="cpu")
+        relative_positions = torch.arange(
+            self.resolved_view.view.context_length,
+            dtype=torch.int64,
+        )
+        position_offset = self.resolved_view.view.target_offset if target else 0
+        positions = (
+            input_starts[:, None] + position_offset + relative_positions[None, :]
+        )
+        return tensor[stored_row_indices[:, None], positions]
+
+    def build_masks(
+        self,
+        left_pad_lengths: Tensor,
+        input_starts: Tensor,
+    ) -> dict[str, Tensor]:
+        """Build masks for model windows with different positions in storage."""
+        left_pad_lengths = left_pad_lengths.to(dtype=torch.int64, device="cpu")
+        input_starts = input_starts.to(dtype=torch.int64, device="cpu")
+        relative_positions = torch.arange(
+            self.resolved_view.view.context_length,
+            dtype=torch.int64,
+        )
+        input_positions = input_starts[:, None] + relative_positions[None, :]
+        target_positions = input_positions + self.resolved_view.view.target_offset
+        return {
+            "attention_valid_mask": input_positions >= left_pad_lengths[:, None],
+            "target_valid_mask": target_positions >= left_pad_lengths[:, None],
+        }
+
+
+class WindowSampleIndex:
+    """Compact logical-index mapping for variable per-row window counts."""
+
+    def __init__(
+        self,
+        plan: ModelWindowSamplingPlan,
+        left_pad_lengths: Tensor,
+    ) -> None:
+        self.plan = plan
+        self.left_pad_lengths = left_pad_lengths.to(dtype=torch.int64, device="cpu")
+        self.starts = plan.candidate_input_starts
+        self.first_start_indices = plan.first_eligible_start_indices(
+            self.left_pad_lengths
+        )
+        self.counts = plan.sample_counts(self.left_pad_lengths)
+        self.cumulative_counts = torch.cumsum(self.counts, dim=0)
+
+    def __len__(self) -> int:
+        if self.cumulative_counts.numel() == 0:
+            return 0
+        return int(self.cumulative_counts[-1].item())
+
+    def share_memory_(self) -> "WindowSampleIndex":
+        for tensor in (
+            self.left_pad_lengths,
+            self.starts,
+            self.first_start_indices,
+            self.counts,
+            self.cumulative_counts,
+        ):
+            tensor.share_memory_()
+        return self
+
+    def resolve(self, logical_indices: Tensor) -> tuple[Tensor, Tensor]:
+        logical_indices = torch.as_tensor(logical_indices, dtype=torch.int64)
+        if logical_indices.numel() == 0:
+            empty = torch.empty(0, dtype=torch.int64)
+            return empty, empty
+        if logical_indices.min().item() < 0 or logical_indices.max().item() >= len(
+            self
+        ):
+            raise IndexError("Logical model-window sample index is out of range")
+
+        stored_rows = torch.searchsorted(
+            self.cumulative_counts,
+            logical_indices,
+            right=True,
+        )
+        previous_counts = torch.where(
+            stored_rows == 0,
+            torch.zeros_like(stored_rows),
+            self.cumulative_counts[stored_rows - 1],
+        )
+        local_indices = logical_indices - previous_counts
+        start_indices = self.first_start_indices[stored_rows] + local_indices
+        return stored_rows, self.starts[start_indices]
+
+
 @beartype
 def _right_aligned_slice(width: int, length: int, offset: int) -> slice:
     start = width - (length + offset)
@@ -309,6 +496,24 @@ def resolve_window_view(
             storage.stored_context_width, view.context_length, target_offset
         ),
     )
+
+
+@beartype
+def resolve_window_sampling_plan(
+    storage: StoredWindowLayout,
+    view: ModelWindowView,
+    model_window_stride: Optional[int],
+) -> ModelWindowSamplingPlan:
+    return ModelWindowSamplingPlan(
+        resolved_view=resolve_window_view(storage, view),
+        stride=model_window_stride,
+    )
+
+
+def configured_model_window_stride(config: Any) -> Optional[int]:
+    """Read the optional stride from validated configs or legacy test doubles."""
+    value = getattr(config, "model_window_stride", None)
+    return value if isinstance(value, int) else None
 
 
 @beartype
@@ -470,6 +675,47 @@ def numpy_to_pytorch(
     metadata = resolved_view.build_masks(left_pad_lengths)
 
     return unified_tensors, metadata
+
+
+@beartype
+def numpy_storage_to_pytorch(
+    data: pl.DataFrame,
+    column_types: dict[str, torch.dtype],
+    all_columns: list[str],
+    stored_context_width: int,
+    sort_rows: bool = True,
+) -> tuple[dict[str, Tensor], Tensor]:
+    """Convert complete stored windows to tensors for virtual window sampling."""
+    sequence_columns = columns_from_slice(
+        slice(0, stored_context_width),
+        stored_context_width,
+    )
+    tensors = {}
+    for column_name in all_columns:
+        column_data = data.filter(pl.col("inputCol") == column_name)
+        if column_data.is_empty():
+            raise ValueError(f"Column not found in preprocessed data: {column_name}")
+        if sort_rows:
+            column_data = column_data.sort(["sequenceId", "subsequenceId"])
+        tensors[column_name] = torch.tensor(
+            column_data.select(sequence_columns).to_numpy(),
+            dtype=column_types[column_name],
+        )
+
+    if sort_rows:
+        left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(data)
+    else:
+        left_pad_values = (
+            data.group_by(["sequenceId", "subsequenceId"], maintain_order=True)
+            .agg(pl.col("leftPadLength").first().alias("leftPadLength"))
+            .get_column("leftPadLength")
+        )
+        left_pad_lengths = torch.tensor(
+            left_pad_values.to_numpy(),
+            dtype=torch.int64,
+        )
+
+    return tensors, left_pad_lengths
 
 
 @beartype

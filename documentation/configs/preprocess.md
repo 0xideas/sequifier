@@ -1,6 +1,6 @@
 # Preprocess Command Guide
 
-The `sequifier preprocess` command transforms raw tabular data (CSV or Parquet) into the specific sequence format required for training transformer sequence models. It handles windowing, data splitting (train/validation/test), categorical encoding, and numerical standardization.
+The `sequifier preprocess` command transforms raw tabular data (CSV or Parquet) into the specific sequence format required for training transformer sequence models. It handles windowing, data splitting (train/validation/test), categorical encoding, and optional numerical standardization.
 
 ## Usage
 
@@ -14,7 +14,7 @@ Values passed on the command line override the YAML before validation.
 
 | Flag | Overrides / Action |
 | :--- | :--- |
-| `-r`, `--randomize` | Generates a random `seed`. Only affects between_sequence split_method |
+| `-r`, `--randomize` | Generates a random `seed`. The seed affects `between_sequence` split assignment. |
 | `-dp`, `--data-path` | Overrides `data_path`. |
 | `-sc`, `--selected-columns` | Overrides `selected_columns` with a space-separated list. Use `None` to process all columns. |
 
@@ -47,8 +47,9 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | :--- | :--- | :--- | :--- | :--- |
 | `selected_columns` | `list[str]` | No | `null` | A specific list of columns to process. If `null`, all columns (except metadata) are processed. |
 | `column_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
+| `normalize_real_columns` | `bool` | No | `true` | If `true`, Z-score normalizes real-valued columns. Set to `false` to preserve their original values. Statistics are still recorded in metadata. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
-| `metadata_config_path` | `Optional[str]` | No | `null` | use a preexisting metadata config path for tokenizing discrete columns and standardising real-valued columns |
+| `metadata_config_path` | `Optional[str]` | No | `null` | Use a preexisting metadata config for tokenizing discrete columns and, when enabled, standardizing real-valued columns. |
 | `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set. |
 | `use_precomputed_maps`| `list[str]` | No | `null` | If not `null`, enforces the use of precomputed maps for the variables in the list. |
 
@@ -88,7 +89,7 @@ This controls data augmentation and redundancy.
 
   * **Stride = `stored_context_width` (Non-overlapping):** The model sees every stored window once as a target. Training is faster, but the model might miss patterns that cross the window boundary.
   * **Stride = 1 (Maximum Overlap):** Maximizes data volume. The model sees every possible sequence. This yields the highest accuracy but significantly increases the size of the preprocessed data and training time.
-  * **Hybrid Approach:** It is common practice to set a large stride for the training and validation splits (index 0) to reduce the size on disk of the dataset, and a stride=1 for the test split to evaluate the model on each point in the test set. This supposes that the test split value is low.
+  * **Hybrid Approach:** It is common practice to set a large stride for the training and validation splits (indices 0 and 1) to reduce the size on disk of the dataset, and a stride=1 for the test split to evaluate the model on each point in the test set. This supposes that the test split value is low.
       * *Example:* `stride_by_split: [24, 24, 1]` (assuming `stored_context_width: 49`).
 
 ### 3\. `subsequence_start_mode`: `distribute` vs `exact`
@@ -103,7 +104,7 @@ By default, Sequifier dynamically builds ID maps from the data found in the inpu
 To use a static vocabulary:
 1. Create a folder `configs/id_maps/` in your project root.
 2. Add JSON files named `{COLUMN_NAME}.json`.
-3. The format must be a dictionary mapping ordinary data values to integers **starting at 3**.
+3. The format must be a dictionary mapping ordinary data values to integers **starting at 3**. Reserved labels may be included only with their fixed IDs.
 
 > **Reserved Indices:**
 > * **0**: Reserved for `[unknown]` (padding/missing).
@@ -127,29 +128,5 @@ After running `preprocess`, the following are generated:
 
 1.  **Data Files:** Located in `data/`. Depending on your configuration, these will be merged files such as `[NAME]-split0.parquet` (Training), `[NAME]-split1.parquet` (Validation), etc., or split folders such as `[NAME]-split0/` containing `.pt` or `.parquet` shards.
 2.  **Metadata Config:** Located in `configs/metadata_configs/[NAME].json`.
-      * **Crucial:** This file contains the integer mappings for categorical variables (`id_maps`) and normalization stats for real variables (`selected_columns_statistics`).
+      * **Crucial:** This file contains the integer mappings for categorical variables (`id_maps`), statistics for real variables (`selected_columns_statistics`), and whether those variables were normalized (`normalize_real_columns`).
       * **Next Step:** You must link this file path in your `train.yaml` and `infer.yaml` under `metadata_config_path`.
-
-
-## 5\. Advanced: Custom ID Mapping
-
-By default, Sequifier automatically generates integer IDs for categorical columns starting from index 3 (indices 0, 1, and 2 are reserved for `[unknown]`, `[other]`, and `[mask]`).
-
-If you need to enforce specific integer mappings (e.g., to maintain consistency across different training runs or datasets), you can provide **precomputed ID maps**.
-
-1.  Create a folder named `id_maps` inside your configs directory: `configs/id_maps/`.
-2.  Create a JSON file named exactly after the column you want to map (e.g., `my_column_name.json`).
-3.  The JSON file must contain a key-value dictionary where keys are the raw values and values are the integer IDs.
-
-**Constraints:**
-* Ordinary data IDs must start at **3**.
-* IDs **0**, **1**, and **2** are reserved.
-
-**Example `configs/id_maps/category_col.json`:**
-```json
-{
-  "cat": 3,
-  "dog": 4,
-  "mouse": 5
-}
-```

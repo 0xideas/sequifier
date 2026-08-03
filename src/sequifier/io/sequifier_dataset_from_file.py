@@ -9,9 +9,10 @@ from torch.utils.data import IterableDataset
 from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
-    numpy_to_pytorch,
+    configured_model_window_stride,
+    numpy_storage_to_pytorch,
     read_data,
-    resolve_window_view,
+    resolve_window_sampling_plan,
 )
 from sequifier.io.batch import SequifierBatch
 from sequifier.io.iteration_state import (
@@ -21,6 +22,7 @@ from sequifier.io.iteration_state import (
     skip_samples_for_batches,
     write_shared_int,
 )
+from sequifier.io.window_sampling import build_window_batch
 
 
 class SequifierDatasetFromFile(IterableDataset):
@@ -46,33 +48,29 @@ class SequifierDatasetFromFile(IterableDataset):
             for col in config.column_types
         }
 
-        resolved_view = resolve_window_view(config.storage_layout, config.window_view)
-        all_tensors, metadata_tensors = numpy_to_pytorch(
+        sampling_plan = resolve_window_sampling_plan(
+            config.storage_layout,
+            config.window_view,
+            configured_model_window_stride(config),
+        )
+        all_tensors, left_pad_lengths = numpy_storage_to_pytorch(
             data=data_df,
             column_types=column_types,
             all_columns=all_columns,
-            resolved_view=resolved_view,
+            stored_context_width=config.storage_layout.stored_context_width,
         )
-        self.n_samples = all_tensors[all_columns[0]].shape[0]
+        self.sample_index = sampling_plan.build_index(left_pad_lengths)
+        self.n_samples = len(self.sample_index)
+        if self.n_samples == 0:
+            raise ValueError("No usable model windows were found in the dataset.")
 
         del data_df
 
-        self.sequence_tensors = {
-            key: all_tensors[key] for key in self.config.input_columns
-        }
-        self.target_tensors = {
-            key: all_tensors[f"{key}_target"] for key in self.config.target_columns
-        }
-        self.metadata_tensors = metadata_tensors
-        del all_tensors
+        self.sequences = all_tensors
 
         if config.training_spec.device.startswith("cuda"):
-            for key in self.sequence_tensors:
-                self.sequence_tensors[key] = self.sequence_tensors[key].pin_memory()
-            for key in self.target_tensors:
-                self.target_tensors[key] = self.target_tensors[key].pin_memory()
-            for key in self.metadata_tensors:
-                self.metadata_tensors[key] = self.metadata_tensors[key].pin_memory()
+            for key in self.sequences:
+                self.sequences[key] = self.sequences[key].pin_memory()
 
         logger.info(f"[INFO] Dataset loaded with {self.n_samples} samples.")
 
@@ -85,7 +83,14 @@ class SequifierDatasetFromFile(IterableDataset):
         write_shared_int(self._start_batch_state, start_batch)
 
     def __len__(self) -> int:
-        return math.ceil(self.n_samples / self.batch_size)
+        num_workers = max(1, self.config.training_spec.num_workers)
+        total_batches = 0
+        for worker_id in range(num_workers):
+            worker_samples = self.n_samples // num_workers + (
+                1 if worker_id < self.n_samples % num_workers else 0
+            )
+            total_batches += math.ceil(worker_samples / self.batch_size)
+        return total_batches
 
     def __iter__(
         self,
@@ -114,7 +119,7 @@ class SequifierDatasetFromFile(IterableDataset):
 
         indices_for_rank = indices[rank::world_size]
         worker_batch_counts = [
-            len(indices_for_rank[i::num_workers]) // self.batch_size
+            math.ceil(len(indices_for_rank[i::num_workers]) / self.batch_size)
             for i in range(num_workers)
         ]
         worker_id, skip_batches = resolve_resume_worker(
@@ -132,26 +137,12 @@ class SequifierDatasetFromFile(IterableDataset):
 
         for i in range(0, len(indices_for_worker), self.batch_size):
             batch_end = i + self.batch_size
-            if batch_end > len(indices_for_worker):
-                continue
-
             batch_indices = indices_for_worker[i:batch_end]
 
-            data_batch = {
-                key: tensor[batch_indices]
-                for key, tensor in self.sequence_tensors.items()
-            }
-            targets_batch = {
-                key: tensor[batch_indices]
-                for key, tensor in self.target_tensors.items()
-            }
-            metadata_batch = {
-                key: tensor[batch_indices]
-                for key, tensor in self.metadata_tensors.items()
-            }
-
-            yield SequifierBatch(
-                inputs=data_batch,
-                targets=targets_batch,
-                metadata=metadata_batch,
+            yield build_window_batch(
+                self.sequences,
+                self.config.input_columns,
+                self.config.target_columns,
+                self.sample_index,
+                batch_indices,
             )

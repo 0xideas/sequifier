@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -29,6 +29,8 @@ class SpecialTokenIds:
 SPECIAL_TOKEN_IDS = SpecialTokenIds()
 SPECIAL_TOKEN_LABELS = frozenset(SPECIAL_TOKEN_IDS.ids_by_label.keys())
 SPECIAL_TOKEN_ID_VALUES = frozenset(SPECIAL_TOKEN_IDS.labels_by_id.keys())
+SPECIAL_TOKEN_NAMES = ("unknown", "other", "mask")
+ONNX_CATEGORICAL_TARGET_CODECS_KEY = "sequifier.categorical_target_codecs"
 
 
 def validate_special_token_ids(
@@ -52,3 +54,26 @@ def validate_special_token_ids(
         )
 
     return normalized
+
+
+def resolve_categorical_decoder_ids(
+    target_columns: Sequence[str],
+    target_column_types: Mapping[str, str],
+    n_classes: Mapping[str, int],
+    configured_tokens: Mapping[str, Sequence[str]],
+) -> dict[str, list[int]]:
+    """Return decoder-index-to-global-ID mappings for categorical targets."""
+    resolved = {}
+    for column in target_columns:
+        if target_column_types[column] != "categorical":
+            continue
+        tokens = configured_tokens.get(column, SPECIAL_TOKEN_NAMES)
+        ids = [
+            getattr(SPECIAL_TOKEN_IDS, name)
+            for name in SPECIAL_TOKEN_NAMES
+            if name in tokens
+        ] + list(range(SPECIAL_TOKEN_IDS.user_start, n_classes[column]))
+        if not ids:
+            raise ValueError(f"Categorical target {column!r} has no decoder classes.")
+        resolved[column] = ids
+    return resolved

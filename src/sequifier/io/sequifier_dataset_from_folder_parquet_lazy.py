@@ -1,6 +1,7 @@
 import json
 import math
 import os
+from collections import Counter
 from typing import Dict, Iterator
 
 import polars as pl
@@ -13,9 +14,10 @@ from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     columns_from_slice,
+    configured_model_window_stride,
     get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
-    resolve_window_view,
+    resolve_window_sampling_plan,
     stored_window_layout_from_metadata,
 )
 from sequifier.io.batch import SequifierBatch
@@ -26,6 +28,7 @@ from sequifier.io.iteration_state import (
     skip_samples_for_batches,
     write_shared_int,
 )
+from sequifier.io.window_sampling import build_window_batch
 
 
 class SequifierDatasetFromFolderParquetLazy(IterableDataset):
@@ -51,10 +54,43 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             metadata = json.load(f)
 
         self.folder_layout = stored_window_layout_from_metadata(metadata)
-        self.resolved_view = resolve_window_view(self.folder_layout, config.window_view)
+        self.sampling_plan = resolve_window_sampling_plan(
+            self.folder_layout,
+            config.window_view,
+            configured_model_window_stride(config),
+        )
 
-        self.batch_files_info = metadata["batch_files"]
-        self.total_samples = metadata["total_samples"]
+        self.batch_files_info = []
+        for raw_file_info in metadata["batch_files"]:
+            file_info = dict(raw_file_info)
+            file_info["stored_samples"] = int(raw_file_info["samples"])
+            histogram = raw_file_info.get("left_pad_length_histogram")
+            if histogram is None and not self.sampling_plan.legacy_single_window:
+                file_path = os.path.join(self.data_dir, file_info["path"])
+                padding_rows = (
+                    pl.scan_parquet(file_path)
+                    .group_by(["sequenceId", "subsequenceId"])
+                    .agg(pl.col("leftPadLength").first())
+                    .select("leftPadLength")
+                    .collect()
+                    .get_column("leftPadLength")
+                    .to_list()
+                )
+                histogram = {
+                    str(value): count for value, count in Counter(padding_rows).items()
+                }
+            if self.sampling_plan.legacy_single_window:
+                file_info["samples"] = file_info["stored_samples"]
+            else:
+                assert histogram is not None
+                file_info["samples"] = self.sampling_plan.sample_count_from_histogram(
+                    histogram
+                )
+            if file_info["samples"] > 0:
+                self.batch_files_info.append(file_info)
+        self.total_samples = sum(info["samples"] for info in self.batch_files_info)
+        if self.total_samples == 0:
+            raise ValueError("No usable model windows were found in the dataset.")
 
         self.column_torch_types = {
             col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
@@ -181,11 +217,9 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         yielded_samples = 0
         global_file_start_sample = 0
 
-        input_seq_cols = columns_from_slice(
-            self.resolved_view.input_slice, self.folder_layout.stored_context_width
-        )
-        target_seq_cols = columns_from_slice(
-            self.resolved_view.target_slice, self.folder_layout.stored_context_width
+        sequence_columns = columns_from_slice(
+            slice(0, self.folder_layout.stored_context_width),
+            self.folder_layout.stored_context_width,
         )
 
         seq_buffer: Dict[str, torch.Tensor] = {}
@@ -208,6 +242,12 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             file_path = os.path.join(self.data_dir, self.batch_files_info[f_id]["path"])
             df = pl.read_parquet(file_path)
             left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(df)
+            sample_index = self.sampling_plan.build_index(left_pad_lengths)
+            if len(sample_index) != file_samples:
+                raise RuntimeError(
+                    f"Expanded sample count mismatch for {file_path}: "
+                    f"metadata={file_samples}, loaded={len(sample_index)}."
+                )
 
             indices = torch.arange(file_samples)
             if self.shuffle:
@@ -232,39 +272,35 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
                 del df
                 continue
 
-            worker_indices_np = worker_indices.numpy()
-
             feature_partitions = {
                 frame.item(0, "inputCol"): frame
                 for frame in df.partition_by("inputCol")
             }
 
-            new_seq, new_tgt = {}, {}
-
-            for col_name in self.config.input_columns:
+            stored_sequences = {}
+            for col_name in set(self.config.input_columns + self.config.target_columns):
                 if col_name in feature_partitions:
-                    feature_chunk = feature_partitions[col_name][worker_indices_np]
-                    new_seq[col_name] = torch.tensor(
-                        feature_chunk.select(input_seq_cols).to_numpy(),
+                    stored_sequences[col_name] = torch.tensor(
+                        feature_partitions[col_name]
+                        .sort(["sequenceId", "subsequenceId"])
+                        .select(sequence_columns)
+                        .to_numpy(),
                         dtype=self.column_torch_types[col_name],
                     )
                 else:
                     raise ValueError(f"Column not found in input data: {col_name}")
 
-            for col_name in self.config.target_columns:
-                if col_name in feature_partitions:
-                    feature_chunk = feature_partitions[col_name][worker_indices_np]
-                    new_tgt[col_name] = torch.tensor(
-                        feature_chunk.select(target_seq_cols).to_numpy(),
-                        dtype=self.column_torch_types[col_name],
-                    )
-                else:
-                    raise RuntimeError(
-                        f"Missing required column {col_name} in Parquet partition"
-                    )
-
-            new_meta = self.resolved_view.build_masks(left_pad_lengths[worker_indices])
-            new_meta["sample_valid_mask"] = sample_is_real
+            new_batch = build_window_batch(
+                stored_sequences,
+                self.config.input_columns,
+                self.config.target_columns,
+                sample_index,
+                worker_indices,
+                sample_is_real,
+            )
+            new_seq = new_batch.inputs
+            new_tgt = new_batch.targets
+            new_meta = new_batch.metadata
 
             del df
 

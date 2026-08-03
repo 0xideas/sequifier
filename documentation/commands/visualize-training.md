@@ -27,9 +27,13 @@ Unlike other commands that rely on a YAML config, `visualize-training` is config
 | `--bucket-training-batches` | `int` | `null` | Smooths the training loss curve by averaging the loss over a specified number of batches. **Must be a multiple of the logged batch interval** used during training. |
 | `--project-root` | `str` | `.` | The root directory of your Sequifier project. |
 
+The command reads rank-0 logs from `logs/sequifier-[MODEL_NAME]-rank0-3.txt`, falling back to `rank0-2.txt`.
+
 ## Outputs
 
 The interactive HTML reports are saved in the `outputs/visualization/` directory.
 
 * **Single Model:** `outputs/visualization/[MODEL_NAME]-training-visualization.html` (Includes global losses and normalized variable validation losses if applicable).
 * **Multiple Models:** `outputs/visualization/multi-model-training-visualization.html` (Side-by-side comparison of validation and training losses across all specified models).
+
+When comparing multiple models, their initial baseline validation loss must match unless `SKIP_BASELINE_CHECK` or `SEQUIFIER_SKIP_BASELINE_CHECK` is set.

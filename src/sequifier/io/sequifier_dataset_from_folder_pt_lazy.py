@@ -1,6 +1,7 @@
 import json
 import math
 import os
+from collections import Counter
 from typing import Dict, Iterator
 
 import torch
@@ -10,8 +11,9 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
+    configured_model_window_stride,
     normalize_path,
-    resolve_window_view,
+    resolve_window_sampling_plan,
     stored_window_layout_from_metadata,
     validate_stored_window_width,
 )
@@ -23,6 +25,7 @@ from sequifier.io.iteration_state import (
     skip_samples_for_batches,
     write_shared_int,
 )
+from sequifier.io.window_sampling import build_window_batch
 
 
 class SequifierDatasetFromFolderPtLazy(IterableDataset):
@@ -48,10 +51,40 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             metadata = json.load(f)
 
         self.folder_layout = stored_window_layout_from_metadata(metadata)
-        self.resolved_view = resolve_window_view(self.folder_layout, config.window_view)
+        self.sampling_plan = resolve_window_sampling_plan(
+            self.folder_layout,
+            config.window_view,
+            configured_model_window_stride(config),
+        )
 
-        self.batch_files_info = metadata["batch_files"]
-        self.total_samples = metadata["total_samples"]
+        self.batch_files_info = []
+        for raw_file_info in metadata["batch_files"]:
+            file_info = dict(raw_file_info)
+            file_info["stored_samples"] = int(raw_file_info["samples"])
+            histogram = raw_file_info.get("left_pad_length_histogram")
+            if histogram is None and not self.sampling_plan.legacy_single_window:
+                file_path = os.path.join(self.data_dir, file_info["path"])
+                _, _, _, _, left_pad_lengths = torch.load(
+                    file_path,
+                    map_location="cpu",
+                    weights_only=False,
+                )
+                histogram = {
+                    str(value): count
+                    for value, count in Counter(left_pad_lengths.tolist()).items()
+                }
+            if self.sampling_plan.legacy_single_window:
+                file_info["samples"] = file_info["stored_samples"]
+            else:
+                assert histogram is not None
+                file_info["samples"] = self.sampling_plan.sample_count_from_histogram(
+                    histogram
+                )
+            if file_info["samples"] > 0:
+                self.batch_files_info.append(file_info)
+        self.total_samples = sum(info["samples"] for info in self.batch_files_info)
+        if self.total_samples == 0:
+            raise ValueError("No usable model windows were found in the dataset.")
 
         self.target_samples = self._get_target_samples()
         self.total_batches = self._calculate_total_batches(self.target_samples)
@@ -202,6 +235,12 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 validate_stored_window_width(
                     tensor, self.folder_layout.stored_context_width
                 )
+            sample_index = self.sampling_plan.build_index(left_pad_lengths_batch)
+            if len(sample_index) != file_samples:
+                raise RuntimeError(
+                    f"Expanded sample count mismatch for {file_path}: "
+                    f"metadata={file_samples}, loaded={len(sample_index)}."
+                )
 
             indices = torch.arange(file_samples)
             if self.shuffle:
@@ -225,21 +264,17 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 del sequences_batch
                 continue
 
-            new_seq = {
-                k: v[worker_indices, self.resolved_view.input_slice]
-                for k, v in sequences_batch.items()
-                if k in self.config.input_columns
-            }
-            new_tgt = {
-                k: v[worker_indices, self.resolved_view.target_slice]
-                for k, v in sequences_batch.items()
-                if k in self.config.target_columns
-            }
-
-            new_meta = self.resolved_view.build_masks(
-                left_pad_lengths_batch[worker_indices]
+            new_batch = build_window_batch(
+                sequences_batch,
+                self.config.input_columns,
+                self.config.target_columns,
+                sample_index,
+                worker_indices,
+                sample_is_real,
             )
-            new_meta["sample_valid_mask"] = sample_is_real
+            new_seq = new_batch.inputs
+            new_tgt = new_batch.targets
+            new_meta = new_batch.metadata
 
             del sequences_batch, left_pad_lengths_batch
 

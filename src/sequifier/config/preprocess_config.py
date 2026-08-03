@@ -45,6 +45,7 @@ class PreprocessorModel(BaseModel):
     allow_sequence_splitting: bool = False
     selected_columns: Optional[list[str]] = None
     column_types: Optional[dict[str, str]] = None
+    normalize_real_columns: bool = True
 
     split_ratios: list[float]
     split_method: str = Field(default="within_sequence")
