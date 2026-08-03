@@ -1,3 +1,5 @@
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Iterator, Optional, cast
 
 import torch
@@ -181,41 +183,31 @@ class TargetDecoding(nn.Module):
         }
 
 
-def _branch_target_columns(
-    branch_config: Any,
-    *,
-    default_target_columns: Optional[list[str]],
-    usage: str,
-) -> list[str]:
-    target_columns = getattr(branch_config, "target_columns", None)
-    if target_columns is not None:
-        return target_columns
-    if default_target_columns is not None:
-        return default_target_columns
-    raise ValueError(f"{usage} must configure target_columns")
+@dataclass(frozen=True)
+class ResolvedDecoderBranch:
+    name: str
+    config: Any
+    target_columns: tuple[str, ...]
 
 
-def _branch_hidden_dims(branch_config: Any) -> list[int]:
-    if branch_config.type == "linear":
-        return []
-    if branch_config.type == "mlp":
-        return list(branch_config.hidden_dims)
-    raise ValueError(f"Unknown target decoder type: {branch_config.type}")
+@dataclass(frozen=True)
+class DecodingPlan:
+    """Canonical internal form for single and named decoding specs."""
+
+    branches: tuple[ResolvedDecoderBranch, ...]
+    target_to_branch: dict[str, str]
 
 
-def build_target_decoding(
-    hparams: Any,
-    target_n_classes: Optional[dict[str, int]] = None,
-) -> TargetDecoding:
-    model_spec = hparams.model_spec
-    decoding_spec = model_spec.decoding_spec
+DECODER_HIDDEN_DIMS: dict[str, Callable[[Any], list[int]]] = {
+    "linear": lambda config: [],
+    "mlp": lambda config: list(config.hidden_dims),
+}
+
+
+def resolve_decoding_plan(hparams: Any) -> DecodingPlan:
+    decoding_spec = hparams.model_spec.decoding_spec
     if decoding_spec is None:
-        raise ValueError("decoding_spec must be configured")
-
-    decoder_n_classes = (
-        hparams.n_classes if target_n_classes is None else target_n_classes
-    )
-    input_dim = model_spec.dim_model * model_spec.decoding_support
+        raise ValueError("model_spec.decoding_spec must be configured")
 
     if isinstance(decoding_spec, dict):
         branch_items = list(decoding_spec.items())
@@ -224,29 +216,79 @@ def build_target_decoding(
         branch_items = [("default", decoding_spec)]
         default_target_columns = hparams.target_columns
 
-    branches = {}
+    branches = []
     target_to_branch = {}
     for branch_name, branch_config in branch_items:
-        target_columns = _branch_target_columns(
-            branch_config,
-            default_target_columns=default_target_columns,
-            usage=f"Target decoding branch {branch_name!r}",
+        if branch_config.type not in DECODER_HIDDEN_DIMS:
+            raise ValueError(f"Unknown target decoder type: {branch_config.type}")
+        target_columns = branch_config.target_columns
+        if target_columns is None:
+            if default_target_columns is None:
+                raise ValueError(
+                    f"Target decoding branch {branch_name!r} must configure "
+                    "target_columns."
+                )
+            target_columns = default_target_columns
+
+        missing_columns = set(target_columns) - set(hparams.target_columns)
+        if missing_columns:
+            raise ValueError(
+                f"Target decoding branch {branch_name!r} references unknown "
+                f"target_columns: {sorted(missing_columns)}"
+            )
+        for target_column in target_columns:
+            if target_column in target_to_branch:
+                raise ValueError(
+                    "Target decoding branches cannot share target columns: "
+                    f"{target_column!r} appears in both "
+                    f"{target_to_branch[target_column]!r} and {branch_name!r}."
+                )
+            target_to_branch[target_column] = branch_name
+        branches.append(
+            ResolvedDecoderBranch(
+                name=branch_name,
+                config=branch_config,
+                target_columns=tuple(target_columns),
+            )
         )
-        branches[branch_name] = TargetDecoderBranch(
-            target_columns=target_columns,
+
+    undecoded_columns = set(hparams.target_columns) - set(target_to_branch)
+    if undecoded_columns:
+        raise ValueError(
+            "model_spec.decoding_spec must decode every target column; "
+            f"missing {sorted(undecoded_columns)}"
+        )
+    return DecodingPlan(tuple(branches), target_to_branch)
+
+
+def build_target_decoding(
+    hparams: Any,
+    target_n_classes: Optional[dict[str, int]] = None,
+) -> TargetDecoding:
+    model_spec = hparams.model_spec
+    plan = resolve_decoding_plan(hparams)
+
+    decoder_n_classes = (
+        hparams.n_classes if target_n_classes is None else target_n_classes
+    )
+    input_dim = model_spec.dim_model * model_spec.decoding_support
+
+    branches = {}
+    for branch in plan.branches:
+        branch_config = branch.config
+        branches[branch.name] = TargetDecoderBranch(
+            target_columns=list(branch.target_columns),
             target_column_types=hparams.target_column_types,
             n_classes=decoder_n_classes,
             input_dim=input_dim,
-            hidden_dims=_branch_hidden_dims(branch_config),
+            hidden_dims=DECODER_HIDDEN_DIMS[branch_config.type](branch_config),
             activation_fn=getattr(branch_config, "activation_fn", "relu"),
             dropout=getattr(branch_config, "dropout", 0.0),
             hidden_weight_l2=getattr(branch_config, "hidden_weight_l2", 0.0),
         )
-        for target_column in target_columns:
-            target_to_branch[target_column] = branch_name
 
     return TargetDecoding(
         branches=branches,
         target_columns=hparams.target_columns,
-        target_to_branch=target_to_branch,
+        target_to_branch=plan.target_to_branch,
     )

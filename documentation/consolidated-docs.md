@@ -534,10 +534,10 @@ model_spec:
 If `ingestion_spec` is omitted, training uses `direct_embed` with
 `output_dim: dim_model` (or `dim_model - 1` for `range_concat`). Once an
 ingestion block is configured explicitly, every ingestion type must set
-`output_dim`. For a single top-level ingestion, `output_dim` must equal
-`dim_model`, except that `range_concat` requires `output_dim + 1 = dim_model`.
-For named multi-ingestion configs, each branch declares its own `output_dim` and
-the merge layer produces the required ingestion width.
+`output_dim`. This is the ingestion's own representation width; it does not
+need to equal `dim_model`. A model-boundary projection adapts a single
+ingestion to the transformer width. For named multi-ingestion configs, each
+branch declares its own `output_dim` and the merge produces the required width.
 Direct-embed `feature_embedding_dims`, when configured, must contain exactly the
 branch columns and sum to the branch `output_dim`. It is required when a
 direct-embed branch, or a temporal-conv branch using `base_ingestion:
@@ -551,8 +551,8 @@ convolution. Use `learned` + `global` to add one shared learned time embedding
 after ingestion. `range` concatenates a fixed scalar coordinate from `-1` to
 `1`, then applies a learned projection back to `dim_model`. `range_concat`
 directly appends the same coordinate without a projection, permanently
-reserving one transformer channel for position. Its ingestion output must
-therefore have width `dim_model - 1`.
+reserving one transformer channel for position. The model-boundary adapter
+therefore projects ingestion output to `dim_model - 1` before appending it.
 
 Every non-auxiliary input column must be consumed by `ingestion_spec`. Use
 `auxiliary_input_columns` for columns that should stay available in
@@ -675,8 +675,8 @@ per-layer schedule. If `dilation` is a list and `num_layers` is omitted,
 
 Use `pass_through` for real-valued columns that should enter the model without
 per-column linear encoders. It can be used as the top-level
-`ingestion_spec` when its output width equals `dim_model`, or inside a
-composite branch where the merge layer handles width projection.
+`ingestion_spec`, where the model-boundary adapter handles any width change, or
+inside a composite branch where the merge layer handles width projection.
 
 ```yaml
 ingestion_spec:
@@ -1370,7 +1370,7 @@ dim_feedforward:
 | `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
-| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. |
+| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A fixed dict is reused across transformer widths and projected at the model boundary. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. |
 | `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. Supports `concat`, `sum`, `gated`, or `attention`. If omitted for multiple ingestions, defaults to `{type: concat}`. The merge produces `dim_model`, except in `range_concat` trials, where it produces `dim_model - 1` before the position channel is appended. |
 | `initialization` | `dict` | No | Per-layer-group initialization configuration. Each `weight` or `bias` entry may be one fixed method or a `candidates` list sampled independently. Uses the same direct group mapping as `sequifier train`. |
 | `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. Defaults to `false`. |
@@ -1386,7 +1386,7 @@ dim_feedforward:
 | `n_kv_heads` | `list[int or null]` | **Yes** | Number of KV heads. Use `1` for MQA, a divisor of `n_head` for GQA, and `null` only with MHA. Invalid values are filtered for each sampled `n_head`. |
 | `normalization` | `list[str]` | **Yes** | E.g., `['rmsnorm']`. |
 | `norm_first` | `list[bool]` | **Yes** | Pre-LN vs Post-LN. |
-| `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope', 'range', 'range_concat']`. Explicit single-branch ingestion widths must equal `dim_model - 1` for `range_concat` candidates. |
+| `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope', 'range', 'range_concat']`. For `range_concat`, the model boundary projects ingestion output to `dim_model - 1` before appending the range channel. |
 | `positional_encoding_scope` | `list[str]` | No | `['per_feature']`. Use `['global']` for shared learned positions; `range` and `range_concat` trials force `global`. |
 | `rope_theta` | `list` or `Distribution` | **Yes** | Base frequency for RoPE. |
 
@@ -1485,7 +1485,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 | Group | Anchor Field | Linked Fields (Must match index) | Reason for Linkage |
 | :--- | :--- | :--- | :--- |
-| **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_spec` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion configs with explicit branch output dimensions often need the same pairing. |
+| **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_spec` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion and merge lists intentionally select different complete frontends by width; fixed frontends are reused and projected automatically. |
 | **Training Schedule** | `learning_rate` | `epochs`<br>`scheduler` | The magnitude of the learning rate often dictates how many epochs are needed. Schedulers often require `T_max` to match `epochs`. |
 | **Data Schema** | `input_columns` | `column_types` | Different subsets of columns require specific data type definitions. |
 

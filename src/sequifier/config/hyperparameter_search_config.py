@@ -1135,62 +1135,6 @@ class ModelSpecHyperparameterSampling(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_fixed_single_ingestion_matches_dim_model(self):
-        if self.ingestion_spec is None or isinstance(self.ingestion_spec, dict):
-            return self
-
-        def expected_output_dims(dim_model: int) -> set[int]:
-            return {
-                dim_model - (positional_encoding == "range_concat")
-                for positional_encoding in self.positional_encoding
-            }
-
-        if isinstance(self.ingestion_spec, list):
-            mismatched_candidates = [
-                (
-                    index,
-                    dim_model,
-                    ingestion_spec.output_dim,
-                    sorted(expected_output_dims(dim_model)),
-                )
-                for index, (dim_model, ingestion_spec) in enumerate(
-                    zip(self.dim_model, self.ingestion_spec)
-                )
-                if not isinstance(ingestion_spec, dict)
-                and any(
-                    ingestion_spec.output_dim != expected_output_dim
-                    for expected_output_dim in expected_output_dims(dim_model)
-                )
-            ]
-            if mismatched_candidates:
-                raise ValueError(
-                    "model_hyperparameter_sampling.ingestion_spec list candidates "
-                    "must match the ingestion output dimensions required by their "
-                    "paired dim_model and positional_encoding values for single-branch "
-                    f"ingestions. Mismatches: {mismatched_candidates}"
-                )
-            return self
-
-        mismatched_dim_models = [
-            dim_model
-            for dim_model in self.dim_model
-            if any(
-                self.ingestion_spec.output_dim != expected_output_dim
-                for expected_output_dim in expected_output_dims(dim_model)
-            )
-        ]
-        if mismatched_dim_models:
-            raise ValueError(
-                "model_hyperparameter_sampling.ingestion_spec.output_dim must "
-                "match the ingestion output dimension required by every dim_model "
-                "and positional_encoding candidate when a fixed single-branch "
-                "ingestion_spec is provided. Provide ingestion_spec as a list "
-                "paired with dim_model for variable widths."
-            )
-
-        return self
-
-    @model_validator(mode="after")
     def validate_concrete_candidates(self):
         list_fields = {
             "dim_model": self.dim_model,

@@ -173,7 +173,7 @@ dim_feedforward:
 | `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
-| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. |
+| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A fixed dict is reused across transformer widths and projected at the model boundary. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. |
 | `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. Supports `concat`, `sum`, `gated`, or `attention`. If omitted for multiple ingestions, defaults to `{type: concat}`. The merge produces `dim_model`, except in `range_concat` trials, where it produces `dim_model - 1` before the position channel is appended. |
 | `initialization` | `dict` | No | Per-layer-group initialization configuration. Each `weight` or `bias` entry may be one fixed method or a `candidates` list sampled independently. Uses the same direct group mapping as `sequifier train`. |
 | `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. Defaults to `false`. |
@@ -189,7 +189,7 @@ dim_feedforward:
 | `n_kv_heads` | `list[int or null]` | **Yes** | Number of KV heads. Use `1` for MQA, a divisor of `n_head` for GQA, and `null` only with MHA. Invalid values are filtered for each sampled `n_head`. |
 | `normalization` | `list[str]` | **Yes** | E.g., `['rmsnorm']`. |
 | `norm_first` | `list[bool]` | **Yes** | Pre-LN vs Post-LN. |
-| `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope', 'range', 'range_concat']`. Explicit single-branch ingestion widths must equal `dim_model - 1` for `range_concat` candidates. |
+| `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope', 'range', 'range_concat']`. For `range_concat`, the model boundary projects ingestion output to `dim_model - 1` before appending the range channel. |
 | `positional_encoding_scope` | `list[str]` | No | `['per_feature']`. Use `['global']` for shared learned positions; `range` and `range_concat` trials force `global`. |
 | `rope_theta` | `list` or `Distribution` | **Yes** | Base frequency for RoPE. |
 
@@ -288,7 +288,7 @@ If you provide a list of $N$ values for an anchor parameter, you **must** provid
 
 | Group | Anchor Field | Linked Fields (Must match index) | Reason for Linkage |
 | :--- | :--- | :--- | :--- |
-| **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_spec` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion configs with explicit branch output dimensions often need the same pairing. |
+| **Model Backbone** | `dim_model` | `n_head`<br>`ingestion_spec` when provided as a list<br>`ingestion_merge` when provided as a list | $d_{model}$ determines transformer width and must be divisible by the number of heads. Ingestion and merge lists intentionally select different complete frontends by width; fixed frontends are reused and projected automatically. |
 | **Training Schedule** | `learning_rate` | `epochs`<br>`scheduler` | The magnitude of the learning rate often dictates how many epochs are needed. Schedulers often require `T_max` to match `epochs`. |
 | **Data Schema** | `input_columns` | `column_types` | Different subsets of columns require specific data type definitions. |
 

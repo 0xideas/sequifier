@@ -195,10 +195,10 @@ model_spec:
 If `ingestion_spec` is omitted, training uses `direct_embed` with
 `output_dim: dim_model` (or `dim_model - 1` for `range_concat`). Once an
 ingestion block is configured explicitly, every ingestion type must set
-`output_dim`. For a single top-level ingestion, `output_dim` must equal
-`dim_model`, except that `range_concat` requires `output_dim + 1 = dim_model`.
-For named multi-ingestion configs, each branch declares its own `output_dim` and
-the merge layer produces the required ingestion width.
+`output_dim`. This is the ingestion's own representation width; it does not
+need to equal `dim_model`. A model-boundary projection adapts a single
+ingestion to the transformer width. For named multi-ingestion configs, each
+branch declares its own `output_dim` and the merge produces the required width.
 Direct-embed `feature_embedding_dims`, when configured, must contain exactly the
 branch columns and sum to the branch `output_dim`. It is required when a
 direct-embed branch, or a temporal-conv branch using `base_ingestion:
@@ -212,8 +212,8 @@ convolution. Use `learned` + `global` to add one shared learned time embedding
 after ingestion. `range` concatenates a fixed scalar coordinate from `-1` to
 `1`, then applies a learned projection back to `dim_model`. `range_concat`
 directly appends the same coordinate without a projection, permanently
-reserving one transformer channel for position. Its ingestion output must
-therefore have width `dim_model - 1`.
+reserving one transformer channel for position. The model-boundary adapter
+therefore projects ingestion output to `dim_model - 1` before appending it.
 
 Every non-auxiliary input column must be consumed by `ingestion_spec`. Use
 `auxiliary_input_columns` for columns that should stay available in
@@ -336,8 +336,8 @@ per-layer schedule. If `dilation` is a list and `num_layers` is omitted,
 
 Use `pass_through` for real-valued columns that should enter the model without
 per-column linear encoders. It can be used as the top-level
-`ingestion_spec` when its output width equals `dim_model`, or inside a
-composite branch where the merge layer handles width projection.
+`ingestion_spec`, where the model-boundary adapter handles any width change, or
+inside a composite branch where the merge layer handles width projection.
 
 ```yaml
 ingestion_spec:

@@ -96,7 +96,7 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
 )
 from sequifier.model.decoders import build_target_decoding  # noqa: E402
 from sequifier.model.dtypes import cast_floating_to_module_dtype  # noqa: E402
-from sequifier.model.ingestions import build_feature_ingestion  # noqa: E402
+from sequifier.model.ingestion_compiler import compile_feature_ingestion  # noqa: E402
 from sequifier.model.initialization import initialize_model_weights  # noqa: E402
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
 from sequifier.objectives import create_objective  # noqa: E402
@@ -803,10 +803,19 @@ class TransformerModel(nn.Module):
         self.positional_encoding = hparams.model_spec.positional_encoding
         self.positional_encoding_scope = hparams.model_spec.positional_encoding_scope
         self.use_rope = self.positional_encoding == "rope"
-        self.ingestion = build_feature_ingestion(
+        built_ingestion = compile_feature_ingestion(
             hparams=hparams,
             direct_real_dtype_provider=self._ingestion_direct_real_dtype,
             device_max_concat_length=hparams.training_spec.device_max_concat_length,
+        )
+        self.ingestion = built_ingestion.module
+        transformer_input_width = self.dim_model - int(
+            self.positional_encoding == "range_concat"
+        )
+        self.ingestion_adapter = (
+            nn.Identity()
+            if built_ingestion.width == transformer_input_width
+            else nn.Linear(built_ingestion.width, transformer_input_width)
         )
         self.global_position_encoder = None
         self.range_position_projection = None
@@ -1170,6 +1179,9 @@ class TransformerModel(nn.Module):
     ) -> Tensor:
         """Encode inputs into contextual hidden states."""
         src2 = self.ingestion(src, metadata)
+        src2 = self.ingestion_adapter(
+            cast_floating_to_module_dtype(src2, self.ingestion_adapter)
+        )
 
         valid_mask = metadata["attention_valid_mask"].bool()  # type: ignore
         if valid_mask.shape != src2.shape[:2]:

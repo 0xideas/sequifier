@@ -1,5 +1,6 @@
 import math
 from collections.abc import Callable
+from dataclasses import dataclass
 from itertools import product
 from typing import Any, Optional, cast
 
@@ -104,20 +105,19 @@ def get_feature_embedding_dims(
 
 
 class BaseFeatureIngestion(nn.Module):
-    output_dim: int
-
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         raise NotImplementedError
 
-    def _scale_embedding(self, x: Tensor) -> Tensor:
-        return x * math.sqrt(self.output_dim)
+    @staticmethod
+    def _scale_embedding(x: Tensor, embedding_dim: int) -> Tensor:
+        return x * math.sqrt(embedding_dim)
 
 
 class RealFeatureProjection(nn.Linear):
     """Project one standardized real-valued feature into an embedding space."""
 
-    def __init__(self, output_dim: int):
-        super().__init__(1, output_dim)
+    def __init__(self, embedding_dim: int):
+        super().__init__(1, embedding_dim)
 
 
 class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
@@ -134,7 +134,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         feature_embedding_dims: Optional[dict[str, int]],
         add_ingestion_position: bool,
         dropout: float,
-        output_dim: Optional[int] = None,
+        embedding_dim: Optional[int] = None,
         device_max_concat_length: int = 12,
     ):
         super().__init__()
@@ -151,7 +151,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         else:
             if embedding_size is None:
                 raise ValueError(
-                    "direct_embed ingestion requires output_dim when "
+                    "direct_embed ingestion requires an embedding dimension when "
                     "feature_embedding_dims is not configured"
                 )
             self.feature_embedding_dims = get_feature_embedding_dims(
@@ -160,7 +160,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
 
         self.input_dim = sum(self.feature_embedding_dims.values())
         self.embedding_size = self.input_dim
-        self.output_dim = output_dim or self.input_dim
+        self.embedding_dim = embedding_dim or self.input_dim
 
         self.encoder = ModuleDict()
         self.real_columns_with_embedding = []
@@ -183,8 +183,8 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         else:
             self.pos_encoder = None
 
-        if self.output_dim != self.input_dim:
-            self.output_projection_layer = nn.Linear(self.input_dim, self.output_dim)
+        if self.embedding_dim != self.input_dim:
+            self.output_projection_layer = nn.Linear(self.input_dim, self.embedding_dim)
         else:
             self.output_projection_layer = None
 
@@ -216,7 +216,9 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         srcs = []
         for col in self.categorical_columns:
             embedding = cast(nn.Embedding, self.encoder[col])
-            src_t = self._scale_embedding(embedding(embedding_safe_indices(src[col])))
+            src_t = self._scale_embedding(
+                embedding(embedding_safe_indices(src[col])), self.embedding_dim
+            )
             srcs.append(self._with_position(col, src_t))
 
         for col in self.real_columns:
@@ -244,7 +246,7 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
         context_length: int,
         add_ingestion_position: bool,
         dropout: float,
-        output_dim: Optional[int] = None,
+        projection_dim: Optional[int] = None,
         direct_real_dtype_provider: Optional[Callable[[], torch.dtype]] = None,
         device_max_concat_length: int = 12,
     ):
@@ -259,7 +261,7 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
         self.drop = nn.Dropout(dropout)
         self.input_dim = len(real_columns)
         self.embedding_size = self.input_dim
-        self.output_dim = output_dim or self.input_dim
+        self.projection_dim = projection_dim or self.input_dim
         self.direct_real_dtype_provider = direct_real_dtype_provider
         self.device_max_concat_length = device_max_concat_length
 
@@ -270,8 +272,10 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
         else:
             self.pos_encoder = None
 
-        if self.output_dim != self.input_dim:
-            self.output_projection_layer = nn.Linear(self.input_dim, self.output_dim)
+        if self.projection_dim != self.input_dim:
+            self.output_projection_layer = nn.Linear(
+                self.input_dim, self.projection_dim
+            )
         else:
             self.output_projection_layer = None
 
@@ -328,7 +332,8 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
         self,
         *,
         base_ingestion: BaseFeatureIngestion,
-        output_dim: int,
+        base_ingestion_width: int,
+        channels: int,
         kernel_size: int,
         dilation_schedule: list[int],
         causal: bool,
@@ -340,8 +345,8 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
     ):
         super().__init__()
         self.base_ingestion = base_ingestion
-        self.input_dim = self.base_ingestion.output_dim
-        self.output_dim = output_dim
+        self.input_dim = base_ingestion_width
+        self.channels = channels
         self.kernel_size = kernel_size
         self.dilation_schedule = list(dilation_schedule)
         if not self.dilation_schedule:
@@ -353,8 +358,8 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
         self.layers = nn.ModuleList(
             [
                 nn.Conv1d(
-                    self.input_dim if layer_idx == 0 else self.output_dim,
-                    self.output_dim,
+                    self.input_dim if layer_idx == 0 else self.channels,
+                    self.channels,
                     kernel_size=self.kernel_size,
                     dilation=dilation,
                 )
@@ -365,7 +370,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
         self.drop = nn.Dropout(dropout)
         self.orientation = orientation
         norm_dim = (
-            context_length if self.orientation == "within_column" else self.output_dim
+            context_length if self.orientation == "within_column" else self.channels
         )
         self.post_conv_norm = self._norm(post_conv_norm, norm_dim)
 
@@ -429,7 +434,7 @@ class _ColumnTokenIngestion(BaseFeatureIngestion):
         real_columns: list[str],
         n_classes: dict[str, int],
         context_length: int,
-        output_dim: int,
+        token_dim: int,
         add_ingestion_position: bool,
         dropout: float,
     ):
@@ -439,25 +444,27 @@ class _ColumnTokenIngestion(BaseFeatureIngestion):
         self.real_columns = real_columns
         self.n_classes = n_classes
         self.context_length = context_length
-        self.output_dim = output_dim
+        self.token_dim = token_dim
         self.add_ingestion_position = add_ingestion_position
         self.drop = nn.Dropout(dropout)
 
         self.encoder = ModuleDict()
         for col in self.categorical_columns:
-            self.encoder[col] = nn.Embedding(self.n_classes[col], self.output_dim)
+            self.encoder[col] = nn.Embedding(self.n_classes[col], self.token_dim)
         for col in self.real_columns:
-            self.encoder[col] = RealFeatureProjection(self.output_dim)
+            self.encoder[col] = RealFeatureProjection(self.token_dim)
 
         if self.add_ingestion_position:
-            self.pos_encoder = nn.Embedding(self.context_length, self.output_dim)
+            self.pos_encoder = nn.Embedding(self.context_length, self.token_dim)
         else:
             self.pos_encoder = None
 
     def _encode_column(self, col: str, src: dict[str, Tensor]) -> Tensor:
         if col in self.categorical_columns:
             embedding = cast(nn.Embedding, self.encoder[col])
-            return self._scale_embedding(embedding(embedding_safe_indices(src[col])))
+            return self._scale_embedding(
+                embedding(embedding_safe_indices(src[col])), self.token_dim
+            )
 
         layer = cast(nn.Linear, self.encoder[col])
         return layer(src[col][:, :, None].to(dtype=layer.weight.dtype))
@@ -478,14 +485,17 @@ class FeaturePoolFeatureIngestion(_ColumnTokenIngestion):
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
         self.feature_embedding = nn.Parameter(
-            torch.zeros(len(self.columns), self.output_dim)
+            torch.zeros(len(self.columns), self.token_dim)
         )
 
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         encoded = [self._encode_column(col, src) for col in self.columns]
         tokens = torch.stack(encoded, dim=2)
         feature_embedding = self.feature_embedding.to(dtype=tokens.dtype)
-        tokens = tokens + self._scale_embedding(feature_embedding)[None, None, :, :]
+        tokens = (
+            tokens
+            + self._scale_embedding(feature_embedding, self.token_dim)[None, None, :, :]
+        )
         return self._with_position(tokens.mean(dim=2))
 
 
@@ -500,13 +510,13 @@ class GroupedFeatureIngestion(BaseFeatureIngestion):
         real_columns: list[str],
         n_classes: dict[str, int],
         context_length: int,
-        output_dim: int,
+        token_dim: int,
         add_ingestion_position: bool,
         dropout: float,
     ):
         super().__init__()
         self.groups = groups
-        self.output_dim = output_dim
+        self.token_dim = token_dim
         self.group_ingestions = ModuleDict()
         categorical_set = set(categorical_columns)
         real_set = set(real_columns)
@@ -522,7 +532,7 @@ class GroupedFeatureIngestion(BaseFeatureIngestion):
                 real_columns=[col for col in group_columns if col in real_set],
                 n_classes=n_classes,
                 context_length=context_length,
-                output_dim=output_dim,
+                token_dim=token_dim,
                 add_ingestion_position=add_ingestion_position,
                 dropout=dropout,
             )
@@ -545,7 +555,7 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
         real_columns: list[str],
         n_classes: dict[str, int],
         context_length: int,
-        output_dim: int,
+        token_dim: int,
         add_ingestion_position: bool,
         dropout: float,
     ):
@@ -554,23 +564,23 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
         self.categorical_columns = categorical_columns
         self.real_columns = real_columns
         self.context_length = context_length
-        self.output_dim = output_dim
+        self.token_dim = token_dim
         self.add_ingestion_position = add_ingestion_position
         self.drop = nn.Dropout(dropout)
 
         if categorical_columns:
             self.categorical_encoder = nn.Embedding(
-                max(n_classes[col] for col in categorical_columns), output_dim
+                max(n_classes[col] for col in categorical_columns), token_dim
             )
         else:
             self.categorical_encoder = None
         if real_columns:
-            self.real_encoder = RealFeatureProjection(output_dim)
+            self.real_encoder = RealFeatureProjection(token_dim)
         else:
             self.real_encoder = None
 
         if self.add_ingestion_position:
-            self.pos_encoder = nn.Embedding(self.context_length, self.output_dim)
+            self.pos_encoder = nn.Embedding(self.context_length, self.token_dim)
         else:
             self.pos_encoder = None
 
@@ -591,7 +601,8 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
                     self._scale_embedding(
                         self.categorical_encoder(  # type: ignore[operator]
                             embedding_safe_indices(src[col])
-                        )
+                        ),
+                        self.token_dim,
                     )
                 )
             else:
@@ -1021,6 +1032,124 @@ class _AxisPoolBlock(nn.Module):
         return torch.amax(x, dim=dims)
 
 
+@dataclass(frozen=True)
+class AxisShape:
+    active_axes: tuple[str, ...]
+    channel_dim: int
+
+
+@dataclass(frozen=True)
+class StructuredBlockHandler:
+    resolve: Callable[[Any, AxisShape], AxisShape]
+    build: Callable[[Any, AxisShape, dict[str, int]], nn.Module]
+
+
+def _validate_block_axes(block: Any, shape: AxisShape) -> None:
+    unknown_axes = [axis for axis in block.axes if axis not in shape.active_axes]
+    if unknown_axes:
+        raise ValueError(
+            "Structured ingestion block references unavailable axes: " f"{unknown_axes}"
+        )
+    if block.type not in {"axis_projection", "axis_conv", "axis_attention"}:
+        return
+    available_unshared_axes = [
+        axis for axis in shape.active_axes if axis not in block.axes
+    ]
+    invalid_unshared_axes = [
+        axis for axis in block.unshared_axes if axis not in available_unshared_axes
+    ]
+    if invalid_unshared_axes:
+        raise ValueError(
+            "Structured ingestion block unshared_axes must be a subset of "
+            f"non-swept active axes: {invalid_unshared_axes}"
+        )
+
+
+def _resolve_axis_projection(block: Any, shape: AxisShape) -> AxisShape:
+    _validate_block_axes(block, shape)
+    return AxisShape(
+        tuple(axis for axis in shape.active_axes if axis not in block.axes),
+        block.output_dim,
+    )
+
+
+def _resolve_axis_preserving(block: Any, shape: AxisShape) -> AxisShape:
+    _validate_block_axes(block, shape)
+    return AxisShape(shape.active_axes, block.output_dim)
+
+
+def _resolve_axis_pool(block: Any, shape: AxisShape) -> AxisShape:
+    _validate_block_axes(block, shape)
+    return AxisShape(
+        tuple(axis for axis in shape.active_axes if axis not in block.axes),
+        shape.channel_dim,
+    )
+
+
+def _build_axis_projection(
+    block: Any, shape: AxisShape, axis_sizes: dict[str, int]
+) -> nn.Module:
+    return _AxisProjectionBlock(
+        axes=block.axes,
+        unshared_axes=block.unshared_axes,
+        output_dim=block.output_dim,
+        active_axes=list(shape.active_axes),
+        axis_sizes=axis_sizes,
+        input_dim=shape.channel_dim,
+    )
+
+
+def _build_axis_conv(
+    block: Any, shape: AxisShape, axis_sizes: dict[str, int]
+) -> nn.Module:
+    return _AxisConvBlock(
+        axes=block.axes,
+        unshared_axes=block.unshared_axes,
+        output_dim=block.output_dim,
+        kernel_size=block.kernel_size,
+        active_axes=list(shape.active_axes),
+        axis_sizes=axis_sizes,
+        input_dim=shape.channel_dim,
+    )
+
+
+def _build_axis_attention(
+    block: Any, shape: AxisShape, axis_sizes: dict[str, int]
+) -> nn.Module:
+    return _AxisAttentionBlock(
+        axes=block.axes,
+        unshared_axes=block.unshared_axes,
+        output_dim=block.output_dim,
+        n_head=block.n_head,
+        dropout=block.dropout,
+        active_axes=list(shape.active_axes),
+        axis_sizes=axis_sizes,
+        input_dim=shape.channel_dim,
+    )
+
+
+def _build_axis_pool(
+    block: Any, shape: AxisShape, axis_sizes: dict[str, int]
+) -> nn.Module:
+    return _AxisPoolBlock(
+        axes=block.axes,
+        mode=block.mode,
+        active_axes=list(shape.active_axes),
+    )
+
+
+STRUCTURED_BLOCK_HANDLERS: dict[str, StructuredBlockHandler] = {
+    "axis_projection": StructuredBlockHandler(
+        _resolve_axis_projection, _build_axis_projection
+    ),
+    "axis_conv": StructuredBlockHandler(_resolve_axis_preserving, _build_axis_conv),
+    "axis_attention": StructuredBlockHandler(
+        _resolve_axis_preserving, _build_axis_attention
+    ),
+    "axis_pool": StructuredBlockHandler(_resolve_axis_pool, _build_axis_pool),
+}
+
+
 class StructuredFeatureIngestion(_ColumnTokenIngestion):
     """Compile a cartesian layout into an ordered cell tensor."""
 
@@ -1032,7 +1161,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         real_columns: list[str],
         n_classes: dict[str, int],
         context_length: int,
-        output_dim: int,
+        result_dim: int,
         add_ingestion_position: bool,
         dropout: float,
         cell_dim: Optional[int] = None,
@@ -1046,7 +1175,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         }
         self.axis_sizes = [len(layout.axes[axis]) for axis in self.axis_names]
         self.expected_dense_shape = tuple(self.axis_sizes)
-        self.cell_dim = cell_dim or output_dim
+        self.cell_dim = cell_dim or result_dim
         self.axis_embeddings_config = axis_embeddings
         self.processing_blocks = processing_blocks or []
         self.coordinate_to_index = {
@@ -1069,13 +1198,13 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
             real_columns=real_columns,
             n_classes=n_classes,
             context_length=context_length,
-            output_dim=self.cell_dim,
+            token_dim=self.cell_dim,
             add_ingestion_position=add_ingestion_position,
             dropout=dropout,
         )
-        self.output_dim = output_dim
+        self.result_dim = result_dim
         if self.add_ingestion_position:
-            self.pos_encoder = nn.Embedding(self.context_length, self.output_dim)
+            self.pos_encoder = nn.Embedding(self.context_length, self.result_dim)
 
         self.axis_embedding_type = (
             "none"
@@ -1103,54 +1232,14 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
                 )
 
         self.axis_blocks = nn.ModuleList()
-        active_axes = list(self.axis_names)
-        channel_dim = self.cell_dim
+        shape = AxisShape(tuple(self.axis_names), self.cell_dim)
         for block in self.processing_blocks:
-            if block.type == "axis_projection":
-                compiled_block = _AxisProjectionBlock(
-                    axes=block.axes,
-                    unshared_axes=block.unshared_axes,
-                    output_dim=block.output_dim,
-                    active_axes=list(active_axes),
-                    axis_sizes=self.axis_size_by_name,
-                    input_dim=channel_dim,
-                )
-                active_axes = compiled_block.output_axes
-                channel_dim = block.output_dim
-            elif block.type == "axis_conv":
-                compiled_block = _AxisConvBlock(
-                    axes=block.axes,
-                    unshared_axes=block.unshared_axes,
-                    output_dim=block.output_dim,
-                    kernel_size=block.kernel_size,
-                    active_axes=list(active_axes),
-                    axis_sizes=self.axis_size_by_name,
-                    input_dim=channel_dim,
-                )
-                channel_dim = block.output_dim
-            elif block.type == "axis_attention":
-                compiled_block = _AxisAttentionBlock(
-                    axes=block.axes,
-                    unshared_axes=block.unshared_axes,
-                    output_dim=block.output_dim,
-                    n_head=block.n_head,
-                    dropout=block.dropout,
-                    active_axes=list(active_axes),
-                    axis_sizes=self.axis_size_by_name,
-                    input_dim=channel_dim,
-                )
-                channel_dim = block.output_dim
-            else:
-                compiled_block = _AxisPoolBlock(
-                    axes=block.axes,
-                    mode=block.mode,
-                    active_axes=list(active_axes),
-                )
-                active_axes = compiled_block.output_axes
-
+            handler = STRUCTURED_BLOCK_HANDLERS[block.type]
+            compiled_block = handler.build(block, shape, self.axis_size_by_name)
             self.axis_blocks.append(compiled_block)
+            shape = handler.resolve(block, shape)
 
-        self.active_axes_after_blocks = active_axes
+        self.active_axes_after_blocks = list(shape.active_axes)
 
     def _dense_cells(self, src: dict[str, Tensor]) -> Tensor:
         encoded = [self._encode_column(col, src) for col in self.ordered_columns]
@@ -1178,7 +1267,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
             axis_size = self.axis_size_by_name[axis_name]
             indices = torch.arange(axis_size, device=output.device)
             embeddings = self._scale_embedding(
-                embedding_layer(indices).to(dtype=output.dtype)
+                embedding_layer(indices).to(dtype=output.dtype), self.cell_dim
             )
             output = output + embeddings.view(
                 *self._axis_broadcast_shape(output, axis_name)
@@ -1237,26 +1326,26 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
 
 
 class IngestionMerge(nn.Module):
-    def __init__(self, merge_type: str, branch_dims: dict[str, int], output_dim: int):
+    def __init__(self, merge_type: str, branch_dims: dict[str, int], merge_dim: int):
         super().__init__()
         self.merge_type = merge_type
         self.branch_names = list(branch_dims)
         self.branch_dims = branch_dims
-        self.output_dim = output_dim
+        self.merge_dim = merge_dim
 
         if self.merge_type == "concat":
             input_dim = sum(self.branch_dims.values())
             self.concat_projection = (
-                nn.Linear(input_dim, self.output_dim)
-                if input_dim != self.output_dim
+                nn.Linear(input_dim, self.merge_dim)
+                if input_dim != self.merge_dim
                 else nn.Identity()
             )
         elif self.merge_type in {"sum", "gated", "attention"}:
             self.branch_projections = ModuleDict(
                 {
                     name: (
-                        nn.Linear(branch_dim, self.output_dim)
-                        if branch_dim != self.output_dim
+                        nn.Linear(branch_dim, self.merge_dim)
+                        if branch_dim != self.merge_dim
                         else nn.Identity()
                     )
                     for name, branch_dim in self.branch_dims.items()
@@ -1264,10 +1353,10 @@ class IngestionMerge(nn.Module):
             )
             if self.merge_type == "gated":
                 self.gate = nn.Linear(
-                    len(self.branch_names) * self.output_dim, len(self.branch_names)
+                    len(self.branch_names) * self.merge_dim, len(self.branch_names)
                 )
             elif self.merge_type == "attention":
-                self.query = nn.Parameter(torch.zeros(self.output_dim))
+                self.query = nn.Parameter(torch.zeros(self.merge_dim))
         else:
             raise ValueError(
                 "merge_type must be one of 'concat', 'sum', 'gated', or "
@@ -1306,7 +1395,7 @@ class IngestionMerge(nn.Module):
 
         query = self.query.to(dtype=stacked.dtype)
         scores = (stacked * query[None, None, None, :]).sum(dim=-1)
-        scores = scores / math.sqrt(self.output_dim)
+        scores = scores / math.sqrt(self.merge_dim)
         weights = torch.softmax(scores, dim=-1)
         return (stacked * weights[:, :, :, None]).sum(dim=2)
 
@@ -1316,8 +1405,9 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
         self,
         *,
         branches: dict[str, BaseFeatureIngestion],
+        branch_widths: dict[str, int],
         merge_type: str,
-        output_dim: int,
+        merge_dim: int,
     ):
         super().__init__()
         for branch_name in branches:
@@ -1325,11 +1415,10 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
                 branch_name, f"Composite ingestion branch {branch_name!r}"
             )
         self.branches = ModuleDict(branches)
-        self.output_dim = output_dim
         self.merge = IngestionMerge(
             merge_type,
-            {name: branch.output_dim for name, branch in branches.items()},
-            output_dim,
+            branch_widths,
+            merge_dim,
         )
 
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
@@ -1343,69 +1432,6 @@ def _add_ingestion_position_encoding(model_spec: Any) -> bool:
     return (
         model_spec.positional_encoding == "learned"
         and model_spec.positional_encoding_scope == "per_feature"
-    )
-
-
-def build_feature_ingestion(
-    *,
-    hparams: Any,
-    direct_real_dtype_provider: Callable[[], torch.dtype],
-    device_max_concat_length: int,
-) -> BaseFeatureIngestion:
-    model_spec = hparams.model_spec
-    ingestion_spec = model_spec.ingestion_spec
-    add_ingestion_position = _add_ingestion_position_encoding(model_spec)
-    ingestion_output_dim = model_spec.dim_model - (
-        model_spec.positional_encoding == "range_concat"
-    )
-
-    if ingestion_spec is None:
-        raise ValueError("ingestion_spec must be configured")
-
-    if isinstance(ingestion_spec, dict):
-        branches = {}
-        for branch_name, branch_config in ingestion_spec.items():
-            branches[branch_name] = _build_branch_ingestion(
-                hparams=hparams,
-                branch_config=branch_config,
-                add_ingestion_position=add_ingestion_position,
-                direct_real_dtype_provider=direct_real_dtype_provider,
-                device_max_concat_length=device_max_concat_length,
-            )
-
-        ingestion_merge = model_spec.ingestion_merge
-        if ingestion_merge is None:
-            raise ValueError("ingestion_merge must be configured for multiple streams")
-
-        return CompositeFeatureIngestion(
-            branches=branches,
-            merge_type=ingestion_merge.type,
-            output_dim=ingestion_output_dim,
-        )
-
-    if ingestion_spec.type == "direct_embed":
-        return _build_direct_embed_ingestion(
-            hparams=hparams,
-            columns=ingestion_spec.columns or hparams.input_columns,
-            ingestion_config=ingestion_spec,
-            device_max_concat_length=device_max_concat_length,
-        )
-
-    if ingestion_spec.type == "pass_through":
-        return _build_pass_through_ingestion(
-            hparams=hparams,
-            columns=ingestion_spec.columns or hparams.input_columns,
-            ingestion_config=ingestion_spec,
-            direct_real_dtype_provider=direct_real_dtype_provider,
-            device_max_concat_length=device_max_concat_length,
-        )
-
-    return _build_branch_ingestion(
-        hparams=hparams,
-        branch_config=ingestion_spec,
-        add_ingestion_position=add_ingestion_position,
-        direct_real_dtype_provider=direct_real_dtype_provider,
-        device_max_concat_length=device_max_concat_length,
     )
 
 
@@ -1436,218 +1462,36 @@ def _feature_dims_for_columns(
     return {col: feature_embedding_dims[col] for col in columns}
 
 
-def _resolve_required_output_dim(
-    configured_output_dim: Optional[int],
-    *,
-    usage: str,
-) -> int:
-    if configured_output_dim is not None:
-        return configured_output_dim
-    raise ValueError(f"{usage} must configure output_dim")
+def resolve_ingestion_plan(hparams: Any):
+    from sequifier.model.ingestion_compiler import resolve_ingestion_plan as resolve
+
+    return resolve(hparams)
 
 
-def _build_direct_embed_ingestion(
+def compile_feature_ingestion(
     *,
     hparams: Any,
-    columns: list[str],
-    ingestion_config: Any,
-    device_max_concat_length: int,
-) -> DirectEmbedFeatureIngestion:
-    categorical_columns, real_columns = _split_columns(
-        columns, hparams.categorical_columns, hparams.real_columns
-    )
-    feature_embedding_dims = _feature_dims_for_columns(ingestion_config, columns)
-    output_dim = _resolve_required_output_dim(
-        ingestion_config.output_dim,
-        usage="direct_embed ingestion",
-    )
-    embedding_size = None if feature_embedding_dims is not None else output_dim
-    return DirectEmbedFeatureIngestion(
-        categorical_columns=categorical_columns,
-        real_columns=real_columns,
-        n_classes=hparams.n_classes,
-        context_length=hparams.window_view.context_length,
-        embedding_size=embedding_size,
-        feature_embedding_dims=feature_embedding_dims,
-        add_ingestion_position=_add_ingestion_position_encoding(hparams.model_spec),
-        dropout=hparams.training_spec.dropout,
-        output_dim=output_dim,
-        device_max_concat_length=device_max_concat_length,
-    )
-
-
-def _build_pass_through_ingestion(
-    *,
-    hparams: Any,
-    columns: list[str],
-    ingestion_config: Any,
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
-    output_dim_override: Optional[int] = None,
-) -> PassThroughFeatureIngestion:
-    categorical_columns, real_columns = _split_columns(
-        columns, hparams.categorical_columns, hparams.real_columns
-    )
-    if categorical_columns:
-        raise ValueError(
-            "pass_through ingestion only supports real columns, "
-            f"got categorical columns: {categorical_columns}"
-        )
-    return PassThroughFeatureIngestion(
-        real_columns=real_columns,
-        context_length=hparams.window_view.context_length,
-        add_ingestion_position=_add_ingestion_position_encoding(hparams.model_spec),
-        dropout=hparams.training_spec.dropout,
-        output_dim=(
-            output_dim_override
-            if output_dim_override is not None
-            else _resolve_required_output_dim(
-                ingestion_config.output_dim,
-                usage="pass_through ingestion",
-            )
-        ),
+):
+    from sequifier.model.ingestion_compiler import compile_feature_ingestion as compile
+
+    return compile(
+        hparams=hparams,
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
     )
 
 
-def _layout_columns(hparams: Any, layout_name: str) -> list[str]:
-    return list(hparams.feature_layout[layout_name].columns)
-
-
-def _build_branch_ingestion(
+def build_feature_ingestion(
     *,
     hparams: Any,
-    branch_config: Any,
-    add_ingestion_position: bool,
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
 ) -> BaseFeatureIngestion:
-    if branch_config.type == "structured":
-        columns = _layout_columns(hparams, branch_config.layout)
-    elif branch_config.type == "grouped":
-        columns = [
-            column
-            for group_columns in branch_config.groups.values()
-            for column in group_columns
-        ]
-    else:
-        columns = branch_config.columns
-
-    categorical_columns, real_columns = _split_columns(
-        columns, hparams.categorical_columns, hparams.real_columns
-    )
-
-    common_kwargs = {
-        "categorical_columns": categorical_columns,
-        "real_columns": real_columns,
-        "n_classes": hparams.n_classes,
-        "context_length": hparams.window_view.context_length,
-        "add_ingestion_position": add_ingestion_position,
-        "dropout": hparams.training_spec.dropout,
-    }
-
-    if branch_config.type == "direct_embed":
-        return _build_direct_embed_ingestion(
-            hparams=hparams,
-            columns=columns,
-            ingestion_config=branch_config,
-            device_max_concat_length=device_max_concat_length,
-        )
-
-    if branch_config.type == "pass_through":
-        return _build_pass_through_ingestion(
-            hparams=hparams,
-            columns=columns,
-            ingestion_config=branch_config,
-            direct_real_dtype_provider=direct_real_dtype_provider,
-            device_max_concat_length=device_max_concat_length,
-        )
-
-    if branch_config.type == "temporal_conv":
-        output_dim = _resolve_required_output_dim(
-            branch_config.output_dim,
-            usage="temporal_conv ingestion",
-        )
-        if branch_config.base_ingestion == "direct_embed":
-            base_ingestion = _build_direct_embed_ingestion(
-                hparams=hparams,
-                columns=columns,
-                ingestion_config=branch_config,
-                device_max_concat_length=device_max_concat_length,
-            )
-        elif branch_config.base_ingestion == "pass_through":
-            base_ingestion = _build_pass_through_ingestion(
-                hparams=hparams,
-                columns=columns,
-                ingestion_config=branch_config,
-                direct_real_dtype_provider=direct_real_dtype_provider,
-                device_max_concat_length=device_max_concat_length,
-                output_dim_override=len(real_columns),
-            )
-        else:
-            raise ValueError(
-                f"Unknown temporal_conv base_ingestion: {branch_config.base_ingestion}"
-            )
-        return TemporalConvFeatureIngestion(
-            base_ingestion=base_ingestion,
-            output_dim=output_dim,
-            kernel_size=branch_config.kernel_size,
-            dilation_schedule=branch_config.dilation_schedule,
-            causal=branch_config.causal,
-            activation_fn=branch_config.activation_fn,
-            dropout=branch_config.dropout,
-            post_conv_norm=branch_config.post_conv_norm,
-            orientation=branch_config.orientation,
-            context_length=hparams.window_view.context_length,
-        )
-
-    if branch_config.type == "feature_pool":
-        output_dim = _resolve_required_output_dim(
-            branch_config.output_dim,
-            usage="feature_pool ingestion",
-        )
-        return FeaturePoolFeatureIngestion(
-            columns=columns,
-            output_dim=output_dim,
-            **common_kwargs,
-        )
-
-    if branch_config.type == "grouped":
-        output_dim = _resolve_required_output_dim(
-            branch_config.output_dim,
-            usage="grouped ingestion",
-        )
-        return GroupedFeatureIngestion(
-            groups=branch_config.groups,
-            output_dim=output_dim,
-            **common_kwargs,
-        )
-
-    if branch_config.type == "siamese":
-        output_dim = _resolve_required_output_dim(
-            branch_config.output_dim,
-            usage="siamese ingestion",
-        )
-        return SiameseFeatureIngestion(
-            columns=columns,
-            output_dim=output_dim,
-            **common_kwargs,
-        )
-
-    if branch_config.type == "structured":
-        layout = hparams.feature_layout[branch_config.layout]
-        output_dim = _resolve_required_output_dim(
-            branch_config.output_dim,
-            usage="structured ingestion",
-        )
-        return StructuredFeatureIngestion(
-            layout=layout,
-            output_dim=output_dim,
-            cell_dim=branch_config.cell_dim,
-            axis_embeddings=branch_config.axis_embeddings,
-            processing_blocks=branch_config.processing_blocks,
-            **common_kwargs,
-        )
-
-    raise ValueError(f"Unknown ingestion type: {branch_config.type}")
+    """Compatibility wrapper returning only the compiled runtime module."""
+    return compile_feature_ingestion(
+        hparams=hparams,
+        direct_real_dtype_provider=direct_real_dtype_provider,
+        device_max_concat_length=device_max_concat_length,
+    ).module
