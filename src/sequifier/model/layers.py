@@ -188,34 +188,39 @@ class SelfAttention(nn.Module):
 
 
 class SequifierEncoderLayer(nn.Module):
-    def __init__(
-        self, config, dim_model, n_head, dim_feedforward, dropout, context_length
-    ):
+    def __init__(self, architecture):
         super().__init__()
-        self.norm_first = config.norm_first
+        dim_model = architecture.dim_model
+        self.norm_first = architecture.normalization.norm_first
 
         # Normalization
-        NormClass = RMSNorm if config.normalization == "rmsnorm" else nn.LayerNorm
-        norm_eps = 1e-6 if config.normalization == "rmsnorm" else 1e-3
+        normalization_type = architecture.normalization.type
+        NormClass = RMSNorm if normalization_type == "rmsnorm" else nn.LayerNorm
+        norm_eps = 1e-6 if normalization_type == "rmsnorm" else 1e-3
         self.norm1 = NormClass(dim_model, eps=norm_eps)
         self.norm2 = NormClass(dim_model, eps=norm_eps)
 
         # Attention
         self.attn = SelfAttention(
             dim_model=dim_model,
-            n_head=n_head,
-            n_kv_heads=config.n_kv_heads,
-            attention_type=config.attention_type,
-            dropout=dropout,
-            context_length=context_length,
-            output_projection=config.attention_output_projection,
-            use_rope=(config.positional_encoding == "rope"),
-            rope_theta=config.rope_theta,
+            n_head=architecture.attention.n_heads,
+            n_kv_heads=architecture.attention.n_kv_heads,
+            attention_type=architecture.attention.type,
+            dropout=architecture.dropout,
+            context_length=architecture.max_context_length,
+            output_projection=architecture.attention.output_projection,
+            use_rope=(architecture.position_encoding.type == "rope"),
+            rope_theta=architecture.position_encoding.theta,
         )
 
         # Feed Forward
-        self.ff = FeedForward(dim_model, dim_feedforward, config.activation_fn, dropout)
-        self.dropout = nn.Dropout(dropout)
+        self.ff = FeedForward(
+            dim_model,
+            architecture.feed_forward.dim,
+            architecture.feed_forward.activation,
+            architecture.dropout,
+        )
+        self.dropout = nn.Dropout(architecture.dropout)
 
     @staticmethod
     def _residual_add(residual, update):

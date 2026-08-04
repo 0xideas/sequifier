@@ -133,7 +133,7 @@ These fields are constant across all search runs.
 | `export_embedding_model` | `bool` | **Yes** | - | Export the vector embedding model for every run. |
 | `inference_batch_size` | `int` | **Yes** | - | Batch size hardcoded into exported ONNX models. |
 | `export_onnx` | `bool` | No | `true` | Export to ONNX format. |
-| `export_pt` | `bool` | No | `false` | Export to PyTorch state dict (`.pt`). |
+| `export_pt` | `bool` | No | `false` | Export a self-contained PyTorch bundle (`.pt`). |
 | `export_with_dropout` | `bool` | No | `false` | Export models with dropout enabled. |
 
 ### 4. Schema & Feature Selection
@@ -187,11 +187,13 @@ dim_feedforward:
 | Field | Type | Mandatory | Description |
 | --- | --- | --- | --- |
 | `dim_model` | `list[int]` | **Yes** | Internal dimension of the Transformer. |
+| `max_context_length` | `int` | No | Maximum context supported by every sampled backbone. Defaults to `2048`. |
+| `backbone_id` | `str` | No | Prefix for sampled backbone IDs. The exact architecture fingerprint is appended automatically. |
 | `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
-| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A fixed dict is reused across transformer widths and projected at the model boundary. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. |
-| `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. Supports `concat`, `sum`, `gated`, or `attention`. If omitted for multiple ingestions, defaults to `{type: concat}`. The merge produces `dim_model`, except in `range_concat` trials, where it produces `dim_model - 1` before the position channel is appended. |
+| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named branches. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. Any required projection is owned by the sampled ingestion. |
+| `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. Supports `concat`, `sum`, `gated`, or `attention`. If omitted for multiple ingestions, defaults to `{type: concat}` and produces `dim_model`. |
 | `initialization` | `dict` | No | Per-layer-group initialization configuration. Each `weight` or `bias` entry may be one fixed method or a `candidates` list sampled independently. Uses the same direct group mapping as `sequifier train`. |
 | `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. Defaults to `false`. |
 | `auxiliary_input_columns` | `list[str]` | No | Input columns that are intentionally kept in `batch.inputs` but must not be consumed by sampled ingestion configs. Defaults to `[]`. |
@@ -206,8 +208,7 @@ dim_feedforward:
 | `n_kv_heads` | `list[int or null]` | **Yes** | Number of KV heads. Use `1` for MQA, a divisor of `n_head` for GQA, and `null` only with MHA. Invalid values are filtered for each sampled `n_head`. |
 | `normalization` | `list[str]` | **Yes** | E.g., `['rmsnorm']`. |
 | `norm_first` | `list[bool]` | **Yes** | Pre-LN vs Post-LN. |
-| `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope', 'range', 'range_concat']`. For `range_concat`, the model boundary projects ingestion output to `dim_model - 1` before appending the range channel. |
-| `positional_encoding_scope` | `list[str]` | No | `['per_feature']`. Use `['global']` for shared learned positions; `range` and `range_concat` trials force `global`. |
+| `positional_encoding` | `list[str]` | **Yes** | One or more of `learned`, `rope`, `range`, or `sinusoidal`. Temporal position handling is part of the sampled backbone. |
 | `rope_theta` | `list` or `Distribution` | **Yes** | Base frequency for RoPE. |
 
 `ingestion_spec` accepts the same ingestion definitions as `sequifier train`.
@@ -261,12 +262,12 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `batch_size` | `list` or `Distribution` | **Yes** | - | Batch sizes to test. |
 | `accumulation_steps` | `list` or `Distribution` | **Yes** | - | Gradient accumulation steps. |
 | `gradient_clip` | `float`, `null`, `list`, or `Distribution` | No | `null` | Fixed or sampled maximum gradient norm. A list may include `null` to sample disabled clipping; float distributions sample enabled clipping thresholds. |
-| `dropout` | `list` or `Distribution` | No | `[0.0]` | Dropout probabilities. |
+| `dropout` | `list` or `Distribution` | No | `[0.0]` | Backbone dropout probabilities. Each value contributes to the exact architecture fingerprint. |
 | `criterion` | `dict` | **Yes** | - | Map of target columns to loss functions. |
 | `bert_spec` | `dict` | Conditional | `null` | Required if `training_objective` includes `bert`; samples BERT masking settings. |
 | `next_occurrence_config` | `dict` | Conditional | `null` | Required if `training_objective` includes `next_occurrence`; configures the categorical target column and target values. |
 | `optimizer` | `list[dict]` | **Yes** | - | List of optimizer configs. |
-| `continue_training` | `bool` | **Yes** | - | Load model weights from the latest checkpoint to resume. |
+| `resume` | `dict` | No | `{policy: never}` | Run-checkpoint resume policy and optional explicit checkpoint path. Sampled backbones are not published. |
 | `save_interval_epochs` | `int` | **Yes** | - | Checkpoint save frequency. |
 | `scheduler_step_on` | `str` | No | `epoch` | When to step the scheduler: `epoch` or `batch`. |
 | `save_latest_interval_minutes`| `float`| No | `null` | Time interval to overwrite a "latest" checkpoint. |

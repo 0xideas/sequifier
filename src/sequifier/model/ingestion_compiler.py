@@ -17,7 +17,6 @@ from sequifier.model.ingestions import (
     SiameseFeatureIngestion,
     StructuredFeatureIngestion,
     TemporalConvFeatureIngestion,
-    _add_ingestion_position_encoding,
     _feature_dims_for_columns,
     _split_columns,
 )
@@ -128,7 +127,7 @@ def _validate_ingestion_columns(hparams: Any, usage: str, columns: list[str]) ->
             f"{usage} references unknown input columns: {sorted(missing_columns)}"
         )
 
-    auxiliary_columns = set(hparams.model_spec.auxiliary_input_columns)
+    auxiliary_columns = set(hparams.model_spec.ingestion.auxiliary_input_columns)
     consumed_auxiliary_columns = set(columns) & auxiliary_columns
     if consumed_auxiliary_columns:
         raise ValueError(
@@ -277,23 +276,11 @@ def _validate_noop(
 def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
     """Lower the public union/dictionary syntax into one validated plan."""
     model_spec = hparams.model_spec
-    ingestion_spec = model_spec.ingestion_spec
-    if ingestion_spec is None:
-        raise ValueError("model_spec.ingestion_spec must be configured")
-
-    is_composite = isinstance(ingestion_spec, dict)
+    ingestion_spec = model_spec.ingestion
+    is_composite = ingestion_spec.type == "composite"
     if is_composite:
-        if not ingestion_spec:
-            raise ValueError(
-                "model_spec.ingestion_spec must define at least one named ingestion"
-            )
-        branch_items = list(ingestion_spec.items())
-        ingestion_merge = model_spec.ingestion_merge
-        if ingestion_merge is None:
-            raise ValueError(
-                "model_spec.ingestion_merge must be configured for multiple ingestions"
-            )
-        merge_type: Optional[str] = ingestion_merge.type
+        branch_items = list(ingestion_spec.branches.items())
+        merge_type: Optional[str] = ingestion_spec.merge.type
     else:
         branch_items = [(None, ingestion_spec)]
         merge_type = None
@@ -303,7 +290,7 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
     consumed_columns: set[str] = set()
     for branch_name, config in branch_items:
         usage = (
-            "model_spec.ingestion_spec"
+            "model_spec.ingestion"
             if branch_name is None
             else f"Composite ingestion branch {branch_name!r}"
         )
@@ -323,12 +310,12 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
             columns, hparams.categorical_columns, hparams.real_columns
         )
 
-        if is_composite and not model_spec.allow_shared_ingestion_columns:
+        if is_composite and not ingestion_spec.allow_shared_columns:
             overlapping_columns = [col for col in columns if col in used_columns]
             if overlapping_columns:
                 raise ValueError(
                     "Ingestion branches cannot share columns unless "
-                    "allow_shared_ingestion_columns is true: "
+                    "model_spec.ingestion.allow_shared_columns is true: "
                     f"{sorted(overlapping_columns)}"
                 )
             for column in columns:
@@ -348,24 +335,22 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
             )
         )
 
-    auxiliary_columns = set(model_spec.auxiliary_input_columns)
+    auxiliary_columns = set(ingestion_spec.auxiliary_input_columns)
     unused_columns = set(hparams.input_columns) - consumed_columns
     unexpected_unused_columns = unused_columns - auxiliary_columns
-    if model_spec.allow_unused_input_columns:
+    if ingestion_spec.allow_unused_input_columns:
         if unused_columns:
             logger.warning(
-                "model_spec.ingestion_spec does not consume every input column; "
+                "model_spec.ingestion does not consume every input column; "
                 f"unused columns: {sorted(unused_columns)}"
             )
     elif unexpected_unused_columns:
         raise ValueError(
-            "model_spec.ingestion_spec must consume every input column; unused "
+            "model_spec.ingestion must consume every input column; unused "
             f"columns: {sorted(unexpected_unused_columns)}"
         )
 
-    transformer_input_width = model_spec.dim_model - int(
-        model_spec.positional_encoding == "range_concat"
-    )
+    transformer_input_width = model_spec.backbone.architecture.dim_model
     return IngestionPlan(
         branches=tuple(branches),
         merge_type=merge_type,
@@ -383,7 +368,7 @@ def _common_branch_kwargs(
         "n_classes": context.hparams.n_classes,
         "context_length": context.hparams.window_view.context_length,
         "add_ingestion_position": context.add_ingestion_position,
-        "dropout": context.hparams.training_spec.dropout,
+        "dropout": branch.config.dropout,
     }
 
 
@@ -401,7 +386,7 @@ def _build_direct_embed_handler(
         embedding_size=None if feature_embedding_dims is not None else branch.width,
         feature_embedding_dims=feature_embedding_dims,
         add_ingestion_position=context.add_ingestion_position,
-        dropout=context.hparams.training_spec.dropout,
+        dropout=branch.config.dropout,
         embedding_dim=branch.width,
         device_max_concat_length=context.device_max_concat_length,
     )
@@ -417,7 +402,7 @@ def _build_pass_through_module(
         real_columns=list(branch.real_columns),
         context_length=context.hparams.window_view.context_length,
         add_ingestion_position=context.add_ingestion_position,
-        dropout=context.hparams.training_spec.dropout,
+        dropout=branch.config.dropout,
         projection_dim=projection_dim,
         direct_real_dtype_provider=context.direct_real_dtype_provider,
         device_max_concat_length=context.device_max_concat_length,
@@ -549,7 +534,7 @@ def compile_feature_ingestion(
         hparams=hparams,
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
-        add_ingestion_position=_add_ingestion_position_encoding(hparams.model_spec),
+        add_ingestion_position=False,
     )
     built_branches = {
         branch.name: INGESTION_HANDLERS[branch.config.type].build(branch, context)

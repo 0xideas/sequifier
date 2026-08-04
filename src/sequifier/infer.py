@@ -14,7 +14,7 @@ from beartype.typing import Iterator
 from loguru import logger
 
 from sequifier.config.infer_config import InfererModel, load_inferer_config
-from sequifier.config.train_config import load_train_config
+from sequifier.config.train_config import TrainModel, load_train_config
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configure_determinism,
@@ -456,17 +456,29 @@ def infer_worker(
     for model_path in model_paths:
         target_decoder_ids = None
         if model_path.lower().endswith(".pt"):
-            if config.training_config_path is None:
-                raise ValueError("training_config_path is required for PyTorch models")
-            training_config = load_train_config(
-                config.training_config_path,
-                {
-                    key: value
-                    for key, value in args_config.items()
-                    if key not in ["model_path", "data_path"]
-                },
-                args_config.get("skip_metadata", False),
+            model_state = torch.load(
+                normalize_path(model_path, config.project_root),
+                map_location="cpu",
+                weights_only=False,
             )
+            embedded_config = model_state.get("training_config")
+            if embedded_config is not None:
+                training_config = TrainModel.model_validate(embedded_config)
+            elif config.training_config_path is not None:
+                training_config = load_train_config(
+                    config.training_config_path,
+                    {
+                        key: value
+                        for key, value in args_config.items()
+                        if key not in ["model_path", "data_path"]
+                    },
+                    args_config.get("skip_metadata", False),
+                )
+            else:
+                raise ValueError(
+                    "PyTorch model has no embedded training config and "
+                    "training_config_path was not provided."
+                )
             target_column_types = training_config.target_column_types
             if target_column_types is None:
                 raise ValueError("target_column_types must be provided or derived")
@@ -1377,8 +1389,6 @@ class Inferer:
                 self.model_type,
             )
         if self.inference_model_type == "pt":
-            if self.training_config_path is None:
-                raise ValueError("training_config_path is required for PyTorch models")
             self.inference_model = load_inference_model(
                 self.model_type,
                 normalize_path(model_path, project_root),

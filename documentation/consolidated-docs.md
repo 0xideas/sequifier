@@ -379,8 +379,8 @@ model_name: composed-run
 Fragment fields must be complementary. Nested containers such as `model_spec`
 and `training_spec` may occur in multiple files when their child fields are
 disjoint, but duplicate fields are rejected even when their values are equal.
-Lists and typed components such as `optimizer`, `scheduler`, ingestion, and
-decoding specifications are complete values and cannot be divided between
+Lists and typed components such as `optimizer`, `scheduler`, `ingestion`,
+`backbone`, and `decoder` are complete values and cannot be divided between
 files. Command-line values are then deep-merged as overrides of the composed
 YAML.
 
@@ -442,64 +442,115 @@ global IDs before autoregression or output ID mapping.
 
 ### 3\. Model Architecture (`model_spec`)
 
-These fields determine the size and complexity of the Transformer.
+`model_spec` contains exactly three atomic components: `ingestion`, `backbone`,
+and `decoder`. A composed config fragment must provide each component as a
+complete value; fields from one component cannot be assembled across files.
 
-When `stored_context_width` is larger than `context_length + max_target_offset`,
-`model_window_stride` reuses the additional stored capacity without duplicating
-the serialized data. For stored width `W`, context length `L`, stored target
-capacity `M`, and stride `A`, an unpadded row yields
-`floor((W - L - M) / A) + 1` model samples. With
-`decoding_support == context_length`, use `model_window_stride: 1` to train one
-distinct next-position target from every complete contained context.
+```yaml
+model_spec:
+  ingestion:
+    type: direct_embed
+    output_dim: 128
 
-| Field | Type | Mandatory | Default | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `dim_model` | `int` | **Yes** | - | The internal dimension ($d_{model}$) of the Transformer. |
-| `n_head` | `int` | **Yes** | - | Number of attention heads. `dim_model` must be divisible by `n_head`. |
-| `num_layers` | `int` | **Yes** | - | Number of transformer encoder layers. |
-| `dim_feedforward` | `int` | **Yes** | - | Dimension of the feedforward network model ($d_{ff}$). |
-| `prediction_length` | `int` | **Yes** | - | Number of steps to predict simultaneously. For BERT-style training, this must equal `context_length`. |
-| `decoding_support` | `int` | No | `1` | Number of consecutive transformer output positions flattened into each decoded target position. Must be between `1` and `context_length`. Values larger than `1` reduce the number of decoded training positions to `context_length - decoding_support + 1`. |
-| `decoding_spec` | `dict` | No | `{type: linear}` | Target decoder definition, or a mapping of named target decoder branches. `linear` preserves the legacy per-target projection. `mlp` adds shared hidden layers before each target projection. |
-| `ingestion_spec` | `dict` | No | `{type: direct_embed, output_dim: dim_model}` | One ingestion definition, or a mapping of named ingestion definitions. `direct_embed` reproduces the classic per-column embedding path. `pass_through` forwards real-valued columns directly. Named multi-ingestion configs can combine `direct_embed`, `temporal_conv`, `feature_pool`, `pass_through`, `grouped`, `siamese`, or `structured` streams. |
-| `ingestion_merge` | `dict` or `null` | No | `null` | Merge strategy for named multi-ingestion configs: `concat`, `sum`, `gated`, or `attention`. Defaults to `{type: concat}` when omitted. The merge produces `dim_model`, except with `range_concat`, where it produces `dim_model - 1` before the position channel is appended. |
-| `initialization` | `dict` | No | `{}` | Per-layer-group weight and bias initialization overrides. Omitted groups retain Sequifier's current initialization behavior. |
-| `allow_shared_ingestion_columns` | `bool` | No | `false` | Allows the same flat input column to be consumed by more than one named ingestion stream. |
-| `auxiliary_input_columns` | `list[str]` | No | `[]` | Input columns that are intentionally kept in `batch.inputs` but must not be consumed by any ingestion branch. All other input columns still need to be consumed. |
-| `allow_unused_input_columns` | `bool` | No | `false` | Broad compatibility escape hatch that allows unused `input_columns` and logs a warning listing them. Prefer `auxiliary_input_columns` for intentional auxiliary inputs. |
-| `activation_fn` | `str` | No | `swiglu` | Activation function: `swiglu`, `gelu`, or `relu`. |
-| `attention_type` | `str` | No | `mha` | `mha` (Multi-Head), `mqa` (Multi-Query), or `gqa` (Grouped-Query). |
-| `attention_output_projection` | `bool` | No | `true` | If `true`, applies a bias-free linear projection after concatenating attention heads. Set to `false` to return concatenated heads directly, as in TransLOB. |
-| `n_kv_heads` | `int` | No | `null` | Number of Key/Value heads. `null` is valid for standard MHA; `mqa` requires `1`, and `gqa` requires a divisor of `n_head`. |
-| `positional_encoding` | `str` | No | `learned`| `learned` (standard absolute), `rope` (Rotary Positional Embedding), `range` (fixed coordinate with a learned projection), or `range_concat` (fixed coordinate appended as one transformer channel). |
-| `positional_encoding_scope` | `str` | No | `per_feature` | `per_feature` keeps the legacy ingestion-time learned position path. `global` injects position after ingestion and before the transformer. `range` and `range_concat` always use `global`. |
-| `rope_theta` | `float` | No | `10000.0` | The base frequency for RoPE. Increase for long-context extrapolation. |
-| `normalization` | `str` | No | `rmsnorm`| `rmsnorm` or `layer_norm`. |
-| `norm_first` | `bool` | No | `true` | If `true` (Pre-LN), applies normalization before attention/FFN. More stable. |
-| `shared_layer_groups` | `list[list[int]]` | No | `[]` | Groups of transformer layer indices that should reuse one `SequifierEncoderLayer` instance, e.g. `[[0, 1], [6, 7]]`. Each group must contain at least two unique, in-range indices, and groups cannot overlap. |
+  backbone:
+    id: shared-small-v1
+    architecture:
+      dim_model: 128
+      max_context_length: 512
+      num_layers: 6
+      attention:
+        type: mha
+        n_heads: 8
+        n_kv_heads: 8
+        output_projection: true
+      feed_forward:
+        dim: 512
+        activation: swiglu
+      normalization:
+        type: rmsnorm
+        norm_first: true
+      position_encoding:
+        type: rope
+        theta: 10000
+      dropout: 0.1
+      shared_layer_groups: []
+    repository:
+      path: checkpoints/backbones/shared-small-v1
+      load_policy: if_exists
+      publish: true
+      conflict_policy: compare_and_swap
+
+  decoder:
+    type: linear
+    prediction_length: 1
+    support: 1
+```
+
+Every ingestion produces `[batch, time, dim_model]` exactly. Projections needed
+to satisfy that contract belong to the ingestion; there is no model-level
+ingestion adapter. All temporal position handling and the final normalization
+belong to the backbone. A run may use any `context_length` no larger than the
+backbone's `max_context_length`.
+
+The decoder may instead use `type: mlp`, or `type: composite` with a `branches`
+mapping. Composite ingestion similarly uses `type: composite`, a `branches`
+mapping, and `merge: {type: concat|sum|gated|attention}`. Ingestion-only
+settings such as `allow_shared_columns`, `allow_unused_input_columns`, and
+`auxiliary_input_columns` live inside `model_spec.ingestion`.
+
+Component-specific `initialization` mappings may be placed inside each of
+`ingestion`, `backbone`, and `decoder`. Selectors are relative to that component.
+
+#### Shared backbone repository
+
+At startup, a complete run checkpoint takes precedence. Otherwise Sequifier
+loads the revision referenced by the backbone repository's `latest.json`; with
+`load_policy: required`, a missing revision is an error. Compatibility requires
+the exact canonical fingerprint of `backbone.architecture`, exact tensor keys
+and shapes, and supported tensor dtypes.
+
+Successful normal completion, early stopping, and handled keyboard interruption
+export the complete model before publishing the final (not best-validation)
+backbone. Revisions are immutable. Updating `latest.json` uses compare-and-swap
+against the revision loaded at startup, so a concurrent publisher cannot
+silently overwrite another run.
+
+#### Run resume
+
+`continue_training` has been replaced by an explicit policy:
+
+```yaml
+training_spec:
+  resume:
+    policy: if_exists # never | if_exists | required
+    checkpoint_path: checkpoints/runs/my-unique-run/latest.pt
+```
+
+Run checkpoints restore the complete model, optimizer, scheduler, scaler, RNG,
+data-loader state, epoch/batch position, and backbone parent revision. Loading a
+shared backbone restores backbone weights only and starts a fresh optimizer.
 
 #### Model Initialization
 
-`model_spec.initialization` maps semantic layer groups directly to optional
+Each component's `initialization` maps semantic layer groups directly to optional
 `weight` and `bias` initialization methods. There is no named overall scheme:
 the current Sequifier behavior remains the default, and each configured entry
 overrides only that group and parameter kind.
 
 ```yaml
 model_spec:
-  initialization:
-    decoder.output:
-      weight:
-        method: normal
-        mean: 0.0
-        std: 0.02
-      bias:
-        method: zeros
-    real_feature_projection:
-      weight:
-        method: uniform
-        low: -0.1
-        high: 0.1
+  decoder:
+    type: linear
+    prediction_length: 1
+    support: 1
+    initialization:
+      decoder.output:
+        weight:
+          method: normal
+          mean: 0.0
+          std: 0.02
+        bias:
+          method: zeros
 ```
 
 Supported groups are `embedding.input`, `embedding.position`,
@@ -517,43 +568,11 @@ Xavier methods accept `gain` and `fan_mode` (`per_tensor` or `joint`). Kaiming
 methods accept `a`, `mode`, and `nonlinearity`. `preserve` leaves the value
 created by the PyTorch module constructor unchanged.
 
-For a model using the architecture available at commit `7af13f2a`, the
-historical initialization behavior can be recreated with individual overrides:
-
-```yaml
-model_spec:
-  initialization:
-    attention.qkv:
-      weight: {method: preserve}
-      bias: {method: preserve}
-    attention.output:
-      weight: {method: preserve}
-      bias: {method: preserve}
-    feed_forward.input:
-      weight: {method: preserve}
-      bias: {method: preserve}
-    feed_forward.output:
-      weight: {method: preserve}
-      bias: {method: preserve}
-    real_feature_projection:
-      weight: {method: preserve}
-      bias: {method: preserve}
-    ingestion.output_projection:
-      weight: {method: normal, mean: 0.0, std: 0.02}
-      bias: {method: zeros}
-    decoder.output:
-      weight: {method: normal, mean: 0.0, std: 0.02}
-      bias: {method: zeros}
-```
-
-Input and position embeddings need no override because their current
-zero-mean normal initialization with standard deviation `0.02` already matches
-that commit. Components that did not exist at the historical commit retain
-their current defaults unless overridden separately.
-
 #### Feature Layout And Ingestion Layers
 
-`feature_layout` describes reusable structure for existing flat columns. `model_spec.ingestion_spec` chooses how the model consumes those columns. Preprocessing, datasets, and exported ONNX inputs remain flat-column based.
+`feature_layout` describes reusable structure for existing flat columns.
+`model_spec.ingestion` chooses how the model consumes those columns.
+Preprocessing, datasets, and exported ONNX inputs remain flat-column based.
 
 ```yaml
 feature_layout:
@@ -569,44 +588,39 @@ feature_layout:
       b_1_size:  {side: b, level: 1, field: size}
 
 model_spec:
-  ingestion_spec:
-    book:
-      type: structured
-      layout: order_book
-      output_dim: 128
-    context:
-      type: feature_pool
-      columns: [spread, volatility]
-      output_dim: 64
-  ingestion_merge:
-    type: concat
+  ingestion:
+    type: composite
+    branches:
+      book:
+        type: structured
+        layout: order_book
+        output_dim: 96
+      context:
+        type: feature_pool
+        columns: [spread, volatility]
+        output_dim: 32
+    merge:
+      type: concat
 ```
 
-If `ingestion_spec` is omitted, training uses `direct_embed` with
-`output_dim: dim_model` (or `dim_model - 1` for `range_concat`). Once an
-ingestion block is configured explicitly, every ingestion type must set
-`output_dim`. This is the ingestion's own representation width; it does not
-need to equal `dim_model`. A model-boundary projection adapts a single
-ingestion to the transformer width. For named multi-ingestion configs, each
-branch declares its own `output_dim` and the merge produces the required width.
+`model_spec.ingestion` is mandatory. A single ingestion's `output_dim` must
+equal `backbone.architecture.dim_model`. For a composite ingestion, each branch
+declares its own `output_dim` and the configured merge must produce exactly the
+backbone width. Any projection needed to meet this contract belongs to the
+ingestion itself; no adapter is added at the model boundary.
+
 Direct-embed `feature_embedding_dims`, when configured, must contain exactly the
 branch columns and sum to the branch `output_dim`. It is required when a
 direct-embed branch, or a temporal-conv branch using `base_ingestion:
 direct_embed`, mixes real and categorical columns.
 
-`positional_encoding` controls the form of temporal information, while
-`positional_encoding_scope` controls where non-RoPE position is injected. The
-default `learned` + `per_feature` setting preserves Sequifier's legacy behavior:
-position embeddings are added inside the ingestion layer, before temporal
-convolution. Use `learned` + `global` to add one shared learned time embedding
-after ingestion. `range` concatenates a fixed scalar coordinate from `-1` to
-`1`, then applies a learned projection back to `dim_model`. `range_concat`
-directly appends the same coordinate without a projection, permanently
-reserving one transformer channel for position. The model-boundary adapter
-therefore projects ingestion output to `dim_model - 1` before appending it.
+Temporal positions are not configured in ingestion. Learned, RoPE, range, and
+sinusoidal positions are all selected with
+`model_spec.backbone.architecture.position_encoding` and applied inside the
+backbone. Structured-axis embeddings remain local to structured ingestion.
 
-Every non-auxiliary input column must be consumed by `ingestion_spec`. Use
-`auxiliary_input_columns` for columns that should stay available in
+Every non-auxiliary input column must be consumed by `model_spec.ingestion`.
+Use `auxiliary_input_columns` for columns that should stay available in
 `batch.inputs` without entering the model ingestion path, such as labels or
 side-channel values needed by custom training code. Validation rejects auxiliary
 columns if an ingestion branch accidentally consumes them.
@@ -618,12 +632,11 @@ input_columns:
   - label_k100
 
 model_spec:
-  auxiliary_input_columns:
-    - label_k100
-  ingestion_spec:
+  ingestion:
     type: temporal_conv
     columns: [bid_size, ask_size]
     output_dim: 128
+    auxiliary_input_columns: [label_k100]
 ```
 
 For migration or experimentation, `allow_unused_input_columns: true` allows any
@@ -631,18 +644,18 @@ unused input columns and emits a warning listing the unused column names.
 
 #### Target Decoding Layers
 
-By default Sequifier preserves the legacy target head: every transformer output
-position is passed through one linear projection per target column. Configure
-`decoding_support` when each decoded value should depend on more than one
-transformer output position. A support of `S` flattens each consecutive window of
-`S` hidden states, so only `context_length - S + 1` decoded positions are
-available for training and inference.
+`model_spec.decoder` is mandatory. A linear decoder passes each support window
+through one projection per target. Set `support` when each decoded value should
+depend on more than one backbone position. A support of `S` flattens each
+consecutive window of `S` hidden states, leaving
+`context_length - S + 1` decoded positions.
 
 ```yaml
 model_spec:
-  decoding_support: 1
-  decoding_spec:
+  decoder:
     type: linear
+    prediction_length: 1
+    support: 1
 ```
 
 The `mlp` decoder applies shared hidden layers to the flattened support window,
@@ -650,9 +663,10 @@ then emits one final projection per configured target column.
 
 ```yaml
 model_spec:
-  decoding_support: 100
-  decoding_spec:
+  decoder:
     type: mlp
+    prediction_length: 1
+    support: 100
     hidden_dims: [64]
     activation_fn: relu
     dropout: 0.1
@@ -661,7 +675,7 @@ model_spec:
 
 This expresses a TransLOB-style head such as transformer output `[100, 15]` ->
 flatten `[1500]` -> dense `64` with ReLU -> dropout -> dense target logits by
-using `context_length: 100`, `dim_model: 15`, and `decoding_support: 100`.
+using `context_length: 100`, backbone `dim_model: 15`, and decoder `support: 100`.
 For categorical targets, Sequifier still applies log-softmax outside the decoder.
 `hidden_weight_l2` is optional and defaults to `0.0`. It adds a coupled L2 loss
 for the MLP branch's hidden linear kernels only. Biases, normalization
@@ -670,32 +684,35 @@ kernels are counted once. This penalty is added to the optimization loss
 separately from the reported prediction loss; optimizer `weight_decay` remains
 an independent, model-wide setting.
 
-For multiple targets, `decoding_spec` can also be a mapping of named branches.
-Each branch must list its `target_columns`, and every target column must be
-decoded by exactly one branch.
+For multiple targets, use a composite decoder. Each branch must list its
+`target_columns`, and every target must be decoded by exactly one branch.
 
 ```yaml
 model_spec:
-  decoding_support: 24
-  decoding_spec:
-    direction:
-      type: mlp
-      target_columns: [price_move]
-      hidden_dims: [64]
-      activation_fn: relu
-      dropout: 0.1
-    spread:
-      type: linear
-      target_columns: [next_spread]
+  decoder:
+    type: composite
+    prediction_length: 1
+    support: 24
+    branches:
+      direction:
+        type: mlp
+        target_columns: [price_move]
+        hidden_dims: [64]
+        activation_fn: relu
+        dropout: 0.1
+      spread:
+        type: linear
+        target_columns: [next_spread]
 ```
 
 ```yaml
-ingestion_spec:
-  type: direct_embed
-  output_dim: 24
-  feature_embedding_dims:
-    customer_segment: 16
-    spend_30d: 8
+model_spec:
+  ingestion:
+    type: direct_embed
+    output_dim: 24
+    feature_embedding_dims:
+      customer_segment: 16
+      spend_30d: 8
 ```
 
 Use `temporal_conv` inside a composite branch when local Conv1D filters should
@@ -710,8 +727,8 @@ run across timesteps before the global transformer consumes the sequence.
   convolution. It only supports real columns, and `feature_embedding_dims` is
   invalid with this base.
 
-After the convolutional stack, `post_conv_norm` applies normalization before any
-model-level positional encoding and transformer attention. It defaults to
+After the convolutional stack, `post_conv_norm` applies normalization before
+the backbone. It defaults to
 `layer_norm`; set it to `rmsnorm` or `none` to change that behavior.
 `orientation` controls the axis normalized by `post_conv_norm`:
 `within_item_position` (the default) normalizes the feature channels at each
@@ -725,21 +742,30 @@ per-layer schedule. If `dilation` is a list and `num_layers` is omitted,
 `num_layers` defaults to the length of the schedule.
 
 Use `pass_through` for real-valued columns that should enter the model without
-per-column linear encoders. It can be used as the top-level
-`ingestion_spec`, where the model-boundary adapter handles any width change, or
-inside a composite branch where the merge layer handles width projection.
+per-column scalar encoders. At the top level its `output_dim` must equal the
+backbone width; any width projection remains inside the ingestion component.
+It can also be used inside a composite ingestion whose merge projects or
+combines branch outputs.
 
 ```yaml
-ingestion_spec:
-  raw_prices:
-    type: pass_through
-    columns: [mid_price, spread]
-    output_dim: 2
+model_spec:
+  ingestion:
+    type: composite
+    branches:
+      raw_prices:
+        type: pass_through
+        columns: [mid_price, spread]
+        output_dim: 2
+      context:
+        type: feature_pool
+        columns: [volatility]
+        output_dim: 126
+    merge: {type: concat}
 ```
 
 ```yaml
-ingestion_spec:
-  tape_context:
+model_spec:
+  ingestion:
     type: temporal_conv
     columns: [spread, imbalance, volatility]
     output_dim: 128
@@ -748,34 +774,23 @@ ingestion_spec:
     dilation: [1, 2, 4, 8, 16]
     causal: true
     post_conv_norm: layer_norm
-positional_encoding: range
-positional_encoding_scope: global
-```
-
-For direct, parameter-free concatenation of the range coordinate, reserve one
-transformer channel for position:
-
-```yaml
-ingestion_spec:
-  type: temporal_conv
-  columns: [spread, imbalance, volatility]
-  output_dim: 14
-  post_conv_norm: layer_norm
-dim_model: 15
-positional_encoding: range_concat
-positional_encoding_scope: global
+  backbone:
+    architecture:
+      position_encoding: {type: range}
 ```
 
 To reuse transformer block weights across multiple layer iterations, configure
-`shared_layer_groups` under `model_spec`. In the example below, layers 0 and 1
+`shared_layer_groups` in the backbone architecture. In the example below, layers 0 and 1
 run as two sequential transformer iterations but share the same attention,
 feed-forward, and normalization parameters.
 
 ```yaml
 model_spec:
-  num_layers: 2
-  shared_layer_groups:
-    - [0, 1]
+  backbone:
+    architecture:
+      num_layers: 2
+      shared_layer_groups:
+        - [0, 1]
 ```
 
 Structured ingestion layers can optionally process cartesian axes before pooling. `cell_dim`
@@ -795,8 +810,8 @@ selects layout axes by name. For backward-compatible shorthand, a plain list is
 treated as learned axis embeddings.
 
 ```yaml
-ingestion_spec:
-  book:
+model_spec:
+  ingestion:
     type: structured
     layout: order_book
     cell_dim: 32
@@ -830,7 +845,6 @@ ingestion_spec:
 | `learning_rate` | `float` | **Yes** | - | Initial learning rate. |
 | `accumulation_steps` | `Optional[int]` | No | `null` | Accumulation steps between weight updates, to increase effective batch size. |
 | `gradient_clip` | `Optional[float]` | No | `null` | Maximum gradient norm. Set to `null` to disable gradient clipping. |
-| `dropout` | `float` | No | `0.0` | Dropout probability. |
 | `optimizer` | `dict` | **Yes** | - | Optimizer config. Supports `Adam`, `AdamW`, `AdEMAMix`, etc. |
 | `scheduler` | `dict` | **Yes** | - | LR Scheduler config (e.g., `StepLR` or `CosineAnnealingLR`). `scheduler.step()` is only called if < total_steps, so correct configuration is essential. |
 | `scheduler_step_on` | `str` | No | `epoch` | When to step the scheduler: `epoch` or `batch`. |
@@ -854,7 +868,7 @@ ingestion_spec:
 | `world_size` | `int` | No | `1` | Number of distributed processes/GPUs. |
 | `backend` | `str` | No | `nccl` | The distributed training backend to use (e.g., `nccl` for GPUs, `gloo` for CPUs). Only relevant if `distributed: true`. |
 | `device_max_concat_length`| `int` | No | `12` | Controls recursive tensor concatenation to prevent CUDA kernel limits on specific hardware. Lower this if you encounter "CUDA error: too many resources requested for launch". |
-| `continue_training` | `bool` | No | `true` | Load model weights and optimizer state from the latest checkpoint and continue training. |
+| `resume` | `dict` | No | `{policy: never}` | Run-checkpoint policy (`never`, `if_exists`, or `required`) and optional `checkpoint_path`. This is separate from shared-backbone initialization. |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt` or `read_format: parquet` and folder-style sharded data. |
 | `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `conv`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float64`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. Must be `null` with FSDP. |
@@ -874,7 +888,7 @@ ingestion_spec:
 | `inference_batch_size` | `int` | **Yes** | - | Batch size hardcoded into the exported ONNX model. |
 | `seed` | `int` | No | `1010` | Root-level random seed for reproducible training. |
 | `export_onnx` | `bool` | No | `true` | Export model as `.onnx` for high-performance inference. |
-| `export_pt` | `bool` | No | `false`| Export model as `.pt` (PyTorch state dict). |
+| `export_pt` | `bool` | No | `false`| Export a self-contained `.pt` bundle with the full state dict and resolved training configuration. |
 | `export_with_dropout` | `bool` | No | `false`| Export model with dropout enabled (useful for Monte Carlo Dropout inference). |
 
 -----
@@ -926,7 +940,7 @@ When `training_objective: bert` is set:
 
 * `bert_spec` is required.
 * `target_offset` is forced to `0`.
-* `model_spec.prediction_length` must equal `context_length`.
+* `model_spec.decoder.prediction_length` must equal `context_length`.
 * Preprocessing should normally use `max_target_offset: 0`, because BERT uses same-width inputs and targets rather than future target capacity.
 * Loss is calculated only on valid positions selected by the generated BERT mask.
 
@@ -960,7 +974,10 @@ context_length: 48
 training_objective: bert
 
 model_spec:
-  prediction_length: 48
+  decoder:
+    type: linear
+    prediction_length: 48
+    support: 1
 
 training_spec:
   bert_spec:
@@ -1050,9 +1067,11 @@ After running `train`, the following are generated:
       * `sequifier-[NAME]-best-[EPOCH].onnx`: The model with the lowest validation loss.
       * `sequifier-[NAME]-last-[EPOCH].onnx`: The model state at the final epoch.
       * *Note:* If `export_embedding_model: true`, you will also see files such as `sequifier-[NAME]-best-embedding-[EPOCH].onnx` or `.pt`, depending on export settings.
-2.  **Checkpoints:** Located in `checkpoints/`.
-      * `.pt` files containing optimizer states, allowing you to resume training later by setting `continue_training: true`.
-3.  **Logs:** Located in `logs/`.
+2.  **Run checkpoints:** Located at the configured `training_spec.resume.checkpoint_path`, with immutable epoch/batch checkpoints beside `latest.pt`.
+      * These contain complete training state and are selected with `resume.policy`.
+3.  **Shared backbones:** Located at `model_spec.backbone.repository.path`.
+      * `latest.json` points to immutable `revisions/<revision_id>/weights.pt` and `manifest.json` files.
+4.  **Logs:** Located in `logs/`.
       * Detailed logs of training loss, validation loss, and learning rate per epoch/batch.
 
 
@@ -1399,7 +1418,7 @@ These fields are constant across all search runs.
 | `export_embedding_model` | `bool` | **Yes** | - | Export the vector embedding model for every run. |
 | `inference_batch_size` | `int` | **Yes** | - | Batch size hardcoded into exported ONNX models. |
 | `export_onnx` | `bool` | No | `true` | Export to ONNX format. |
-| `export_pt` | `bool` | No | `false` | Export to PyTorch state dict (`.pt`). |
+| `export_pt` | `bool` | No | `false` | Export a self-contained PyTorch bundle (`.pt`). |
 | `export_with_dropout` | `bool` | No | `false` | Export models with dropout enabled. |
 
 ### 4. Schema & Feature Selection
@@ -1453,11 +1472,13 @@ dim_feedforward:
 | Field | Type | Mandatory | Description |
 | --- | --- | --- | --- |
 | `dim_model` | `list[int]` | **Yes** | Internal dimension of the Transformer. |
+| `max_context_length` | `int` | No | Maximum context supported by every sampled backbone. Defaults to `2048`. |
+| `backbone_id` | `str` | No | Prefix for sampled backbone IDs. The exact architecture fingerprint is appended automatically. |
 | `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
-| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A fixed dict is reused across transformer widths and projected at the model boundary. A dict may be one ingestion definition or a mapping of named ingestion definitions. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. |
-| `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. Supports `concat`, `sum`, `gated`, or `attention`. If omitted for multiple ingestions, defaults to `{type: concat}`. The merge produces `dim_model`, except in `range_concat` trials, where it produces `dim_model - 1` before the position channel is appended. |
+| `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named branches. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. Any required projection is owned by the sampled ingestion. |
+| `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. Supports `concat`, `sum`, `gated`, or `attention`. If omitted for multiple ingestions, defaults to `{type: concat}` and produces `dim_model`. |
 | `initialization` | `dict` | No | Per-layer-group initialization configuration. Each `weight` or `bias` entry may be one fixed method or a `candidates` list sampled independently. Uses the same direct group mapping as `sequifier train`. |
 | `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. Defaults to `false`. |
 | `auxiliary_input_columns` | `list[str]` | No | Input columns that are intentionally kept in `batch.inputs` but must not be consumed by sampled ingestion configs. Defaults to `[]`. |
@@ -1472,8 +1493,7 @@ dim_feedforward:
 | `n_kv_heads` | `list[int or null]` | **Yes** | Number of KV heads. Use `1` for MQA, a divisor of `n_head` for GQA, and `null` only with MHA. Invalid values are filtered for each sampled `n_head`. |
 | `normalization` | `list[str]` | **Yes** | E.g., `['rmsnorm']`. |
 | `norm_first` | `list[bool]` | **Yes** | Pre-LN vs Post-LN. |
-| `positional_encoding` | `list[str]` | **Yes** | `['learned', 'rope', 'range', 'range_concat']`. For `range_concat`, the model boundary projects ingestion output to `dim_model - 1` before appending the range channel. |
-| `positional_encoding_scope` | `list[str]` | No | `['per_feature']`. Use `['global']` for shared learned positions; `range` and `range_concat` trials force `global`. |
+| `positional_encoding` | `list[str]` | **Yes** | One or more of `learned`, `rope`, `range`, or `sinusoidal`. Temporal position handling is part of the sampled backbone. |
 | `rope_theta` | `list` or `Distribution` | **Yes** | Base frequency for RoPE. |
 
 `ingestion_spec` accepts the same ingestion definitions as `sequifier train`.
@@ -1527,12 +1547,12 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `batch_size` | `list` or `Distribution` | **Yes** | - | Batch sizes to test. |
 | `accumulation_steps` | `list` or `Distribution` | **Yes** | - | Gradient accumulation steps. |
 | `gradient_clip` | `float`, `null`, `list`, or `Distribution` | No | `null` | Fixed or sampled maximum gradient norm. A list may include `null` to sample disabled clipping; float distributions sample enabled clipping thresholds. |
-| `dropout` | `list` or `Distribution` | No | `[0.0]` | Dropout probabilities. |
+| `dropout` | `list` or `Distribution` | No | `[0.0]` | Backbone dropout probabilities. Each value contributes to the exact architecture fingerprint. |
 | `criterion` | `dict` | **Yes** | - | Map of target columns to loss functions. |
 | `bert_spec` | `dict` | Conditional | `null` | Required if `training_objective` includes `bert`; samples BERT masking settings. |
 | `next_occurrence_config` | `dict` | Conditional | `null` | Required if `training_objective` includes `next_occurrence`; configures the categorical target column and target values. |
 | `optimizer` | `list[dict]` | **Yes** | - | List of optimizer configs. |
-| `continue_training` | `bool` | **Yes** | - | Load model weights from the latest checkpoint to resume. |
+| `resume` | `dict` | No | `{policy: never}` | Run-checkpoint resume policy and optional explicit checkpoint path. Sampled backbones are not published. |
 | `save_interval_epochs` | `int` | **Yes** | - | Checkpoint save frequency. |
 | `scheduler_step_on` | `str` | No | `epoch` | When to step the scheduler: `epoch` or `batch`. |
 | `save_latest_interval_minutes`| `float`| No | `null` | Time interval to overwrite a "latest" checkpoint. |

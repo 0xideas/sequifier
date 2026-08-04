@@ -171,7 +171,6 @@ SEARCH_FIELD_POLICIES: dict[ConfigPath, SearchFieldPolicy] = {
             ("model_spec", "activation_fn"),
             ("model_spec", "normalization"),
             ("model_spec", "positional_encoding"),
-            ("model_spec", "positional_encoding_scope"),
             ("model_spec", "attention_type"),
             ("model_spec", "attention_output_projection"),
             ("model_spec", "norm_first"),
@@ -585,6 +584,71 @@ def _compile_sampling_section(
     return compiled
 
 
+def _model_sampling_values(model_spec: BaseModel) -> dict[str, Any]:
+    """Translate a component model config into the architecture search schema."""
+    ingestion = model_spec.ingestion
+    if ingestion.type == "composite":
+        ingestion_spec = {
+            name: branch.model_dump(mode="python")
+            for name, branch in ingestion.branches.items()
+        }
+        ingestion_merge = ingestion.merge.model_dump(mode="python")
+    else:
+        ingestion_spec = ingestion.model_dump(mode="python")
+        ingestion_merge = None
+
+    decoder = model_spec.decoder
+    if decoder.type == "composite":
+        decoding_spec = {
+            name: branch.model_dump(mode="python")
+            for name, branch in decoder.branches.items()
+        }
+    else:
+        decoding_spec = decoder.model_dump(
+            mode="python",
+            exclude={"prediction_length", "support", "initialization"},
+        )
+
+    architecture = model_spec.backbone.architecture
+    return {
+        "dim_model": architecture.dim_model,
+        "max_context_length": architecture.max_context_length,
+        "backbone_id": model_spec.backbone.id,
+        "ingestion_spec": ingestion_spec,
+        "ingestion_merge": ingestion_merge,
+        "allow_shared_ingestion_columns": ingestion.allow_shared_columns,
+        "allow_unused_input_columns": ingestion.allow_unused_input_columns,
+        "auxiliary_input_columns": list(ingestion.auxiliary_input_columns),
+        "initialization": model_spec.backbone.initialization.model_dump(mode="python"),
+        "n_head": architecture.attention.n_heads,
+        "dim_feedforward": architecture.feed_forward.dim,
+        "num_layers": architecture.num_layers,
+        "prediction_length": decoder.prediction_length,
+        "decoding_support": decoder.support,
+        "decoding_spec": decoding_spec,
+        "activation_fn": architecture.feed_forward.activation,
+        "normalization": architecture.normalization.type,
+        "positional_encoding": architecture.position_encoding.type,
+        "attention_type": architecture.attention.type,
+        "attention_output_projection": architecture.attention.output_projection,
+        "norm_first": architecture.normalization.norm_first,
+        "shared_layer_groups": architecture.shared_layer_groups,
+        "n_kv_heads": architecture.attention.n_kv_heads,
+        "rope_theta": architecture.position_encoding.theta,
+    }
+
+
+def _source_model_sampling_values(source_model_spec: dict[str, Any]) -> dict[str, Any]:
+    if not source_model_spec:
+        return {}
+    try:
+        from sequifier.config.train_config import ModelSpecModel
+
+        return _model_sampling_values(ModelSpecModel.model_validate(source_model_spec))
+    except ValidationError:
+        return {}
+
+
 def _resolve_base_config_path(config_path: str, base_config_path: str) -> str:
     if os.path.isabs(base_config_path) or os.path.exists(base_config_path):
         return base_config_path
@@ -757,7 +821,9 @@ def compile_hyperparameter_search_override_config(
         for input_candidate, column_candidate in zip(input_columns, column_data_types)
     ]
 
-    source_model_spec = source_values.get("model_spec", {})
+    source_model_spec = _source_model_sampling_values(
+        source_values.get("model_spec", {})
+    )
     source_training_spec = copy.deepcopy(source_values.get("training_spec", {}))
     source_training_spec.update(
         {
@@ -780,6 +846,7 @@ def compile_hyperparameter_search_override_config(
         ("model_spec",),
         ModelSpecHyperparameterSampling,
         _MODEL_WIDTH_GROUP,
+        inherited_values=_model_sampling_values(base_model.model_spec),
     )
     training_sampling = _compile_sampling_section(
         config_path,
@@ -792,6 +859,7 @@ def compile_hyperparameter_search_override_config(
         inherited_values={
             "training_objective": base_model.training_objective,
             "device": base_model.device,
+            "dropout": base_model.model_spec.backbone.architecture.dropout,
         },
     )
 

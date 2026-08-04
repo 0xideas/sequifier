@@ -12,7 +12,7 @@ from sequifier.config.initialization_config import (
     LayerGroup,
     ModelInitializationConfig,
 )
-from sequifier.model.decoders import TargetDecoderBranch
+from sequifier.model.decoders import TargetDecoderBranch, TargetDecoding
 from sequifier.model.ingestions import (
     RealFeatureProjection,
     TemporalConvFeatureIngestion,
@@ -54,6 +54,12 @@ class _ModelWeightInitializer:
         self.position_embedding_module_ids = self._position_embedding_module_ids()
         self.ingestion_projection_module_ids = self._ingestion_projection_module_ids()
         self.decoder_output_module_ids = self._decoder_output_module_ids()
+
+    def _decoder_module(self) -> Optional[nn.Module]:
+        if isinstance(self.model, (TargetDecoding, TargetDecoderBranch)):
+            return self.model
+        decoder = getattr(self.model, "decoder", None)
+        return decoder if isinstance(decoder, nn.Module) else None
 
     def initialize(self) -> None:
         # Keep this order stable: it is part of seeded initialization compatibility.
@@ -106,13 +112,12 @@ class _ModelWeightInitializer:
         return projections
 
     def _decoder_output_module_ids(self) -> set[int]:
-        decoder = getattr(self.model, "decoder", None)
-        if not isinstance(decoder, nn.Module):
+        decoder = self._decoder_module()
+        if decoder is None:
             return set()
-        decoder_module = cast(nn.Module, decoder)
         output_module_ids = {
             id(output_layer)
-            for module in decoder_module.modules()
+            for module in decoder.modules()
             if isinstance(module, TargetDecoderBranch)
             for output_layer in module.output_layers.values()
             if isinstance(output_layer, nn.Linear)
@@ -121,9 +126,7 @@ class _ModelWeightInitializer:
             return output_module_ids
         # Compatibility with the original per-target ModuleDict decoder.
         return {
-            id(module)
-            for module in decoder_module.modules()
-            if isinstance(module, nn.Linear)
+            id(module) for module in decoder.modules() if isinstance(module, nn.Linear)
         }
 
     def _is_initialized(self, parameter: Optional[Tensor]) -> bool:
@@ -397,11 +400,11 @@ class _ModelWeightInitializer:
         self._initialize_linear_xavier(feed_forward.linear2, "feed_forward.output")
 
     def _initialize_decoder(self) -> None:
-        decoder = getattr(self.model, "decoder", None)
-        if not isinstance(decoder, nn.Module):
+        decoder = self._decoder_module()
+        if decoder is None:
             return
 
-        for module in cast(nn.Module, decoder).modules():
+        for module in decoder.modules():
             if not isinstance(module, nn.Linear):
                 continue
             group: LayerGroup = (
@@ -413,6 +416,8 @@ class _ModelWeightInitializer:
 
     def _initialize_range_position_projection(self) -> None:
         projection = getattr(self.model, "range_position_projection", None)
+        if projection is None:
+            projection = getattr(self.model, "range_projection", None)
         if projection is None:
             return
         if not isinstance(projection, nn.Linear):
