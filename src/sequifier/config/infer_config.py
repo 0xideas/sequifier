@@ -1,4 +1,3 @@
-import json
 import os
 from typing import Optional, Union
 
@@ -14,6 +13,12 @@ from pydantic import (
     model_validator,
 )
 
+from sequifier.config.composition import merge_config_fragments
+from sequifier.config.metadata import (
+    DatasetMetadata,
+    extract_inline_metadata,
+    load_dataset_metadata,
+)
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -22,7 +27,6 @@ from sequifier.helpers import (
     metadata_config_path_from_preprocessing_data_path,
     normalize_path,
     resolve_window_view,
-    stored_window_layout_from_metadata,
     try_catch_excess_keys,
 )
 from sequifier.objectives import (
@@ -31,125 +35,132 @@ from sequifier.objectives import (
     get_objective_class,
     target_offset_for_objective,
 )
-from sequifier.special_tokens import validate_special_token_ids
 
 
 @beartype
 def load_inferer_config(
     config_path: str, args_config: dict, skip_metadata: bool
-) -> "InfererModel":
-    """Load inference YAML plus CLI overrides and optional metadata fields."""
-    with open(config_path, "r") as f:
-        config_values = yaml.safe_load(f)
-    config_values.update(args_config)
+) -> "ResolvedInferenceConfig":
+    """Compose and validate inference YAML, then resolve dataset metadata."""
 
-    config_values["seed"] = config_values.get("seed", 1010)
-
-    preprocessing_data_path = config_values.get("preprocessing_data_path")
-    if config_values.get("metadata_config_path") is None and preprocessing_data_path:
-        config_values["metadata_config_path"] = (
-            metadata_config_path_from_preprocessing_data_path(preprocessing_data_path)
+    with open(config_path, "r") as file:
+        config_values = yaml.safe_load(file)
+    if not isinstance(config_values, dict):
+        raise ValueError(
+            f"Inference config '{config_path}' must contain a YAML mapping."
         )
 
-    if not skip_metadata:
-        metadata_config_path = config_values.get("metadata_config_path")
-        if not isinstance(metadata_config_path, str) or not metadata_config_path:
+    cli_values = {
+        key: value for key, value in args_config.items() if key != "skip_metadata"
+    }
+    authored_values = merge_config_fragments((config_values, cli_values))
+    authored_values, extracted_metadata_values = extract_inline_metadata(
+        authored_values
+    )
+    inline_metadata_values = extracted_metadata_values if skip_metadata else None
+    config = try_catch_excess_keys(config_path, InferenceConfig, authored_values)
+
+    metadata_path = _effective_metadata_config_path(config)
+    if skip_metadata:
+        if inline_metadata_values is None:
+            raise ValueError(
+                "skip_metadata requires inline storage_layout and column values "
+                "so the inference config can still be resolved."
+            )
+        metadata = DatasetMetadata.model_validate(inline_metadata_values)
+    else:
+        if metadata_path is None:
             raise ValueError(
                 f"Inference config '{config_path}' must define metadata_config_path "
                 "or preprocessing_data_path when metadata loading is enabled."
             )
-
-        with open(
-            normalize_path(metadata_config_path, config_values["project_root"]), "r"
-        ) as f:
-            metadata_config = json.load(f)
-
-        validate_special_token_ids(
-            metadata_config["special_token_ids"],
-            source=f"metadata config '{metadata_config_path}'",
-        )
-        storage_layout = stored_window_layout_from_metadata(metadata_config)
-        if storage_layout.version != 2:
-            raise ValueError(
-                "Inference requires metadata stored_window_layout_version=2, "
-                f"got {storage_layout.version}."
-            )
-        training_objective = config_values["training_objective"]
-        target_offset = target_offset_for_objective(
-            training_objective,
-            int(config_values.pop("target_offset", 1)),
-        )
-        window_view = ModelWindowView(
-            context_length=int(config_values.pop("context_length")),
-            objective=training_objective,
-            target_offset=target_offset,
-        )
-        resolve_window_view(storage_layout, window_view)
-        config_values["storage_layout"] = storage_layout
-        config_values["window_view"] = window_view
-        for key in (
-            "target_offset",
-            "stored_context_width",
-            "max_target_offset",
-            "stored_window_layout_version",
-        ):
-            config_values.pop(key, None)
-
-        config_values["column_data_types"] = config_values.get(
-            "column_data_types", metadata_config["column_data_types"]
+        metadata = load_dataset_metadata(
+            normalize_path(metadata_path, config.project_root)
         )
 
-        if config_values["input_columns"] is None:
-            config_values["input_columns"] = list(
-                config_values["column_data_types"].keys()
-            )
+    return resolve_inference_config(config, metadata)
 
-        configured_column_data_types = config_values["column_data_types"]
 
-        config_values["categorical_columns"] = [
-            col
-            for col, type_ in configured_column_data_types.items()
-            if "int" in type_.lower() and col in config_values["input_columns"]
-        ]
-        config_values["real_columns"] = [
-            col
-            for col, type_ in configured_column_data_types.items()
-            if "float" in type_.lower() and col in config_values["input_columns"]
-        ]
-
-        if not (
-            len(config_values["real_columns"] + config_values["categorical_columns"])
-            > 0
-        ):
-            raise ValueError("No columns found in config")
-        config_values["data_path"] = normalize_path(
-            config_values.get("data_path")
-            or metadata_config["split_paths"][
-                min(2, len(metadata_config["split_paths"]) - 1)
-            ],
-            config_values["project_root"],
+def _effective_metadata_config_path(config: "InferenceConfig") -> Optional[str]:
+    if config.metadata_config_path:
+        return config.metadata_config_path
+    if config.preprocessing_data_path:
+        return metadata_config_path_from_preprocessing_data_path(
+            config.preprocessing_data_path
         )
+    return None
 
-        if config_values.get("target_column_types") is None:
-            config_values["target_column_types"] = derive_target_column_types(
-                config_values["target_columns"],
-                config_values["column_data_types"],
-            )
 
-    elif (
-        config_values.get("target_column_types") is None
-        and config_values.get("column_data_types") is not None
-    ):
-        config_values["target_column_types"] = derive_target_column_types(
-            config_values["target_columns"],
-            config_values["column_data_types"],
+def resolve_inference_config(
+    config: "InferenceConfig", metadata: DatasetMetadata
+) -> "ResolvedInferenceConfig":
+    """Return an inference config with all metadata-derived values populated."""
+
+    storage_layout = metadata.storage_layout
+    if storage_layout.version != 2:
+        raise ValueError(
+            "Inference requires metadata stored_window_layout_version=2, "
+            f"got {storage_layout.version}."
         )
+    column_data_types = config.column_data_types or metadata.column_data_types
+    input_columns = (
+        list(column_data_types)
+        if config.input_columns is None
+        else config.input_columns
+    )
+    categorical_columns = [
+        column
+        for column, type_name in column_data_types.items()
+        if "int" in type_name.lower() and column in input_columns
+    ]
+    real_columns = [
+        column
+        for column, type_name in column_data_types.items()
+        if "float" in type_name.lower() and column in input_columns
+    ]
+    if not categorical_columns and not real_columns:
+        raise ValueError("No columns found in resolved inference config")
 
-    return try_catch_excess_keys(config_path, InfererModel, config_values)
+    target_column_types = config.target_column_types or derive_target_column_types(
+        config.target_columns, column_data_types
+    )
+    window_view = ModelWindowView(
+        context_length=config.context_length,
+        objective=config.training_objective,
+        target_offset=target_offset_for_objective(
+            config.training_objective, config.target_offset
+        ),
+    )
+    resolve_window_view(storage_layout, window_view)
+
+    if config.data_path is None and not metadata.split_paths:
+        raise ValueError(
+            "Resolved inference config needs data_path when metadata does not "
+            "provide split_paths."
+        )
+    data_path = (
+        config.data_path or metadata.split_paths[min(2, len(metadata.split_paths) - 1)]
+    )
+    values = config.model_dump(mode="python")
+    values.update(
+        {
+            "metadata_config_path": _effective_metadata_config_path(config),
+            "data_path": normalize_path(data_path, config.project_root),
+            "input_columns": input_columns,
+            "column_data_types": column_data_types,
+            "categorical_columns": categorical_columns,
+            "real_columns": real_columns,
+            "target_column_types": target_column_types,
+            "storage_layout": storage_layout,
+            "window_view": window_view,
+            "dataset_metadata": metadata,
+        }
+    )
+    return ResolvedInferenceConfig.model_validate(values)
 
 
-class InfererModel(BaseModel):
-    """Top-level inference config."""
+class InferenceConfig(BaseModel):
+    """User-authored configuration for one inference run."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -164,20 +175,18 @@ class InfererModel(BaseModel):
     read_format: str = Field(default="parquet")
     write_format: str = Field(default="csv")
 
-    input_columns: list[str]
-    categorical_columns: list[str]
-    real_columns: list[str]
+    input_columns: Optional[list[str]]
     target_columns: list[str]
-    column_data_types: dict[str, str]
+    column_data_types: Optional[dict[str, str]] = None
     target_column_types: Optional[dict[str, str]] = None
 
     enforce_deterministic_inference: bool = Field(default=False)
     output_probabilities: bool = Field(default=False)
     map_to_id: bool = Field(default=True)
-    seed: int
+    seed: int = 1010
     device: str
-    storage_layout: StoredWindowLayout
-    window_view: ModelWindowView
+    context_length: int = Field(gt=0)
+    target_offset: int = Field(default=1, ge=0)
     model_window_stride: Optional[int] = Field(default=None, gt=0)
     prediction_length: Optional[int] = None
     inference_batch_size: int
@@ -187,12 +196,78 @@ class InfererModel(BaseModel):
     autoregression: bool = Field(default=False)
     autoregression_total_steps: Optional[int] = Field(default=None)
 
+    @field_validator("input_columns", mode="before")
+    @classmethod
+    def normalize_single_input_column(cls, value):
+        if isinstance(value, str):
+            return [value]
+        return value
+
+    @field_validator("training_objective")
+    @classmethod
+    def validate_authored_training_objective(cls, value: str) -> str:
+        if value not in ALLOWED_OBJECTIVE_NAMES:
+            raise ValueError(
+                f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {value}"
+            )
+        return value
+
+    @field_validator("model_type")
+    @classmethod
+    def validate_authored_model_type(cls, value: str) -> str:
+        if value not in {"embedding", "generative"}:
+            raise ValueError("model_type must be either embedding or generative")
+        return value
+
+    @model_validator(mode="after")
+    def validate_authored_paths(self):
+        if self.metadata_config_path is None and self.preprocessing_data_path is None:
+            raise ValueError(
+                "metadata_config_path is required when preprocessing_data_path "
+                "is not provided"
+            )
+        ModelWindowView(
+            context_length=self.context_length,
+            objective=self.training_objective,
+            target_offset=target_offset_for_objective(
+                self.training_objective, self.target_offset
+            ),
+        )
+        return self
+
+
+class ResolvedInferenceConfig(InferenceConfig):
+    """Internal inference config after dataset metadata has been resolved."""
+
+    # Pydantic validates these narrowed fields when constructing the resolved model.
+    metadata_config_path: str  # pyright: ignore[reportIncompatibleVariableOverride]
+    data_path: str  # pyright: ignore[reportIncompatibleVariableOverride]
+    input_columns: list[str]  # pyright: ignore[reportIncompatibleVariableOverride]
+    column_data_types: dict[str, str]  # pyright: ignore[reportIncompatibleVariableOverride]
+    target_column_types: dict[str, str]  # pyright: ignore[reportIncompatibleVariableOverride]
+    categorical_columns: list[str]
+    real_columns: list[str]
+    storage_layout: StoredWindowLayout
+    window_view: ModelWindowView
+    dataset_metadata: Optional[DatasetMetadata] = Field(default=None, exclude=True)
+
     @model_validator(mode="before")
     @classmethod
     def derive_optional_config_values(cls, values):
         if not isinstance(values, dict):
             return values
         values = dict(values)
+        window_view = values.get("window_view")
+        if "context_length" not in values and isinstance(window_view, dict):
+            values["context_length"] = window_view.get("context_length")
+        elif "context_length" not in values and isinstance(
+            window_view, ModelWindowView
+        ):
+            values["context_length"] = window_view.context_length
+        if "target_offset" not in values and isinstance(window_view, dict):
+            values["target_offset"] = window_view.get("target_offset", 1)
+        elif "target_offset" not in values and isinstance(window_view, ModelWindowView):
+            values["target_offset"] = window_view.target_offset
         preprocessing_data_path = values.get("preprocessing_data_path")
         if values.get("metadata_config_path") is None and preprocessing_data_path:
             values["metadata_config_path"] = (
@@ -430,3 +505,7 @@ class InfererModel(BaseModel):
         ]
         if not (columns_ordered_filtered == self.target_columns):
             raise ValueError(f"{columns_ordered_filtered} != {self.target_columns}")
+
+
+# Compatibility name retained for runtime code and external integrations.
+InfererModel = ResolvedInferenceConfig

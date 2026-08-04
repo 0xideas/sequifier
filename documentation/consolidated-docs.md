@@ -347,6 +347,24 @@ The `sequifier train` command initializes and trains a transformer sequence mode
 sequifier train --config-path configs/train.yaml
 ```
 
+## Configuration Composition and Resolution
+
+Training configuration has two explicit phases. Sequifier first deep-merges
+the authored YAML and command-line overrides, then validates that result as one
+`SequifierConfig`. Nested mappings such as `model_spec` and `training_spec`
+merge recursively; lists, scalar values, and explicit `null` replace the
+earlier value. Typed components such as `optimizer`, `scheduler`, ingestion,
+and decoding specifications are replaced as complete values.
+
+After authored validation, Sequifier loads preprocessing metadata and creates
+an internal `ResolvedSequifierConfig`. Metadata supplies the stored window
+layout, categorical and real column groups, class counts, ID maps, special
+token IDs, and default split paths. The authored `context_length` and
+`target_offset` remain authored fields; resolution uses them to build the
+internal model window view without mutating the authored config. Existing YAML
+patterns remain valid, including `input_columns: null`, metadata-derived paths,
+and partial hyperparameter-search configs based on a training YAML.
+
 ## Configuration Fields
 
 The configuration is defined in a YAML file (e.g., `train.yaml`). The file is structured into root-level fields (mostly data/paths), an optional `feature_layout` annotation section, and two subsections: `model_spec` (architecture) and `training_spec` (hyperparameters).
@@ -1021,7 +1039,9 @@ sequifier infer --config-path configs/infer.yaml
 
 ## CLI Overrides
 
-Values passed on the command line override the YAML before validation.
+Values passed on the command line are deep-merged into the authored YAML before
+validation. Nested mappings merge recursively, while lists, scalars, `null`,
+and typed components replace the YAML value.
 
 | Flag | Overrides / Action |
 | :--- | :--- |
@@ -1032,6 +1052,12 @@ Values passed on the command line override the YAML before validation.
 | `-sm`, `--skip-metadata` | Skips loading metadata-derived config values. All required schema fields must then be supplied directly. |
 | `-mp`, `--model-path` | Overrides `model_path`. |
 | `-s`, `--seed` | Overrides `seed`, unless `--randomize` is also set. |
+
+Inference follows the same authored/resolved boundary as training. The YAML is
+validated as `InferenceConfig`, then preprocessing metadata is resolved into an
+internal `ResolvedInferenceConfig`. Storage layout, column groups, ID maps, and
+normalization statistics are runtime values and do not need to be copied into
+authored inference YAML.
 
 ## Configuration Fields
 
@@ -1261,6 +1287,12 @@ config-path resolution and may also be written relative to the partial config.
 
 The original self-contained hyperparameter-search format remains supported
 when `overrides` is absent.
+
+Each sampled trial is emitted as an authored `SequifierConfig`. Generated YAML
+therefore contains `context_length` and `target_offset`, but not metadata-derived
+`storage_layout`, `window_view`, column groups, class counts, or ID maps. The
+normal training loader resolves those values from metadata when the trial
+starts.
 
 ## CLI Overrides
 

@@ -101,7 +101,7 @@ def _stable_json_digest(value: Any) -> str:
 def _normalize_column_types(
     column_data_types: Optional[dict[str, str]],
 ) -> Optional[dict[str, str]]:
-    if column_data_types is None:
+    if not column_data_types:
         return None
     return {
         column: canonicalize_polars_dtype_name(dtype)
@@ -110,11 +110,19 @@ def _normalize_column_types(
 
 
 @beartype
+def _column_types_from_metadata(metadata: dict[str, Any]) -> Optional[dict[str, str]]:
+    """Read current and historical metadata field names."""
+    return _normalize_column_types(
+        metadata.get("column_data_types") or metadata.get("column_types")
+    )
+
+
+@beartype
 def _configured_column_types_for_data_columns(
     column_data_types: Optional[dict[str, str]],
     data_columns: list[str],
 ) -> Optional[dict[str, str]]:
-    if column_data_types is None:
+    if not column_data_types:
         return None
 
     missing_columns = [
@@ -429,7 +437,7 @@ class Preprocessor:
                     "selected_columns_statistics"
                 ]
                 n_classes = preexisting_metadata["n_classes"]
-                col_types = preexisting_metadata["column_data_types"]
+                col_types = _column_types_from_metadata(preexisting_metadata)
             else:
                 id_maps, selected_columns_statistics = {}, {}
 
@@ -542,7 +550,13 @@ class Preprocessor:
                     "selected_columns_statistics"
                 ]
                 n_classes = preexisting_metadata["n_classes"]
-                col_types = preexisting_metadata["column_data_types"]
+                col_types = _column_types_from_metadata(preexisting_metadata)
+
+                if col_types is None:
+                    raise ValueError(
+                        "Metadata used with folder preprocessing must contain "
+                        "'column_data_types' or the historical 'column_types' field."
+                    )
 
                 # Reconstruct data_columns from the provided col_types
                 data_columns = [

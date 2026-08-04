@@ -35,7 +35,6 @@ from sequifier.special_tokens import (
     ONNX_CATEGORICAL_TARGET_CODECS_KEY,
     SPECIAL_TOKEN_IDS,
     resolve_categorical_decoder_ids,
-    validate_special_token_ids,
 )
 from sequifier.train import (
     infer_with_embedding_model,
@@ -153,22 +152,15 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     config = load_inferer_config(config_path, args_config, skip_metadata)
 
     if config.map_to_id or (len(config.real_columns) > 0):
-        if config.metadata_config_path is None:
+        metadata = config.dataset_metadata
+        if metadata is None:
             raise ValueError(
-                "If you want to map to id, you need to provide a file path to a json that contains: {{'id_maps':{...}}} to metadata_config_path"
-                "\nIf you have real columns in the data, you need to provide a json that contains: {{'selected_columns_statistics':{COL_NAME:{'std':..., 'mean':...}}}}"
+                "Resolved inference metadata is required for ID mapping and "
+                "real-column normalization."
             )
-        with open(
-            normalize_path(config.metadata_config_path, config.project_root), "r"
-        ) as f:
-            metadata_config = json.loads(f.read())
-            validate_special_token_ids(
-                metadata_config["special_token_ids"],
-                source=f"metadata config '{config.metadata_config_path}'",
-            )
-            id_maps = metadata_config["id_maps"]
-            selected_columns_statistics = metadata_config["selected_columns_statistics"]
-            normalize_real_columns = metadata_config.get("normalize_real_columns", True)
+        id_maps = metadata.id_maps
+        selected_columns_statistics = metadata.selected_columns_statistics
+        normalize_real_columns = metadata.normalize_real_columns
     else:
         id_maps = None
         selected_columns_statistics = {}

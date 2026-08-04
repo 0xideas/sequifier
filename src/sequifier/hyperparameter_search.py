@@ -53,15 +53,13 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
     )
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
 
-    run_config_dict = run_config.model_dump()
-    run_config_dict["context_length"] = run_config_dict["window_view"]["context_length"]
-    run_config_dict["target_offset"] = run_config_dict["window_view"]["target_offset"]
-
-    del run_config_dict["window_view"]
-    del run_config_dict["storage_layout"]
-
     with open(config_path, "w") as f:
-        yaml.dump(run_config_dict, f, Dumper=TrainModelDumper, sort_keys=False)
+        yaml.dump(
+            run_config.model_dump(mode="python"),
+            f,
+            Dumper=TrainModelDumper,
+            sort_keys=False,
+        )
 
     os.environ["SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"] = "1"
 

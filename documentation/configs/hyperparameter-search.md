@@ -61,6 +61,12 @@ config-path resolution and may also be written relative to the partial config.
 The original self-contained hyperparameter-search format remains supported
 when `overrides` is absent.
 
+Each sampled trial is emitted as an authored `SequifierConfig`. Generated YAML
+therefore contains `context_length` and `target_offset`, but not metadata-derived
+`storage_layout`, `window_view`, column groups, class counts, or ID maps. The
+normal training loader resolves those values from metadata when the trial
+starts.
+
 ## CLI Overrides
 
 The search runner reads most configuration from YAML. The config-related CLI flag currently used by this command is:

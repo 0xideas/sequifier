@@ -10,7 +10,9 @@ sequifier infer --config-path configs/infer.yaml
 
 ## CLI Overrides
 
-Values passed on the command line override the YAML before validation.
+Values passed on the command line are deep-merged into the authored YAML before
+validation. Nested mappings merge recursively, while lists, scalars, `null`,
+and typed components replace the YAML value.
 
 | Flag | Overrides / Action |
 | :--- | :--- |
@@ -21,6 +23,12 @@ Values passed on the command line override the YAML before validation.
 | `-sm`, `--skip-metadata` | Skips loading metadata-derived config values. All required schema fields must then be supplied directly. |
 | `-mp`, `--model-path` | Overrides `model_path`. |
 | `-s`, `--seed` | Overrides `seed`, unless `--randomize` is also set. |
+
+Inference follows the same authored/resolved boundary as training. The YAML is
+validated as `InferenceConfig`, then preprocessing metadata is resolved into an
+internal `ResolvedInferenceConfig`. Storage layout, column groups, ID maps, and
+normalization statistics are runtime values and do not need to be copied into
+authored inference YAML.
 
 ## Configuration Fields
 

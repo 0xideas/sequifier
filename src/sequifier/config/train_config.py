@@ -1,5 +1,4 @@
 import copy
-import json
 import math
 import os
 import warnings
@@ -26,7 +25,13 @@ from pydantic import (
 
 import sequifier
 import sequifier.optimizers
+from sequifier.config.composition import merge_config_fragments
 from sequifier.config.initialization_config import ModelInitializationConfig
+from sequifier.config.metadata import (
+    DatasetMetadata,
+    extract_inline_metadata,
+    load_dataset_metadata,
+)
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.helpers import (
     ModelWindowView,
@@ -35,7 +40,6 @@ from sequifier.helpers import (
     metadata_config_path_from_preprocessing_data_path,
     normalize_path,
     resolve_window_view,
-    stored_window_layout_from_metadata,
     try_catch_excess_keys,
 )
 from sequifier.objectives import (
@@ -568,18 +572,36 @@ def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
 
 @dataclass(frozen=True)
 class LoadedTrainConfig:
-    """User-authored training values together with their resolved model."""
+    """A validated authored config together with its resolved runtime config."""
 
-    source_values: dict[str, Any]
-    model: "TrainModel"
-    metadata_values: Optional[dict[str, Any]] = None
+    config: "SequifierConfig"
+    resolved: "ResolvedSequifierConfig"
+    metadata: DatasetMetadata
+
+    @property
+    def source_values(self) -> dict[str, Any]:
+        """Compatibility view used by the legacy partial-search compiler."""
+
+        return self.config.model_dump(mode="python", exclude_unset=True)
+
+    @property
+    def model(self) -> "ResolvedSequifierConfig":
+        """Compatibility alias for callers that previously consumed ``model``."""
+
+        return self.resolved
+
+    @property
+    def metadata_values(self) -> dict[str, Any]:
+        """Compatibility view of validated preprocessing metadata."""
+
+        return self.metadata.model_dump(mode="python")
 
 
 @beartype
 def load_train_config_with_source(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
 ) -> LoadedTrainConfig:
-    """Load training YAML while retaining the effective user-authored values."""
+    """Compose and validate authored YAML, then resolve preprocessing metadata."""
     with open(config_path, "r") as f:
         config_values = yaml.safe_load(f)
 
@@ -588,148 +610,145 @@ def load_train_config_with_source(
             f"Training config '{config_path}' must contain a YAML mapping."
         )
 
-    config_values.update(args_config)
+    cli_values = {
+        key: value for key, value in args_config.items() if key != "skip_metadata"
+    }
+    authored_values = merge_config_fragments((config_values, cli_values))
+    authored_values, extracted_metadata_values = extract_inline_metadata(
+        authored_values
+    )
+    inline_metadata_values = extracted_metadata_values if skip_metadata else None
 
-    preprocessing_data_path = config_values.get("preprocessing_data_path")
-    if config_values.get("metadata_config_path") is None and preprocessing_data_path:
-        config_values["metadata_config_path"] = (
-            metadata_config_path_from_preprocessing_data_path(preprocessing_data_path)
-        )
-    source_values = copy.deepcopy(config_values)
-    config_values = copy.deepcopy(source_values)
-    metadata_config: Optional[dict[str, Any]] = None
-
-    config_values["seed"] = config_values.get("seed", 1010)
-
-    if not skip_metadata:
-        metadata_config_path = config_values.get("metadata_config_path")
-        if not isinstance(metadata_config_path, str) or not metadata_config_path:
+    config = try_catch_excess_keys(config_path, SequifierConfig, authored_values)
+    metadata_path = _effective_metadata_config_path(config)
+    if skip_metadata:
+        if inline_metadata_values is None:
+            raise ValueError(
+                "skip_metadata requires inline storage_layout, column data, class, "
+                "and ID-map values so the config can still be resolved."
+            )
+        metadata = DatasetMetadata.model_validate(inline_metadata_values)
+    else:
+        if metadata_path is None:
             raise ValueError(
                 f"Training config '{config_path}' must define metadata_config_path "
                 "or preprocessing_data_path when metadata loading is enabled."
             )
-
-        with open(
-            normalize_path(metadata_config_path, config_values["project_root"]), "r"
-        ) as f:
-            loaded_metadata: dict[str, Any] = json.loads(f.read())
-        metadata_config = loaded_metadata
-
-        storage_layout = stored_window_layout_from_metadata(loaded_metadata)
-        if storage_layout.version != 2:
-            raise ValueError(
-                "Training requires metadata stored_window_layout_version=2, "
-                f"got {storage_layout.version}."
-            )
-        training_objective = config_values["training_objective"]
-        target_offset = target_offset_for_objective(
-            training_objective,
-            int(config_values.pop("target_offset", 1)),
-        )
-        window_view = ModelWindowView(
-            context_length=int(config_values.pop("context_length")),
-            objective=training_objective,
-            target_offset=target_offset,
-        )
-        resolve_window_view(storage_layout, window_view)
-        config_values["storage_layout"] = storage_layout
-        config_values["window_view"] = window_view
-        for key in (
-            "target_offset",
-            "stored_context_width",
-            "max_target_offset",
-            "stored_window_layout_version",
-        ):
-            config_values.pop(key, None)
-        for key in ("target_offset", "stored_context_width", "max_target_offset"):
-            config_values.get("training_spec", {}).pop(key, None)
-
-        split_paths = loaded_metadata["split_paths"]
-
-        config_values["column_data_types"] = config_values.get(
-            "column_data_types", loaded_metadata["column_data_types"]
+        metadata = load_dataset_metadata(
+            normalize_path(metadata_path, config.project_root)
         )
 
-        if config_values["input_columns"] is None:
-            config_values["input_columns"] = list(
-                config_values["column_data_types"].keys()
-            )
-
-        configured_column_data_types = config_values["column_data_types"]
-        config_values["categorical_columns"] = [
-            col
-            for col, type_ in configured_column_data_types.items()
-            if "int" in type_.lower() and col in config_values["input_columns"]
-        ]
-        config_values["real_columns"] = [
-            col
-            for col, type_ in configured_column_data_types.items()
-            if "float" in type_.lower() and col in config_values["input_columns"]
-        ]
-        if not (
-            len(config_values["real_columns"] + config_values["categorical_columns"])
-            > 0
-        ):
-            raise ValueError("No columns found in config_values")
-        config_values["n_classes"] = config_values.get(
-            "n_classes", loaded_metadata["n_classes"]
-        )
-        config_values["data_path"] = normalize_path(
-            config_values.get("data_path") or split_paths[0],
-            config_values["project_root"],
-        )
-        config_values["validation_data_path"] = normalize_path(
-            config_values.get(
-                "validation_data_path",
-                split_paths[min(1, len(split_paths) - 1)],
-            ),
-            config_values["project_root"],
-        )
-
-        config_values["id_maps"] = loaded_metadata["id_maps"]
-        config_values["special_token_ids"] = validate_special_token_ids(
-            loaded_metadata.get(
-                "special_token_ids",
-                SPECIAL_TOKEN_IDS.ids_by_label,
-            ),
-            source=f"metadata config '{metadata_config_path}'",
-        )
-
-        if config_values.get("target_column_types") is None:
-            config_values["target_column_types"] = derive_target_column_types(
-                config_values["target_columns"],
-                config_values["column_data_types"],
-            )
-
-        _validate_class_share_log_columns(config_values)
-
-    elif (
-        config_values.get("target_column_types") is None
-        and config_values.get("column_data_types") is not None
-    ):
-        config_values["target_column_types"] = derive_target_column_types(
-            config_values["target_columns"],
-            config_values["column_data_types"],
-        )
-
-    model = try_catch_excess_keys(config_path, TrainModel, config_values)
+    resolved = resolve_sequifier_config(config, metadata)
     return LoadedTrainConfig(
-        source_values=source_values,
-        model=model,
-        metadata_values=copy.deepcopy(metadata_config),
+        config=config,
+        resolved=resolved,
+        metadata=metadata,
     )
 
 
 @beartype
 def load_train_config(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
-) -> "TrainModel":
+) -> "ResolvedSequifierConfig":
     """Load train YAML plus CLI overrides and optional metadata-derived fields."""
     return load_train_config_with_source(
         config_path,
         args_config,
         skip_metadata,
-    ).model
+    ).resolved
+
+
+def _effective_metadata_config_path(config: "SequifierConfig") -> Optional[str]:
+    if config.metadata_config_path:
+        return config.metadata_config_path
+    if config.preprocessing_data_path:
+        return metadata_config_path_from_preprocessing_data_path(
+            config.preprocessing_data_path
+        )
+    return None
+
+
+def resolve_sequifier_config(
+    config: "SequifierConfig", metadata: DatasetMetadata
+) -> "ResolvedSequifierConfig":
+    """Resolve dataset metadata without mutating the validated authored config."""
+
+    storage_layout = metadata.storage_layout
+    if storage_layout.version != 2:
+        raise ValueError(
+            "Training requires metadata stored_window_layout_version=2, "
+            f"got {storage_layout.version}."
+        )
+
+    column_data_types = config.column_data_types or metadata.column_data_types
+    input_columns = (
+        list(column_data_types)
+        if config.input_columns is None
+        else config.input_columns
+    )
+    categorical_columns = [
+        column
+        for column, type_name in column_data_types.items()
+        if "int" in type_name.lower() and column in input_columns
+    ]
+    real_columns = [
+        column
+        for column, type_name in column_data_types.items()
+        if "float" in type_name.lower() and column in input_columns
+    ]
+    if not categorical_columns and not real_columns:
+        raise ValueError("No columns found in resolved training config")
+
+    target_column_types = config.target_column_types or derive_target_column_types(
+        config.target_columns,
+        column_data_types,
+    )
+    target_offset = target_offset_for_objective(
+        config.training_objective,
+        config.target_offset,
+    )
+    window_view = ModelWindowView(
+        context_length=config.context_length,
+        objective=config.training_objective,
+        target_offset=target_offset,
+    )
+    resolve_window_view(storage_layout, window_view)
+
+    if not metadata.split_paths and (
+        config.data_path is None or config.validation_data_path is None
+    ):
+        raise ValueError(
+            "Resolved training config needs data_path and validation_data_path "
+            "when metadata does not provide split_paths."
+        )
+    data_path = config.data_path or metadata.split_paths[0]
+    validation_data_path = (
+        config.validation_data_path
+        or metadata.split_paths[min(1, len(metadata.split_paths) - 1)]
+    )
+
+    resolved_values = config.model_dump(mode="python")
+    resolved_values.update(
+        {
+            "metadata_config_path": _effective_metadata_config_path(config),
+            "data_path": normalize_path(data_path, config.project_root),
+            "validation_data_path": normalize_path(
+                validation_data_path, config.project_root
+            ),
+            "input_columns": input_columns,
+            "column_data_types": column_data_types,
+            "categorical_columns": categorical_columns,
+            "real_columns": real_columns,
+            "target_column_types": target_column_types,
+            "id_maps": metadata.id_maps,
+            "special_token_ids": metadata.special_token_ids,
+            "storage_layout": storage_layout,
+            "window_view": window_view,
+            "n_classes": metadata.n_classes,
+        }
+    )
+    _validate_class_share_log_columns(resolved_values)
+    return ResolvedSequifierConfig.model_validate(resolved_values)
 
 
 class DotDict(dict):
@@ -825,14 +844,22 @@ class TrainingSpecModel(BaseModel):
     float32_matmul_precision: str = "highest"
 
     def __init__(self, **kwargs):
-        super().__init__(
-            **{k: v for k, v in kwargs.items() if k not in ["optimizer", "scheduler"]}
+        values = dict(kwargs)
+        optimizer = values.pop("optimizer", {"name": "Adam"})
+        scheduler = values.pop(
+            "scheduler",
+            {"name": "StepLR", "step_size": 1, "gamma": 0.99},
         )
+        super().__init__(**values)
 
-        self.validate_optimizer_config(kwargs["optimizer"])
-        self.optimizer = DotDict(kwargs["optimizer"])
-        self.validate_scheduler_config(kwargs["scheduler"], kwargs)
-        self.scheduler = DotDict(kwargs["scheduler"])
+        self.optimizer = DotDict(self.validate_optimizer_config(optimizer))
+        scheduler_context = {
+            "epochs": self.epochs,
+            "scheduler_step_on": self.scheduler_step_on,
+        }
+        self.scheduler = DotDict(
+            self.validate_scheduler_config(scheduler, scheduler_context)
+        )
 
     @field_serializer("optimizer", "scheduler")
     def serialize_dotdict(self, value: DotDict) -> dict[str, Any]:
@@ -1169,8 +1196,8 @@ class ModelSpecModel(BaseModel):
         return v
 
 
-class TrainModel(BaseModel):
-    """Top-level training config."""
+class SequifierConfig(BaseModel):
+    """User-authored configuration for one concrete training run."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -1181,29 +1208,22 @@ class TrainModel(BaseModel):
     training_objective: str
     device: str
     data_path: Optional[str] = None
-    validation_data_path: str
+    validation_data_path: Optional[str] = None
     read_format: str = "parquet"
 
-    input_columns: list[str]
-    column_data_types: dict[str, str]
-    categorical_columns: list[str]
-    real_columns: list[str]
+    input_columns: Optional[list[str]]
+    column_data_types: Optional[dict[str, str]] = None
     target_columns: list[str]
     target_column_types: Optional[dict[str, str]] = None
-    id_maps: dict[str, dict[str | int, int]]
-    special_token_ids: dict[str, int] = Field(
-        default_factory=lambda: SPECIAL_TOKEN_IDS.ids_by_label
-    )
     categorical_decoder_special_tokens: dict[
         str, list[Literal["unknown", "other", "mask"]]
     ] = Field(default_factory=dict)
 
-    storage_layout: StoredWindowLayout
-    window_view: ModelWindowView
+    context_length: int = Field(gt=0)
+    target_offset: int = Field(default=1, ge=0)
     model_window_stride: Optional[int] = Field(default=None, gt=0)
-    n_classes: dict[str, int]
     inference_batch_size: int
-    seed: int
+    seed: int = 1010
 
     export_generative_model: bool
     export_embedding_model: bool
@@ -1215,12 +1235,156 @@ class TrainModel(BaseModel):
     model_spec: ModelSpecModel
     training_spec: TrainingSpecModel
 
+    @field_validator("training_objective")
+    @classmethod
+    def validate_authored_training_objective(cls, value: str) -> str:
+        if value not in ALLOWED_OBJECTIVE_NAMES:
+            raise ValueError(
+                f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {value}"
+            )
+        return value
+
+    @field_validator("model_name")
+    @classmethod
+    def validate_authored_model_name(cls, value: str) -> str:
+        if "embedding" in value:
+            raise ValueError("model_name cannot contain 'embedding'")
+        return value
+
+    @field_validator("read_format")
+    @classmethod
+    def validate_authored_read_format(cls, value: str) -> str:
+        if value not in {"csv", "parquet", "pt"}:
+            raise ValueError("Currently only 'csv', 'parquet' and 'pt' are supported")
+        return value
+
+    @field_validator("target_column_types")
+    @classmethod
+    def validate_authored_target_column_types(cls, value, info):
+        if value is None:
+            return value
+        if any(
+            type_name not in {"categorical", "real"} for type_name in value.values()
+        ):
+            raise ValueError("Target column types must be either categorical or real")
+        if list(value) != info.data.get("target_columns", []):
+            raise ValueError(
+                "target_columns and target_column_types must contain the same "
+                "values/keys in the same order"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def validate_authored_relationships(self):
+        if self.metadata_config_path is None and self.preprocessing_data_path is None:
+            raise ValueError(
+                "metadata_config_path is required when preprocessing_data_path "
+                "is not provided"
+            )
+
+        objective_class = get_objective_class(self.training_objective)
+        is_bert = issubclass(objective_class, BERTObjective)
+        is_next_occurrence = issubclass(objective_class, NextOccurrenceObjective)
+        if self.training_spec.bert_spec is not None and not is_bert:
+            raise ValueError(
+                "The BERT hyperparameters should only be configured if the "
+                "training objective is 'bert'"
+            )
+        if self.training_spec.bert_spec is None and is_bert:
+            raise ValueError(
+                "If the training_objective is 'bert', the BERT hyperparameters "
+                "must be set"
+            )
+        if (
+            self.training_spec.next_occurrence_config is not None
+            and not is_next_occurrence
+        ):
+            raise ValueError(
+                "next_occurrence_config should only be configured if the "
+                "training objective is 'next_occurrence'"
+            )
+        if self.training_spec.next_occurrence_config is None and is_next_occurrence:
+            raise ValueError(
+                "If the training_objective is 'next_occurrence', "
+                "next_occurrence_config must be set"
+            )
+
+        effective_target_offset = target_offset_for_objective(
+            self.training_objective, self.target_offset
+        )
+        ModelWindowView(
+            context_length=self.context_length,
+            objective=self.training_objective,
+            target_offset=effective_target_offset,
+        )
+        objective_class.validate_prediction_length(
+            self.model_spec.prediction_length,
+            self.context_length,
+            usage="training",
+        )
+        decoded_context_length = (
+            self.context_length - self.model_spec.decoding_support + 1
+        )
+        if self.model_spec.decoding_support > self.context_length:
+            raise ValueError("model_spec.decoding_support cannot exceed context_length")
+        if self.model_spec.prediction_length > decoded_context_length:
+            raise ValueError(
+                "model_spec.prediction_length cannot exceed the number of "
+                "decoded positions produced by decoding_support"
+            )
+        if set(self.training_spec.criterion) != set(self.target_columns):
+            raise ValueError(
+                "target_columns and criterion must contain the same values/keys"
+            )
+        if (
+            not self.export_generative_model
+            and not self.export_embedding_model
+            and os.getenv("SEQUIFIER_PREVENT_EXPORT") is None
+        ):
+            raise ValueError(
+                "At least one of export_generative_model and "
+                "export_embedding_model must be true"
+            )
+        return self
+
+
+class ResolvedSequifierConfig(SequifierConfig):
+    """Internal training config after preprocessing metadata has been resolved."""
+
+    # Pydantic validates these narrowed fields when constructing the resolved model.
+    metadata_config_path: str  # pyright: ignore[reportIncompatibleVariableOverride]
+    data_path: str  # pyright: ignore[reportIncompatibleVariableOverride]
+    validation_data_path: str  # pyright: ignore[reportIncompatibleVariableOverride]
+    input_columns: list[str]  # pyright: ignore[reportIncompatibleVariableOverride]
+    column_data_types: dict[str, str]  # pyright: ignore[reportIncompatibleVariableOverride]
+    target_column_types: dict[str, str]  # pyright: ignore[reportIncompatibleVariableOverride]
+    categorical_columns: list[str]
+    real_columns: list[str]
+    id_maps: dict[str, dict[str | int, int]]
+    special_token_ids: dict[str, int] = Field(
+        default_factory=lambda: SPECIAL_TOKEN_IDS.ids_by_label
+    )
+    storage_layout: StoredWindowLayout
+    window_view: ModelWindowView
+    n_classes: dict[str, int]
+
     @model_validator(mode="before")
     @classmethod
     def derive_optional_config_values(cls, values):
         if not isinstance(values, dict):
             return values
         values = dict(values)
+        window_view = values.get("window_view")
+        if "context_length" not in values and isinstance(window_view, dict):
+            values["context_length"] = window_view.get("context_length")
+        elif "context_length" not in values and isinstance(
+            window_view, ModelWindowView
+        ):
+            values["context_length"] = window_view.context_length
+        if "target_offset" not in values and isinstance(window_view, dict):
+            values["target_offset"] = window_view.get("target_offset", 1)
+        elif "target_offset" not in values and isinstance(window_view, ModelWindowView):
+            values["target_offset"] = window_view.target_offset
         preprocessing_data_path = values.get("preprocessing_data_path")
         if values.get("metadata_config_path") is None and preprocessing_data_path:
             values["metadata_config_path"] = (
@@ -1587,3 +1751,9 @@ class TrainModel(BaseModel):
 
         resolve_ingestion_plan(self)
         return self
+
+
+# Compatibility name for integrations that construct or annotate the historical
+# resolved training model directly.  New authored config code should use
+# ``SequifierConfig`` and resolve it explicitly.
+TrainModel = ResolvedSequifierConfig

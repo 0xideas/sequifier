@@ -26,7 +26,7 @@ from pydantic import (
     model_validator,
 )
 
-from sequifier.config.train_config import TrainModel, load_train_config_with_source
+from sequifier.config.train_config import SequifierConfig, load_train_config_with_source
 from sequifier.helpers import normalize_path, stored_window_layout_from_metadata
 from sequifier.objectives import (
     BERTObjective,
@@ -250,7 +250,7 @@ _TOP_LEVEL_DERIVED_FIELDS = {
     "window_view",
 }
 _TOP_LEVEL_OVERRIDE_FIELDS = (
-    set(TrainModel.model_fields) - _TOP_LEVEL_DERIVED_FIELDS
+    set(SequifierConfig.model_fields) - _TOP_LEVEL_DERIVED_FIELDS
 ) | {"context_length", "target_offset"}
 _NESTED_OVERRIDE_MODELS: dict[ConfigPath, type[BaseModel]] = {
     ("model_spec",): ModelSpecHyperparameterSampling,
@@ -664,14 +664,11 @@ def compile_hyperparameter_search_override_config(
                 "stored_window_layout_version=2, got "
                 f"{storage_layout.version}."
             )
-        base_column_types = source_values.get(
-            "column_data_types",
-            metadata_config["column_data_types"],
+        base_column_types = (
+            source_values.get("column_data_types")
+            or metadata_config["column_data_types"]
         )
-        base_n_classes = source_values.get(
-            "n_classes",
-            metadata_config["n_classes"],
-        )
+        base_n_classes = source_values.get("n_classes") or metadata_config["n_classes"]
         base_id_maps = metadata_config["id_maps"]
         base_special_token_ids = validate_special_token_ids(
             metadata_config.get(
@@ -682,9 +679,9 @@ def compile_hyperparameter_search_override_config(
         )
         split_paths = metadata_config["split_paths"]
         raw_training_path = source_values.get("data_path") or split_paths[0]
-        raw_validation_path = source_values.get(
-            "validation_data_path",
-            split_paths[min(1, len(split_paths) - 1)],
+        raw_validation_path = (
+            source_values.get("validation_data_path")
+            or split_paths[min(1, len(split_paths) - 1)]
         )
         base_training_path = normalize_path(raw_training_path, project_root)
         base_validation_path = normalize_path(raw_validation_path, project_root)

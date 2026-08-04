@@ -22,6 +22,7 @@ from sequifier.config.initialization_config import (
     ModelInitializationConfig,
     ModelInitializationSamplingConfig,
 )
+from sequifier.config.metadata import DatasetMetadata
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.config.train_config import (
     BERTSpecModel,
@@ -33,14 +34,14 @@ from sequifier.config.train_config import (
     ModelSpecModel,
     NextOccurrenceConfigModel,
     ReplacementDistribution,
+    ResolvedSequifierConfig,
+    SequifierConfig,
     TrainingSpecModel,
-    TrainModel,
+    resolve_sequifier_config,
 )
 from sequifier.helpers import (
-    ModelWindowView,
     StoredWindowLayout,
     normalize_path,
-    resolve_window_view,
     stored_window_layout_from_metadata,
     try_catch_excess_keys,
 )
@@ -1420,7 +1421,37 @@ class HyperparameterSearchConfig(BaseModel):
         context_length: int,
         seed: int,
         run_index: int,
-    ) -> TrainModel:
+    ) -> ResolvedSequifierConfig:
+        authored = self._build_authored_config(
+            model_spec=model_spec,
+            training_config=training_config,
+            input_columns_index=input_columns_index,
+            context_length=context_length,
+            seed=seed,
+            run_index=run_index,
+        )
+        metadata = DatasetMetadata(
+            split_paths=[self.data_path, self.validation_data_path],
+            column_data_types=self.column_data_types[input_columns_index],
+            n_classes=self.n_classes,
+            id_maps=self.id_maps,
+            special_token_ids=self.special_token_ids,
+            stored_context_width=self.storage_layout.stored_context_width,
+            max_target_offset=self.storage_layout.max_target_offset,
+            stored_window_layout_version=self.storage_layout.version,
+        )
+        return resolve_sequifier_config(authored, metadata)
+
+    def _build_authored_config(
+        self,
+        *,
+        model_spec: ModelSpecModel,
+        training_config: SampledTrainingConfig,
+        input_columns_index: int,
+        context_length: int,
+        seed: int,
+        run_index: int,
+    ) -> SequifierConfig:
         training_spec = training_config.training_spec
         training_objective = training_config.training_objective
         objective_class = get_objective_class(training_objective)
@@ -1429,17 +1460,7 @@ class HyperparameterSearchConfig(BaseModel):
                 update={"prediction_length": context_length}
             )
 
-        window_view = ModelWindowView(
-            context_length=context_length,
-            objective=training_objective,
-            target_offset=target_offset_for_objective(
-                training_objective,
-                self.target_offset,
-            ),
-        )
-        resolve_window_view(self.storage_layout, window_view)
-
-        return TrainModel(
+        return SequifierConfig(
             project_root=self.project_root,
             metadata_config_path=self.metadata_config_path,
             model_name=f"{self.hp_search_name}-run-{run_index}",
@@ -1450,17 +1471,15 @@ class HyperparameterSearchConfig(BaseModel):
             read_format=self.read_format,
             input_columns=self.input_columns[input_columns_index],
             column_data_types=self.column_data_types[input_columns_index],
-            categorical_columns=self.categorical_columns[input_columns_index],
-            real_columns=self.real_columns[input_columns_index],
             target_columns=self.target_columns,
             target_column_types=self.target_column_types,
-            id_maps=self.id_maps,
-            special_token_ids=self.special_token_ids,
             categorical_decoder_special_tokens=self.categorical_decoder_special_tokens,
-            storage_layout=self.storage_layout,
-            window_view=window_view,
+            context_length=context_length,
+            target_offset=target_offset_for_objective(
+                training_objective,
+                self.target_offset,
+            ),
             model_window_stride=self.model_window_stride,
-            n_classes=self.n_classes,
             inference_batch_size=self.inference_batch_size,
             seed=seed,
             export_embedding_model=self.export_embedding_model,
@@ -1679,7 +1698,7 @@ class HyperparameterSearchConfig(BaseModel):
                 )
             except (ValidationError, ValueError) as error:
                 raise ValueError(
-                    "Hyperparameter search can produce an invalid TrainModel for "
+                    "Hyperparameter search can produce an invalid SequifierConfig for "
                     f"{description}:\n{error}"
                 ) from error
         return self
@@ -1759,8 +1778,8 @@ class HyperparameterSearchConfig(BaseModel):
             raise ValueError(f"search_strategy must be one of {allowed}, got '{v}'")
         return v
 
-    def sample_trial(self, trial: Any, run_index: int) -> TrainModel:
-        """Sample a concrete TrainModel for one trial/run index."""
+    def sample_trial(self, trial: Any, run_index: int) -> SequifierConfig:
+        """Sample and validate one concrete authored training config."""
         model_spec = self.model_hyperparameter_sampling.sample_trial(trial)
 
         seed = (
@@ -1775,7 +1794,7 @@ class HyperparameterSearchConfig(BaseModel):
         training_config = self.training_hyperparameter_sampling.sample_trial(trial)
         logger.info(f"{seed = } - {input_columns_index = } - {context_length = }")
 
-        return self._build_train_model(
+        return self._build_authored_config(
             model_spec=model_spec,
             training_config=training_config,
             input_columns_index=input_columns_index,

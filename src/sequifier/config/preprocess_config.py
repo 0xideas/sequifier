@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from sequifier.config.composition import merge_config_fragments
 from sequifier.helpers import canonicalize_polars_dtype_name, try_catch_excess_keys
 
 
@@ -22,12 +23,14 @@ def load_preprocessor_config(
     config_path: str, args_config: dict
 ) -> "PreprocessorModel":
     """Load preprocessing YAML plus CLI overrides."""
-    with open(config_path, "r") as f:
-        config_values = yaml.safe_load(f)
+    with open(config_path, "r") as file:
+        config_values = yaml.safe_load(file)
+    if not isinstance(config_values, dict):
+        raise ValueError(
+            f"Preprocessing config '{config_path}' must contain a YAML mapping."
+        )
 
-    config_values.update(args_config)
-
-    config_values["seed"] = config_values.get("seed", 1010)
+    config_values = merge_config_fragments((config_values, args_config))
 
     return try_catch_excess_keys(config_path, PreprocessorModel, config_values)
 
@@ -53,7 +56,7 @@ class PreprocessorModel(BaseModel):
     max_target_offset: int = Field(default=1, ge=0)
     stride_by_split: Optional[list[int]] = None
     max_rows: Optional[int] = None
-    seed: int
+    seed: int = 1010
     n_cores: Optional[int] = None
     batches_per_file: int = 1024
     process_by_file: bool = True
@@ -167,7 +170,7 @@ class PreprocessorModel(BaseModel):
     def validate_column_types(
         cls, v: Optional[dict[str, str]], info: ValidationInfo
     ) -> Optional[dict[str, str]]:
-        if v is None:
+        if not v:
             return None
 
         normalized = {

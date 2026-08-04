@@ -8,6 +8,24 @@ The `sequifier train` command initializes and trains a transformer sequence mode
 sequifier train --config-path configs/train.yaml
 ```
 
+## Configuration Composition and Resolution
+
+Training configuration has two explicit phases. Sequifier first deep-merges
+the authored YAML and command-line overrides, then validates that result as one
+`SequifierConfig`. Nested mappings such as `model_spec` and `training_spec`
+merge recursively; lists, scalar values, and explicit `null` replace the
+earlier value. Typed components such as `optimizer`, `scheduler`, ingestion,
+and decoding specifications are replaced as complete values.
+
+After authored validation, Sequifier loads preprocessing metadata and creates
+an internal `ResolvedSequifierConfig`. Metadata supplies the stored window
+layout, categorical and real column groups, class counts, ID maps, special
+token IDs, and default split paths. The authored `context_length` and
+`target_offset` remain authored fields; resolution uses them to build the
+internal model window view without mutating the authored config. Existing YAML
+patterns remain valid, including `input_columns: null`, metadata-derived paths,
+and partial hyperparameter-search configs based on a training YAML.
+
 ## Configuration Fields
 
 The configuration is defined in a YAML file (e.g., `train.yaml`). The file is structured into root-level fields (mostly data/paths), an optional `feature_layout` annotation section, and two subsections: `model_spec` (architecture) and `training_spec` (hyperparameters).

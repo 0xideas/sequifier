@@ -78,6 +78,7 @@ training_spec:
     anneal_strategy: cos
     total_steps: PLEASE FILL
     three_phase: false
+  scheduler_step_on: batch
   continue_training: true
 """
 
