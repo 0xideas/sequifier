@@ -4,7 +4,7 @@ import os
 import warnings
 from dataclasses import dataclass
 from itertools import product
-from typing import Annotated, Any, Literal, Optional, TypeAlias, Union
+from typing import Annotated, Any, Generic, Literal, Optional, TypeAlias, TypeVar, Union
 
 import torch
 import torch_optimizer
@@ -1196,25 +1196,30 @@ class ModelSpecModel(BaseModel):
         return v
 
 
-class SequifierConfig(BaseModel):
-    """User-authored configuration for one concrete training run."""
+_PathT = TypeVar("_PathT")
+_InputColumnsT = TypeVar("_InputColumnsT")
+_ColumnTypesT = TypeVar("_ColumnTypesT")
+
+
+class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTypesT]):
+    """Shared fields and validation for authored and resolved training config."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     project_root: str
     preprocessing_data_path: Optional[str] = None
-    metadata_config_path: Optional[str] = None
+    metadata_config_path: _PathT = Field(default=None)
     model_name: str
     training_objective: str
     device: str
-    data_path: Optional[str] = None
-    validation_data_path: Optional[str] = None
+    data_path: _PathT = Field(default=None)
+    validation_data_path: _PathT = Field(default=None)
     read_format: str = "parquet"
 
-    input_columns: Optional[list[str]]
-    column_data_types: Optional[dict[str, str]] = None
+    input_columns: _InputColumnsT
+    column_data_types: _ColumnTypesT = Field(default=None)
     target_columns: list[str]
-    target_column_types: Optional[dict[str, str]] = None
+    target_column_types: _ColumnTypesT = Field(default=None)
     categorical_decoder_special_tokens: dict[
         str, list[Literal["unknown", "other", "mask"]]
     ] = Field(default_factory=dict)
@@ -1348,16 +1353,21 @@ class SequifierConfig(BaseModel):
         return self
 
 
-class ResolvedSequifierConfig(SequifierConfig):
+class SequifierConfig(
+    _SequifierConfigBase[Optional[str], Optional[list[str]], Optional[dict[str, str]]]
+):
+    """User-authored configuration for one concrete training run."""
+
+
+class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str]]):
     """Internal training config after preprocessing metadata has been resolved."""
 
-    # Pydantic validates these narrowed fields when constructing the resolved model.
-    metadata_config_path: str  # pyright: ignore[reportIncompatibleVariableOverride]
-    data_path: str  # pyright: ignore[reportIncompatibleVariableOverride]
-    validation_data_path: str  # pyright: ignore[reportIncompatibleVariableOverride]
-    input_columns: list[str]  # pyright: ignore[reportIncompatibleVariableOverride]
-    column_data_types: dict[str, str]  # pyright: ignore[reportIncompatibleVariableOverride]
-    target_column_types: dict[str, str]  # pyright: ignore[reportIncompatibleVariableOverride]
+    metadata_config_path: str
+    data_path: str
+    validation_data_path: str
+    input_columns: list[str]
+    column_data_types: dict[str, str]
+    target_column_types: dict[str, str]
     categorical_columns: list[str]
     real_columns: list[str]
     id_maps: dict[str, dict[str | int, int]]

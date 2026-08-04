@@ -1,5 +1,5 @@
 import os
-from typing import Optional, Union
+from typing import Generic, Optional, TypeVar, Union
 
 import numpy as np
 import yaml
@@ -159,26 +159,31 @@ def resolve_inference_config(
     return ResolvedInferenceConfig.model_validate(values)
 
 
-class InferenceConfig(BaseModel):
-    """User-authored configuration for one inference run."""
+_PathT = TypeVar("_PathT")
+_InputColumnsT = TypeVar("_InputColumnsT")
+_ColumnTypesT = TypeVar("_ColumnTypesT")
+
+
+class _InferenceConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTypesT]):
+    """Shared fields and validation for authored and resolved inference config."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     project_root: str
     preprocessing_data_path: Optional[str] = None
-    metadata_config_path: Optional[str] = None
+    metadata_config_path: _PathT = Field(default=None)
     model_path: Union[str, list[str]]
     model_type: str
     training_objective: str
-    data_path: Optional[str] = None
+    data_path: _PathT = Field(default=None)
     training_config_path: Optional[str] = Field(default="configs/train.yaml")
     read_format: str = Field(default="parquet")
     write_format: str = Field(default="csv")
 
-    input_columns: Optional[list[str]]
+    input_columns: _InputColumnsT
     target_columns: list[str]
-    column_data_types: Optional[dict[str, str]] = None
-    target_column_types: Optional[dict[str, str]] = None
+    column_data_types: _ColumnTypesT = Field(default=None)
+    target_column_types: _ColumnTypesT = Field(default=None)
 
     enforce_deterministic_inference: bool = Field(default=False)
     output_probabilities: bool = Field(default=False)
@@ -236,15 +241,20 @@ class InferenceConfig(BaseModel):
         return self
 
 
-class ResolvedInferenceConfig(InferenceConfig):
+class InferenceConfig(
+    _InferenceConfigBase[Optional[str], Optional[list[str]], Optional[dict[str, str]]]
+):
+    """User-authored configuration for one inference run."""
+
+
+class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str]]):
     """Internal inference config after dataset metadata has been resolved."""
 
-    # Pydantic validates these narrowed fields when constructing the resolved model.
-    metadata_config_path: str  # pyright: ignore[reportIncompatibleVariableOverride]
-    data_path: str  # pyright: ignore[reportIncompatibleVariableOverride]
-    input_columns: list[str]  # pyright: ignore[reportIncompatibleVariableOverride]
-    column_data_types: dict[str, str]  # pyright: ignore[reportIncompatibleVariableOverride]
-    target_column_types: dict[str, str]  # pyright: ignore[reportIncompatibleVariableOverride]
+    metadata_config_path: str
+    data_path: str
+    input_columns: list[str]
+    column_data_types: dict[str, str]
+    target_column_types: dict[str, str]
     categorical_columns: list[str]
     real_columns: list[str]
     storage_layout: StoredWindowLayout
