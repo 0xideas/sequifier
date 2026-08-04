@@ -80,7 +80,16 @@ def setup_parser() -> ArgumentParser:
 
         if subparser != parser_hyperparameter_search:
             subparser.add_argument("-r", "--randomize", action="store_true")
-            subparser.add_argument("-dp", "--data-path", type=str)
+            subparser.add_argument(
+                "-dp",
+                "--data-path",
+                dest=(
+                    "preprocessing_data_path"
+                    if subparser == parser_preprocess
+                    else "data_path"
+                ),
+                type=str,
+            )
 
     for subparser in [parser_train, parser_infer, parser_hyperparameter_search]:
         subparser.add_argument(

@@ -9,12 +9,20 @@ Preprocessing Config
 Training Config
 ---------------------
 .. automodule:: sequifier.config.train_config
-   :members: TrainModel, ModelSpecModel, TrainingSpecModel, LoadedTrainConfig, load_train_config_with_source
+   :members: SequifierConfig, ResolvedSequifierConfig, TrainModel, ModelSpecModel, TrainingSpecModel, LoadedTrainConfig, load_train_config_with_source, resolve_sequifier_config
 
 Inference Config
 ---------------------
 .. automodule:: sequifier.config.infer_config
-   :members: InfererModel
+   :members: InferenceConfig, ResolvedInferenceConfig, InfererModel, resolve_inference_config
+
+Config Composition and Metadata
+---------------------------------
+.. automodule:: sequifier.config.composition
+   :members:
+
+.. automodule:: sequifier.config.metadata
+   :members:
 
 Hyperparameter Search Config
 ---------------------------------

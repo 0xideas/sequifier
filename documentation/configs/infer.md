@@ -10,7 +10,9 @@ sequifier infer --config-path configs/infer.yaml
 
 ## CLI Overrides
 
-Values passed on the command line override the YAML before validation.
+Values passed on the command line are deep-merged into the authored YAML before
+validation. Nested mappings merge recursively, while lists, scalars, `null`,
+and typed components replace the YAML value.
 
 | Flag | Overrides / Action |
 | :--- | :--- |
@@ -22,6 +24,21 @@ Values passed on the command line override the YAML before validation.
 | `-mp`, `--model-path` | Overrides `model_path`. |
 | `-s`, `--seed` | Overrides `seed`, unless `--randomize` is also set. |
 
+Inference follows the same authored/resolved boundary as training. The YAML is
+validated as `InferenceConfig`, then preprocessing metadata is resolved into an
+internal `ResolvedInferenceConfig`. Storage layout, column groups, ID maps, and
+normalization statistics are runtime values and do not need to be copied into
+authored inference YAML.
+
+## Composable Configuration Files
+
+An inference entry config may set `additional_config_paths` to one non-empty
+string, a list of non-empty strings, or `null`. Relative paths resolve against
+the entry config's `project_root`; absolute paths are used directly. Fragments
+are direct only and cannot include further fragments. They may share nested
+containers when their child fields are disjoint, but duplicate fields are
+errors. CLI values override the completed file composition.
+
 ## Configuration Fields
 
 The configuration is defined in a YAML file (e.g., `infer.yaml`).
@@ -31,10 +48,12 @@ The configuration is defined in a YAML file (e.g., `infer.yaml`).
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
+| `additional_config_paths` | `str`, `list[str]`, or `null` | No | `null` | Direct complementary YAML fragments. Relative paths resolve against `project_root`; recursive composition and duplicate fields are rejected. |
+| `preprocessing_data_path` | `str` | Conditional | `null` | Raw preprocessing input path. When set, Sequifier derives `metadata_config_path` and defaults `data_path` to the inference/test preprocessing split. |
 | `data_path` | `str` | No | Metadata split 2 | Path to the input data file (`csv` or `parquet`) or folder (`pt` or `parquet`). Defaults to split 2 from metadata, or the last available split if fewer than three splits exist. |
 | `model_path` | `str` or `list[str]` | **Yes** | - | Path to a specific model file, or a list of paths to process sequentially. (e.g., `models/sequifier-[NAME]-best-[EPOCH].pt`). |
 | `training_config_path`| `str` | No | `configs/train.yaml`| Path to the config used to train the model. Required only to reconstruct PyTorch `.pt` exports; ONNX models load categorical target codecs from model metadata. |
-| `metadata_config_path`| `str` | **Yes** | - | Path to the JSON metadata file generated during preprocessing. Used for ID mapping and normalization. |
+| `metadata_config_path`| `str` | Conditional | Derived from `preprocessing_data_path` | Path to the JSON metadata file generated during preprocessing. Required when `preprocessing_data_path` is omitted. |
 | `read_format` | `str` | No | `parquet` | Format of input data. Single-file inference supports `csv` and `parquet`; folder inference supports `parquet` and `pt`. |
 | `write_format` | `str` | No | `csv` | Format for output predictions (`csv`, `parquet`). |
 
@@ -46,8 +65,8 @@ These fields tell the inference engine which columns to extract from the new dat
 | :--- | :--- | :--- | :--- | :--- |
 | `input_columns` | `list[str]` or `null`| **Yes** | `null` | List of feature columns. Must match the columns the model was trained on. Set to `null` to use all metadata columns. |
 | `target_columns` | `list[str]`| **Yes** | - | The column(s) to predict. |
-| `column_types` | `dict` | No | Metadata column types | Map of all columns to their type (e.g., `Int64`, `Float64`). Usually copied from metadata. |
-| `target_column_types`| `dict` | **Yes** | - | Map of target columns to `categorical` or `real`. |
+| `column_data_types` | `dict` | No | Metadata column types | Map of all columns to their type (e.g., `Int64`, `Float64`). Usually copied from metadata. |
+| `target_column_types`| `dict` | Conditional | Derived from `column_data_types` | Map of target columns to `categorical` or `real`. Integer dtypes derive as categorical and floating dtypes derive as real. |
 
 ### 3\. Inference Logic & Modes
 
@@ -77,7 +96,7 @@ start plus this model-window offset.
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `device` | `str` | **Yes** | - | `cuda`, `cpu`, or `mps`. |
-| `enforce_determinism` | `bool` | No | `false` | Forces PyTorch to use deterministic algorithms. |
+| `enforce_deterministic_inference` | `bool` | No | `false` | Forces PyTorch inference to use deterministic algorithms. |
 -----
 
 ## Key Trade-offs and Decisions

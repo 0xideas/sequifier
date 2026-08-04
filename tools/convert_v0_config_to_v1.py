@@ -20,6 +20,8 @@ def rename_key(d, old, new, transform=None):
 
 def convert_preprocess(config):
     rename_key(config, "project_path", "project_root")
+    rename_key(config, "data_path", "preprocessing_data_path")
+    rename_key(config, "column_types", "column_data_types")
 
     assert "group_proportions" in config, "group_proportions missing"
     rename_key(config, "group_proportions", "split_ratios")
@@ -126,6 +128,9 @@ def convert_train(config):
 
     assert "training_spec" in config, "training_spec missing"
     config["training_spec"] = convert_training_spec(config["training_spec"])
+    for field_name in ("training_objective", "device"):
+        if field_name in config["training_spec"]:
+            config[field_name] = config["training_spec"].pop(field_name)
 
     return config
 
@@ -147,7 +152,7 @@ def convert_infer(config):
     if "seed" not in config:
         config["seed"] = 1010
 
-    config["enforce_determinism"] = False
+    config["enforce_deterministic_inference"] = False
 
     return config
 

@@ -183,13 +183,13 @@ def _resolve_integer_sequence_type(integer_types: list[str]) -> Any:
 
 
 @beartype
-def resolve_unified_polars_numeric_dtype(column_types: dict[str, str]) -> Any:
+def resolve_unified_polars_numeric_dtype(column_data_types: dict[str, str]) -> Any:
     """Resolve one Polars dtype for long-format numeric sequence columns."""
-    if not column_types:
-        raise ValueError("column_types cannot be empty")
+    if not column_data_types:
+        raise ValueError("column_data_types cannot be empty")
 
     normalized_types = [
-        canonicalize_polars_dtype_name(type_) for type_ in column_types.values()
+        canonicalize_polars_dtype_name(type_) for type_ in column_data_types.values()
     ]
     float_types = [type_ for type_ in normalized_types if is_float_dtype_name(type_)]
     integer_types = [
@@ -640,7 +640,7 @@ def subset_to_input_columns(
 @beartype
 def numpy_to_pytorch(
     data: pl.DataFrame,
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
     all_columns: list[str],
     resolved_view: ResolvedWindowView,
 ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
@@ -659,7 +659,7 @@ def numpy_to_pytorch(
             data.filter(pl.col("inputCol") == col_name)
             .select(input_seq_cols)
             .to_numpy(),
-            dtype=column_types[col_name],
+            dtype=column_data_types[col_name],
         )
         unified_tensors[col_name] = input_tensor
 
@@ -667,7 +667,7 @@ def numpy_to_pytorch(
             data.filter(pl.col("inputCol") == col_name)
             .select(target_seq_cols)
             .to_numpy(),
-            dtype=column_types[col_name],
+            dtype=column_data_types[col_name],
         )
         unified_tensors[f"{col_name}_target"] = target_tensor
 
@@ -680,7 +680,7 @@ def numpy_to_pytorch(
 @beartype
 def numpy_storage_to_pytorch(
     data: pl.DataFrame,
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
     all_columns: list[str],
     stored_context_width: int,
     sort_rows: bool = True,
@@ -699,7 +699,7 @@ def numpy_storage_to_pytorch(
             column_data = column_data.sort(["sequenceId", "subsequenceId"])
         tensors[column_name] = torch.tensor(
             column_data.select(sequence_columns).to_numpy(),
-            dtype=column_types[column_name],
+            dtype=column_data_types[column_name],
         )
 
     if sort_rows:
@@ -770,6 +770,43 @@ def normalize_path(path: str, project_root: str) -> str:
     project_root_normalized = (project_root + os.sep).replace(os.sep + os.sep, os.sep)
     path2 = os.path.join(project_root, path.replace(project_root_normalized, ""))
     return path2
+
+
+@beartype
+def metadata_config_path_from_preprocessing_data_path(
+    preprocessing_data_path: str,
+) -> str:
+    """Return the metadata path generated for a preprocessing input path."""
+    data_name = os.path.splitext(
+        os.path.basename(os.path.normpath(preprocessing_data_path))
+    )[0]
+    if not data_name:
+        raise ValueError("preprocessing_data_path must have a non-empty basename")
+    return os.path.join("configs", "metadata_configs", f"{data_name}.json")
+
+
+@beartype
+def derive_target_column_types(
+    target_columns: list[str], column_data_types: dict[str, str]
+) -> dict[str, str]:
+    """Derive categorical/real target kinds from configured physical dtypes."""
+    derived: dict[str, str] = {}
+    for column in target_columns:
+        if column not in column_data_types:
+            raise ValueError(
+                "column_data_types must include every target column to derive "
+                f"target_column_types. Missing: {column!r}"
+            )
+        dtype = column_data_types[column]
+        if is_integer_dtype_name(dtype):
+            derived[column] = "categorical"
+        elif is_float_dtype_name(dtype):
+            derived[column] = "real"
+        else:
+            raise ValueError(
+                f"Cannot derive target type for {column!r} from dtype {dtype!r}"
+            )
+    return derived
 
 
 @beartype

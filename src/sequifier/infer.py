@@ -35,7 +35,6 @@ from sequifier.special_tokens import (
     ONNX_CATEGORICAL_TARGET_CODECS_KEY,
     SPECIAL_TOKEN_IDS,
     resolve_categorical_decoder_ids,
-    validate_special_token_ids,
 )
 from sequifier.train import (
     infer_with_embedding_model,
@@ -153,28 +152,21 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     config = load_inferer_config(config_path, args_config, skip_metadata)
 
     if config.map_to_id or (len(config.real_columns) > 0):
-        if config.metadata_config_path is None:
+        metadata = config.dataset_metadata
+        if metadata is None:
             raise ValueError(
-                "If you want to map to id, you need to provide a file path to a json that contains: {{'id_maps':{...}}} to metadata_config_path"
-                "\nIf you have real columns in the data, you need to provide a json that contains: {{'selected_columns_statistics':{COL_NAME:{'std':..., 'mean':...}}}}"
+                "Resolved inference metadata is required for ID mapping and "
+                "real-column normalization."
             )
-        with open(
-            normalize_path(config.metadata_config_path, config.project_root), "r"
-        ) as f:
-            metadata_config = json.loads(f.read())
-            validate_special_token_ids(
-                metadata_config["special_token_ids"],
-                source=f"metadata config '{config.metadata_config_path}'",
-            )
-            id_maps = metadata_config["id_maps"]
-            selected_columns_statistics = metadata_config["selected_columns_statistics"]
-            normalize_real_columns = metadata_config.get("normalize_real_columns", True)
+        id_maps = metadata.id_maps
+        selected_columns_statistics = metadata.selected_columns_statistics
+        normalize_real_columns = metadata.normalize_real_columns
     else:
         id_maps = None
         selected_columns_statistics = {}
         normalize_real_columns = True
 
-    configure_determinism(config.seed, config.enforce_determinism)
+    configure_determinism(config.seed, config.enforce_deterministic_inference)
 
     infer_worker(
         config,
@@ -217,8 +209,8 @@ def load_parquet_folder_dataset(
 @beartype
 def _torch_column_types(config: InfererModel) -> dict[str, torch.dtype]:
     return {
-        col: PANDAS_TO_TORCH_TYPES[config.column_types[col]]
-        for col in config.column_types
+        col: PANDAS_TO_TORCH_TYPES[config.column_data_types[col]]
+        for col in config.column_data_types
     }
 
 
@@ -237,17 +229,17 @@ def _configured_types_for_loaded_rows(
 ) -> dict[str, str]:
     if "inputCol" not in data.columns:
         return {
-            column: config.column_types[column]
+            column: config.column_data_types[column]
             for column in config.input_columns
-            if column in config.column_types
+            if column in config.column_data_types
         }
 
     loaded_columns = [
         column
         for column in data.get_column("inputCol").unique().to_list()
-        if column in config.column_types
+        if column in config.column_data_types
     ]
-    return {column: config.column_types[column] for column in loaded_columns}
+    return {column: config.column_data_types[column] for column in loaded_columns}
 
 
 @beartype
@@ -277,12 +269,12 @@ def apply_inference_column_types(
 @beartype
 def apply_inference_tensor_types(
     sequences_dict: dict[str, torch.Tensor],
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
 ) -> dict[str, torch.Tensor]:
     """Cast loaded PT feature tensors to the configured per-column dtype."""
     return {
-        column: tensor.to(dtype=column_types[column])
-        if column in column_types and tensor.dtype != column_types[column]
+        column: tensor.to(dtype=column_data_types[column])
+        if column in column_data_types and tensor.dtype != column_data_types[column]
         else tensor
         for column, tensor in sequences_dict.items()
     }
@@ -346,7 +338,7 @@ def _windowed_inference_batch_from_storage(
 def _windowed_inference_batch_from_dataframe(
     config: InfererModel,
     data: pl.DataFrame,
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
 ) -> WindowedInferenceBatch:
     if config.input_columns is not None:
         subset = subset_to_input_columns(data, config.input_columns)
@@ -357,7 +349,7 @@ def _windowed_inference_batch_from_dataframe(
 
     sequences, left_pad_lengths = numpy_storage_to_pytorch(
         data,
-        column_types,
+        column_data_types,
         config.input_columns,
         config.storage_layout.stored_context_width,
         sort_rows=False,
@@ -388,7 +380,7 @@ def _windowed_inference_batch_from_dataframe(
 def _windowed_inference_batch_from_pt(
     config: InfererModel,
     data: tuple,
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
 ) -> WindowedInferenceBatch:
     (
         sequences,
@@ -397,7 +389,7 @@ def _windowed_inference_batch_from_pt(
         start_positions,
         left_pad_lengths,
     ) = data
-    sequences = apply_inference_tensor_types(sequences, column_types)
+    sequences = apply_inference_tensor_types(sequences, column_data_types)
     for tensor in sequences.values():
         validate_stored_window_width(
             tensor,
@@ -417,19 +409,19 @@ def _windowed_inference_batch_from_pt(
 def _windowed_inference_batch(
     config: InfererModel,
     data: Any,
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
 ) -> WindowedInferenceBatch:
     if isinstance(data, pl.DataFrame):
         return _windowed_inference_batch_from_dataframe(
             config,
             data,
-            column_types,
+            column_data_types,
         )
     if isinstance(data, tuple):
         return _windowed_inference_batch_from_pt(
             config,
             data,
-            column_types,
+            column_data_types,
         )
     raise TypeError(f"Unsupported preprocessed inference chunk: {type(data).__name__}")
 
@@ -475,9 +467,12 @@ def infer_worker(
                 },
                 args_config.get("skip_metadata", False),
             )
+            target_column_types = training_config.target_column_types
+            if target_column_types is None:
+                raise ValueError("target_column_types must be provided or derived")
             target_decoder_ids = resolve_categorical_decoder_ids(
                 training_config.target_columns,
-                training_config.target_column_types,
+                target_column_types,
                 training_config.n_classes,
                 training_config.categorical_decoder_special_tokens,
             )
@@ -535,7 +530,7 @@ def infer_worker(
             target_decoder_ids=target_decoder_ids,
         )
 
-        column_types = _torch_column_types(config)
+        column_data_types = _torch_column_types(config)
 
         model_id = os.path.split(model_path)[1].replace(
             f".{inferer.inference_model_type}", ""
@@ -543,9 +538,9 @@ def infer_worker(
 
         logger.info(f"[INFO] Inferring for {model_id}")
         if config.model_type == "generative":
-            infer_generative(config, inferer, model_id, dataset, column_types)
+            infer_generative(config, inferer, model_id, dataset, column_data_types)
         if config.model_type == "embedding":
-            infer_embedding(config, inferer, model_id, dataset, column_types)
+            infer_embedding(config, inferer, model_id, dataset, column_data_types)
 
     logger.info("--- Inference Complete ---")
 
@@ -693,27 +688,28 @@ def infer_embedding(
     inferer: "Inferer",
     model_id: str,
     dataset: Union[list[Any], Iterator[Any]],
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
 ) -> None:
     """Write embeddings for each dataset chunk."""
+    data_path = config.data_path
+    if data_path is None:
+        raise ValueError("data_path must be provided or resolved from metadata")
     for data_id, data in enumerate(dataset):
         prediction_length = inferer.prediction_length
-        is_folder_input = os.path.isdir(
-            normalize_path(config.data_path, config.project_root)
-        )
-        windowed = _windowed_inference_batch(config, data, column_types)
+        is_folder_input = os.path.isdir(normalize_path(data_path, config.project_root))
+        windowed = _windowed_inference_batch(config, data, column_data_types)
         if (
             isinstance(data, pl.DataFrame)
             and configured_model_window_stride(config) is None
         ):
-            embeddings = get_embeddings(config, inferer, data, column_types)
+            embeddings = get_embeddings(config, inferer, data, column_data_types)
         else:
             embeddings = inferer.infer_embedding(
                 {key: value.numpy() for key, value in windowed.inputs.items()},
                 metadata={
                     key: value.numpy() for key, value in windowed.metadata.items()
                 },
-                column_types=column_types,
+                column_data_types=column_data_types,
             )
         valid_prediction_mask = _flatten_valid_mask(
             config,
@@ -814,16 +810,17 @@ def infer_generative(
     inferer: "Inferer",
     model_id: str,
     dataset: Union[list[Any], Iterator[Any]],
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
 ):
     """Write generative predictions/probabilities for each dataset chunk."""
+    data_path = config.data_path
+    if data_path is None:
+        raise ValueError("data_path must be provided or resolved from metadata")
     for data_id, data in enumerate(dataset):
-        is_folder_input = os.path.isdir(
-            normalize_path(config.data_path, config.project_root)
-        )
+        is_folder_input = os.path.isdir(normalize_path(data_path, config.project_root))
         if config.autoregression and isinstance(data, pl.DataFrame):
             data = _autoregression_seed_dataframe(config, data)
-        windowed = _windowed_inference_batch(config, data, column_types)
+        windowed = _windowed_inference_batch(config, data, column_data_types)
         if config.autoregression and inferer.prediction_length != 1:
             raise ValueError(
                 "prediction_length must be 1 for autoregression, "
@@ -844,7 +841,7 @@ def infer_generative(
                 config,
                 inferer,
                 data,
-                column_types,
+                column_data_types,
             )
         else:
             probs, preds = get_probs_preds_from_dict(
@@ -852,7 +849,7 @@ def infer_generative(
                 inferer,
                 windowed.inputs,
                 windowed.metadata,
-                column_types,
+                column_data_types,
                 total_steps,
             )
 
@@ -1030,7 +1027,7 @@ def get_embeddings_pt(
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
     metadata: dict[str, torch.Tensor],
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
 ) -> np.ndarray:
     """Infer embeddings from PT tensors."""
     resolved_view = resolve_window_view(config.storage_layout, config.window_view)
@@ -1043,7 +1040,7 @@ def get_embeddings_pt(
     }
     metadata_np = {key: val.numpy() for key, val in metadata.items()}
     embeddings = inferer.infer_embedding(
-        X, metadata=metadata_np, column_types=column_types
+        X, metadata=metadata_np, column_data_types=column_data_types
     )
     return embeddings
 
@@ -1054,7 +1051,7 @@ def get_probs_preds_from_dict(
     inferer: "Inferer",
     data: dict[str, torch.Tensor],
     metadata: dict[str, torch.Tensor],
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
     total_steps: int = 1,
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """Infer PT predictions, flattened sample-major across autoregressive steps."""
@@ -1076,7 +1073,7 @@ def get_probs_preds_from_dict(
             probs_for_step = inferer.infer_generative(
                 X,
                 metadata_for_step,
-                column_types=column_types,
+                column_data_types=column_data_types,
                 return_probs=True,
             )
             preds_for_step = inferer.infer_generative(
@@ -1088,7 +1085,7 @@ def get_probs_preds_from_dict(
             preds_for_step = inferer.infer_generative(
                 X,
                 metadata_for_step,
-                column_types=column_types,
+                column_data_types=column_data_types,
                 return_probs=False,
             )
 
@@ -1142,18 +1139,18 @@ def get_embeddings(
     config: Any,
     inferer: "Inferer",
     data: pl.DataFrame,
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
 ) -> np.ndarray:
     """Infer embeddings from a Polars chunk."""
     windowed = _windowed_inference_batch_from_dataframe(
         config,
         data,
-        column_types,
+        column_data_types,
     )
     embeddings = inferer.infer_embedding(
         {key: value.numpy() for key, value in windowed.inputs.items()},
         metadata={key: value.numpy() for key, value in windowed.metadata.items()},
-        column_types=column_types,
+        column_data_types=column_data_types,
     )
 
     return embeddings
@@ -1164,25 +1161,27 @@ def get_probs_preds_from_df(
     config: Any,
     inferer: "Inferer",
     data: pl.DataFrame,
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
 ) -> tuple[Optional[dict[str, np.ndarray]], dict[str, np.ndarray]]:
     """Infer non-autoregressive predictions from a Polars chunk."""
     windowed = _windowed_inference_batch_from_dataframe(
         config,
         data,
-        column_types,
+        column_data_types,
     )
     X = {key: value.numpy() for key, value in windowed.inputs.items()}
     metadata_np = {key: value.numpy() for key, value in windowed.metadata.items()}
 
     if config.output_probabilities:
         probs = inferer.infer_generative(
-            X, metadata_np, column_types=column_types, return_probs=True
+            X, metadata_np, column_data_types=column_data_types, return_probs=True
         )
         preds = inferer.infer_generative(None, metadata_np, probs)
     else:
         probs = None
-        preds = inferer.infer_generative(X, metadata_np, column_types=column_types)
+        preds = inferer.infer_generative(
+            X, metadata_np, column_data_types=column_data_types
+        )
 
     return (probs, preds)
 
@@ -1223,7 +1222,7 @@ def get_probs_preds_autoregression(
     config: Any,
     inferer: "Inferer",
     data: pl.DataFrame,
-    column_types: dict[str, torch.dtype],
+    column_data_types: dict[str, torch.dtype],
     context_length: int,
 ) -> tuple[
     Optional[dict[str, np.ndarray]],
@@ -1259,7 +1258,7 @@ def get_probs_preds_autoregression(
 
     head_data, metadata = numpy_to_pytorch(
         head_data_df,
-        column_types,
+        column_data_types,
         config.input_columns,
         resolved_view,
     )
@@ -1269,7 +1268,7 @@ def get_probs_preds_autoregression(
         inferer,
         head_data,
         metadata,
-        column_types,
+        column_data_types,
         config.autoregression_total_steps,
     )
 
@@ -1444,12 +1443,14 @@ class Inferer:
         self,
         x: dict[str, np.ndarray],
         metadata: dict[str, np.ndarray],
-        column_types: dict[str, torch.dtype],
+        column_data_types: dict[str, torch.dtype],
     ) -> np.ndarray:
         """Return embeddings for a feature-array batch."""
         assert x is not None
         size = x[list(x.keys())[0]].shape[0]
-        embedding = self.adjust_and_infer_embedding(x, size, metadata, column_types)
+        embedding = self.adjust_and_infer_embedding(
+            x, size, metadata, column_data_types
+        )
 
         return embedding
 
@@ -1460,7 +1461,7 @@ class Inferer:
         metadata: dict[str, np.ndarray],
         probs: Optional[dict[str, np.ndarray]] = None,
         return_probs: bool = False,
-        column_types: Optional[dict[str, torch.dtype]] = None,
+        column_data_types: Optional[dict[str, torch.dtype]] = None,
     ) -> dict[str, np.ndarray]:
         """Return target probabilities or decoded predictions."""
         if probs is None or (
@@ -1478,7 +1479,7 @@ class Inferer:
                 )
 
             outs = self.adjust_and_infer_generative(
-                x, size, metadata, column_types or {}
+                x, size, metadata, column_data_types or {}
             )
 
             for target_column, target_outs in outs.items():
@@ -1535,7 +1536,7 @@ class Inferer:
         x: dict[str, np.ndarray],
         size: int,
         metadata: dict[str, np.ndarray],
-        column_types: dict[str, torch.dtype],
+        column_data_types: dict[str, torch.dtype],
     ):
         """Batch embedding inference across the active backend."""
         if self.inference_model_type == "onnx":
@@ -1565,7 +1566,7 @@ class Inferer:
                 size,
                 self.target_columns,
                 metadata=metadata_adjusted,
-                column_types=column_types,
+                column_data_types=column_data_types,
             )
         else:
             assert False, "not possible"
@@ -1577,7 +1578,7 @@ class Inferer:
         x: dict[str, np.ndarray],
         size: int,
         metadata: dict[str, np.ndarray],
-        column_types: dict[str, torch.dtype],
+        column_data_types: dict[str, torch.dtype],
     ):
         """Batch generative inference across the active backend."""
         if self.inference_model_type == "onnx":
@@ -1609,7 +1610,7 @@ class Inferer:
                 size * self.prediction_length,
                 self.target_columns,
                 metadata=metadata_adjusted,
-                column_types=column_types,
+                column_data_types=column_data_types,
             )
         else:
             assert False
