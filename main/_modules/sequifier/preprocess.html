@@ -195,6 +195,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../../api.html">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.sequifier">Internals</a></li>
@@ -279,6 +280,7 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">shutil</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">collections</span><span class="w"> </span><span class="kn">import</span> <span class="n">Counter</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
 
@@ -371,32 +373,42 @@
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_normalize_column_types</span><span class="p">(</span>
-    <span class="n">column_types</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span>
+    <span class="n">column_data_types</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]:</span>
-    <span class="k">if</span> <span class="n">column_types</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">column_data_types</span><span class="p">:</span>
         <span class="k">return</span> <span class="kc">None</span>
     <span class="k">return</span> <span class="p">{</span>
         <span class="n">column</span><span class="p">:</span> <span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
-        <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">dtype</span> <span class="ow">in</span> <span class="n">column_types</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">dtype</span> <span class="ow">in</span> <span class="n">column_data_types</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
     <span class="p">}</span>
 
 
 <span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_column_types_from_metadata</span><span class="p">(</span><span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Read current and historical metadata field names.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">_normalize_column_types</span><span class="p">(</span>
+        <span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;column_data_types&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;column_types&quot;</span><span class="p">)</span>
+    <span class="p">)</span>
+
+
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_configured_column_types_for_data_columns</span><span class="p">(</span>
-    <span class="n">column_types</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span>
+    <span class="n">column_data_types</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span>
     <span class="n">data_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]:</span>
-    <span class="k">if</span> <span class="n">column_types</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">column_data_types</span><span class="p">:</span>
         <span class="k">return</span> <span class="kc">None</span>
 
-    <span class="n">missing_columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">data_columns</span> <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">column_types</span><span class="p">]</span>
+    <span class="n">missing_columns</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">data_columns</span> <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">column_data_types</span>
+    <span class="p">]</span>
     <span class="k">if</span> <span class="n">missing_columns</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;column_types must include every to-be-processed column. &quot;</span>
+            <span class="s2">&quot;column_data_types must include every to-be-processed column. &quot;</span>
             <span class="sa">f</span><span class="s2">&quot;Missing: </span><span class="si">{</span><span class="n">missing_columns</span><span class="si">}</span><span class="s2">&quot;</span>
         <span class="p">)</span>
 
-    <span class="k">return</span> <span class="p">{</span><span class="n">column</span><span class="p">:</span> <span class="n">column_types</span><span class="p">[</span><span class="n">column</span><span class="p">]</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">data_columns</span><span class="p">}</span>
+    <span class="k">return</span> <span class="p">{</span><span class="n">column</span><span class="p">:</span> <span class="n">column_data_types</span><span class="p">[</span><span class="n">column</span><span class="p">]</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">data_columns</span><span class="p">}</span>
 
 
 <span class="nd">@beartype</span>
@@ -408,10 +420,12 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_apply_configured_input_casting</span><span class="p">(</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">data_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
-    <span class="n">column_types</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span>
+    <span class="n">column_data_types</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Cast input columns early when the requested type defines processing semantics.&quot;&quot;&quot;</span>
-    <span class="n">configured</span> <span class="o">=</span> <span class="n">_configured_column_types_for_data_columns</span><span class="p">(</span><span class="n">column_types</span><span class="p">,</span> <span class="n">data_columns</span><span class="p">)</span>
+    <span class="n">configured</span> <span class="o">=</span> <span class="n">_configured_column_types_for_data_columns</span><span class="p">(</span>
+        <span class="n">column_data_types</span><span class="p">,</span> <span class="n">data_columns</span>
+    <span class="p">)</span>
     <span class="k">if</span> <span class="n">configured</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">data</span>
 
@@ -487,12 +501,12 @@
 
 
 <span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_resolve_unified_parquet_type</span><span class="p">(</span><span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">column_types</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;column_types cannot be empty&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_resolve_unified_parquet_type</span><span class="p">(</span><span class="n">column_data_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">column_data_types</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;column_data_types cannot be empty&quot;</span><span class="p">)</span>
 
     <span class="n">normalized_types</span> <span class="o">=</span> <span class="p">[</span>
-        <span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span><span class="n">type_</span><span class="p">)</span> <span class="k">for</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">column_types</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+        <span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span><span class="n">type_</span><span class="p">)</span> <span class="k">for</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">column_data_types</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
     <span class="p">]</span>
     <span class="n">float_types</span> <span class="o">=</span> <span class="p">[</span><span class="n">type_</span> <span class="k">for</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">normalized_types</span> <span class="k">if</span> <span class="n">is_float_dtype_name</span><span class="p">(</span><span class="n">type_</span><span class="p">)]</span>
     <span class="n">integer_types</span> <span class="o">=</span> <span class="p">[</span>
@@ -502,7 +516,7 @@
     <span class="k">if</span> <span class="ow">not</span> <span class="n">float_types</span><span class="p">:</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">integer_types</span><span class="p">))</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
             <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
-                <span class="s2">&quot;Multiple integer column_types were specified for Parquet output; &quot;</span>
+                <span class="s2">&quot;Multiple integer column_data_types were specified for Parquet output; &quot;</span>
                 <span class="s2">&quot;using a unified integer schema.&quot;</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">_resolve_integer_sequence_type</span><span class="p">(</span><span class="n">integer_types</span><span class="p">)</span>
@@ -510,7 +524,7 @@
     <span class="n">resolved_float</span> <span class="o">=</span> <span class="n">_highest_ranked_type</span><span class="p">(</span><span class="n">float_types</span><span class="p">,</span> <span class="n">FLOAT_TYPE_ORDER</span><span class="p">)</span>
     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">normalized_types</span><span class="p">))</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
         <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
-            <span class="s2">&quot;Multiple column_types were specified for Parquet output; &quot;</span>
+            <span class="s2">&quot;Multiple column_data_types were specified for Parquet output; &quot;</span>
             <span class="sa">f</span><span class="s2">&quot;using unified sequence dtype </span><span class="si">{</span><span class="n">resolved_float</span><span class="si">}</span><span class="s2">.&quot;</span>
         <span class="p">)</span>
 
@@ -536,9 +550,9 @@
 
 
 <span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_resolve_pt_extraction_type</span><span class="p">(</span><span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_resolve_pt_extraction_type</span><span class="p">(</span><span class="n">column_data_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
     <span class="n">normalized_types</span> <span class="o">=</span> <span class="p">[</span>
-        <span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span><span class="n">type_</span><span class="p">)</span> <span class="k">for</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">column_types</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+        <span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span><span class="n">type_</span><span class="p">)</span> <span class="k">for</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">column_data_types</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
     <span class="p">]</span>
     <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">is_float_dtype_name</span><span class="p">(</span><span class="n">type_</span><span class="p">)</span> <span class="k">for</span> <span class="n">type_</span> <span class="ow">in</span> <span class="n">normalized_types</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">pl</span><span class="o">.</span><span class="n">Float64</span>
@@ -563,7 +577,7 @@
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">continue_preprocessing</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
-        <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">preprocessing_data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">write_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">merge_output</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
@@ -582,17 +596,20 @@
         <span class="n">metadata_config_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
         <span class="n">max_target_offset</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
         <span class="n">mask_column</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">column_types</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">column_data_types</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">split_method</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;within_sequence&quot;</span><span class="p">,</span>
+        <span class="n">normalize_real_columns</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Initialize and run preprocessing from validated config fields.&quot;&quot;&quot;</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">project_root</span> <span class="o">=</span> <span class="n">project_root</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">batches_per_file</span> <span class="o">=</span> <span class="n">batches_per_file</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">data_path</span> <span class="o">=</span> <span class="n">data_path</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">preprocessing_data_path</span> <span class="o">=</span> <span class="n">preprocessing_data_path</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">read_format</span> <span class="o">=</span> <span class="n">read_format</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">write_format</span> <span class="o">=</span> <span class="n">write_format</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">data_name_root</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">basename</span><span class="p">(</span><span class="n">data_path</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data_name_root</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">basename</span><span class="p">(</span><span class="n">preprocessing_data_path</span><span class="p">)</span>
+        <span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">merge_output</span> <span class="o">=</span> <span class="n">merge_output</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">merge_output</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">target_dir</span> <span class="o">=</span> <span class="s2">&quot;temp&quot;</span>
@@ -618,7 +635,8 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">max_rows</span> <span class="o">=</span> <span class="n">max_rows</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">process_by_file</span> <span class="o">=</span> <span class="n">process_by_file</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">subsequence_start_mode</span> <span class="o">=</span> <span class="n">subsequence_start_mode</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">column_types</span> <span class="o">=</span> <span class="n">_normalize_column_types</span><span class="p">(</span><span class="n">column_types</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">column_data_types</span> <span class="o">=</span> <span class="n">_normalize_column_types</span><span class="p">(</span><span class="n">column_data_types</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">normalize_real_columns</span> <span class="o">=</span> <span class="n">normalize_real_columns</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">mask_column</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata_config_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;metadata_config_path must be set when mask_column is set&quot;</span><span class="p">)</span>
 
@@ -661,9 +679,9 @@
                 <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">write_format</span><span class="p">)</span>
                 <span class="k">return</span>
 
-        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">data_path</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">preprocessing_data_path</span><span class="p">):</span>
             <span class="n">data</span> <span class="o">=</span> <span class="n">_load_and_preprocess_data</span><span class="p">(</span>
-                <span class="n">data_path</span><span class="p">,</span>
+                <span class="n">preprocessing_data_path</span><span class="p">,</span>
                 <span class="n">read_format</span><span class="p">,</span>
                 <span class="n">selected_columns</span><span class="p">,</span>
                 <span class="n">max_rows</span><span class="p">,</span>
@@ -671,7 +689,7 @@
             <span class="p">)</span>
             <span class="n">data_columns</span> <span class="o">=</span> <span class="n">_get_data_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">mask_column</span><span class="p">)</span>
             <span class="n">configured_col_types</span> <span class="o">=</span> <span class="n">_configured_column_types_for_data_columns</span><span class="p">(</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">column_types</span><span class="p">,</span> <span class="n">data_columns</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">,</span> <span class="n">data_columns</span>
             <span class="p">)</span>
             <span class="n">data</span> <span class="o">=</span> <span class="n">_apply_configured_input_casting</span><span class="p">(</span>
                 <span class="n">data</span><span class="p">,</span> <span class="n">data_columns</span><span class="p">,</span> <span class="n">configured_col_types</span>
@@ -693,7 +711,7 @@
                     <span class="s2">&quot;selected_columns_statistics&quot;</span>
                 <span class="p">]</span>
                 <span class="n">n_classes</span> <span class="o">=</span> <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">&quot;n_classes&quot;</span><span class="p">]</span>
-                <span class="n">col_types</span> <span class="o">=</span> <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">&quot;column_types&quot;</span><span class="p">]</span>
+                <span class="n">col_types</span> <span class="o">=</span> <span class="n">_column_types_from_metadata</span><span class="p">(</span><span class="n">preexisting_metadata</span><span class="p">)</span>
             <span class="k">else</span><span class="p">:</span>
                 <span class="n">id_maps</span><span class="p">,</span> <span class="n">selected_columns_statistics</span> <span class="o">=</span> <span class="p">{},</span> <span class="p">{}</span>
 
@@ -720,6 +738,7 @@
                 <span class="n">data_columns</span><span class="p">,</span>
                 <span class="n">id_maps</span><span class="p">,</span>
                 <span class="n">selected_columns_statistics</span><span class="p">,</span>
+                <span class="n">normalize_real_columns</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">normalize_real_columns</span><span class="p">,</span>
                 <span class="n">n_classes</span><span class="o">=</span><span class="n">n_classes</span><span class="p">,</span>
                 <span class="n">col_types</span><span class="o">=</span><span class="n">configured_col_types</span> <span class="ow">or</span> <span class="n">col_types</span><span class="p">,</span>
             <span class="p">)</span>
@@ -805,7 +824,13 @@
                     <span class="s2">&quot;selected_columns_statistics&quot;</span>
                 <span class="p">]</span>
                 <span class="n">n_classes</span> <span class="o">=</span> <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">&quot;n_classes&quot;</span><span class="p">]</span>
-                <span class="n">col_types</span> <span class="o">=</span> <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">&quot;column_types&quot;</span><span class="p">]</span>
+                <span class="n">col_types</span> <span class="o">=</span> <span class="n">_column_types_from_metadata</span><span class="p">(</span><span class="n">preexisting_metadata</span><span class="p">)</span>
+
+                <span class="k">if</span> <span class="n">col_types</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="s2">&quot;Metadata used with folder preprocessing must contain &quot;</span>
+                        <span class="s2">&quot;&#39;column_data_types&#39; or the historical &#39;column_types&#39; field.&quot;</span>
+                    <span class="p">)</span>
 
                 <span class="c1"># Reconstruct data_columns from the provided col_types</span>
                 <span class="n">data_columns</span> <span class="o">=</span> <span class="p">[</span>
@@ -814,14 +839,14 @@
                     <span class="k">if</span> <span class="n">col</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_reserved_input_columns</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mask_column</span><span class="p">)</span>
                 <span class="p">]</span>
                 <span class="n">configured_col_types</span> <span class="o">=</span> <span class="n">_configured_column_types_for_data_columns</span><span class="p">(</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">column_types</span><span class="p">,</span> <span class="n">data_columns</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">,</span> <span class="n">data_columns</span>
                 <span class="p">)</span>
                 <span class="k">if</span> <span class="n">configured_col_types</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                     <span class="n">col_types</span> <span class="o">=</span> <span class="n">configured_col_types</span>
 
                 <span class="c1"># We still need to find the files to process</span>
                 <span class="n">files_to_process</span> <span class="o">=</span> <span class="p">[]</span>
-                <span class="k">for</span> <span class="n">root</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">files</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">walk</span><span class="p">(</span><span class="n">data_path</span><span class="p">):</span>
+                <span class="k">for</span> <span class="n">root</span><span class="p">,</span> <span class="n">dirs</span><span class="p">,</span> <span class="n">files</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">walk</span><span class="p">(</span><span class="n">preprocessing_data_path</span><span class="p">):</span>
                     <span class="k">for</span> <span class="n">file</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">files</span><span class="p">)):</span>
                         <span class="k">if</span> <span class="n">file</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="n">read_format</span><span class="p">):</span>
                             <span class="n">files_to_process</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">root</span><span class="p">,</span> <span class="n">file</span><span class="p">))</span>
@@ -834,14 +859,14 @@
                     <span class="n">col_types</span><span class="p">,</span>
                     <span class="n">data_columns</span><span class="p">,</span>
                 <span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_column_metadata_across_files</span><span class="p">(</span>
-                    <span class="n">data_path</span><span class="p">,</span>
+                    <span class="n">preprocessing_data_path</span><span class="p">,</span>
                     <span class="n">read_format</span><span class="p">,</span>
                     <span class="n">max_rows</span><span class="p">,</span>
                     <span class="n">selected_columns</span><span class="p">,</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">column_types</span><span class="p">,</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">,</span>
                 <span class="p">)</span>
                 <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">id_maps</span><span class="p">:</span>
-                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">column_types</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">column_data_types</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
                         <span class="n">col_types</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;Int64&quot;</span>
 
             <span class="bp">self</span><span class="o">.</span><span class="n">_write_or_validate_resume_manifest</span><span class="p">(</span>
@@ -916,7 +941,7 @@
         <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">max_rows</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>
         <span class="n">selected_columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]],</span>
-        <span class="n">column_types</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span>
+        <span class="n">column_data_types</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span>
         <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
         <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span>
@@ -962,7 +987,7 @@
                     <span class="n">current_file_cols</span> <span class="o">=</span> <span class="n">_get_data_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">mask_column</span><span class="p">)</span>
                     <span class="n">current_configured_col_types</span> <span class="o">=</span> <span class="p">(</span>
                         <span class="n">_configured_column_types_for_data_columns</span><span class="p">(</span>
-                            <span class="n">column_types</span><span class="p">,</span> <span class="n">current_file_cols</span>
+                            <span class="n">column_data_types</span><span class="p">,</span> <span class="n">current_file_cols</span>
                         <span class="p">)</span>
                     <span class="p">)</span>
                     <span class="n">data</span> <span class="o">=</span> <span class="n">_apply_configured_input_casting</span><span class="p">(</span>
@@ -992,7 +1017,7 @@
                                 <span class="sa">f</span><span class="s2">&quot;Extra: </span><span class="si">{</span><span class="n">extra</span><span class="si">}</span><span class="s2">&quot;</span>
                             <span class="p">)</span>
 
-                        <span class="k">if</span> <span class="n">column_types</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="k">if</span> <span class="n">column_data_types</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
                             <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">current_file_cols</span><span class="p">:</span>
                                 <span class="k">if</span> <span class="nb">str</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">schema</span><span class="p">[</span><span class="n">col</span><span class="p">])</span> <span class="o">!=</span> <span class="n">col_types</span><span class="p">[</span><span class="n">col</span><span class="p">]:</span>
                                     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -1118,6 +1143,7 @@
                 <span class="n">mask_column</span><span class="o">=</span><span class="n">mask_column</span><span class="p">,</span>
                 <span class="n">split_method</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">split_method</span><span class="p">,</span>
                 <span class="n">seed</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">seed</span><span class="p">,</span>
+                <span class="n">normalize_real_columns</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">normalize_real_columns</span><span class="p">,</span>
             <span class="p">)</span>
             <span class="n">input_files</span> <span class="o">=</span> <span class="n">create_file_paths_for_multiple_files2</span><span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
@@ -1166,6 +1192,7 @@
                 <span class="s2">&quot;mask_column&quot;</span><span class="p">:</span> <span class="n">mask_column</span><span class="p">,</span>
                 <span class="s2">&quot;split_method&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">split_method</span><span class="p">,</span>
                 <span class="s2">&quot;seed&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">seed</span><span class="p">,</span>
+                <span class="s2">&quot;normalize_real_columns&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">normalize_real_columns</span><span class="p">,</span>
             <span class="p">}</span>
 
             <span class="n">job_params</span> <span class="o">=</span> <span class="p">[</span>
@@ -1277,8 +1304,9 @@
                 <span class="s2">&quot;use_precomputed_maps&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_precomputed_maps</span><span class="p">,</span>
                 <span class="s2">&quot;n_classes&quot;</span><span class="p">:</span> <span class="n">n_classes</span><span class="p">,</span>
                 <span class="s2">&quot;id_maps&quot;</span><span class="p">:</span> <span class="n">id_maps</span><span class="p">,</span>
-                <span class="s2">&quot;column_types&quot;</span><span class="p">:</span> <span class="n">col_types</span><span class="p">,</span>
+                <span class="s2">&quot;column_data_types&quot;</span><span class="p">:</span> <span class="n">col_types</span><span class="p">,</span>
                 <span class="s2">&quot;selected_columns_statistics&quot;</span><span class="p">:</span> <span class="n">selected_columns_statistics</span><span class="p">,</span>
+                <span class="s2">&quot;normalize_real_columns&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">normalize_real_columns</span><span class="p">,</span>
                 <span class="s2">&quot;special_token_ids&quot;</span><span class="p">:</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">ids_by_label</span><span class="p">,</span>
             <span class="p">},</span>
         <span class="p">}</span>
@@ -1334,11 +1362,14 @@
                 <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">split_path</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">merge_output</span> <span class="k">else</span> <span class="n">split_path</span>
                 <span class="k">for</span> <span class="n">split_path</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">split_paths</span>
             <span class="p">],</span>
-            <span class="s2">&quot;column_types&quot;</span><span class="p">:</span> <span class="n">col_types</span><span class="p">,</span>
+            <span class="s2">&quot;column_data_types&quot;</span><span class="p">:</span> <span class="n">col_types</span><span class="p">,</span>
             <span class="s2">&quot;selected_columns_statistics&quot;</span><span class="p">:</span> <span class="p">{</span>
                 <span class="n">col</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;mean&quot;</span><span class="p">:</span> <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;mean&quot;</span><span class="p">],</span> <span class="s2">&quot;std&quot;</span><span class="p">:</span> <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;std&quot;</span><span class="p">]}</span>
                 <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">stats</span> <span class="ow">in</span> <span class="n">selected_columns_statistics</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
             <span class="p">},</span>
+            <span class="s2">&quot;normalize_real_columns&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">normalize_real_columns</span><span class="p">,</span>
+            <span class="s2">&quot;stride_by_split&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">stride_by_split</span><span class="p">,</span>
+            <span class="s2">&quot;subsequence_start_mode&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">subsequence_start_mode</span><span class="p">,</span>
             <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_layout_metadata</span><span class="p">(),</span>
         <span class="p">}</span>
         <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span>
@@ -1377,7 +1408,7 @@
         <span class="k">for</span> <span class="n">file_path</span> <span class="ow">in</span> <span class="n">files</span><span class="p">:</span>
             <span class="k">try</span><span class="p">:</span>
                 <span class="k">if</span> <span class="n">write_format</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
-                    <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
+                    <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">left_pad_lengths</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
                         <span class="n">file_path</span><span class="p">,</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span>
                     <span class="p">)</span>
                     <span class="k">if</span> <span class="n">sequences_dict</span><span class="p">:</span>
@@ -1385,7 +1416,16 @@
                             <span class="nb">list</span><span class="p">(</span><span class="n">sequences_dict</span><span class="o">.</span><span class="n">keys</span><span class="p">())[</span><span class="mi">0</span><span class="p">]</span>
                         <span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
                         <span class="n">batch_files_metadata</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                            <span class="p">{</span><span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="n">file_path</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="s2">&quot;samples&quot;</span><span class="p">:</span> <span class="n">n_samples</span><span class="p">}</span>
+                            <span class="p">{</span>
+                                <span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="n">file_path</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                                <span class="s2">&quot;samples&quot;</span><span class="p">:</span> <span class="n">n_samples</span><span class="p">,</span>
+                                <span class="s2">&quot;left_pad_length_histogram&quot;</span><span class="p">:</span> <span class="p">{</span>
+                                    <span class="nb">str</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="n">count</span>
+                                    <span class="k">for</span> <span class="n">value</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">Counter</span><span class="p">(</span>
+                                        <span class="n">left_pad_lengths</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+                                    <span class="p">)</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                                <span class="p">},</span>
+                            <span class="p">}</span>
                         <span class="p">)</span>
                         <span class="n">total_samples</span> <span class="o">+=</span> <span class="n">n_samples</span>
                 <span class="k">elif</span> <span class="n">write_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span><span class="p">:</span>
@@ -1398,8 +1438,25 @@
 
                     <span class="k">if</span> <span class="n">n_cols</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
                         <span class="n">n_samples</span> <span class="o">=</span> <span class="n">n_rows</span> <span class="o">//</span> <span class="n">n_cols</span>
+                        <span class="n">left_pad_lengths</span> <span class="o">=</span> <span class="p">(</span>
+                            <span class="n">lazy_df</span><span class="o">.</span><span class="n">group_by</span><span class="p">([</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="s2">&quot;subsequenceId&quot;</span><span class="p">])</span>
+                            <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;leftPadLength&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">())</span>
+                            <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;leftPadLength&quot;</span><span class="p">)</span>
+                            <span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+                            <span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;leftPadLength&quot;</span><span class="p">)</span>
+                            <span class="o">.</span><span class="n">to_list</span><span class="p">()</span>
+                        <span class="p">)</span>
                         <span class="n">batch_files_metadata</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                            <span class="p">{</span><span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="n">file_path</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="s2">&quot;samples&quot;</span><span class="p">:</span> <span class="n">n_samples</span><span class="p">}</span>
+                            <span class="p">{</span>
+                                <span class="s2">&quot;path&quot;</span><span class="p">:</span> <span class="n">file_path</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                                <span class="s2">&quot;samples&quot;</span><span class="p">:</span> <span class="n">n_samples</span><span class="p">,</span>
+                                <span class="s2">&quot;left_pad_length_histogram&quot;</span><span class="p">:</span> <span class="p">{</span>
+                                    <span class="nb">str</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="n">count</span>
+                                    <span class="k">for</span> <span class="n">value</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">Counter</span><span class="p">(</span>
+                                        <span class="n">left_pad_lengths</span>
+                                    <span class="p">)</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                                <span class="p">},</span>
+                            <span class="p">}</span>
                         <span class="p">)</span>
                         <span class="n">total_samples</span> <span class="o">+=</span> <span class="n">n_samples</span>
             <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
@@ -1519,10 +1576,11 @@
     <span class="n">data_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
     <span class="n">id_maps</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="nb">int</span><span class="p">]],</span>
     <span class="n">selected_columns_statistics</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]],</span>
+    <span class="n">normalize_real_columns</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
     <span class="n">n_classes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">col_types</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply categorical maps and numeric standardization.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply categorical maps and optional numeric standardization.&quot;&quot;&quot;</span>
     <span class="n">col_types_was_provided</span> <span class="o">=</span> <span class="n">col_types</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
 
     <span class="k">if</span> <span class="n">n_classes</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -1547,7 +1605,7 @@
             <span class="n">data</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="n">col</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">id_maps</span><span class="p">[</span><span class="n">col</span><span class="p">],</span> <span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
             <span class="k">if</span> <span class="ow">not</span> <span class="n">col_types_was_provided</span><span class="p">:</span>
                 <span class="n">col_types</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;Int64&quot;</span>
-        <span class="k">elif</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">selected_columns_statistics</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">selected_columns_statistics</span> <span class="ow">and</span> <span class="n">normalize_real_columns</span><span class="p">:</span>
             <span class="n">data</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
                 <span class="p">(</span>
                     <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="n">col</span><span class="p">)</span> <span class="o">-</span> <span class="n">selected_columns_statistics</span><span class="p">[</span><span class="n">col</span><span class="p">][</span><span class="s2">&quot;mean&quot;</span><span class="p">])</span>
@@ -1855,6 +1913,7 @@
     <span class="n">mask_column</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
     <span class="n">split_method</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">normalize_real_columns</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
 <span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Process this worker&#39;s file shard.&quot;&quot;&quot;</span>
 
@@ -1921,6 +1980,7 @@
                 <span class="n">data_columns</span><span class="p">,</span>
                 <span class="n">id_maps</span><span class="p">,</span>
                 <span class="n">selected_columns_statistics</span><span class="p">,</span>
+                <span class="n">normalize_real_columns</span><span class="p">,</span>
                 <span class="n">n_classes</span><span class="p">,</span>
                 <span class="n">col_types</span><span class="p">,</span>
             <span class="p">)</span>
@@ -2225,7 +2285,7 @@
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">stored_context_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-    <span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span>
+    <span class="n">column_data_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span>
 <span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Write long-format sequences as packed PT tensors.&quot;&quot;&quot;</span>
     <span class="k">if</span> <span class="n">data</span><span class="o">.</span><span class="n">is_empty</span><span class="p">():</span>
@@ -2270,7 +2330,7 @@
     <span class="n">sequences_dict</span> <span class="o">=</span> <span class="p">{}</span>
 
     <span class="k">for</span> <span class="n">col_name</span> <span class="ow">in</span> <span class="n">all_feature_cols</span><span class="p">:</span>
-        <span class="n">torch_dtype</span> <span class="o">=</span> <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">[</span><span class="n">column_types</span><span class="p">[</span><span class="n">col_name</span><span class="p">]]</span>
+        <span class="n">torch_dtype</span> <span class="o">=</span> <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">[</span><span class="n">column_data_types</span><span class="p">[</span><span class="n">col_name</span><span class="p">]]</span>
 
         <span class="n">sequences_np</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">vstack</span><span class="p">(</span>
             <span class="n">aggregated_data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;seq_</span><span class="si">{</span><span class="n">col_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(</span><span class="n">writable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>

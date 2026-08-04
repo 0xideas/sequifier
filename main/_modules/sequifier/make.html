@@ -195,6 +195,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../../api.html">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.sequifier">Internals</a></li>
@@ -274,11 +275,11 @@
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 
 <span class="n">preprocess_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_root: .</span>
-<span class="s2">data_path: PLEASE FILL</span>
+<span class="s2">preprocessing_data_path: PLEASE FILL</span>
 <span class="s2">read_format: csv</span>
 <span class="s2">write_format: parquet</span>
 <span class="s2">selected_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
-<span class="s2">column_types: null # optional map of selected columns to output dtypes, e.g. {EXAMPLE_INPUT_COLUMN_NAME: Float32}</span>
+<span class="s2">column_data_types: null # optional map of selected columns to output dtypes, e.g. {EXAMPLE_INPUT_COLUMN_NAME: Float32}</span>
 <span class="s2">mask_column: null</span>
 
 <span class="s2">split_ratios:</span>
@@ -292,9 +293,11 @@
 <span class="s2">&quot;&quot;&quot;</span>
 
 <span class="n">train_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_root: .</span>
+<span class="s2">preprocessing_data_path: PLEASE FILL</span>
 <span class="s2">model_name: PLEASE FILL</span>
+<span class="s2">training_objective: causal</span>
+<span class="s2">device: cuda</span>
 <span class="s2">read_format: parquet</span>
-<span class="s2">metadata_config_path: PLEASE FILL</span>
 
 <span class="s2">input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
 <span class="s2">feature_layout: null # optional structure annotations for flat input columns</span>
@@ -303,6 +306,7 @@
 <span class="s2">  EXAMPLE_TARGET_COLUMN_NAME: real</span>
 
 <span class="s2">context_length: 48</span>
+<span class="s2">model_window_stride: null # null loads one right-aligned view; a positive integer loads all contained views at this stride</span>
 <span class="s2">inference_batch_size: 10</span>
 
 <span class="s2">export_generative_model: PLEASE FILL # true or false</span>
@@ -310,6 +314,7 @@
 <span class="s2">export_onnx: true</span>
 
 <span class="s2">model_spec:</span>
+<span class="s2">  initialization: </span><span class="si">{}</span><span class="s2"> # optional per-layer-group initialization overrides</span>
 <span class="s2">  ingestion_spec:</span>
 <span class="s2">    type: direct_embed</span>
 <span class="s2">    output_dim: 128</span>
@@ -319,16 +324,20 @@
 <span class="s2">  n_head: 16</span>
 <span class="s2">  dim_feedforward: 128</span>
 <span class="s2">  num_layers: 3</span>
+<span class="s2">  positional_encoding: learned</span>
+<span class="s2">  positional_encoding_scope: per_feature</span>
 <span class="s2">  prediction_length: 1</span>
+<span class="s2">  decoding_support: 1</span>
+<span class="s2">  decoding_spec:</span>
+<span class="s2">    type: linear</span>
 <span class="s2">training_spec:</span>
-<span class="s2">  training_objective: causal</span>
-<span class="s2">  device: cuda</span>
 <span class="s2">  epochs: 10</span>
 <span class="s2">  save_interval_epochs: 10</span>
 <span class="s2">  batch_size: 10</span>
 <span class="s2">  log_interval: 10</span>
 <span class="s2">  learning_rate: 0.0001</span>
 <span class="s2">  accumulation_steps: 1</span>
+<span class="s2">  gradient_clip: null</span>
 <span class="s2">  dropout: 0.2</span>
 <span class="s2">  criterion:</span>
 <span class="s2">    EXAMPLE_TARGET_COLUMN_NAME: MSELoss</span>
@@ -343,14 +352,14 @@
 <span class="s2">    anneal_strategy: cos</span>
 <span class="s2">    total_steps: PLEASE FILL</span>
 <span class="s2">    three_phase: false</span>
+<span class="s2">  scheduler_step_on: batch</span>
 <span class="s2">  continue_training: true</span>
 <span class="s2">&quot;&quot;&quot;</span>
 
 <span class="n">infer_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_root: .</span>
-<span class="s2">metadata_config_path: PLEASE FILL</span>
+<span class="s2">preprocessing_data_path: PLEASE FILL</span>
 <span class="s2">model_type: PLEASE FILL # generative or embedding</span>
 <span class="s2">model_path: PLEASE FILL</span>
-<span class="s2">data_path: PLEASE FILL</span>
 
 <span class="s2">input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
 <span class="s2">target_columns: [EXAMPLE_TARGET_COLUMN_NAME]</span>
@@ -362,6 +371,7 @@
 <span class="s2">map_to_id: true</span>
 <span class="s2">device: cpu</span>
 <span class="s2">context_length: 48</span>
+<span class="s2">model_window_stride: null</span>
 <span class="s2">inference_batch_size: 10</span>
 
 <span class="s2">autoregression: true</span>

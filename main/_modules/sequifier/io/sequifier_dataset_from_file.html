@@ -195,6 +195,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.sequifier">Internals</a></li>
@@ -282,9 +283,10 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModel</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">,</span>
-    <span class="n">numpy_to_pytorch</span><span class="p">,</span>
+    <span class="n">configured_model_window_stride</span><span class="p">,</span>
+    <span class="n">numpy_storage_to_pytorch</span><span class="p">,</span>
     <span class="n">read_data</span><span class="p">,</span>
-    <span class="n">resolve_window_view</span><span class="p">,</span>
+    <span class="n">resolve_window_sampling_plan</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.batch</span><span class="w"> </span><span class="kn">import</span> <span class="n">SequifierBatch</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.iteration_state</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
@@ -294,6 +296,7 @@
     <span class="n">skip_samples_for_batches</span><span class="p">,</span>
     <span class="n">write_shared_int</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.window_sampling</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_window_batch</span>
 
 
 <div class="viewcode-block" id="SequifierDatasetFromFile"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">SequifierDatasetFromFile</span><span class="p">(</span><span class="n">IterableDataset</span><span class="p">):</span>
@@ -314,38 +317,34 @@
         <span class="p">)</span>
         <span class="n">data_df</span> <span class="o">=</span> <span class="n">read_data</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span><span class="p">)</span>
 
-        <span class="n">column_types</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="n">col</span><span class="p">:</span> <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">[</span><span class="n">config</span><span class="o">.</span><span class="n">column_types</span><span class="p">[</span><span class="n">col</span><span class="p">]]</span>
-            <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">column_types</span>
+        <span class="n">column_data_types</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">col</span><span class="p">:</span> <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">[</span><span class="n">config</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">[</span><span class="n">col</span><span class="p">]]</span>
+            <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">column_data_types</span>
         <span class="p">}</span>
 
-        <span class="n">resolved_view</span> <span class="o">=</span> <span class="n">resolve_window_view</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="p">)</span>
-        <span class="n">all_tensors</span><span class="p">,</span> <span class="n">metadata_tensors</span> <span class="o">=</span> <span class="n">numpy_to_pytorch</span><span class="p">(</span>
-            <span class="n">data</span><span class="o">=</span><span class="n">data_df</span><span class="p">,</span>
-            <span class="n">column_types</span><span class="o">=</span><span class="n">column_types</span><span class="p">,</span>
-            <span class="n">all_columns</span><span class="o">=</span><span class="n">all_columns</span><span class="p">,</span>
-            <span class="n">resolved_view</span><span class="o">=</span><span class="n">resolved_view</span><span class="p">,</span>
+        <span class="n">sampling_plan</span> <span class="o">=</span> <span class="n">resolve_window_sampling_plan</span><span class="p">(</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="p">,</span>
+            <span class="n">configured_model_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">),</span>
         <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">=</span> <span class="n">all_tensors</span><span class="p">[</span><span class="n">all_columns</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">all_tensors</span><span class="p">,</span> <span class="n">left_pad_lengths</span> <span class="o">=</span> <span class="n">numpy_storage_to_pytorch</span><span class="p">(</span>
+            <span class="n">data</span><span class="o">=</span><span class="n">data_df</span><span class="p">,</span>
+            <span class="n">column_data_types</span><span class="o">=</span><span class="n">column_data_types</span><span class="p">,</span>
+            <span class="n">all_columns</span><span class="o">=</span><span class="n">all_columns</span><span class="p">,</span>
+            <span class="n">stored_context_width</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sample_index</span> <span class="o">=</span> <span class="n">sampling_plan</span><span class="o">.</span><span class="n">build_index</span><span class="p">(</span><span class="n">left_pad_lengths</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sample_index</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;No usable model windows were found in the dataset.&quot;</span><span class="p">)</span>
 
         <span class="k">del</span> <span class="n">data_df</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">sequence_tensors</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="n">key</span><span class="p">:</span> <span class="n">all_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">input_columns</span>
-        <span class="p">}</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="n">key</span><span class="p">:</span> <span class="n">all_tensors</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">key</span><span class="si">}</span><span class="s2">_target&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">target_columns</span>
-        <span class="p">}</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">metadata_tensors</span> <span class="o">=</span> <span class="n">metadata_tensors</span>
-        <span class="k">del</span> <span class="n">all_tensors</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span> <span class="o">=</span> <span class="n">all_tensors</span>
 
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">):</span>
-            <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequence_tensors</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">sequence_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequence_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span><span class="o">.</span><span class="n">pin_memory</span><span class="p">()</span>
-            <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span><span class="o">.</span><span class="n">pin_memory</span><span class="p">()</span>
-            <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata_tensors</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">metadata_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span><span class="o">.</span><span class="n">pin_memory</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span><span class="p">[</span><span class="n">key</span><span class="p">]</span><span class="o">.</span><span class="n">pin_memory</span><span class="p">()</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] Dataset loaded with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2"> samples.&quot;</span><span class="p">)</span>
 
@@ -358,7 +357,14 @@
         <span class="n">write_shared_int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_start_batch_state</span><span class="p">,</span> <span class="n">start_batch</span><span class="p">)</span></div>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
+        <span class="n">num_workers</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">num_workers</span><span class="p">)</span>
+        <span class="n">total_batches</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">worker_id</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_workers</span><span class="p">):</span>
+            <span class="n">worker_samples</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">//</span> <span class="n">num_workers</span> <span class="o">+</span> <span class="p">(</span>
+                <span class="mi">1</span> <span class="k">if</span> <span class="n">worker_id</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">%</span> <span class="n">num_workers</span> <span class="k">else</span> <span class="mi">0</span>
+            <span class="p">)</span>
+            <span class="n">total_batches</span> <span class="o">+=</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">worker_samples</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">total_batches</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__iter__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -387,7 +393,7 @@
 
         <span class="n">indices_for_rank</span> <span class="o">=</span> <span class="n">indices</span><span class="p">[</span><span class="n">rank</span><span class="p">::</span><span class="n">world_size</span><span class="p">]</span>
         <span class="n">worker_batch_counts</span> <span class="o">=</span> <span class="p">[</span>
-            <span class="nb">len</span><span class="p">(</span><span class="n">indices_for_rank</span><span class="p">[</span><span class="n">i</span><span class="p">::</span><span class="n">num_workers</span><span class="p">])</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span>
+            <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">indices_for_rank</span><span class="p">[</span><span class="n">i</span><span class="p">::</span><span class="n">num_workers</span><span class="p">])</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
             <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_workers</span><span class="p">)</span>
         <span class="p">]</span>
         <span class="n">worker_id</span><span class="p">,</span> <span class="n">skip_batches</span> <span class="o">=</span> <span class="n">resolve_resume_worker</span><span class="p">(</span>
@@ -405,28 +411,14 @@
 
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices_for_worker</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">):</span>
             <span class="n">batch_end</span> <span class="o">=</span> <span class="n">i</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span>
-            <span class="k">if</span> <span class="n">batch_end</span> <span class="o">&gt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices_for_worker</span><span class="p">):</span>
-                <span class="k">continue</span>
-
             <span class="n">batch_indices</span> <span class="o">=</span> <span class="n">indices_for_worker</span><span class="p">[</span><span class="n">i</span><span class="p">:</span><span class="n">batch_end</span><span class="p">]</span>
 
-            <span class="n">data_batch</span> <span class="o">=</span> <span class="p">{</span>
-                <span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">batch_indices</span><span class="p">]</span>
-                <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequence_tensors</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-            <span class="p">}</span>
-            <span class="n">targets_batch</span> <span class="o">=</span> <span class="p">{</span>
-                <span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">batch_indices</span><span class="p">]</span>
-                <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-            <span class="p">}</span>
-            <span class="n">metadata_batch</span> <span class="o">=</span> <span class="p">{</span>
-                <span class="n">key</span><span class="p">:</span> <span class="n">tensor</span><span class="p">[</span><span class="n">batch_indices</span><span class="p">]</span>
-                <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata_tensors</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-            <span class="p">}</span>
-
-            <span class="k">yield</span> <span class="n">SequifierBatch</span><span class="p">(</span>
-                <span class="n">inputs</span><span class="o">=</span><span class="n">data_batch</span><span class="p">,</span>
-                <span class="n">targets</span><span class="o">=</span><span class="n">targets_batch</span><span class="p">,</span>
-                <span class="n">metadata</span><span class="o">=</span><span class="n">metadata_batch</span><span class="p">,</span>
+            <span class="k">yield</span> <span class="n">build_window_batch</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">sample_index</span><span class="p">,</span>
+                <span class="n">batch_indices</span><span class="p">,</span>
             <span class="p">)</span></div>
 </pre></div>
         </article>

@@ -196,6 +196,7 @@
 <li class="toctree-l1"><a class="reference internal" href="api.html">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.config.infer_config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.sequifier">Internals</a></li>
@@ -287,13 +288,31 @@
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.config.train_config">Training Config</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.train_config.LoadedTrainConfig"><code class="docutils literal notranslate"><span class="pre">LoadedTrainConfig</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.train_config.ModelSpecModel"><code class="docutils literal notranslate"><span class="pre">ModelSpecModel</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.train_config.ResolvedSequifierConfig"><code class="docutils literal notranslate"><span class="pre">ResolvedSequifierConfig</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.train_config.SequifierConfig"><code class="docutils literal notranslate"><span class="pre">SequifierConfig</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.train_config.TrainModel"><code class="docutils literal notranslate"><span class="pre">TrainModel</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.train_config.TrainingSpecModel"><code class="docutils literal notranslate"><span class="pre">TrainingSpecModel</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.train_config.load_train_config_with_source"><code class="docutils literal notranslate"><span class="pre">load_train_config_with_source()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.train_config.resolve_sequifier_config"><code class="docutils literal notranslate"><span class="pre">resolve_sequifier_config()</span></code></a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.config.infer_config">Inference Config</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.infer_config.InferenceConfig"><code class="docutils literal notranslate"><span class="pre">InferenceConfig</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.infer_config.InfererModel"><code class="docutils literal notranslate"><span class="pre">InfererModel</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.infer_config.ResolvedInferenceConfig"><code class="docutils literal notranslate"><span class="pre">ResolvedInferenceConfig</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.infer_config.resolve_inference_config"><code class="docutils literal notranslate"><span class="pre">resolve_inference_config()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.config.composition">Config Composition and Metadata</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.composition.deep_merge_config"><code class="docutils literal notranslate"><span class="pre">deep_merge_config()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.composition.load_composed_yaml_config"><code class="docutils literal notranslate"><span class="pre">load_composed_yaml_config()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.composition.merge_complementary_config_fragments"><code class="docutils literal notranslate"><span class="pre">merge_complementary_config_fragments()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.composition.merge_config_fragments"><code class="docutils literal notranslate"><span class="pre">merge_config_fragments()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.metadata.DatasetMetadata"><code class="docutils literal notranslate"><span class="pre">DatasetMetadata</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.metadata.extract_inline_metadata"><code class="docutils literal notranslate"><span class="pre">extract_inline_metadata()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.config.metadata.load_dataset_metadata"><code class="docutils literal notranslate"><span class="pre">load_dataset_metadata()</span></code></a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a><ul>
@@ -341,6 +360,7 @@
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.train.train"><code class="docutils literal notranslate"><span class="pre">train()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.train.train_worker"><code class="docutils literal notranslate"><span class="pre">train_worker()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.Inferer"><code class="docutils literal notranslate"><span class="pre">Inferer</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.WindowedInferenceBatch"><code class="docutils literal notranslate"><span class="pre">WindowedInferenceBatch</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.apply_inference_column_types"><code class="docutils literal notranslate"><span class="pre">apply_inference_column_types()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.apply_inference_tensor_types"><code class="docutils literal notranslate"><span class="pre">apply_inference_tensor_types()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.calculate_item_positions"><code class="docutils literal notranslate"><span class="pre">calculate_item_positions()</span></code></a></li>
@@ -354,6 +374,7 @@
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.infer_embedding"><code class="docutils literal notranslate"><span class="pre">infer_embedding()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.infer_generative"><code class="docutils literal notranslate"><span class="pre">infer_generative()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.infer_worker"><code class="docutils literal notranslate"><span class="pre">infer_worker()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.load_onnx_target_decoder_ids"><code class="docutils literal notranslate"><span class="pre">load_onnx_target_decoder_ids()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.load_parquet_folder_dataset"><code class="docutils literal notranslate"><span class="pre">load_parquet_folder_dataset()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.load_pt_dataset"><code class="docutils literal notranslate"><span class="pre">load_pt_dataset()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.infer.normalize"><code class="docutils literal notranslate"><span class="pre">normalize()</span></code></a></li>
@@ -363,19 +384,25 @@
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.hyperparameter_search.hyperparameter_search"><code class="docutils literal notranslate"><span class="pre">hyperparameter_search()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.hyperparameter_search.objective"><code class="docutils literal notranslate"><span class="pre">objective()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.hyperparameter_search.set_pdeathsig"><code class="docutils literal notranslate"><span class="pre">set_pdeathsig()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.ModelWindowSamplingPlan"><code class="docutils literal notranslate"><span class="pre">ModelWindowSamplingPlan</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.ModelWindowView"><code class="docutils literal notranslate"><span class="pre">ModelWindowView</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.ResolvedWindowView"><code class="docutils literal notranslate"><span class="pre">ResolvedWindowView</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.StoredWindowLayout"><code class="docutils literal notranslate"><span class="pre">StoredWindowLayout</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.WindowSampleIndex"><code class="docutils literal notranslate"><span class="pre">WindowSampleIndex</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.assign_sequence_to_split"><code class="docutils literal notranslate"><span class="pre">assign_sequence_to_split()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.build_valid_mask"><code class="docutils literal notranslate"><span class="pre">build_valid_mask()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.configure_determinism"><code class="docutils literal notranslate"><span class="pre">configure_determinism()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.configure_logger"><code class="docutils literal notranslate"><span class="pre">configure_logger()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.configured_model_window_stride"><code class="docutils literal notranslate"><span class="pre">configured_model_window_stride()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.construct_index_maps"><code class="docutils literal notranslate"><span class="pre">construct_index_maps()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.derive_target_column_types"><code class="docutils literal notranslate"><span class="pre">derive_target_column_types()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.get_best_model_path"><code class="docutils literal notranslate"><span class="pre">get_best_model_path()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.get_last_training_batch_timedelta"><code class="docutils literal notranslate"><span class="pre">get_last_training_batch_timedelta()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.get_left_pad_lengths_from_preprocessed_data"><code class="docutils literal notranslate"><span class="pre">get_left_pad_lengths_from_preprocessed_data()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.get_torch_dtype"><code class="docutils literal notranslate"><span class="pre">get_torch_dtype()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.metadata_config_path_from_preprocessing_data_path"><code class="docutils literal notranslate"><span class="pre">metadata_config_path_from_preprocessing_data_path()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.normalize_path"><code class="docutils literal notranslate"><span class="pre">normalize_path()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.numpy_storage_to_pytorch"><code class="docutils literal notranslate"><span class="pre">numpy_storage_to_pytorch()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.numpy_to_pytorch"><code class="docutils literal notranslate"><span class="pre">numpy_to_pytorch()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.read_data"><code class="docutils literal notranslate"><span class="pre">read_data()</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="api.html#sequifier.helpers.resolve_unified_polars_numeric_dtype"><code class="docutils literal notranslate"><span class="pre">resolve_unified_polars_numeric_dtype()</span></code></a></li>

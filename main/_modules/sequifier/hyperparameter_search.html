@@ -195,6 +195,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../../api.html">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.sequifier">Internals</a></li>
@@ -299,14 +300,14 @@
 
 <span class="k">def</span><span class="w"> </span><span class="nf">create_sampler</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">BaseSampler</span><span class="p">:</span>
     <span class="n">strategy</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">&quot;search_strategy&quot;</span><span class="p">,</span> <span class="s2">&quot;bayesian&quot;</span><span class="p">)</span>
-    <span class="n">seed</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">&quot;seed&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">global_seed</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">&quot;global_seed&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">strategy</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;sample&quot;</span><span class="p">]:</span>
-        <span class="k">return</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">RandomSampler</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">RandomSampler</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="n">global_seed</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">strategy</span> <span class="o">==</span> <span class="s2">&quot;grid&quot;</span><span class="p">:</span>
         <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="p">,</span> <span class="s2">&quot;BruteForceSampler&quot;</span><span class="p">):</span>
-            <span class="k">return</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">BruteForceSampler</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">BruteForceSampler</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="n">global_seed</span><span class="p">)</span>
         <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Grid search requires Optuna &gt;= 3.1 for BruteForceSampler.&quot;</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">TPESampler</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">TPESampler</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="n">global_seed</span><span class="p">)</span>
 
 
 <div class="viewcode-block" id="set_pdeathsig"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.set_pdeathsig">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">set_pdeathsig</span><span class="p">():</span>
@@ -326,15 +327,13 @@
     <span class="p">)</span>
     <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">config_path</span><span class="p">),</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
-    <span class="n">run_config_dict</span> <span class="o">=</span> <span class="n">run_config</span><span class="o">.</span><span class="n">model_dump</span><span class="p">()</span>
-    <span class="n">run_config_dict</span><span class="p">[</span><span class="s2">&quot;context_length&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">run_config_dict</span><span class="p">[</span><span class="s2">&quot;window_view&quot;</span><span class="p">][</span><span class="s2">&quot;context_length&quot;</span><span class="p">]</span>
-    <span class="n">run_config_dict</span><span class="p">[</span><span class="s2">&quot;target_offset&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">run_config_dict</span><span class="p">[</span><span class="s2">&quot;window_view&quot;</span><span class="p">][</span><span class="s2">&quot;target_offset&quot;</span><span class="p">]</span>
-
-    <span class="k">del</span> <span class="n">run_config_dict</span><span class="p">[</span><span class="s2">&quot;window_view&quot;</span><span class="p">]</span>
-    <span class="k">del</span> <span class="n">run_config_dict</span><span class="p">[</span><span class="s2">&quot;storage_layout&quot;</span><span class="p">]</span>
-
     <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
-        <span class="n">yaml</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">run_config_dict</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="n">Dumper</span><span class="o">=</span><span class="n">TrainModelDumper</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">yaml</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span>
+            <span class="n">run_config</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">),</span>
+            <span class="n">f</span><span class="p">,</span>
+            <span class="n">Dumper</span><span class="o">=</span><span class="n">TrainModelDumper</span><span class="p">,</span>
+            <span class="n">sort_keys</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="p">)</span>
 
     <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;SEQUIFIER_HYPERPARAMETER_SEARCH_RUN&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;1&quot;</span>
 
@@ -355,8 +354,11 @@
 
     <span class="n">last_read_pos</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="n">best_val_loss</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)</span>
+    <span class="n">completed_epochs</span> <span class="o">=</span> <span class="mi">0</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">consume_metrics</span><span class="p">(</span><span class="n">last_read_pos</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">consume_metrics</span><span class="p">(</span>
+        <span class="n">last_read_pos</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">completed_epochs</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Read complete metric lines; report/prune single-objective trials.&quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">metrics_path</span><span class="p">):</span>
             <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">metrics_path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
@@ -369,6 +371,10 @@
                         <span class="n">data</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">line</span><span class="p">)</span>
                         <span class="n">val_loss</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;val_loss&quot;</span><span class="p">)</span>
                         <span class="n">global_step</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;global_step&quot;</span><span class="p">)</span>
+                        <span class="n">metric_epoch</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;epoch&quot;</span><span class="p">)</span>
+
+                        <span class="k">if</span> <span class="n">metric_epoch</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                            <span class="n">completed_epochs</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">completed_epochs</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">metric_epoch</span><span class="p">))</span>
 
                         <span class="k">if</span> <span class="n">global_step</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">val_loss</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                             <span class="n">is_multi_objective</span> <span class="o">=</span> <span class="p">(</span>
@@ -379,7 +385,22 @@
                                 <span class="n">trial</span><span class="o">.</span><span class="n">report</span><span class="p">(</span><span class="n">val_loss</span><span class="p">,</span> <span class="n">global_step</span><span class="p">)</span>
                                 <span class="n">best_val_loss</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">best_val_loss</span><span class="p">,</span> <span class="n">val_loss</span><span class="p">)</span>
 
-                                <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">prune_trials</span> <span class="ow">and</span> <span class="n">trial</span><span class="o">.</span><span class="n">should_prune</span><span class="p">():</span>
+                                <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">pruning_warmup_batches</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                                    <span class="n">warmup_complete</span> <span class="o">=</span> <span class="p">(</span>
+                                        <span class="n">global_step</span> <span class="o">&gt;=</span> <span class="n">config</span><span class="o">.</span><span class="n">pruning_warmup_batches</span>
+                                    <span class="p">)</span>
+                                <span class="k">else</span><span class="p">:</span>
+                                    <span class="n">pruning_warmup_epochs</span> <span class="o">=</span> <span class="p">(</span>
+                                        <span class="n">config</span><span class="o">.</span><span class="n">pruning_warmup_epochs</span> <span class="ow">or</span> <span class="mi">0</span>
+                                    <span class="p">)</span>
+                                    <span class="n">warmup_complete</span> <span class="o">=</span> <span class="p">(</span>
+                                        <span class="n">completed_epochs</span> <span class="o">&gt;=</span> <span class="n">pruning_warmup_epochs</span>
+                                    <span class="p">)</span>
+                                <span class="k">if</span> <span class="p">(</span>
+                                    <span class="n">config</span><span class="o">.</span><span class="n">prune_trials</span>
+                                    <span class="ow">and</span> <span class="n">warmup_complete</span>
+                                    <span class="ow">and</span> <span class="n">trial</span><span class="o">.</span><span class="n">should_prune</span><span class="p">()</span>
+                                <span class="p">):</span>
                                     <span class="nb">open</span><span class="p">(</span><span class="n">prune_path</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
                                     <span class="k">try</span><span class="p">:</span>
                                         <span class="k">try</span><span class="p">:</span>
@@ -401,13 +422,17 @@
 
                     <span class="k">except</span> <span class="n">json</span><span class="o">.</span><span class="n">JSONDecodeError</span><span class="p">:</span>
                         <span class="k">break</span>
-        <span class="k">return</span> <span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span>
+        <span class="k">return</span> <span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">,</span> <span class="n">completed_epochs</span>
 
     <span class="k">while</span> <span class="n">process</span><span class="o">.</span><span class="n">poll</span><span class="p">()</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span> <span class="o">=</span> <span class="n">consume_metrics</span><span class="p">(</span><span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">)</span>
+        <span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">,</span> <span class="n">completed_epochs</span> <span class="o">=</span> <span class="n">consume_metrics</span><span class="p">(</span>
+            <span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">,</span> <span class="n">completed_epochs</span>
+        <span class="p">)</span>
         <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
 
-    <span class="n">_</span><span class="p">,</span> <span class="n">best_val_loss</span> <span class="o">=</span> <span class="n">consume_metrics</span><span class="p">(</span><span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">)</span>
+    <span class="n">_</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">consume_metrics</span><span class="p">(</span>
+        <span class="n">last_read_pos</span><span class="p">,</span> <span class="n">best_val_loss</span><span class="p">,</span> <span class="n">completed_epochs</span>
+    <span class="p">)</span>
 
     <span class="n">exit_code</span> <span class="o">=</span> <span class="n">process</span><span class="o">.</span><span class="n">returncode</span>
     <span class="k">if</span> <span class="n">exit_code</span> <span class="o">==</span> <span class="mi">143</span><span class="p">:</span>

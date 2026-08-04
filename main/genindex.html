@@ -194,6 +194,7 @@
 <li class="toctree-l1"><a class="reference internal" href="api.html">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.config.infer_config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
 <li class="toctree-l1"><a class="reference internal" href="api.html#module-sequifier.sequifier">Internals</a></li>
@@ -324,10 +325,14 @@
     <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="api.html#sequifier.sequifier.build_args_config">build_args_config() (in module sequifier.sequifier)</a>
 </li>
+        <li><a href="api.html#sequifier.helpers.ModelWindowSamplingPlan.build_masks">build_masks() (sequifier.helpers.ModelWindowSamplingPlan method)</a>
+
+        <ul>
+          <li><a href="api.html#sequifier.helpers.ResolvedWindowView.build_masks">(sequifier.helpers.ResolvedWindowView method)</a>
+</li>
+        </ul></li>
     </ul></td>
     <td style="width: 33%; vertical-align: top;"><ul>
-        <li><a href="api.html#sequifier.helpers.ResolvedWindowView.build_masks">build_masks() (sequifier.helpers.ResolvedWindowView method)</a>
-</li>
         <li><a href="api.html#sequifier.helpers.build_valid_mask">build_valid_mask() (in module sequifier.helpers)</a>
 </li>
     </ul></td>
@@ -339,6 +344,8 @@
   <table style="width: 100%" class="indextable genindextable"><tr>
     <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="api.html#sequifier.infer.calculate_item_positions">calculate_item_positions() (in module sequifier.infer)</a>
+</li>
+        <li><a href="api.html#sequifier.helpers.ModelWindowSamplingPlan.candidate_input_starts">candidate_input_starts (sequifier.helpers.ModelWindowSamplingPlan property)</a>
 </li>
         <li><a href="api.html#sequifier.preprocess.cast_columns_to_string">cast_columns_to_string() (in module sequifier.preprocess)</a>
 </li>
@@ -355,6 +362,8 @@
         <li><a href="api.html#sequifier.helpers.configure_determinism">configure_determinism() (in module sequifier.helpers)</a>
 </li>
         <li><a href="api.html#sequifier.helpers.configure_logger">configure_logger() (in module sequifier.helpers)</a>
+</li>
+        <li><a href="api.html#sequifier.helpers.configured_model_window_stride">configured_model_window_stride() (in module sequifier.helpers)</a>
 </li>
         <li><a href="api.html#sequifier.helpers.construct_index_maps">construct_index_maps() (in module sequifier.helpers)</a>
 </li>
@@ -374,11 +383,17 @@
   <h2>D</h2>
   <table style="width: 100%" class="indextable genindextable"><tr>
     <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#sequifier.config.metadata.DatasetMetadata">DatasetMetadata (class in sequifier.config.metadata)</a>
+</li>
         <li><a href="api.html#sequifier.train.TransformerModel.decode">decode() (sequifier.train.TransformerModel method)</a>
 </li>
     </ul></td>
     <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#sequifier.config.composition.deep_merge_config">deep_merge_config() (in module sequifier.config.composition)</a>
+</li>
         <li><a href="api.html#sequifier.preprocess.delete_files">delete_files() (in module sequifier.preprocess)</a>
+</li>
+        <li><a href="api.html#sequifier.helpers.derive_target_column_types">derive_target_column_types() (in module sequifier.helpers)</a>
 </li>
     </ul></td>
   </tr></table>
@@ -389,6 +404,8 @@
   <table style="width: 100%" class="indextable genindextable"><tr>
     <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="api.html#sequifier.infer.Inferer.expand_to_batch_size">expand_to_batch_size() (sequifier.infer.Inferer method)</a>
+</li>
+        <li><a href="api.html#sequifier.config.metadata.extract_inline_metadata">extract_inline_metadata() (in module sequifier.config.metadata)</a>
 </li>
     </ul></td>
     <td style="width: 33%; vertical-align: top;"><ul>
@@ -405,6 +422,8 @@
   <table style="width: 100%" class="indextable genindextable"><tr>
     <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="api.html#sequifier.infer.fill_number">fill_number() (in module sequifier.infer)</a>
+</li>
+        <li><a href="api.html#sequifier.helpers.ModelWindowSamplingPlan.first_eligible_start_indices">first_eligible_start_indices() (sequifier.helpers.ModelWindowSamplingPlan method)</a>
 </li>
         <li><a href="api.html#sequifier.train.TransformerEmbeddingModel.forward">forward() (sequifier.train.TransformerEmbeddingModel method)</a>
 
@@ -428,6 +447,8 @@
   <h2>G</h2>
   <table style="width: 100%" class="indextable genindextable"><tr>
     <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#sequifier.helpers.ModelWindowSamplingPlan.gather">gather() (sequifier.helpers.ModelWindowSamplingPlan method)</a>
+</li>
         <li><a href="api.html#sequifier.preprocess.get_batch_limits">get_batch_limits() (in module sequifier.preprocess)</a>
 </li>
         <li><a href="api.html#sequifier.helpers.get_best_model_path">get_best_model_path() (in module sequifier.helpers)</a>
@@ -458,6 +479,12 @@
 </li>
         <li><a href="api.html#sequifier.helpers.get_torch_dtype">get_torch_dtype() (in module sequifier.helpers)</a>
 </li>
+        <li><a href="api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.grid_size">grid_size() (sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling method)</a>
+
+        <ul>
+          <li><a href="api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.grid_size">(sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling method)</a>
+</li>
+        </ul></li>
     </ul></td>
   </tr></table>
 </section>
@@ -498,17 +525,19 @@
         </ul></li>
         <li><a href="api.html#sequifier.infer.Inferer.infer_pure">infer_pure() (sequifier.infer.Inferer method)</a>
 </li>
-    </ul></td>
-    <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="api.html#sequifier.train.infer_with_embedding_model">infer_with_embedding_model() (in module sequifier.train)</a>
 </li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="api.html#sequifier.train.infer_with_generative_model">infer_with_generative_model() (in module sequifier.train)</a>
 </li>
         <li><a href="api.html#sequifier.infer.infer_worker">infer_worker() (in module sequifier.infer)</a>
 </li>
+        <li><a href="api.html#sequifier.config.infer_config.InferenceConfig">InferenceConfig (class in sequifier.config.infer_config)</a>
+</li>
         <li><a href="api.html#sequifier.infer.Inferer">Inferer (class in sequifier.infer)</a>
 </li>
-        <li><a href="api.html#sequifier.config.infer_config.InfererModel">InfererModel (class in sequifier.config.infer_config)</a>
+        <li><a href="api.html#sequifier.config.infer_config.InfererModel">InfererModel (in module sequifier.config.infer_config)</a>
 </li>
         <li><a href="api.html#sequifier.train.TransformerModel.initialize_optimizer">initialize_optimizer() (sequifier.train.TransformerModel method)</a>
 </li>
@@ -524,15 +553,25 @@
   <h2>L</h2>
   <table style="width: 100%" class="indextable genindextable"><tr>
     <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#sequifier.config.composition.load_composed_yaml_config">load_composed_yaml_config() (in module sequifier.config.composition)</a>
+</li>
+        <li><a href="api.html#sequifier.config.metadata.load_dataset_metadata">load_dataset_metadata() (in module sequifier.config.metadata)</a>
+</li>
         <li><a href="api.html#sequifier.train.load_inference_model">load_inference_model() (in module sequifier.train)</a>
 </li>
-        <li><a href="api.html#sequifier.infer.load_parquet_folder_dataset">load_parquet_folder_dataset() (in module sequifier.infer)</a>
+        <li><a href="api.html#sequifier.infer.load_onnx_target_decoder_ids">load_onnx_target_decoder_ids() (in module sequifier.infer)</a>
 </li>
     </ul></td>
     <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#sequifier.infer.load_parquet_folder_dataset">load_parquet_folder_dataset() (in module sequifier.infer)</a>
+</li>
         <li><a href="api.html#sequifier.preprocess.load_precomputed_id_maps">load_precomputed_id_maps() (in module sequifier.preprocess)</a>
 </li>
         <li><a href="api.html#sequifier.infer.load_pt_dataset">load_pt_dataset() (in module sequifier.infer)</a>
+</li>
+        <li><a href="api.html#sequifier.config.train_config.load_train_config_with_source">load_train_config_with_source() (in module sequifier.config.train_config)</a>
+</li>
+        <li><a href="api.html#sequifier.config.train_config.LoadedTrainConfig">LoadedTrainConfig (class in sequifier.config.train_config)</a>
 </li>
     </ul></td>
   </tr></table>
@@ -546,6 +585,16 @@
 </li>
         <li><a href="api.html#sequifier.make.make">make() (in module sequifier.make)</a>
 </li>
+        <li><a href="api.html#sequifier.config.composition.merge_complementary_config_fragments">merge_complementary_config_fragments() (in module sequifier.config.composition)</a>
+</li>
+        <li><a href="api.html#sequifier.config.composition.merge_config_fragments">merge_config_fragments() (in module sequifier.config.composition)</a>
+</li>
+        <li><a href="api.html#sequifier.helpers.metadata_config_path_from_preprocessing_data_path">metadata_config_path_from_preprocessing_data_path() (in module sequifier.helpers)</a>
+</li>
+        <li><a href="api.html#sequifier.config.train_config.LoadedTrainConfig.metadata_values">metadata_values (sequifier.config.train_config.LoadedTrainConfig property)</a>
+</li>
+        <li><a href="api.html#sequifier.config.train_config.LoadedTrainConfig.model">model (sequifier.config.train_config.LoadedTrainConfig property)</a>
+</li>
         <li><a href="api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.model_config">model_config (sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig attribute)</a>
 
         <ul>
@@ -553,20 +602,30 @@
 </li>
           <li><a href="api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.model_config">(sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling attribute)</a>
 </li>
-          <li><a href="api.html#sequifier.config.infer_config.InfererModel.model_config">(sequifier.config.infer_config.InfererModel attribute)</a>
+          <li><a href="api.html#sequifier.config.infer_config.InferenceConfig.model_config">(sequifier.config.infer_config.InferenceConfig attribute)</a>
+</li>
+          <li><a href="api.html#sequifier.config.infer_config.ResolvedInferenceConfig.model_config">(sequifier.config.infer_config.ResolvedInferenceConfig attribute)</a>
+</li>
+          <li><a href="api.html#sequifier.config.metadata.DatasetMetadata.model_config">(sequifier.config.metadata.DatasetMetadata attribute)</a>
 </li>
           <li><a href="api.html#sequifier.config.preprocess_config.PreprocessorModel.model_config">(sequifier.config.preprocess_config.PreprocessorModel attribute)</a>
 </li>
           <li><a href="api.html#sequifier.config.train_config.ModelSpecModel.model_config">(sequifier.config.train_config.ModelSpecModel attribute)</a>
 </li>
-          <li><a href="api.html#sequifier.config.train_config.TrainingSpecModel.model_config">(sequifier.config.train_config.TrainingSpecModel attribute)</a>
+          <li><a href="api.html#sequifier.config.train_config.ResolvedSequifierConfig.model_config">(sequifier.config.train_config.ResolvedSequifierConfig attribute)</a>
 </li>
-          <li><a href="api.html#sequifier.config.train_config.TrainModel.model_config">(sequifier.config.train_config.TrainModel attribute)</a>
+          <li><a href="api.html#sequifier.config.train_config.SequifierConfig.model_config">(sequifier.config.train_config.SequifierConfig attribute)</a>
+</li>
+          <li><a href="api.html#sequifier.config.train_config.TrainingSpecModel.model_config">(sequifier.config.train_config.TrainingSpecModel attribute)</a>
 </li>
         </ul></li>
         <li><a href="api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling">ModelSpecHyperparameterSampling (class in sequifier.config.hyperparameter_search_config)</a>
 </li>
         <li><a href="api.html#sequifier.config.train_config.ModelSpecModel">ModelSpecModel (class in sequifier.config.train_config)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#sequifier.helpers.ModelWindowSamplingPlan">ModelWindowSamplingPlan (class in sequifier.helpers)</a>
 </li>
         <li><a href="api.html#sequifier.helpers.ModelWindowView">ModelWindowView (class in sequifier.helpers)</a>
 </li>
@@ -574,9 +633,13 @@
     module
 
         <ul>
+          <li><a href="api.html#module-sequifier.config.composition">sequifier.config.composition</a>
+</li>
           <li><a href="api.html#module-sequifier.config.hyperparameter_search_config">sequifier.config.hyperparameter_search_config</a>
 </li>
           <li><a href="api.html#module-sequifier.config.infer_config">sequifier.config.infer_config</a>
+</li>
+          <li><a href="api.html#module-sequifier.config.metadata">sequifier.config.metadata</a>
 </li>
           <li><a href="api.html#module-sequifier.config.preprocess_config">sequifier.config.preprocess_config</a>
 </li>
@@ -615,9 +678,11 @@
     <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="api.html#sequifier.infer.normalize">normalize() (in module sequifier.infer)</a>
 </li>
+        <li><a href="api.html#sequifier.helpers.normalize_path">normalize_path() (in module sequifier.helpers)</a>
+</li>
     </ul></td>
     <td style="width: 33%; vertical-align: top;"><ul>
-        <li><a href="api.html#sequifier.helpers.normalize_path">normalize_path() (in module sequifier.helpers)</a>
+        <li><a href="api.html#sequifier.helpers.numpy_storage_to_pytorch">numpy_storage_to_pytorch() (in module sequifier.helpers)</a>
 </li>
         <li><a href="api.html#sequifier.helpers.numpy_to_pytorch">numpy_to_pytorch() (in module sequifier.helpers)</a>
 </li>
@@ -667,13 +732,21 @@
 </li>
         <li><a href="api.html#sequifier.io.yaml.represent_numpy_float">represent_numpy_float() (in module sequifier.io.yaml)</a>
 </li>
-    </ul></td>
-    <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="api.html#sequifier.io.yaml.represent_numpy_int">represent_numpy_int() (in module sequifier.io.yaml)</a>
 </li>
         <li><a href="api.html#sequifier.io.yaml.represent_sequifier_object">represent_sequifier_object() (in module sequifier.io.yaml)</a>
 </li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#sequifier.config.infer_config.resolve_inference_config">resolve_inference_config() (in module sequifier.config.infer_config)</a>
+</li>
+        <li><a href="api.html#sequifier.config.train_config.resolve_sequifier_config">resolve_sequifier_config() (in module sequifier.config.train_config)</a>
+</li>
         <li><a href="api.html#sequifier.helpers.resolve_unified_polars_numeric_dtype">resolve_unified_polars_numeric_dtype() (in module sequifier.helpers)</a>
+</li>
+        <li><a href="api.html#sequifier.config.infer_config.ResolvedInferenceConfig">ResolvedInferenceConfig (class in sequifier.config.infer_config)</a>
+</li>
+        <li><a href="api.html#sequifier.config.train_config.ResolvedSequifierConfig">ResolvedSequifierConfig (class in sequifier.config.train_config)</a>
 </li>
         <li><a href="api.html#sequifier.helpers.ResolvedWindowView">ResolvedWindowView (class in sequifier.helpers)</a>
 </li>
@@ -685,6 +758,8 @@
   <h2>S</h2>
   <table style="width: 100%" class="indextable genindextable"><tr>
     <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#sequifier.helpers.ModelWindowSamplingPlan.sample_counts">sample_counts() (sequifier.helpers.ModelWindowSamplingPlan method)</a>
+</li>
         <li><a href="api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.sample_trial">sample_trial() (sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig method)</a>
 
         <ul>
@@ -695,6 +770,13 @@
         </ul></li>
         <li><a href="api.html#sequifier.infer.sample_with_cumsum">sample_with_cumsum() (in module sequifier.infer)</a>
 </li>
+        <li>
+    sequifier.config.composition
+
+        <ul>
+          <li><a href="api.html#module-sequifier.config.composition">module</a>
+</li>
+        </ul></li>
         <li>
     sequifier.config.hyperparameter_search_config
 
@@ -707,6 +789,13 @@
 
         <ul>
           <li><a href="api.html#module-sequifier.config.infer_config">module</a>
+</li>
+        </ul></li>
+        <li>
+    sequifier.config.metadata
+
+        <ul>
+          <li><a href="api.html#module-sequifier.config.metadata">module</a>
 </li>
         </ul></li>
         <li>
@@ -751,6 +840,8 @@
           <li><a href="api.html#module-sequifier.io.sequifier_dataset_from_file">module</a>
 </li>
         </ul></li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
         <li>
     sequifier.io.yaml
 
@@ -758,8 +849,6 @@
           <li><a href="api.html#module-sequifier.io.yaml">module</a>
 </li>
         </ul></li>
-    </ul></td>
-    <td style="width: 33%; vertical-align: top;"><ul>
         <li>
     sequifier.make
 
@@ -802,6 +891,8 @@
           <li><a href="api.html#module-sequifier.train">module</a>
 </li>
         </ul></li>
+        <li><a href="api.html#sequifier.config.train_config.SequifierConfig">SequifierConfig (class in sequifier.config.train_config)</a>
+</li>
         <li><a href="api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile">SequifierDatasetFromFile (class in sequifier.io.sequifier_dataset_from_file)</a>
 </li>
         <li><a href="api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.set_epoch">set_epoch() (sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile method)</a>
@@ -811,6 +902,8 @@
         <li><a href="api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.set_start_batch">set_start_batch() (sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile method)</a>
 </li>
         <li><a href="api.html#sequifier.sequifier.setup_parser">setup_parser() (in module sequifier.sequifier)</a>
+</li>
+        <li><a href="api.html#sequifier.config.train_config.LoadedTrainConfig.source_values">source_values (sequifier.config.train_config.LoadedTrainConfig property)</a>
 </li>
         <li><a href="api.html#sequifier.optimizers.ademamix.AdEMAMix.step">step() (sequifier.optimizers.ademamix.AdEMAMix method)</a>
 </li>
@@ -838,7 +931,7 @@
     <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="api.html#sequifier.config.train_config.TrainingSpecModel">TrainingSpecModel (class in sequifier.config.train_config)</a>
 </li>
-        <li><a href="api.html#sequifier.config.train_config.TrainModel">TrainModel (class in sequifier.config.train_config)</a>
+        <li><a href="api.html#sequifier.config.train_config.TrainModel">TrainModel (in module sequifier.config.train_config)</a>
 </li>
         <li><a href="api.html#sequifier.io.yaml.TrainModelDumper">TrainModelDumper (class in sequifier.io.yaml)</a>
 </li>
@@ -854,6 +947,16 @@
   <h2>V</h2>
   <table style="width: 100%" class="indextable genindextable"><tr>
     <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig.validate_grid_n_trials_matches_combinations">validate_grid_n_trials_matches_combinations() (sequifier.config.hyperparameter_search_config.HyperparameterSearchConfig method)</a>
+</li>
+        <li><a href="api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.validation_model">validation_model() (sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling method)</a>
+
+        <ul>
+          <li><a href="api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.validation_model">(sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
         <li><a href="api.html#sequifier.infer.verify_variable_order">verify_variable_order() (in module sequifier.infer)</a>
 </li>
     </ul></td>
@@ -864,6 +967,12 @@
   <h2>W</h2>
   <table style="width: 100%" class="indextable genindextable"><tr>
     <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#sequifier.infer.WindowedInferenceBatch">WindowedInferenceBatch (class in sequifier.infer)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#sequifier.helpers.WindowSampleIndex">WindowSampleIndex (class in sequifier.helpers)</a>
+</li>
         <li><a href="api.html#sequifier.helpers.write_data">write_data() (in module sequifier.helpers)</a>
 </li>
     </ul></td>

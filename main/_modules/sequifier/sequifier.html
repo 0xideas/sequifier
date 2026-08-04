@@ -195,6 +195,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../../api.html">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.sequifier">Internals</a></li>
@@ -353,7 +354,16 @@
 
         <span class="k">if</span> <span class="n">subparser</span> <span class="o">!=</span> <span class="n">parser_hyperparameter_search</span><span class="p">:</span>
             <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-r&quot;</span><span class="p">,</span> <span class="s2">&quot;--randomize&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">)</span>
-            <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-dp&quot;</span><span class="p">,</span> <span class="s2">&quot;--data-path&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">)</span>
+            <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+                <span class="s2">&quot;-dp&quot;</span><span class="p">,</span>
+                <span class="s2">&quot;--data-path&quot;</span><span class="p">,</span>
+                <span class="n">dest</span><span class="o">=</span><span class="p">(</span>
+                    <span class="s2">&quot;preprocessing_data_path&quot;</span>
+                    <span class="k">if</span> <span class="n">subparser</span> <span class="o">==</span> <span class="n">parser_preprocess</span>
+                    <span class="k">else</span> <span class="s2">&quot;data_path&quot;</span>
+                <span class="p">),</span>
+                <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span>
+            <span class="p">)</span>
 
     <span class="k">for</span> <span class="n">subparser</span> <span class="ow">in</span> <span class="p">[</span><span class="n">parser_train</span><span class="p">,</span> <span class="n">parser_infer</span><span class="p">,</span> <span class="n">parser_hyperparameter_search</span><span class="p">]:</span>
         <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
