@@ -2,7 +2,6 @@ import os
 from typing import Generic, Optional, TypeVar, Union
 
 import numpy as np
-import yaml
 from beartype import beartype
 from pydantic import (
     BaseModel,
@@ -13,7 +12,10 @@ from pydantic import (
     model_validator,
 )
 
-from sequifier.config.composition import merge_config_fragments
+from sequifier.config.composition import (
+    load_composed_yaml_config,
+    merge_config_fragments,
+)
 from sequifier.config.metadata import (
     DatasetMetadata,
     extract_inline_metadata,
@@ -43,12 +45,7 @@ def load_inferer_config(
 ) -> "ResolvedInferenceConfig":
     """Compose and validate inference YAML, then resolve dataset metadata."""
 
-    with open(config_path, "r") as file:
-        config_values = yaml.safe_load(file)
-    if not isinstance(config_values, dict):
-        raise ValueError(
-            f"Inference config '{config_path}' must contain a YAML mapping."
-        )
+    config_values = load_composed_yaml_config(config_path)
 
     cli_values = {
         key: value for key, value in args_config.items() if key != "skip_metadata"

@@ -18,6 +18,15 @@ Values passed on the command line override the YAML before validation.
 | `-dp`, `--data-path` | Overrides `preprocessing_data_path`. |
 | `-sc`, `--selected-columns` | Overrides `selected_columns` with a space-separated list. Use `None` to process all columns. |
 
+## Composable Configuration Files
+
+A preprocessing entry config may set `additional_config_paths` to one
+non-empty string, a list of non-empty strings, or `null`. Relative paths
+resolve against the entry config's `project_root`; absolute paths are used
+directly. Fragments are direct only and cannot include further fragments. They
+may share nested containers when their child fields are disjoint, but duplicate
+fields are errors. CLI values override the completed file composition.
+
 ## Configuration Fields
 
 The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are the available fields, their requirements, and their functions.
@@ -27,6 +36,7 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
+| `additional_config_paths` | `str`, `list[str]`, or `null` | No | `null` | Direct complementary YAML fragments. Relative paths resolve against `project_root`; recursive composition and duplicate fields are rejected. |
 | `preprocessing_data_path` | `str` | **Yes** | - | Path to the raw input file or folder. |
 | `read_format` | `str` | No | `csv` | Format of input data (`csv`, `parquet`). |
 | `write_format` | `str` | No | `parquet` | Format of output data (`csv`, `parquet`, `pt`). |

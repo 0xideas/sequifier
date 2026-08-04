@@ -30,6 +30,15 @@ internal `ResolvedInferenceConfig`. Storage layout, column groups, ID maps, and
 normalization statistics are runtime values and do not need to be copied into
 authored inference YAML.
 
+## Composable Configuration Files
+
+An inference entry config may set `additional_config_paths` to one non-empty
+string, a list of non-empty strings, or `null`. Relative paths resolve against
+the entry config's `project_root`; absolute paths are used directly. Fragments
+are direct only and cannot include further fragments. They may share nested
+containers when their child fields are disjoint, but duplicate fields are
+errors. CLI values override the completed file composition.
+
 ## Configuration Fields
 
 The configuration is defined in a YAML file (e.g., `infer.yaml`).
@@ -39,6 +48,7 @@ The configuration is defined in a YAML file (e.g., `infer.yaml`).
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
+| `additional_config_paths` | `str`, `list[str]`, or `null` | No | `null` | Direct complementary YAML fragments. Relative paths resolve against `project_root`; recursive composition and duplicate fields are rejected. |
 | `preprocessing_data_path` | `str` | Conditional | `null` | Raw preprocessing input path. When set, Sequifier derives `metadata_config_path` and defaults `data_path` to the inference/test preprocessing split. |
 | `data_path` | `str` | No | Metadata split 2 | Path to the input data file (`csv` or `parquet`) or folder (`pt` or `parquet`). Defaults to split 2 from metadata, or the last available split if fewer than three splits exist. |
 | `model_path` | `str` or `list[str]` | **Yes** | - | Path to a specific model file, or a list of paths to process sequentially. (e.g., `models/sequifier-[NAME]-best-[EPOCH].pt`). |

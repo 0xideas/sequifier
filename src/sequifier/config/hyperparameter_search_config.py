@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Optional, Union, cast
 
-import yaml
 from beartype import beartype
 from loguru import logger
 from pydantic import (
@@ -18,6 +17,7 @@ from pydantic import (
     model_validator,
 )
 
+from sequifier.config.composition import load_composed_yaml_config
 from sequifier.config.initialization_config import (
     ModelInitializationConfig,
     ModelInitializationSamplingConfig,
@@ -276,13 +276,7 @@ def load_hyperparameter_search_config(
     config_path: str, skip_metadata: bool
 ) -> "HyperparameterSearchConfig":
     """Load hyperparameter-search YAML plus optional metadata-derived fields."""
-    with open(config_path, "r") as f:
-        config_values = yaml.safe_load(f)
-
-    if not isinstance(config_values, dict):
-        raise ValueError(
-            f"Hyperparameter search config '{config_path}' must contain a YAML mapping."
-        )
+    config_values = load_composed_yaml_config(config_path)
 
     if "overrides" in config_values:
         if not config_values.get("base_config_path"):

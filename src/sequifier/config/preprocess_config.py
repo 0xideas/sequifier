@@ -3,7 +3,6 @@ import warnings
 from typing import Optional
 
 import numpy as np
-import yaml
 from beartype import beartype
 from pydantic import (
     BaseModel,
@@ -14,7 +13,10 @@ from pydantic import (
     model_validator,
 )
 
-from sequifier.config.composition import merge_config_fragments
+from sequifier.config.composition import (
+    load_composed_yaml_config,
+    merge_config_fragments,
+)
 from sequifier.helpers import canonicalize_polars_dtype_name, try_catch_excess_keys
 
 
@@ -23,12 +25,7 @@ def load_preprocessor_config(
     config_path: str, args_config: dict
 ) -> "PreprocessorModel":
     """Load preprocessing YAML plus CLI overrides."""
-    with open(config_path, "r") as file:
-        config_values = yaml.safe_load(file)
-    if not isinstance(config_values, dict):
-        raise ValueError(
-            f"Preprocessing config '{config_path}' must contain a YAML mapping."
-        )
+    config_values = load_composed_yaml_config(config_path)
 
     config_values = merge_config_fragments((config_values, args_config))
 

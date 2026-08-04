@@ -57,6 +57,7 @@ class PartialHyperparameterSearchConfig(BaseModel):
 
     base_config_path: str
     overrides: dict[str, Any]
+    project_root: str | None = Field(default=None, min_length=1)
 
     hp_search_name: str
     search_strategy: str = "bayesian"
@@ -626,7 +627,7 @@ def compile_hyperparameter_search_override_config(
     project_root = _configured_or_base(
         overrides,
         ("project_root",),
-        base_model.project_root,
+        partial.project_root or base_model.project_root,
     )
     metadata_config_path = _configured_or_base(
         overrides,
@@ -799,6 +800,8 @@ def compile_hyperparameter_search_override_config(
         mode="python",
         by_alias=True,
     )
+    if partial.project_root is None:
+        search_values.pop("project_root", None)
     base_top_values = base_model.model_dump(mode="python")
     base_top_values.update(
         {

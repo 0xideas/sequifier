@@ -8,7 +8,6 @@ from typing import Annotated, Any, Generic, Literal, Optional, TypeAlias, TypeVa
 
 import torch
 import torch_optimizer
-import yaml
 from beartype import beartype
 from loguru import logger
 from pydantic import (
@@ -25,7 +24,10 @@ from pydantic import (
 
 import sequifier
 import sequifier.optimizers
-from sequifier.config.composition import merge_config_fragments
+from sequifier.config.composition import (
+    load_composed_yaml_config,
+    merge_config_fragments,
+)
 from sequifier.config.initialization_config import ModelInitializationConfig
 from sequifier.config.metadata import (
     DatasetMetadata,
@@ -602,13 +604,7 @@ def load_train_config_with_source(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
 ) -> LoadedTrainConfig:
     """Compose and validate authored YAML, then resolve preprocessing metadata."""
-    with open(config_path, "r") as f:
-        config_values = yaml.safe_load(f)
-
-    if not isinstance(config_values, dict):
-        raise ValueError(
-            f"Training config '{config_path}' must contain a YAML mapping."
-        )
+    config_values = load_composed_yaml_config(config_path)
 
     cli_values = {
         key: value for key, value in args_config.items() if key != "skip_metadata"
