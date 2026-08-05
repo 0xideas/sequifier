@@ -274,6 +274,7 @@
           <h1>Source code for sequifier.config.hyperparameter_search_config</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">copy</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
@@ -677,6 +678,7 @@
     <span class="n">training_objective</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">device</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">backbone_dropout</span><span class="p">:</span> <span class="nb">float</span>
+    <span class="n">ingestion_dropout</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
 
 
 <div class="viewcode-block" id="TrainingSpecHyperparameterSampling"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TrainingSpecHyperparameterSampling</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
@@ -706,18 +708,19 @@
     <span class="n">accumulation_steps</span><span class="p">:</span> <span class="n">OptionalOptunaInt</span>
     <span class="n">gradient_clip</span><span class="p">:</span> <span class="n">OptionalOptunaFloat</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">dropout</span><span class="p">:</span> <span class="n">OptunaFloat</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.0</span><span class="p">]</span>
+    <span class="n">ingestion_dropout</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">OptunaFloat</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
 
     <span class="n">loss_weights</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">optimizer</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">DotDict</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="p">[</span><span class="n">DotDict</span><span class="p">({</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Adam&quot;</span><span class="p">})]</span>
     <span class="p">)</span>
+    <span class="n">scheduler_step_on</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;epoch&quot;</span>
     <span class="n">scheduler</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">DotDict</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="p">[</span>
             <span class="n">DotDict</span><span class="p">({</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;StepLR&quot;</span><span class="p">,</span> <span class="s2">&quot;step_size&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;gamma&quot;</span><span class="p">:</span> <span class="mf">0.99</span><span class="p">})</span>
         <span class="p">]</span>
     <span class="p">)</span>
     <span class="n">resume</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ResumeConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">scheduler_step_on</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;epoch&quot;</span>
     <span class="n">distributed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">load_full_data_to_ram</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">max_ram_gb</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="mi">16</span>
@@ -740,6 +743,7 @@
         <span class="n">training_objective</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
         <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+        <span class="n">ingestion_dropout</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">],</span>
         <span class="n">accumulation_steps</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>
         <span class="n">gradient_clip</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">],</span>
         <span class="n">bert_spec</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BERTSpecModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -794,6 +798,7 @@
             <span class="n">training_objective</span><span class="o">=</span><span class="n">training_objective</span><span class="p">,</span>
             <span class="n">device</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">,</span>
             <span class="n">backbone_dropout</span><span class="o">=</span><span class="n">dropout</span><span class="p">,</span>
+            <span class="n">ingestion_dropout</span><span class="o">=</span><span class="n">ingestion_dropout</span><span class="p">,</span>
         <span class="p">)</span>
 
 <div class="viewcode-block" id="TrainingSpecHyperparameterSampling.validation_model"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.TrainingSpecHyperparameterSampling.validation_model">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">validation_model</span><span class="p">(</span>
@@ -826,6 +831,11 @@
             <span class="n">training_objective</span><span class="o">=</span><span class="n">objective</span><span class="p">,</span>
             <span class="n">batch_size</span><span class="o">=</span><span class="n">_validation_space_values</span><span class="p">(</span><span class="s2">&quot;batch_size&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
             <span class="n">dropout</span><span class="o">=</span><span class="n">_validation_space_values</span><span class="p">(</span><span class="s2">&quot;dropout&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+            <span class="n">ingestion_dropout</span><span class="o">=</span><span class="p">(</span>
+                <span class="n">_validation_space_values</span><span class="p">(</span><span class="s2">&quot;ingestion_dropout&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_dropout</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_dropout</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                <span class="k">else</span> <span class="kc">None</span>
+            <span class="p">),</span>
             <span class="n">accumulation_steps</span><span class="o">=</span><span class="n">_validation_space_values</span><span class="p">(</span>
                 <span class="s2">&quot;accumulation_steps&quot;</span><span class="p">,</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span><span class="p">,</span>
@@ -850,12 +860,18 @@
             <span class="k">else</span> <span class="mi">1</span>
             <span class="k">for</span> <span class="n">objective_name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span>
         <span class="p">)</span>
+        <span class="n">ingestion_dropout_combinations</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">grid_space_size</span><span class="p">(</span><span class="s2">&quot;ingestion_dropout&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_dropout</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_dropout</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="mi">1</span>
+        <span class="p">)</span>
         <span class="k">return</span> <span class="p">(</span>
             <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">learning_rate</span><span class="p">)</span>
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">)</span>
             <span class="o">*</span> <span class="n">objective_combinations</span>
             <span class="o">*</span> <span class="n">grid_space_size</span><span class="p">(</span><span class="s2">&quot;batch_size&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
             <span class="o">*</span> <span class="n">grid_space_size</span><span class="p">(</span><span class="s2">&quot;dropout&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span><span class="p">)</span>
+            <span class="o">*</span> <span class="n">ingestion_dropout_combinations</span>
             <span class="o">*</span> <span class="n">grid_space_size</span><span class="p">(</span><span class="s2">&quot;accumulation_steps&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span><span class="p">)</span>
             <span class="o">*</span> <span class="n">gradient_clip_combinations</span>
         <span class="p">)</span></div>
@@ -945,6 +961,8 @@
 
         <span class="n">_validation_space_values</span><span class="p">(</span><span class="s2">&quot;batch_size&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
         <span class="n">_validation_space_values</span><span class="p">(</span><span class="s2">&quot;dropout&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_dropout</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">_validation_space_values</span><span class="p">(</span><span class="s2">&quot;ingestion_dropout&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_dropout</span><span class="p">)</span>
         <span class="n">_validation_space_values</span><span class="p">(</span><span class="s2">&quot;accumulation_steps&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span><span class="p">)</span>
         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gradient_clip</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="n">FloatDistribution</span><span class="p">)):</span>
             <span class="n">_validation_space_values</span><span class="p">(</span><span class="s2">&quot;gradient_clip&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gradient_clip</span><span class="p">)</span>
@@ -1066,6 +1084,11 @@
         <span class="p">)</span>
         <span class="n">batch_size</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="s2">&quot;batch_size&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
         <span class="n">dropout</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="s2">&quot;dropout&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dropout</span><span class="p">)</span>
+        <span class="n">ingestion_dropout</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">sample_param</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="s2">&quot;ingestion_dropout&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_dropout</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_dropout</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="kc">None</span>
+        <span class="p">)</span>
         <span class="n">accumulation_steps</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span>
             <span class="n">trial</span><span class="p">,</span> <span class="s2">&quot;accumulation_steps&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span>
         <span class="p">)</span>
@@ -1076,7 +1099,9 @@
         <span class="p">)</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">training_objective</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">learning_rate</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">batch_size</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">dropout</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">gradient_clip</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">optimizer</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">training_objective</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">learning_rate</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">batch_size</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">dropout</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">ingestion_dropout</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">gradient_clip</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">optimizer</span><span class="w"> </span><span class="si">= }</span><span class="s2">&quot;</span>
         <span class="p">)</span>
 
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_training_spec</span><span class="p">(</span>
@@ -1085,6 +1110,7 @@
             <span class="n">training_objective</span><span class="o">=</span><span class="n">training_objective</span><span class="p">,</span>
             <span class="n">batch_size</span><span class="o">=</span><span class="n">batch_size</span><span class="p">,</span>
             <span class="n">dropout</span><span class="o">=</span><span class="n">dropout</span><span class="p">,</span>
+            <span class="n">ingestion_dropout</span><span class="o">=</span><span class="n">ingestion_dropout</span><span class="p">,</span>
             <span class="n">accumulation_steps</span><span class="o">=</span><span class="n">accumulation_steps</span><span class="p">,</span>
             <span class="n">gradient_clip</span><span class="o">=</span><span class="n">gradient_clip</span><span class="p">,</span>
             <span class="n">bert_spec</span><span class="o">=</span><span class="n">bert_spec</span><span class="p">,</span>
@@ -1111,6 +1137,9 @@
     <span class="n">initialization</span><span class="p">:</span> <span class="n">ModelInitializationSamplingConfig</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="n">ModelInitializationSamplingConfig</span>
     <span class="p">)</span>
+    <span class="n">ingestion_initialization</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ModelInitializationSamplingConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">backbone_initialization</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ModelInitializationSamplingConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">decoder_initialization</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ModelInitializationSamplingConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">n_head</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
 
     <span class="n">dim_feedforward</span><span class="p">:</span> <span class="n">OptunaInt</span>
@@ -1122,6 +1151,9 @@
     <span class="n">activation_fn</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
     <span class="n">normalization</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
     <span class="n">positional_encoding</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+    <span class="n">positional_encoding_scope</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
+        <span class="n">default_factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;per_feature&quot;</span><span class="p">]</span>
+    <span class="p">)</span>
     <span class="n">attention_type</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
     <span class="n">attention_output_projection</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="p">[</span><span class="kc">True</span><span class="p">])</span>
 
@@ -1157,6 +1189,55 @@
             <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoding_spec</span><span class="p">[</span><span class="n">decoding_spec_index</span><span class="p">]</span>
         <span class="k">return</span> <span class="n">cast</span><span class="p">(</span><span class="n">Optional</span><span class="p">[</span><span class="n">DecodingSpecConfig</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoding_spec</span><span class="p">)</span>
 
+    <span class="k">def</span><span class="w"> </span><span class="nf">_validation_initializations</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span>
+        <span class="n">ModelInitializationConfig</span><span class="p">,</span>
+        <span class="n">ModelInitializationConfig</span><span class="p">,</span>
+        <span class="n">ModelInitializationConfig</span><span class="p">,</span>
+    <span class="p">]:</span>
+        <span class="n">fallback</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">initialization</span><span class="o">.</span><span class="n">validation_config</span><span class="p">()</span>
+        <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span>
+            <span class="p">(</span>
+                <span class="n">sampling</span><span class="o">.</span><span class="n">validation_config</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">sampling</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                <span class="k">else</span> <span class="n">fallback</span><span class="o">.</span><span class="n">model_copy</span><span class="p">(</span><span class="n">deep</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="p">)</span>
+            <span class="k">for</span> <span class="n">sampling</span> <span class="ow">in</span> <span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_initialization</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">backbone_initialization</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">decoder_initialization</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="p">)</span>  <span class="c1"># type: ignore[return-value]</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_sample_initializations</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">trial</span><span class="p">:</span> <span class="n">Any</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span>
+        <span class="n">ModelInitializationConfig</span><span class="p">,</span>
+        <span class="n">ModelInitializationConfig</span><span class="p">,</span>
+        <span class="n">ModelInitializationConfig</span><span class="p">,</span>
+    <span class="p">]:</span>
+        <span class="n">component_sampling</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="p">(</span><span class="s2">&quot;ingestion&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_initialization</span><span class="p">),</span>
+            <span class="p">(</span><span class="s2">&quot;backbone&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">backbone_initialization</span><span class="p">),</span>
+            <span class="p">(</span><span class="s2">&quot;decoder&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder_initialization</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="n">fallback</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">initialization</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">sampling</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">sampling</span> <span class="ow">in</span> <span class="n">component_sampling</span><span class="p">)</span>
+            <span class="k">else</span> <span class="kc">None</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span>
+            <span class="p">(</span>
+                <span class="n">sampling</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span>
+                    <span class="n">trial</span><span class="p">,</span> <span class="n">parameter_prefix</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">component</span><span class="si">}</span><span class="s2">_initialization&quot;</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="n">sampling</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                <span class="k">else</span> <span class="n">cast</span><span class="p">(</span><span class="n">ModelInitializationConfig</span><span class="p">,</span> <span class="n">fallback</span><span class="p">)</span><span class="o">.</span><span class="n">model_copy</span><span class="p">(</span><span class="n">deep</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="p">)</span>
+            <span class="k">for</span> <span class="n">component</span><span class="p">,</span> <span class="n">sampling</span> <span class="ow">in</span> <span class="n">component_sampling</span>
+        <span class="p">)</span>  <span class="c1"># type: ignore[return-value]</span>
+
     <span class="k">def</span><span class="w"> </span><span class="nf">_build_model_spec</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="o">*</span><span class="p">,</span>
@@ -1168,20 +1249,24 @@
         <span class="n">activation_fn</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">normalization</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">positional_encoding</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">positional_encoding_scope</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">attention_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">attention_output_projection</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
         <span class="n">norm_first</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
         <span class="n">n_kv_heads</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>
         <span class="n">rope_theta</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-        <span class="n">initialization</span><span class="p">:</span> <span class="n">ModelInitializationConfig</span><span class="p">,</span>
+        <span class="n">ingestion_initialization</span><span class="p">:</span> <span class="n">ModelInitializationConfig</span><span class="p">,</span>
+        <span class="n">backbone_initialization</span><span class="p">:</span> <span class="n">ModelInitializationConfig</span><span class="p">,</span>
+        <span class="n">decoder_initialization</span><span class="p">:</span> <span class="n">ModelInitializationConfig</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ModelSpecModel</span><span class="p">:</span>
         <span class="n">dim_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">[</span><span class="n">width_index</span><span class="p">]</span>
+        <span class="n">transformer_input_width</span> <span class="o">=</span> <span class="n">dim_model</span> <span class="o">-</span> <span class="nb">int</span><span class="p">(</span><span class="n">positional_encoding</span> <span class="o">==</span> <span class="s2">&quot;range_concat&quot;</span><span class="p">)</span>
         <span class="n">ingestion_spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_ingestion_spec_for_width</span><span class="p">(</span><span class="n">width_index</span><span class="p">)</span>
         <span class="n">ingestion_merge</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_ingestion_merge_for_width</span><span class="p">(</span><span class="n">width_index</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">ingestion_spec</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">ingestion</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
                 <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;direct_embed&quot;</span><span class="p">,</span>
-                <span class="s2">&quot;output_dim&quot;</span><span class="p">:</span> <span class="n">dim_model</span><span class="p">,</span>
+                <span class="s2">&quot;output_dim&quot;</span><span class="p">:</span> <span class="n">transformer_input_width</span><span class="p">,</span>
             <span class="p">}</span>
         <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
             <span class="n">ingestion</span> <span class="o">=</span> <span class="p">{</span>
@@ -1203,7 +1288,7 @@
                 <span class="s2">&quot;allow_shared_columns&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">allow_shared_ingestion_columns</span><span class="p">,</span>
                 <span class="s2">&quot;allow_unused_input_columns&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">allow_unused_input_columns</span><span class="p">,</span>
                 <span class="s2">&quot;auxiliary_input_columns&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">auxiliary_input_columns</span><span class="p">,</span>
-                <span class="s2">&quot;initialization&quot;</span><span class="p">:</span> <span class="n">initialization</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">),</span>
+                <span class="s2">&quot;initialization&quot;</span><span class="p">:</span> <span class="n">ingestion_initialization</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">),</span>
             <span class="p">}</span>
         <span class="p">)</span>
 
@@ -1223,7 +1308,7 @@
             <span class="p">{</span>
                 <span class="s2">&quot;prediction_length&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
                 <span class="s2">&quot;support&quot;</span><span class="p">:</span> <span class="n">decoding_support</span><span class="p">,</span>
-                <span class="s2">&quot;initialization&quot;</span><span class="p">:</span> <span class="n">initialization</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">),</span>
+                <span class="s2">&quot;initialization&quot;</span><span class="p">:</span> <span class="n">decoder_initialization</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">),</span>
             <span class="p">}</span>
         <span class="p">)</span>
 
@@ -1257,6 +1342,7 @@
                             <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="n">positional_encoding</span><span class="p">,</span>
                             <span class="s2">&quot;theta&quot;</span><span class="p">:</span> <span class="n">rope_theta</span><span class="p">,</span>
                         <span class="p">},</span>
+                        <span class="s2">&quot;positional_encoding_scope&quot;</span><span class="p">:</span> <span class="n">positional_encoding_scope</span><span class="p">,</span>
                         <span class="s2">&quot;dropout&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>
                         <span class="s2">&quot;shared_layer_groups&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">shared_layer_groups</span><span class="p">,</span>
                     <span class="p">},</span>
@@ -1270,7 +1356,7 @@
                         <span class="s2">&quot;publish&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
                         <span class="s2">&quot;conflict_policy&quot;</span><span class="p">:</span> <span class="s2">&quot;compare_and_swap&quot;</span><span class="p">,</span>
                     <span class="p">},</span>
-                    <span class="s2">&quot;initialization&quot;</span><span class="p">:</span> <span class="n">initialization</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">),</span>
+                    <span class="s2">&quot;initialization&quot;</span><span class="p">:</span> <span class="n">backbone_initialization</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">),</span>
                 <span class="p">},</span>
                 <span class="s2">&quot;decoder&quot;</span><span class="p">:</span> <span class="n">decoder</span><span class="p">,</span>
             <span class="p">}</span>
@@ -1309,6 +1395,7 @@
         <span class="n">activation_fn</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">normalization</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">positional_encoding</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">positional_encoding_scope</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">attention_type</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">attention_output_projection</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">norm_first</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -1320,6 +1407,16 @@
             <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
             <span class="k">if</span> <span class="n">positional_encoding</span> <span class="ow">is</span> <span class="kc">None</span>
             <span class="k">else</span> <span class="n">positional_encoding</span>
+        <span class="p">)</span>
+        <span class="n">sampled_scope</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding_scope</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">positional_encoding_scope</span> <span class="ow">is</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="n">positional_encoding_scope</span>
+        <span class="p">)</span>
+        <span class="n">selected_scope</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="s2">&quot;global&quot;</span>
+            <span class="k">if</span> <span class="n">selected_positional_encoding</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;range&quot;</span><span class="p">,</span> <span class="s2">&quot;range_concat&quot;</span><span class="p">,</span> <span class="s2">&quot;sinusoidal&quot;</span><span class="p">}</span>
+            <span class="k">else</span> <span class="n">sampled_scope</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="n">n_kv_heads</span> <span class="ow">is</span> <span class="n">_DEFAULT_KV_HEADS</span><span class="p">:</span>
             <span class="n">selected_kv_heads</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_valid_kv_heads_for_width</span><span class="p">(</span><span class="n">width_index</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
@@ -1339,6 +1436,11 @@
                     <span class="bp">self</span><span class="o">.</span><span class="n">decoding_support</span><span class="p">,</span>
                 <span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
             <span class="p">)</span>
+        <span class="p">(</span>
+            <span class="n">ingestion_initialization</span><span class="p">,</span>
+            <span class="n">backbone_initialization</span><span class="p">,</span>
+            <span class="n">decoder_initialization</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_validation_initializations</span><span class="p">()</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_model_spec</span><span class="p">(</span>
             <span class="n">width_index</span><span class="o">=</span><span class="n">width_index</span><span class="p">,</span>
             <span class="n">dim_feedforward</span><span class="o">=</span><span class="p">(</span>
@@ -1359,6 +1461,7 @@
             <span class="n">activation_fn</span><span class="o">=</span><span class="n">activation_fn</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">activation_fn</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
             <span class="n">normalization</span><span class="o">=</span><span class="n">normalization</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">normalization</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
             <span class="n">positional_encoding</span><span class="o">=</span><span class="n">selected_positional_encoding</span><span class="p">,</span>
+            <span class="n">positional_encoding_scope</span><span class="o">=</span><span class="n">selected_scope</span><span class="p">,</span>
             <span class="n">attention_type</span><span class="o">=</span><span class="n">attention_type</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">attention_type</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
             <span class="n">attention_output_projection</span><span class="o">=</span><span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">attention_output_projection</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
@@ -1372,7 +1475,9 @@
                 <span class="k">if</span> <span class="n">rope_theta</span> <span class="ow">is</span> <span class="kc">None</span>
                 <span class="k">else</span> <span class="n">rope_theta</span>
             <span class="p">),</span>
-            <span class="n">initialization</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">initialization</span><span class="o">.</span><span class="n">validation_config</span><span class="p">(),</span>
+            <span class="n">ingestion_initialization</span><span class="o">=</span><span class="n">ingestion_initialization</span><span class="p">,</span>
+            <span class="n">backbone_initialization</span><span class="o">=</span><span class="n">backbone_initialization</span><span class="p">,</span>
+            <span class="n">decoder_initialization</span><span class="o">=</span><span class="n">decoder_initialization</span><span class="p">,</span>
         <span class="p">)</span></div>
 
 <div class="viewcode-block" id="ModelSpecHyperparameterSampling.grid_size"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.ModelSpecHyperparameterSampling.grid_size">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">grid_size</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
@@ -1395,6 +1500,27 @@
         <span class="n">decoding_spec_combinations</span> <span class="o">=</span> <span class="p">(</span>
             <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">decoding_spec</span><span class="p">)</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">decoding_spec</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span> <span class="k">else</span> <span class="mi">1</span>
         <span class="p">)</span>
+        <span class="n">component_initialization_combinations</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span>
+            <span class="n">sampling</span><span class="o">.</span><span class="n">grid_size</span><span class="p">()</span>
+            <span class="k">for</span> <span class="n">sampling</span> <span class="ow">in</span> <span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_initialization</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">backbone_initialization</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">decoder_initialization</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="n">sampling</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="p">)</span>
+        <span class="n">fallback_initialization_combinations</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">initialization</span><span class="o">.</span><span class="n">grid_size</span><span class="p">()</span>
+            <span class="k">if</span> <span class="nb">any</span><span class="p">(</span>
+                <span class="n">sampling</span> <span class="ow">is</span> <span class="kc">None</span>
+                <span class="k">for</span> <span class="n">sampling</span> <span class="ow">in</span> <span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_initialization</span><span class="p">,</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">backbone_initialization</span><span class="p">,</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">decoder_initialization</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+            <span class="k">else</span> <span class="mi">1</span>
+        <span class="p">)</span>
         <span class="k">return</span> <span class="p">(</span>
             <span class="n">width_and_kv_head_combinations</span>
             <span class="o">*</span> <span class="n">decoding_support_combinations</span>
@@ -1405,10 +1531,12 @@
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">activation_fn</span><span class="p">)</span>
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">normalization</span><span class="p">)</span>
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span><span class="p">)</span>
+            <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding_scope</span><span class="p">)</span>
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">attention_type</span><span class="p">)</span>
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">attention_output_projection</span><span class="p">)</span>
             <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">norm_first</span><span class="p">)</span>
-            <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">initialization</span><span class="o">.</span><span class="n">grid_size</span><span class="p">()</span>
+            <span class="o">*</span> <span class="n">component_initialization_combinations</span>
+            <span class="o">*</span> <span class="n">fallback_initialization_combinations</span>
         <span class="p">)</span></div>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;decoding_support&quot;</span><span class="p">)</span>
@@ -1506,6 +1634,7 @@
             <span class="s2">&quot;activation_fn&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">activation_fn</span><span class="p">,</span>
             <span class="s2">&quot;normalization&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">normalization</span><span class="p">,</span>
             <span class="s2">&quot;positional_encoding&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span><span class="p">,</span>
+            <span class="s2">&quot;positional_encoding_scope&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding_scope</span><span class="p">,</span>
             <span class="s2">&quot;attention_type&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">attention_type</span><span class="p">,</span>
             <span class="s2">&quot;attention_output_projection&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">attention_output_projection</span><span class="p">,</span>
             <span class="s2">&quot;norm_first&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">norm_first</span><span class="p">,</span>
@@ -1578,16 +1707,21 @@
 
         <span class="k">for</span> <span class="n">width_index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">)):</span>
             <span class="k">for</span> <span class="n">positional_encoding</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span><span class="p">:</span>
-                <span class="n">candidates</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                    <span class="p">(</span>
-                        <span class="s2">&quot;width/positional encoding combination &quot;</span>
-                        <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="n">width_index</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">positional_encoding</span><span class="si">!r}</span><span class="s2">)&quot;</span><span class="p">,</span>
-                        <span class="p">{</span>
-                            <span class="s2">&quot;width_index&quot;</span><span class="p">:</span> <span class="n">width_index</span><span class="p">,</span>
-                            <span class="s2">&quot;positional_encoding&quot;</span><span class="p">:</span> <span class="n">positional_encoding</span><span class="p">,</span>
-                        <span class="p">},</span>
+                <span class="k">for</span> <span class="n">positional_encoding_scope</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding_scope</span><span class="p">:</span>
+                    <span class="n">candidates</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                        <span class="p">(</span>
+                            <span class="s2">&quot;width/positional encoding combination &quot;</span>
+                            <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="n">width_index</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">positional_encoding</span><span class="si">!r}</span><span class="s2">, &quot;</span>
+                            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">positional_encoding_scope</span><span class="si">!r}</span><span class="s2">)&quot;</span><span class="p">,</span>
+                            <span class="p">{</span>
+                                <span class="s2">&quot;width_index&quot;</span><span class="p">:</span> <span class="n">width_index</span><span class="p">,</span>
+                                <span class="s2">&quot;positional_encoding&quot;</span><span class="p">:</span> <span class="n">positional_encoding</span><span class="p">,</span>
+                                <span class="s2">&quot;positional_encoding_scope&quot;</span><span class="p">:</span> <span class="p">(</span>
+                                    <span class="n">positional_encoding_scope</span>
+                                <span class="p">),</span>
+                            <span class="p">},</span>
+                        <span class="p">)</span>
                     <span class="p">)</span>
-                <span class="p">)</span>
             <span class="k">for</span> <span class="n">attention_type</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">attention_type</span><span class="p">:</span>
                 <span class="k">for</span> <span class="n">n_kv_heads</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_valid_kv_heads_for_width</span><span class="p">(</span><span class="n">width_index</span><span class="p">):</span>
                     <span class="n">candidates</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
@@ -1636,12 +1770,24 @@
         <span class="n">dim_feedforward</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="s2">&quot;dim_feedforward&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_feedforward</span><span class="p">)</span>
         <span class="n">num_layers</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="s2">&quot;num_layers&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_layers</span><span class="p">)</span>
         <span class="n">rope_theta</span> <span class="o">=</span> <span class="n">sample_param</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="s2">&quot;rope_theta&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">rope_theta</span><span class="p">)</span>
-        <span class="n">initialization</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">initialization</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
+        <span class="p">(</span>
+            <span class="n">ingestion_initialization</span><span class="p">,</span>
+            <span class="n">backbone_initialization</span><span class="p">,</span>
+            <span class="n">decoder_initialization</span><span class="p">,</span>
+        <span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_sample_initializations</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
 
         <span class="n">activation_fn</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span><span class="s2">&quot;activation_fn&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">activation_fn</span><span class="p">)</span>
         <span class="n">normalization</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span><span class="s2">&quot;normalization&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">normalization</span><span class="p">)</span>
         <span class="n">positional_encoding</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span>
             <span class="s2">&quot;positional_encoding&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span>
+        <span class="p">)</span>
+        <span class="n">sampled_positional_encoding_scope</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span>
+            <span class="s2">&quot;positional_encoding_scope&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding_scope</span>
+        <span class="p">)</span>
+        <span class="n">positional_encoding_scope</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="s2">&quot;global&quot;</span>
+            <span class="k">if</span> <span class="n">positional_encoding</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;range&quot;</span><span class="p">,</span> <span class="s2">&quot;range_concat&quot;</span><span class="p">,</span> <span class="s2">&quot;sinusoidal&quot;</span><span class="p">}</span>
+            <span class="k">else</span> <span class="n">sampled_positional_encoding_scope</span>
         <span class="p">)</span>
         <span class="n">attention_type</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span>
             <span class="s2">&quot;attention_type&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">attention_type</span>
@@ -1666,7 +1812,11 @@
             <span class="n">n_kv_heads</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">suggest_categorical</span><span class="p">(</span><span class="s2">&quot;n_kv_heads&quot;</span><span class="p">,</span> <span class="n">valid_kv_heads</span><span class="p">)</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">dim_model</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">dim_feedforward</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">num_layers</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">activation_fn</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">normalization</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">positional_encoding</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">attention_type</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">attention_output_projection</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">norm_first</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">n_kv_heads</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">rope_theta</span><span class="w"> </span><span class="si">= }</span><span class="s2"> &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">dim_model</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">dim_feedforward</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">num_layers</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">activation_fn</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">normalization</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">positional_encoding</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">positional_encoding_scope</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">attention_type</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">attention_output_projection</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">norm_first</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">n_kv_heads</span><span class="w"> </span><span class="si">= }</span><span class="s2"> - </span><span class="si">{</span><span class="n">rope_theta</span><span class="w"> </span><span class="si">= }</span><span class="s2"> &quot;</span>
         <span class="p">)</span>
 
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_model_spec</span><span class="p">(</span>
@@ -1678,12 +1828,15 @@
             <span class="n">activation_fn</span><span class="o">=</span><span class="n">activation_fn</span><span class="p">,</span>
             <span class="n">normalization</span><span class="o">=</span><span class="n">normalization</span><span class="p">,</span>
             <span class="n">positional_encoding</span><span class="o">=</span><span class="n">positional_encoding</span><span class="p">,</span>
+            <span class="n">positional_encoding_scope</span><span class="o">=</span><span class="n">positional_encoding_scope</span><span class="p">,</span>
             <span class="n">attention_type</span><span class="o">=</span><span class="n">attention_type</span><span class="p">,</span>
             <span class="n">attention_output_projection</span><span class="o">=</span><span class="n">attention_output_projection</span><span class="p">,</span>
             <span class="n">norm_first</span><span class="o">=</span><span class="n">norm_first</span><span class="p">,</span>
             <span class="n">n_kv_heads</span><span class="o">=</span><span class="n">n_kv_heads</span><span class="p">,</span>
             <span class="n">rope_theta</span><span class="o">=</span><span class="n">rope_theta</span><span class="p">,</span>
-            <span class="n">initialization</span><span class="o">=</span><span class="n">initialization</span><span class="p">,</span>
+            <span class="n">ingestion_initialization</span><span class="o">=</span><span class="n">ingestion_initialization</span><span class="p">,</span>
+            <span class="n">backbone_initialization</span><span class="o">=</span><span class="n">backbone_initialization</span><span class="p">,</span>
+            <span class="n">decoder_initialization</span><span class="o">=</span><span class="n">decoder_initialization</span><span class="p">,</span>
         <span class="p">)</span></div></div>
 
 
@@ -1792,6 +1945,19 @@
         <span class="n">architecture</span> <span class="o">=</span> <span class="n">model_spec</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">architecture</span><span class="o">.</span><span class="n">model_copy</span><span class="p">(</span>
             <span class="n">update</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;dropout&quot;</span><span class="p">:</span> <span class="n">training_config</span><span class="o">.</span><span class="n">backbone_dropout</span><span class="p">}</span>
         <span class="p">)</span>
+        <span class="n">ingestion</span> <span class="o">=</span> <span class="n">model_spec</span><span class="o">.</span><span class="n">ingestion</span>
+        <span class="k">if</span> <span class="n">training_config</span><span class="o">.</span><span class="n">ingestion_dropout</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">ingestion_updates</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s2">&quot;dropout&quot;</span><span class="p">:</span> <span class="n">training_config</span><span class="o">.</span><span class="n">ingestion_dropout</span>
+            <span class="p">}</span>
+            <span class="k">if</span> <span class="n">ingestion</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s2">&quot;composite&quot;</span><span class="p">:</span>
+                <span class="n">ingestion_updates</span><span class="p">[</span><span class="s2">&quot;branches&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">name</span><span class="p">:</span> <span class="n">branch</span><span class="o">.</span><span class="n">model_copy</span><span class="p">(</span>
+                        <span class="n">update</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;dropout&quot;</span><span class="p">:</span> <span class="n">training_config</span><span class="o">.</span><span class="n">ingestion_dropout</span><span class="p">}</span>
+                    <span class="p">)</span>
+                    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">branch</span> <span class="ow">in</span> <span class="n">ingestion</span><span class="o">.</span><span class="n">branches</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                <span class="p">}</span>
+            <span class="n">ingestion</span> <span class="o">=</span> <span class="n">ingestion</span><span class="o">.</span><span class="n">model_copy</span><span class="p">(</span><span class="n">update</span><span class="o">=</span><span class="n">ingestion_updates</span><span class="p">)</span>
         <span class="n">repository_template</span> <span class="o">=</span> <span class="n">model_spec</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">repository</span>
         <span class="k">if</span> <span class="n">repository_template</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">repository</span> <span class="o">=</span> <span class="kc">None</span>
@@ -1811,12 +1977,13 @@
             <span class="p">)</span>
         <span class="n">model_spec</span> <span class="o">=</span> <span class="n">model_spec</span><span class="o">.</span><span class="n">model_copy</span><span class="p">(</span>
             <span class="n">update</span><span class="o">=</span><span class="p">{</span>
+                <span class="s2">&quot;ingestion&quot;</span><span class="p">:</span> <span class="n">ingestion</span><span class="p">,</span>
                 <span class="s2">&quot;backbone&quot;</span><span class="p">:</span> <span class="n">model_spec</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">model_copy</span><span class="p">(</span>
                     <span class="n">update</span><span class="o">=</span><span class="p">{</span>
                         <span class="s2">&quot;architecture&quot;</span><span class="p">:</span> <span class="n">architecture</span><span class="p">,</span>
                         <span class="s2">&quot;repository&quot;</span><span class="p">:</span> <span class="n">repository</span><span class="p">,</span>
                     <span class="p">}</span>
-                <span class="p">)</span>
+                <span class="p">),</span>
             <span class="p">}</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">objective_class</span><span class="o">.</span><span class="n">forward_looking</span><span class="p">:</span>

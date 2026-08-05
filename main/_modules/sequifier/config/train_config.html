@@ -967,7 +967,7 @@
 <span class="k">class</span><span class="w"> </span><span class="nc">BackbonePositionEncodingConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
 
-    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;learned&quot;</span><span class="p">,</span> <span class="s2">&quot;rope&quot;</span><span class="p">,</span> <span class="s2">&quot;range&quot;</span><span class="p">,</span> <span class="s2">&quot;sinusoidal&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;learned&quot;</span>
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;learned&quot;</span><span class="p">,</span> <span class="s2">&quot;rope&quot;</span><span class="p">,</span> <span class="s2">&quot;range&quot;</span><span class="p">,</span> <span class="s2">&quot;range_concat&quot;</span><span class="p">,</span> <span class="s2">&quot;sinusoidal&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;learned&quot;</span>
     <span class="n">theta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mf">10000.0</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
 
 
@@ -987,8 +987,28 @@
     <span class="n">position_encoding</span><span class="p">:</span> <span class="n">BackbonePositionEncodingConfig</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="n">BackbonePositionEncodingConfig</span>
     <span class="p">)</span>
+    <span class="n">positional_encoding_scope</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;per_feature&quot;</span><span class="p">,</span> <span class="s2">&quot;global&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;per_feature&quot;</span>
     <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">lt</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
     <span class="n">shared_layer_groups</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">default_global_position_scope</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">values</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">values</span>
+        <span class="n">position_encoding</span> <span class="o">=</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;position_encoding&quot;</span><span class="p">,</span> <span class="p">{})</span>
+        <span class="n">position_type</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">position_encoding</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;type&quot;</span><span class="p">,</span> <span class="s2">&quot;learned&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">position_encoding</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span>
+            <span class="k">else</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">position_encoding</span><span class="p">,</span> <span class="s2">&quot;type&quot;</span><span class="p">,</span> <span class="s2">&quot;learned&quot;</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">position_type</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;range&quot;</span><span class="p">,</span> <span class="s2">&quot;range_concat&quot;</span><span class="p">,</span> <span class="s2">&quot;sinusoidal&quot;</span><span class="p">}</span>
+            <span class="ow">and</span> <span class="s2">&quot;positional_encoding_scope&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">values</span>
+        <span class="p">):</span>
+            <span class="n">values</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
+            <span class="n">values</span><span class="p">[</span><span class="s2">&quot;positional_encoding_scope&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;global&quot;</span>
+        <span class="k">return</span> <span class="n">values</span>
 
     <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_architecture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
@@ -1003,6 +1023,16 @@
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                     <span class="sa">f</span><span class="s2">&quot;RoPE requires an even head dimension, got </span><span class="si">{</span><span class="n">head_dim</span><span class="si">}</span><span class="s2">&quot;</span>
                 <span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">position_encoding</span><span class="o">.</span><span class="n">type</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;range&quot;</span><span class="p">,</span> <span class="s2">&quot;range_concat&quot;</span><span class="p">,</span> <span class="s2">&quot;sinusoidal&quot;</span><span class="p">}</span>
+            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding_scope</span> <span class="o">!=</span> <span class="s2">&quot;global&quot;</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;position_encoding type </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">position_encoding</span><span class="o">.</span><span class="n">type</span><span class="si">!r}</span><span class="s2"> requires &quot;</span>
+                <span class="s2">&quot;positional_encoding_scope &#39;global&#39;&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">position_encoding</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s2">&quot;range_concat&quot;</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;range_concat requires dim_model to be at least 2&quot;</span><span class="p">)</span>
 
         <span class="n">seen_layers</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
         <span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">shared_layer_groups</span><span class="p">:</span>
@@ -1480,21 +1510,7 @@
 
     <span class="n">ingestion</span><span class="p">:</span> <span class="n">IngestionComponentConfig</span>
     <span class="n">backbone</span><span class="p">:</span> <span class="n">BackboneComponentConfig</span>
-    <span class="n">decoder</span><span class="p">:</span> <span class="n">DecoderComponentConfig</span>
-
-    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_component_contracts</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="n">dim_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">architecture</span><span class="o">.</span><span class="n">dim_model</span>
-        <span class="k">if</span> <span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">type</span> <span class="o">!=</span> <span class="s2">&quot;composite&quot;</span>
-            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">output_dim</span> <span class="o">!=</span> <span class="n">dim_model</span>
-        <span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;model_spec.ingestion.output_dim must equal &quot;</span>
-                <span class="s2">&quot;model_spec.backbone.architecture.dim_model: &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">output_dim</span><span class="si">}</span><span class="s2"> != </span><span class="si">{</span><span class="n">dim_model</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="p">)</span>
-        <span class="k">return</span> <span class="bp">self</span></div>
+    <span class="n">decoder</span><span class="p">:</span> <span class="n">DecoderComponentConfig</span></div>
 
 
 <span class="n">_PathT</span> <span class="o">=</span> <span class="n">TypeVar</span><span class="p">(</span><span class="s2">&quot;_PathT&quot;</span><span class="p">)</span>
