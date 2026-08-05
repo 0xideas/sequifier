@@ -205,12 +205,10 @@ DECODER_HIDDEN_DIMS: dict[str, Callable[[Any], list[int]]] = {
 
 
 def resolve_decoding_plan(hparams: Any) -> DecodingPlan:
-    decoding_spec = hparams.model_spec.decoding_spec
-    if decoding_spec is None:
-        raise ValueError("model_spec.decoding_spec must be configured")
+    decoding_spec = hparams.model_spec.decoder
 
-    if isinstance(decoding_spec, dict):
-        branch_items = list(decoding_spec.items())
+    if decoding_spec.type == "composite":
+        branch_items = list(decoding_spec.branches.items())
         default_target_columns = None
     else:
         branch_items = [("default", decoding_spec)]
@@ -255,7 +253,7 @@ def resolve_decoding_plan(hparams: Any) -> DecodingPlan:
     undecoded_columns = set(hparams.target_columns) - set(target_to_branch)
     if undecoded_columns:
         raise ValueError(
-            "model_spec.decoding_spec must decode every target column; "
+            "model_spec.decoder must decode every target column; "
             f"missing {sorted(undecoded_columns)}"
         )
     return DecodingPlan(tuple(branches), target_to_branch)
@@ -271,7 +269,7 @@ def build_target_decoding(
     decoder_n_classes = (
         hparams.n_classes if target_n_classes is None else target_n_classes
     )
-    input_dim = model_spec.dim_model * model_spec.decoding_support
+    input_dim = model_spec.backbone.architecture.dim_model * model_spec.decoder.support
 
     branches = {}
     for branch in plan.branches:

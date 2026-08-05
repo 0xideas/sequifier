@@ -1428,13 +1428,6 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
         return self.merge(branch_outputs)
 
 
-def _add_ingestion_position_encoding(model_spec: Any) -> bool:
-    return (
-        model_spec.positional_encoding == "learned"
-        and model_spec.positional_encoding_scope == "per_feature"
-    )
-
-
 def _split_columns(
     columns: list[str], categorical_columns: list[str], real_columns: list[str]
 ) -> tuple[list[str], list[str]]:

@@ -40,22 +40,44 @@ export_embedding_model: PLEASE FILL # true or false
 export_onnx: true
 
 model_spec:
-  initialization: {} # optional per-layer-group initialization overrides
-  ingestion_spec:
+  ingestion:
     type: direct_embed
     output_dim: 128
-    feature_embedding_dims: # optional per-column embedding sizes for direct_embed
-      EXAMPLE_INPUT_COLUMN_NAME: # can be left out if either all input variables are real or all are categorical
-  dim_model: 128
-  n_head: 16
-  dim_feedforward: 128
-  num_layers: 3
-  positional_encoding: learned
-  positional_encoding_scope: per_feature
-  prediction_length: 1
-  decoding_support: 1
-  decoding_spec:
+    initialization: {} # optional ingestion initialization overrides
+    feature_embedding_dims: null # optional, e.g. {EXAMPLE_INPUT_COLUMN_NAME: 128}; unnecessary if all inputs share one numeric kind
+  backbone:
+    architecture:
+      dim_model: 128
+      max_context_length: 512
+      num_layers: 3
+      attention:
+        type: mha
+        n_heads: 16
+        n_kv_heads: 16
+        output_projection: true
+      feed_forward:
+        dim: 128
+        activation: swiglu
+      normalization:
+        type: rmsnorm
+        norm_first: true
+      position_encoding:
+        type: learned
+        theta: 10000
+      dropout: 0.2
+      shared_layer_groups: []
+    repository:
+      backbone_id: shared-backbone-v1
+      path: checkpoints/backbones/shared-backbone-v1
+      load_policy: if_exists
+      publish: true
+      conflict_policy: compare_and_swap
+    initialization: {}
+  decoder:
     type: linear
+    prediction_length: 1
+    support: 1
+    initialization: {}
 training_spec:
   epochs: 10
   save_interval_epochs: 10
@@ -64,7 +86,6 @@ training_spec:
   learning_rate: 0.0001
   accumulation_steps: 1
   gradient_clip: null
-  dropout: 0.2
   criterion:
     EXAMPLE_TARGET_COLUMN_NAME: MSELoss
   optimizer:
@@ -79,7 +100,6 @@ training_spec:
     total_steps: PLEASE FILL
     three_phase: false
   scheduler_step_on: batch
-  continue_training: true
 """
 
 infer_config_string = """project_root: .

@@ -1,13 +1,11 @@
 import contextlib
 import copy
-import glob
 import hashlib
 import json
 import logging
 import math
 import os
 import random
-import re
 import sys
 from dataclasses import asdict
 
@@ -15,7 +13,7 @@ os.environ["TORCH_NCCL_ASYNC_ERROR_HANDLING"] = "1"
 import time  # noqa: E402
 import uuid  # noqa: E402
 import warnings  # noqa: E402
-from typing import Any, Optional, Union, cast  # noqa: E402
+from typing import Any, Optional, Union  # noqa: E402
 
 import numpy as np  # noqa: E402
 import onnx  # noqa: E402
@@ -31,7 +29,6 @@ from torch.distributed.checkpoint.state_dict import (  # noqa: E402
     StateDictOptions,
     get_model_state_dict,
     get_optimizer_state_dict,
-    set_model_state_dict,
     set_optimizer_state_dict,
 )
 
@@ -68,6 +65,8 @@ NARROW_EMBEDDING_INDEX_DTYPES = (
 )
 WIDE_UNSIGNED_EMBEDDING_INDEX_DTYPES = (torch.uint32, torch.uint64)
 
+from sequifier.artifacts.model_export import pt_bundle  # noqa: E402
+from sequifier.artifacts.run_checkpoint import checkpoint_path  # noqa: E402
 from sequifier.config.train_config import TrainModel, load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
@@ -94,16 +93,30 @@ from sequifier.io.sequifier_dataset_from_folder_pt import (  # noqa: E402
 from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
     SequifierDatasetFromFolderPtLazy,
 )
+from sequifier.model.backbone import TransformerBackbone  # noqa: E402
 from sequifier.model.decoders import build_target_decoding  # noqa: E402
-from sequifier.model.dtypes import cast_floating_to_module_dtype  # noqa: E402
 from sequifier.model.ingestion_compiler import compile_feature_ingestion  # noqa: E402
 from sequifier.model.initialization import initialize_model_weights  # noqa: E402
-from sequifier.model.layers import RMSNorm, SequifierEncoderLayer  # noqa: E402
+from sequifier.model.layers import RMSNorm  # noqa: E402
+from sequifier.model.model import SequifierModel  # noqa: E402
 from sequifier.objectives import create_objective  # noqa: E402
 from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 from sequifier.special_tokens import (  # noqa: E402
     ONNX_CATEGORICAL_TARGET_CODECS_KEY,
     resolve_categorical_decoder_ids,
+)
+from sequifier.training.distributed import (  # noqa: E402
+    broadcast_initial_state,
+    broadcast_publication_result,
+    verify_loaded_revision,
+)
+from sequifier.training.initial_state import (  # noqa: E402
+    load_model_initial_state,
+    select_initial_state,
+)
+from sequifier.training.lifecycle import (  # noqa: E402
+    publish_final_backbone,
+    write_terminal_manifest,
 )
 
 
@@ -247,21 +260,27 @@ def train_worker(
     }
     base_model = model
 
-    latest_model_path = model._get_latest_model_name()
+    if config.training_spec.distributed:
+        selected_source = broadcast_initial_state(
+            select_initial_state(config) if global_rank == 0 else None,
+            global_rank,
+        )
+    else:
+        selected_source = select_initial_state(config)
+    checkpoint = load_model_initial_state(model, selected_source)
+    if config.training_spec.distributed:
+        verify_loaded_revision(model._backbone_parent_revision_id)
+    if checkpoint is not None:
+        model._validate_checkpoint_compatibility(checkpoint, len(train_loader))
+
     pytorch_total_params = sum(p.numel() for p in model.parameters())
-    checkpoint = None
 
     # Initialize Optimizer
     if not config.training_spec.distributed:
         params_to_optimize = model.parameters()
         model.initialize_optimizer(params=params_to_optimize)
 
-        if config.training_spec.continue_training and latest_model_path:
-            checkpoint = torch.load(
-                latest_model_path, map_location="cpu", weights_only=False
-            )
-            model._validate_checkpoint_compatibility(checkpoint, len(train_loader))
-            model.load_state_dict(checkpoint["model_state_dict"])
+        if checkpoint is not None:
             model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
             base_model.start_epoch, base_model.start_batch = _checkpoint_start_position(
@@ -327,105 +346,25 @@ def train_worker(
         params_to_optimize = model.parameters()
         model.initialize_optimizer(params=params_to_optimize)
 
-        resume_signal = [
-            config.training_spec.continue_training and latest_model_path is not None
-            if global_rank == 0
-            else None
-        ]
-        dist.broadcast_object_list(resume_signal, src=0)
-        did_resume = cast(bool, resume_signal[0])
-
-        if did_resume:
-            if global_rank == 0:
-                if latest_model_path is None:
-                    raise RuntimeError("Rank 0 selected resume without a checkpoint.")
-                checkpoint = torch.load(
-                    latest_model_path, map_location="cpu", weights_only=False
-                )
-                full_msd = checkpoint["model_state_dict"]
-                full_osd = checkpoint["optimizer_state_dict"]
-                start_epoch, start_batch = _checkpoint_start_position(
-                    checkpoint, len(train_loader)
-                )
-                resume_state = {
-                    "scaler_state_dict": checkpoint.get("scaler_state_dict"),
-                    "best_val_loss": checkpoint.get("best_val_loss", float("inf")),
-                    "n_epochs_no_improvement": checkpoint.get(
-                        "n_epochs_no_improvement", 0
-                    ),
-                    "has_best_model_state_dict": checkpoint.get("best_model_state_dict")
-                    is not None,
-                    "rng_state": checkpoint.get("rng_state"),
-                    "data_loader_generator_states": checkpoint.get(
-                        "data_loader_generator_states"
-                    ),
-                    "checkpoint_metadata": checkpoint.get("checkpoint_metadata"),
-                }
-
-                meta = [
-                    start_epoch,
-                    start_batch,
-                    checkpoint["scheduler_state_dict"],
-                    full_msd,
-                    full_osd,
-                    resume_state,
-                ]
-            else:
-                meta = [None, None, None, None, None, None]
-
-            # Broadcast the checkpoint data to all ranks simultaneously
-            dist.broadcast_object_list(meta, src=0)
-
-            # Unpack on all ranks. The placeholder Nones are replaced by broadcast.
-            (
-                start_epoch_obj,
-                start_batch_obj,
-                sched_state_obj,
-                full_msd_obj,
-                full_osd_obj,
-                resume_state_obj,
-            ) = meta
-            model.start_epoch = cast(int, start_epoch_obj)
-            model.start_batch = cast(int, start_batch_obj)
-            sched_state = cast(Optional[dict[str, Any]], sched_state_obj)
-            full_msd = cast(dict[str, Tensor], full_msd_obj)
-            full_osd = cast(dict[str, Any], full_osd_obj)
-            resume_state = cast(dict[str, Any], resume_state_obj)
-            model._validate_checkpoint_compatibility(
-                {"checkpoint_metadata": resume_state.get("checkpoint_metadata")},
-                len(train_loader),
+        if checkpoint is not None:
+            model.start_epoch, model.start_batch = _checkpoint_start_position(
+                checkpoint, len(train_loader)
             )
-
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
-
-            set_model_state_dict(
-                base_model,
-                model_state_dict=full_msd,
-                options=options,
-            )
-
             set_optimizer_state_dict(
                 base_model,
                 base_model.optimizer,
-                optim_state_dict=full_osd,
+                optim_state_dict=checkpoint["optimizer_state_dict"],
                 options=options,
             )
-
-            if sched_state is not None:
-                base_model.scheduler.load_state_dict(sched_state)
-            best_model_state_dict = None
-            if resume_state.get("has_best_model_state_dict"):
-                if global_rank == 0 and checkpoint is not None:
-                    best_model_state_dict = checkpoint.get("best_model_state_dict")
-                else:
-                    best_model_state_dict = {}
+            base_model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
             model._apply_checkpoint_training_state(
-                resume_state.get("scaler_state_dict"),
-                resume_state.get("best_val_loss", float("inf")),
-                resume_state.get("n_epochs_no_improvement", 0),
-                best_model_state_dict,
-                resume_state.get("rng_state"),
-                resume_state.get("data_loader_generator_states"),
+                checkpoint.get("scaler_state_dict"),
+                checkpoint.get("best_val_loss", float("inf")),
+                checkpoint.get("n_epochs_no_improvement", 0),
+                checkpoint.get("best_model_state_dict"),
+                checkpoint.get("rng_state"),
+                checkpoint.get("data_loader_generator_states"),
             )
 
         else:
@@ -449,7 +388,7 @@ def train_worker(
 
             dist.barrier()
 
-        if did_resume:
+        if checkpoint is not None:
             base_model._restore_rng_state()
             base_model._restore_data_loader_generator_states()
 
@@ -459,12 +398,7 @@ def train_worker(
         params_to_optimize = model.parameters()
         model.initialize_optimizer(params=params_to_optimize)
 
-        if config.training_spec.continue_training and latest_model_path:
-            checkpoint = torch.load(
-                latest_model_path, map_location="cpu", weights_only=False
-            )
-            base_model._validate_checkpoint_compatibility(checkpoint, len(train_loader))
-            base_model.load_state_dict(checkpoint["model_state_dict"])
+        if checkpoint is not None:
             base_model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             base_model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
             base_model.start_epoch, base_model.start_batch = _checkpoint_start_position(
@@ -722,7 +656,7 @@ class _OnnxExportWrapper(nn.Module):
         return self.model(features, metadata=metadata)
 
 
-class TransformerModel(nn.Module):
+class TransformerModel(SequifierModel):
     """Sequifier transformer plus train/eval/export routines."""
 
     @beartype
@@ -792,64 +726,32 @@ class TransformerModel(nn.Module):
         self.early_stopping_epochs = hparams.training_spec.early_stopping_epochs
         self.hparams = hparams
         self.objective = create_objective(hparams)
-        self.dim_model = self.hparams.model_spec.dim_model
-
-        self.positional_encoding = hparams.model_spec.positional_encoding
-        self.positional_encoding_scope = hparams.model_spec.positional_encoding_scope
-        self.use_rope = self.positional_encoding == "rope"
+        architecture = self.hparams.model_spec.backbone.architecture
+        self.dim_model = architecture.dim_model
+        backbone = TransformerBackbone(architecture)
         built_ingestion = compile_feature_ingestion(
             hparams=hparams,
-            direct_real_dtype_provider=self._ingestion_direct_real_dtype,
+            direct_real_dtype_provider=lambda: (
+                backbone.layers[0].ff.get_first_layer_dtype()
+            ),
             device_max_concat_length=hparams.training_spec.device_max_concat_length,
         )
         self.ingestion = built_ingestion.module
-        transformer_input_width = self.dim_model - int(
-            self.positional_encoding == "range_concat"
-        )
-        self.ingestion_adapter = (
-            nn.Identity()
-            if built_ingestion.width == transformer_input_width
-            else nn.Linear(built_ingestion.width, transformer_input_width)
-        )
-        self.global_position_encoder = None
-        self.range_position_projection = None
-        self.global_position_drop = nn.Dropout(hparams.training_spec.dropout)
-        self.register_buffer(
-            "range_position_values",
-            self._build_range_position_values(self.context_length),
-            persistent=False,
-        )
-        if self.positional_encoding_scope == "global":
-            if self.positional_encoding == "learned":
-                self.global_position_encoder = nn.Embedding(
-                    self.context_length, self.dim_model
-                )
-            elif self.positional_encoding == "range":
-                self.range_position_projection = nn.Linear(
-                    self.dim_model + 1, self.dim_model
-                )
-
-        self.layers = self._build_encoder_layers(hparams)
-
-        if hparams.model_spec.norm_first:
-            NormClass = (
-                RMSNorm
-                if hparams.model_spec.normalization == "rmsnorm"
-                else nn.LayerNorm
+        if built_ingestion.width != self.dim_model:
+            raise ValueError(
+                "Ingestion compiler violated the backbone input contract: "
+                f"{built_ingestion.width} != {self.dim_model}."
             )
-            norm_eps = 1e-6 if hparams.model_spec.normalization == "rmsnorm" else 1e-3
-            self.final_norm = NormClass(self.dim_model, eps=norm_eps)
-        else:
-            self.final_norm = nn.Identity()
+        self.backbone = backbone
 
-        self.prediction_length = hparams.model_spec.prediction_length
-        self.decoding_support = hparams.model_spec.decoding_support
+        self.prediction_length = hparams.model_spec.decoder.prediction_length
+        self.decoding_support = hparams.model_spec.decoder.support
         self.decoded_context_length = self.context_length - self.decoding_support + 1
 
         self.decoder = build_target_decoding(
             hparams, target_n_classes=self.target_n_classes
         )
-        self.softmax = ModuleDict()
+        self.softmax: dict[str, nn.Module] = {}
         for target_column, target_column_type in self.target_column_types.items():
             if target_column_type == "categorical":
                 self.softmax[target_column] = nn.LogSoftmax(dim=-1)
@@ -883,12 +785,18 @@ class TransformerModel(nn.Module):
             persistent=False,
         )
 
-        if hparams.model_spec.initialization.root:
-            self.logger.info(
-                "[INFO] Applying model initialization overrides: "
-                f"{hparams.model_spec.initialization.model_dump(mode='json')}"
-            )
-        initialize_model_weights(self, hparams.model_spec.initialization)
+        component_initializers = {
+            "ingestion": hparams.model_spec.ingestion.initialization,
+            "backbone": hparams.model_spec.backbone.initialization,
+            "decoder": hparams.model_spec.decoder.initialization,
+        }
+        for component_name, initialization in component_initializers.items():
+            if initialization.root:
+                self.logger.info(
+                    f"[INFO] Applying {component_name} initialization overrides: "
+                    f"{initialization.model_dump(mode='json')}"
+                )
+            initialize_model_weights(getattr(self, component_name), initialization)
 
         self.scheduler_step_on = hparams.training_spec.scheduler_step_on
 
@@ -899,8 +807,6 @@ class TransformerModel(nn.Module):
         self.save_interval_minutes = hparams.training_spec.save_interval_minutes
         self.save_interval_batches = hparams.training_spec.save_interval_batches
         self.save_interval_val_loss = hparams.training_spec.save_interval_val_loss
-        self.continue_training = hparams.training_spec.continue_training
-
         use_scaler = False
         if hparams.training_spec.layer_type_dtypes:
             if "float16" in hparams.training_spec.layer_type_dtypes.values():
@@ -913,10 +819,15 @@ class TransformerModel(nn.Module):
         self._resume_rng_state = None
         self._resume_data_loader_generator_states = None
         self._data_loader_generators: dict[str, torch.Generator] = {}
+        self.start_epoch = 1
+        self.start_batch = 0
+        self._backbone_parent_revision_id: Optional[str] = None
 
         self._apply_layer_dtypes()
 
         self.to(self.device)
+        for criterion in self.criterion.values():
+            criterion.to(self.device)
 
     @property
     def encoder(self) -> ModuleDict:
@@ -926,33 +837,16 @@ class TransformerModel(nn.Module):
     def pos_encoder(self):
         return getattr(self.ingestion, "pos_encoder", None)
 
-    def _build_encoder_layer(self, hparams: Any) -> SequifierEncoderLayer:
-        return SequifierEncoderLayer(
-            hparams.model_spec,
-            self.dim_model,
-            hparams.model_spec.n_head,
-            hparams.model_spec.dim_feedforward,
-            hparams.training_spec.dropout,
-            hparams.window_view.context_length,
-        )
-
-    def _build_encoder_layers(self, hparams: Any) -> nn.ModuleList:
-        layers = [
-            self._build_encoder_layer(hparams)
-            for _ in range(hparams.model_spec.num_layers)
-        ]
-        for group in hparams.model_spec.shared_layer_groups:
-            shared_layer = layers[group[0]]
-            for layer_idx in group[1:]:
-                layers[layer_idx] = shared_layer
-        return nn.ModuleList(layers)
+    @property
+    def layers(self) -> nn.ModuleList:
+        return self.backbone.layers
 
     @property
     def real_columns_direct(self) -> list[str]:
         return getattr(self.ingestion, "real_columns_direct", [])
 
     def _ingestion_direct_real_dtype(self) -> torch.dtype:
-        return self.layers[0].ff.get_first_layer_dtype()
+        return self.backbone.layers[0].ff.get_first_layer_dtype()
 
     @beartype
     def initialize_optimizer(self, params: Any = None) -> None:
@@ -1016,9 +910,9 @@ class TransformerModel(nn.Module):
                     criterion.weight.data = criterion.weight.data.to(dtype=target_dtype)
 
     @beartype
-    def _init_criterion(self, hparams: Any) -> ModuleDict:
+    def _init_criterion(self, hparams: Any) -> dict[str, nn.Module]:
         """Build unreduced per-target loss modules."""
-        criterion = ModuleDict()
+        criterion: dict[str, nn.Module] = {}
         for target_column in self.target_columns:
             criterion_name = hparams.training_spec.criterion[target_column]
             if hasattr(torch.nn, criterion_name):
@@ -1056,30 +950,9 @@ class TransformerModel(nn.Module):
         return torch.triu(torch.ones(sz, sz) * float("-inf"), diagonal=1)
 
     @staticmethod
-    def _build_range_position_values(context_length: int) -> Tensor:
-        """Return fixed slot coordinates in [-1, 1] for global range encoding."""
-        if context_length == 1:
-            return torch.zeros(1, dtype=torch.float32)
-        return torch.linspace(-1.0, 1.0, steps=context_length, dtype=torch.float32)
-
-    @staticmethod
     def _filter_key(dict_: dict[str, Any], key: str) -> dict[str, Any]:
         """Return a copy without key."""
         return {k: v for k, v in dict_.items() if k != key}
-
-    @conditional_beartype
-    def _recursive_concat(self, srcs: list[Tensor]):
-        """Concatenate tensors in chunks to avoid device concat limits."""
-        if len(srcs) <= self.device_max_concat_length:
-            return torch.cat(srcs, 2)
-        else:
-            srcs_inner = []
-            for start in range(0, len(srcs), self.device_max_concat_length):
-                src = self._recursive_concat(
-                    srcs[start : start + self.device_max_concat_length]
-                )
-                srcs_inner.append(src)
-            return self._recursive_concat(srcs_inner)
 
     @conditional_beartype
     def _build_attention_mask(self, valid_mask: Tensor, dtype: torch.dtype) -> Tensor:
@@ -1115,88 +988,15 @@ class TransformerModel(nn.Module):
         return base_mask + padding_mask
 
     @conditional_beartype
-    def _zero_padding_positions(self, x: Tensor, valid_mask: Tensor) -> Tensor:
-        """Zero padded query positions after attention/FFN layers."""
-        return x.masked_fill(~valid_mask[:, :, None], 0.0)
-
-    @conditional_beartype
-    def _global_position_indices(self, x: Tensor) -> Tensor:
-        """Return absolute window-slot indices shared across feature channels."""
-        pos = torch.arange(0, self.context_length, dtype=torch.long, device=x.device)
-        return pos.repeat(x.shape[0], 1)
-
-    @conditional_beartype
-    def _apply_global_position(self, x: Tensor) -> Tensor:
-        """Apply model-level positional encoding after ingestion."""
-        if x.shape[1] != self.context_length:
-            raise ValueError(
-                f"Input sequence length ({x.shape[1]}) must match "
-                f"context_length ({self.context_length}) for global position encoding."
-            )
-
-        if self.global_position_encoder is not None:
-            pos_embedding = self.global_position_encoder(
-                self._global_position_indices(x)
-            )
-            pos_embedding = pos_embedding.to(dtype=x.dtype)
-            return self.global_position_drop(x + pos_embedding)
-
-        if self.range_position_projection is not None:
-            position_channel = self.range_position_values.to(
-                device=x.device, dtype=x.dtype
-            )
-            position_channel = position_channel.view(1, self.context_length, 1).expand(
-                x.shape[0], -1, -1
-            )
-            positioned = torch.cat((x, position_channel), dim=-1)
-            positioned = self.range_position_projection(
-                cast_floating_to_module_dtype(
-                    positioned, self.range_position_projection
-                )
-            )
-            return self.global_position_drop(positioned)
-
-        if self.positional_encoding == "range_concat":
-            position_channel = self.range_position_values.to(
-                device=x.device, dtype=x.dtype
-            )
-            position_channel = position_channel.view(1, self.context_length, 1).expand(
-                x.shape[0], -1, -1
-            )
-            return torch.cat((x, position_channel), dim=-1)
-
-        return x
-
-    @conditional_beartype
     def forward_inner(
         self, src: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> Tensor:
         """Encode inputs into contextual hidden states."""
-        src2 = self.ingestion(src, metadata)
-        src2 = self.ingestion_adapter(
-            cast_floating_to_module_dtype(src2, self.ingestion_adapter)
-        )
-
         valid_mask = metadata["attention_valid_mask"].bool()  # type: ignore
-        if valid_mask.shape != src2.shape[:2]:
-            raise ValueError(
-                f"Invalid attention mask shape: got {tuple(valid_mask.shape)}, "
-                f"expected {tuple(src2.shape[:2])} = (batch_size, context_length). "
-                "Check attention_valid_mask / leftPadLength construction."
-            )
-        src2 = self._apply_global_position(src2)
-        src2 = self._zero_padding_positions(src2, valid_mask)
-
-        mask = self._build_attention_mask(valid_mask, dtype=src2.dtype)
-
-        for layer in self.layers:
-            src2 = layer(src2, src_mask=mask)
-            src2 = self._zero_padding_positions(src2, valid_mask)
-
-        src2 = self.final_norm(cast_floating_to_module_dtype(src2, self.final_norm))
-        src2 = self._zero_padding_positions(src2, valid_mask)
-
-        return src2.transpose(0, 1)
+        ingestion_output = self.ingestion(src, metadata)
+        mask = self._build_attention_mask(valid_mask, dtype=ingestion_output.dtype)
+        hidden = self.encode_ingested(ingestion_output, metadata, mask)
+        return hidden.transpose(0, 1)
 
     @conditional_beartype
     def forward_embed(
@@ -1354,7 +1154,6 @@ class TransformerModel(nn.Module):
             ),
             "training_objective": self.hparams.training_objective,
             "seed": self.hparams.seed,
-            "dropout": training_spec.dropout,
             "bert_spec": bert_spec,
             "next_occurrence_config": next_occurrence_config,
             "criterion": training_spec.criterion,
@@ -1602,6 +1401,7 @@ class TransformerModel(nn.Module):
         n_epochs_no_improvement = self._resume_n_epochs_no_improvement
         last_epoch = self.start_epoch - 1
         best_model_state = self._resume_best_model_state_dict
+        completion_reason = "normal_completion"
 
         try:
             self.last_latest_save_time = time.time()
@@ -1624,134 +1424,92 @@ class TransformerModel(nn.Module):
                 )
             for epoch in range(self.start_epoch, self.hparams.training_spec.epochs + 1):
                 if (
-                    self.early_stopping_epochs is None
-                    or n_epochs_no_improvement < self.early_stopping_epochs
-                ) and (
-                    epoch == self.start_epoch
-                    or epoch > self.start_epoch
-                    and not np.isnan(total_loss)  # type: ignore # noqa: F821
+                    self.early_stopping_epochs is not None
+                    and n_epochs_no_improvement >= self.early_stopping_epochs
                 ):
-                    epoch_start_time = time.time()
+                    completion_reason = "early_stopping"
+                    break
+                if epoch > self.start_epoch and np.isnan(total_loss):  # type: ignore # noqa: F821
+                    raise RuntimeError("Validation loss became NaN.")
 
-                    train_loader.dataset.set_epoch(epoch)
-                    valid_loader.dataset.set_epoch(epoch)
+                epoch_start_time = time.time()
+                train_loader.dataset.set_epoch(epoch)
+                valid_loader.dataset.set_epoch(epoch)
 
-                    self._train_epoch(
-                        train_loader,
-                        valid_loader,
-                        epoch,
-                        ddp_model,
-                        best_val_loss,
-                        n_epochs_no_improvement,
-                        best_model_state,
-                    )
+                self._train_epoch(
+                    train_loader,
+                    valid_loader,
+                    epoch,
+                    ddp_model,
+                    best_val_loss,
+                    n_epochs_no_improvement,
+                    best_model_state,
+                )
 
-                    total_loss, total_losses, class_counts = self._evaluate(
-                        valid_loader, ddp_model
-                    )
-                    elapsed = time.time() - epoch_start_time
+                total_loss, total_losses, class_counts = self._evaluate(
+                    valid_loader, ddp_model
+                )
+                elapsed = time.time() - epoch_start_time
+                self._log_epoch_results(
+                    epoch,
+                    len(train_loader),
+                    elapsed,
+                    total_loss,
+                    total_losses,
+                    class_counts,
+                    epoch * len(train_loader),
+                )
 
-                    total_expected_batches = epoch * len(train_loader)
-                    self._log_epoch_results(
-                        epoch,
-                        len(train_loader),
-                        elapsed,
-                        total_loss,
-                        total_losses,
-                        class_counts,
-                        total_expected_batches,
-                    )
-
-                    if total_loss < best_val_loss:
-                        best_val_loss = float(total_loss)
-                        best_model_state = self._get_full_state_dict(ddp_model)
-                        n_epochs_no_improvement = 0
-                    else:
-                        n_epochs_no_improvement += 1
-
-                    if self.scheduler_step_on == "epoch":
-                        if (
-                            not hasattr(self.scheduler, "total_steps")
-                            or self.scheduler.last_epoch < self.scheduler.total_steps
-                        ):
-                            self.scheduler.step()
-
-                    if epoch % self.save_interval_epochs == 0:
-                        self._save(
-                            epoch,
-                            len(train_loader) - 1,
-                            total_loss,
-                            ddp_model=ddp_model,
-                            suffix=f"epoch-{epoch}",
-                            best_val_loss=best_val_loss,
-                            n_epochs_no_improvement=n_epochs_no_improvement,
-                            best_model_state_dict=best_model_state,
-                            num_batches=len(train_loader),
-                        )
-
-                    last_epoch = epoch
-                    self._check_and_terminate()
-        except KeyboardInterrupt:
-            self.logger.info("\n" + "=" * 89)
-            self.logger.info("[WARNING] Training interrupted by user (Ctrl+C).")
-
-            if self.hparams.training_spec.distributed:
-                dist.barrier()
-
-            answer_list = ["n"]
-
-            if self.rank == 0:
-                try:
-                    answer = (
-                        input(
-                            "Do you want to export the 'best' and 'last' models? (y/n): "
-                        )
-                        .lower()
-                        .strip()
-                    )
-                    if answer == "y":
-                        answer_list[0] = "y"
-                except EOFError:  # Handle non-interactive environments
-                    answer_list[0] = "n"
-
-            if self.hparams.training_spec.distributed:
-                dist.broadcast_object_list(answer_list, src=0)
-
-            if answer_list[0] == "y":
-                if self.rank == 0:
-                    self.logger.info("[INFO] User opted to export models.")
-
-                if last_epoch is not None and best_model_state is not None:
-                    if self.rank == 0:
-                        self.logger.info(
-                            f"[INFO] Exporting 'last' model from epoch {last_epoch}..."
-                        )
-
-                    # FSDP state extraction is collective; only rank 0 writes the result.
-                    last_model_state = self._get_full_state_dict(ddp_model)
-
-                    if self.rank == 0:
-                        self._export(last_model_state, "last", last_epoch)
-
-                        self.logger.info(
-                            "[INFO] Exporting 'best' model (based on best val loss)..."
-                        )
-                        self._export(best_model_state, "best", last_epoch)
-                        self.logger.info("[INFO] Models exported.")
+                if total_loss < best_val_loss:
+                    best_val_loss = float(total_loss)
+                    best_model_state = self._get_full_state_dict(ddp_model)
+                    n_epochs_no_improvement = 0
                 else:
-                    if self.rank == 0:
-                        self.logger.info(
-                            "[INFO] Could not export model as no epoch ran."
-                        )
-            else:
-                if self.rank == 0:
-                    self.logger.info("[INFO] User opted *not* to export. Exiting.")
+                    n_epochs_no_improvement += 1
+
+                if self.scheduler_step_on == "epoch":
+                    if (
+                        not hasattr(self.scheduler, "total_steps")
+                        or self.scheduler.last_epoch < self.scheduler.total_steps
+                    ):
+                        self.scheduler.step()
+
+                if epoch % self.save_interval_epochs == 0:
+                    self._save(
+                        epoch,
+                        len(train_loader) - 1,
+                        total_loss,
+                        ddp_model=ddp_model,
+                        suffix=f"epoch-{epoch}",
+                        best_val_loss=best_val_loss,
+                        n_epochs_no_improvement=n_epochs_no_improvement,
+                        best_model_state_dict=best_model_state,
+                        num_batches=len(train_loader),
+                    )
+
+                last_epoch = epoch
+                self._check_and_terminate()
+        except KeyboardInterrupt:
+            completion_reason = "keyboard_interruption"
+            self.logger.info("[WARNING] Training interrupted; exporting final state.")
+        except BaseException as error:
+            if self.rank == 0:
+                is_pruned = isinstance(error, SystemExit) and error.code == 143
+                write_terminal_manifest(
+                    self,
+                    status="pruned" if is_pruned else "failed",
+                    completion_reason="optuna_pruning" if is_pruned else "exception",
+                    source_epoch=last_epoch,
+                    exports_succeeded=False,
+                    publication={"success": False, "reason": "not_attempted"},
+                )
+            raise
 
         if self.hparams.training_spec.distributed:
             dist.barrier()
 
+        # Complete export needs one full final model. FSDP extraction is collective.
         last_model_state = self._get_full_state_dict(ddp_model)
-
         if best_model_state is None:
             if self.rank == 0:
                 self.logger.info(
@@ -1759,10 +1517,74 @@ class TransformerModel(nn.Module):
                 )
             best_model_state = last_model_state
 
+        finalization: dict[str, Any] | None = None
         if self.rank == 0:
-            self._export(last_model_state, "last", last_epoch, clean=True)  # type: ignore
-            self._export(best_model_state, "best", last_epoch, clean=True)  # type: ignore
-            self.logger.info("--- Training Complete ---")
+            try:
+                exported_last_model = self._export(
+                    last_model_state, "last", last_epoch, clean=True
+                )
+                self._export(best_model_state, "best", last_epoch, clean=True)
+                if exported_last_model is None:
+                    raise RuntimeError("Rank 0 did not construct an export model.")
+            except Exception as error:
+                finalization = {
+                    "exports_succeeded": False,
+                    "publication": {"success": False, "reason": "not_attempted"},
+                    "error": f"{type(error).__name__}: {error}",
+                }
+                write_terminal_manifest(
+                    self,
+                    status="failed",
+                    completion_reason="export_failure",
+                    source_epoch=last_epoch,
+                    exports_succeeded=False,
+                    publication=finalization["publication"],
+                )
+            else:
+                try:
+                    publication = publish_final_backbone(
+                        exported_last_model, source_epoch=last_epoch
+                    )
+                except Exception as error:
+                    publication = {
+                        "success": False,
+                        "reason": "publication_error",
+                        "error": f"{type(error).__name__}: {error}",
+                    }
+                finalization = {"exports_succeeded": True, "publication": publication}
+                write_terminal_manifest(
+                    self,
+                    status="complete",
+                    completion_reason=completion_reason,
+                    source_epoch=last_epoch,
+                    exports_succeeded=True,
+                    publication=publication,
+                )
+
+        if self.hparams.training_spec.distributed:
+            if self.rank is None:
+                raise RuntimeError("Distributed training requires a process rank.")
+            finalization = broadcast_publication_result(finalization, self.rank)
+        if finalization is None or not finalization["exports_succeeded"]:
+            error = None if finalization is None else finalization.get("error")
+            raise RuntimeError(f"Complete-model export failed: {error}")
+
+        publication = finalization["publication"]
+        if publication.get("success"):
+            self.logger.info(
+                f"[INFO] Published backbone revision {publication['revision_id']}."
+            )
+        elif publication.get("reason") == "compare_and_swap_conflict":
+            self.logger.warning(
+                "[WARNING] Backbone publication lost a compare-and-swap race; "
+                "complete model exports remain valid."
+            )
+        elif publication.get("reason") == "publication_error":
+            self.logger.warning(
+                "[WARNING] Complete model exports succeeded, but backbone "
+                f"publication failed: {publication.get('error')}"
+            )
+        self.logger.info("--- Training Complete ---")
 
         if self.hparams.training_spec.distributed:
             dist.barrier()
@@ -2656,20 +2478,25 @@ class TransformerModel(nn.Module):
         suffix: str,
         epoch: int,
         clean: bool = False,
-    ) -> None:
+    ) -> Optional["TransformerModel"]:
         """Export configured model variants from rank 0."""
         if self.rank != 0:
-            return
+            return None
 
         # Instantiate a clean, decoupled CPU model for the export phase
         if clean:
             export_hparams = copy.deepcopy(self.hparams)
             export_hparams.training_spec.torch_compile = "none"
+            export_hparams.training_spec.distributed = False
+            export_hparams.training_spec.data_parallelism = None
+            export_hparams.training_spec.fsdp_cpu_offload = None
+            export_hparams.device = "cpu"
         else:
             export_hparams = self.hparams
 
         export_model = TransformerModel(export_hparams)
         export_model.load_state_dict(state_dict)
+        export_model._backbone_parent_revision_id = self._backbone_parent_revision_id
         export_model.eval()
 
         os.makedirs(os.path.join(self.project_root, "models"), exist_ok=True)
@@ -2679,6 +2506,7 @@ class TransformerModel(nn.Module):
         if self.export_embedding_model:
             model2 = TransformerEmbeddingModel(export_model)
             self._export_model(model2, f"{suffix}-embedding", epoch)
+        return export_model
 
     @beartype
     def _export_model(
@@ -2807,10 +2635,7 @@ class TransformerModel(nn.Module):
                 f"sequifier-{self.model_name}-{suffix}-{epoch}.pt",
             )
             torch.save(
-                {
-                    "model_state_dict": model.state_dict(),
-                    "export_with_dropout": self.export_with_dropout,
-                },
+                pt_bundle(model, self.hparams, self.export_with_dropout),
                 export_path,
             )
 
@@ -2857,14 +2682,10 @@ class TransformerModel(nn.Module):
         if self.rank != 0:
             return
 
-        os.makedirs(os.path.join(self.project_root, "checkpoints"), exist_ok=True)
-
-        file_name = f"{self.model_name}-{suffix}.pt"
-
-        output_path = os.path.join(
-            self.project_root,
-            "checkpoints",
-            file_name,
+        latest_path = checkpoint_path(self.hparams)
+        latest_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = (
+            latest_path if suffix == "latest" else latest_path.with_name(f"{suffix}.pt")
         )
 
         checkpoint = {
@@ -2880,14 +2701,11 @@ class TransformerModel(nn.Module):
             "best_val_loss": float(best_val_loss),
             "n_epochs_no_improvement": int(n_epochs_no_improvement),
             "best_model_state_dict": best_model_state_dict,
+            "backbone_parent_revision_id": self._backbone_parent_revision_id,
             "loss": val_loss,
         }
 
-        temp_path = os.path.join(
-            self.project_root,
-            "checkpoints",
-            f".{file_name}.{uuid.uuid4().hex}.tmp",
-        )
+        temp_path = output_path.with_name(f".{output_path.name}.{uuid.uuid4().hex}.tmp")
         try:
             torch.save(checkpoint, temp_path)
             os.replace(temp_path, output_path)
@@ -2895,6 +2713,16 @@ class TransformerModel(nn.Module):
             with contextlib.suppress(OSError):
                 os.remove(temp_path)
             raise
+        if output_path != latest_path:
+            latest_temp_path = latest_path.with_name(
+                f".{latest_path.name}.{uuid.uuid4().hex}.tmp"
+            )
+            try:
+                torch.save(checkpoint, latest_temp_path)
+                os.replace(latest_temp_path, latest_path)
+            finally:
+                with contextlib.suppress(OSError):
+                    os.remove(latest_temp_path)
         self.logger.info(f"[INFO] Saved checkpoint to {output_path}")
 
     @beartype
@@ -2924,24 +2752,9 @@ class TransformerModel(nn.Module):
 
     @beartype
     def _get_latest_model_name(self) -> Optional[str]:
-        """Return the newest checkpoint path for this model name."""
-        checkpoint_path = os.path.join(
-            self.project_root, "checkpoints", f"{glob.escape(self.model_name)}-*.pt"
-        )
-        checkpoint_name_re = re.compile(
-            rf"^{re.escape(self.model_name)}-(?:latest|epoch-\d+(?:-batch-\d+)?)\.pt$"
-        )
-
-        files = glob.glob(checkpoint_path)
-        files = [
-            file
-            for file in files
-            if checkpoint_name_re.fullmatch(os.path.split(file)[1])
-        ]
-        if files:
-            return max(files, key=os.path.getmtime)
-        else:
-            return None
+        """Return the explicitly configured run checkpoint when it exists."""
+        path = checkpoint_path(self.hparams)
+        return str(path) if path.is_file() else None
 
     @beartype
     def _log_epoch_results(
@@ -3023,36 +2836,45 @@ class TransformerModel(nn.Module):
 def load_inference_model(
     model_type: str,
     model_path: str,
-    training_config_path: str,
+    training_config_path: Optional[str],
     args_config: dict[str, Any],
     device: str,
     infer_with_dropout: bool,
 ) -> torch.nn.Module:
     """Load a PT checkpoint as a generative or embedding inference module."""
-    skip_metadata = args_config.get("skip_metadata", False)
-    args_config_subset = {
-        k: v for k, v in args_config.items() if k not in ["model_path", "data_path"]
-    }
-    training_config = load_train_config(
-        training_config_path, args_config_subset, skip_metadata
+    model_state = torch.load(
+        model_path, map_location=torch.device(device), weights_only=False
     )
+    embedded_config = model_state.get("training_config")
+    if embedded_config is not None:
+        training_config = TrainModel.model_validate(embedded_config)
+    else:
+        if training_config_path is None:
+            raise ValueError(
+                "PyTorch model has no embedded training config and "
+                "training_config_path was not provided."
+            )
+        skip_metadata = args_config.get("skip_metadata", False)
+        args_config_subset = {
+            k: v for k, v in args_config.items() if k not in ["model_path", "data_path"]
+        }
+        training_config = load_train_config(
+            training_config_path, args_config_subset, skip_metadata
+        )
 
     training_config.training_spec.torch_compile = "none"
+    training_config.device = device
 
     with torch.no_grad():
-        model = TransformerModel(training_config)
         if model_type == "generative":
             model = TransformerModel(training_config)
         elif model_type == "embedding":
             model_inner = TransformerModel(training_config)
             model = TransformerEmbeddingModel(model_inner)
         else:
-            assert False, "impossible"
+            raise ValueError(f"Unknown PT model type: {model_type!r}")
 
         model.logger.info(f"[INFO] Loading model weights from {model_path}")
-        model_state = torch.load(
-            model_path, map_location=torch.device(device), weights_only=False
-        )
         model.load_state_dict(model_state["model_state_dict"])
 
         model.eval()

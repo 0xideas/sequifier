@@ -173,7 +173,7 @@ class _InferenceConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
     model_type: str
     training_objective: str
     data_path: _PathT = Field(default=None)
-    training_config_path: Optional[str] = Field(default="configs/train.yaml")
+    training_config_path: Optional[str] = None
     read_format: str = Field(default="parquet")
     write_format: str = Field(default="csv")
 
@@ -362,10 +362,9 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
         if not any(path.lower().endswith(".pt") for path in model_paths):
             return self
 
-        if self.training_config_path is None:
-            raise ValueError("training_config_path is required for PyTorch models")
-
-        if not os.path.exists(self.training_config_path):
+        if self.training_config_path is not None and not os.path.exists(
+            self.training_config_path
+        ):
             raise ValueError(f"{self.training_config_path} does not exist")
         return self
 

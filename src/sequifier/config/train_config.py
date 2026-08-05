@@ -128,7 +128,29 @@ class FeatureLayoutRegistryModel(RootModel[dict[str, CartesianLayoutModel]]):
         return self.root[key]
 
 
-class DirectEmbedIngestionConfig(BaseModel):
+class IngestionComponentBase(BaseModel):
+    """Settings shared by every feature-ingestion component."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    allow_shared_columns: bool = False
+    allow_unused_input_columns: bool = False
+    auxiliary_input_columns: list[str] = Field(default_factory=list)
+    dropout: float = Field(0.0, ge=0.0, lt=1.0)
+    initialization: ModelInitializationConfig = Field(
+        default_factory=ModelInitializationConfig
+    )
+
+    @field_validator("auxiliary_input_columns")
+    @classmethod
+    def validate_auxiliary_input_columns(cls, value):
+        _validate_column_list_unique(
+            value, "model_spec.ingestion.auxiliary_input_columns"
+        )
+        return value
+
+
+class DirectEmbedIngestionConfig(IngestionComponentBase):
     """Use the existing flat-column embedding path."""
 
     model_config = ConfigDict(extra="forbid")
@@ -152,7 +174,7 @@ class DirectEmbedIngestionConfig(BaseModel):
         return v
 
 
-class PassThroughIngestionConfig(BaseModel):
+class PassThroughIngestionConfig(IngestionComponentBase):
     """Pass real-valued columns through without per-feature encoders."""
 
     model_config = ConfigDict(extra="forbid")
@@ -169,7 +191,7 @@ class PassThroughIngestionConfig(BaseModel):
         return v
 
 
-class FeaturePoolIngestionConfig(BaseModel):
+class FeaturePoolIngestionConfig(IngestionComponentBase):
     """Encode columns as feature tokens before pooling to one time token."""
 
     model_config = ConfigDict(extra="forbid")
@@ -185,7 +207,7 @@ class FeaturePoolIngestionConfig(BaseModel):
         return v
 
 
-class GroupedIngestionConfig(BaseModel):
+class GroupedIngestionConfig(IngestionComponentBase):
     """Encode configured column groups and merge them within one branch."""
 
     model_config = ConfigDict(extra="forbid")
@@ -214,7 +236,7 @@ class GroupedIngestionConfig(BaseModel):
         return self
 
 
-class SiameseIngestionConfig(BaseModel):
+class SiameseIngestionConfig(IngestionComponentBase):
     """Apply one shared scalar encoder across the branch columns."""
 
     model_config = ConfigDict(extra="forbid")
@@ -230,7 +252,7 @@ class SiameseIngestionConfig(BaseModel):
         return v
 
 
-class TemporalConvIngestionConfig(BaseModel):
+class TemporalConvIngestionConfig(IngestionComponentBase):
     """Encode columns, then apply Conv1D over the time axis."""
 
     model_config = ConfigDict(extra="forbid")
@@ -443,7 +465,7 @@ class AxisEmbeddingModel(BaseModel):
         return self
 
 
-class StructuredIngestionConfig(BaseModel):
+class StructuredIngestionConfig(IngestionComponentBase):
     """Consume a top-level cartesian layout."""
 
     model_config = ConfigDict(extra="forbid")
@@ -488,6 +510,38 @@ class IngestionMergeConfig(BaseModel):
 
 
 IngestionSpecConfig = BranchIngestionConfig | dict[str, BranchIngestionConfig]
+
+
+class CompositeIngestionConfig(IngestionComponentBase):
+    """Combine independently configured ingestion branches."""
+
+    type: Literal["composite"]
+    branches: dict[str, BranchIngestionConfig] = Field(..., min_length=1)
+    merge: IngestionMergeConfig = Field(default_factory=IngestionMergeConfig)
+
+    @field_validator("branches")
+    @classmethod
+    def validate_branch_names(cls, branches):
+        for branch_name in branches:
+            _validate_module_dict_key(
+                branch_name, f"Composite ingestion branch {branch_name!r}"
+            )
+        return branches
+
+
+IngestionComponentConfig = Annotated[
+    Union[
+        DirectEmbedIngestionConfig,
+        PassThroughIngestionConfig,
+        FeaturePoolIngestionConfig,
+        GroupedIngestionConfig,
+        SiameseIngestionConfig,
+        TemporalConvIngestionConfig,
+        StructuredIngestionConfig,
+        CompositeIngestionConfig,
+    ],
+    Field(discriminator="type"),
+]
 
 
 class LinearDecodingConfig(BaseModel):
@@ -550,6 +604,172 @@ BranchDecodingConfig = Annotated[
 
 
 DecodingSpecConfig = BranchDecodingConfig | dict[str, BranchDecodingConfig]
+
+
+class DecoderComponentBase(BaseModel):
+    """Settings shared by every target-decoder component."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prediction_length: int = Field(..., gt=0)
+    support: int = Field(1, gt=0)
+    initialization: ModelInitializationConfig = Field(
+        default_factory=ModelInitializationConfig
+    )
+
+
+class LinearDecoderComponentConfig(DecoderComponentBase, LinearDecodingConfig):
+    pass
+
+
+class MLPDecoderComponentConfig(DecoderComponentBase, MLPDecodingConfig):
+    pass
+
+
+class CompositeDecoderComponentConfig(DecoderComponentBase):
+    type: Literal["composite"]
+    branches: dict[str, BranchDecodingConfig] = Field(..., min_length=1)
+
+    @field_validator("branches")
+    @classmethod
+    def validate_branch_names(cls, branches):
+        for branch_name in branches:
+            _validate_module_dict_key(
+                branch_name, f"Target decoding branch {branch_name!r}"
+            )
+        return branches
+
+
+DecoderComponentConfig = Annotated[
+    Union[
+        LinearDecoderComponentConfig,
+        MLPDecoderComponentConfig,
+        CompositeDecoderComponentConfig,
+    ],
+    Field(discriminator="type"),
+]
+
+
+class BackboneAttentionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["mha", "mqa", "gqa"] = "mha"
+    n_heads: int = Field(..., gt=0)
+    n_kv_heads: Optional[int] = Field(default=None, gt=0)
+    output_projection: bool = True
+
+    @model_validator(mode="after")
+    def validate_heads(self):
+        if self.n_kv_heads is None:
+            if self.type == "gqa":
+                raise ValueError("gqa requires n_kv_heads")
+            self.n_kv_heads = 1 if self.type == "mqa" else self.n_heads
+        if self.n_heads % self.n_kv_heads != 0:
+            raise ValueError(
+                f"n_heads {self.n_heads} must be divisible by n_kv_heads "
+                f"{self.n_kv_heads}"
+            )
+        if self.type == "mha" and self.n_kv_heads != self.n_heads:
+            raise ValueError("mha requires n_kv_heads to equal n_heads")
+        if self.type == "mqa" and self.n_kv_heads != 1:
+            raise ValueError("mqa requires n_kv_heads to equal 1")
+        return self
+
+
+class BackboneFeedForwardConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dim: int = Field(..., gt=0)
+    activation: Literal["relu", "gelu", "swiglu"] = "swiglu"
+
+
+class BackboneNormalizationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["layer_norm", "rmsnorm"] = "rmsnorm"
+    norm_first: bool = True
+
+
+class BackbonePositionEncodingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["learned", "rope", "range", "sinusoidal"] = "learned"
+    theta: float = Field(10000.0, gt=0.0)
+
+
+class BackboneArchitectureConfig(BaseModel):
+    """All and only fields that determine shared-backbone compatibility."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dim_model: int = Field(..., gt=0)
+    max_context_length: int = Field(..., gt=0)
+    num_layers: int = Field(..., gt=0)
+    attention: BackboneAttentionConfig
+    feed_forward: BackboneFeedForwardConfig
+    normalization: BackboneNormalizationConfig = Field(
+        default_factory=BackboneNormalizationConfig
+    )
+    position_encoding: BackbonePositionEncodingConfig = Field(
+        default_factory=BackbonePositionEncodingConfig
+    )
+    dropout: float = Field(0.0, ge=0.0, lt=1.0)
+    shared_layer_groups: list[list[int]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_architecture(self):
+        n_heads = self.attention.n_heads
+        if self.dim_model % n_heads != 0:
+            raise ValueError(
+                f"dim_model {self.dim_model} must be divisible by n_heads {n_heads}"
+            )
+        if self.position_encoding.type == "rope":
+            head_dim = self.dim_model // n_heads
+            if head_dim % 2 != 0:
+                raise ValueError(
+                    f"RoPE requires an even head dimension, got {head_dim}"
+                )
+
+        seen_layers: set[int] = set()
+        for group in self.shared_layer_groups:
+            if len(group) < 2 or len(group) != len(set(group)):
+                raise ValueError(
+                    "shared_layer_groups entries must contain at least two unique "
+                    "layer indices"
+                )
+            invalid = [i for i in group if i < 0 or i >= self.num_layers]
+            if invalid:
+                raise ValueError(
+                    "shared_layer_groups references indices outside the backbone: "
+                    f"{invalid}"
+                )
+            overlap = seen_layers & set(group)
+            if overlap:
+                raise ValueError(
+                    "shared_layer_groups cannot overlap: " f"{sorted(overlap)}"
+                )
+            seen_layers.update(group)
+        return self
+
+
+class BackboneRepositoryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    backbone_id: StrictStr = Field(..., min_length=1)
+    path: str
+    load_policy: Literal["if_exists", "required"] = "if_exists"
+    publish: bool = True
+    conflict_policy: Literal["compare_and_swap"] = "compare_and_swap"
+
+
+class BackboneComponentConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    architecture: BackboneArchitectureConfig
+    repository: Optional[BackboneRepositoryConfig] = None
+    initialization: ModelInitializationConfig = Field(
+        default_factory=ModelInitializationConfig
+    )
 
 
 def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
@@ -790,6 +1010,24 @@ class NextOccurrenceConfigModel(BaseModel):
     target_values: list[NextOccurrenceTargetValue] = Field(..., min_length=1)
 
 
+class ResumeConfig(BaseModel):
+    """Policy for resuming the same run from its complete checkpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    policy: Literal["never", "if_exists", "required"] = "never"
+    checkpoint_path: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_checkpoint_path(self):
+        if self.policy == "required" and not self.checkpoint_path:
+            raise ValueError(
+                "training_spec.resume.checkpoint_path is required when policy is "
+                "'required'"
+            )
+        return self
+
+
 class TrainingSpecModel(BaseModel):
     """Training loop, optimization, precision, and distribution settings."""
 
@@ -812,7 +1050,6 @@ class TrainingSpecModel(BaseModel):
     class_weights: Optional[dict[str, list[float]]] = None
     accumulation_steps: Optional[int] = None
     gradient_clip: Optional[float] = None
-    dropout: float = 0.0
     loss_weights: Optional[dict[str, float]] = None
     optimizer: DotDict = Field(default_factory=lambda: DotDict({"name": "Adam"}))
     scheduler: DotDict = Field(
@@ -824,7 +1061,7 @@ class TrainingSpecModel(BaseModel):
     bert_spec: Optional[BERTSpecModel] = None
     next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
 
-    continue_training: bool = True
+    resume: Optional[ResumeConfig] = None
     enforce_determinism: bool = False
     distributed: bool = False
     load_full_data_to_ram: bool = True
@@ -963,233 +1200,27 @@ class TrainingSpecModel(BaseModel):
 
 
 class ModelSpecModel(BaseModel):
-    """Transformer architecture settings."""
+    """The three independently configured runtime model components."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    ingestion_spec: Optional[IngestionSpecConfig] = None
-    ingestion_merge: Optional[IngestionMergeConfig] = None
-    allow_shared_ingestion_columns: bool = False
-    allow_unused_input_columns: bool = False
-    auxiliary_input_columns: list[str] = Field(default_factory=list)
-    initialization: ModelInitializationConfig = Field(
-        default_factory=ModelInitializationConfig
-    )
-    dim_model: int
-    n_head: int
-    dim_feedforward: int
-    num_layers: int
-
-    activation_fn: str = "swiglu"  # Options: "relu", "gelu", "swiglu"
-    normalization: str = "rmsnorm"  # Options: "layer_norm", "rmsnorm"
-    positional_encoding: str = (
-        "learned"  # Options: "learned", "rope", "range", "range_concat"
-    )
-    positional_encoding_scope: str = "per_feature"  # Options: "per_feature", "global"
-    attention_type: str = "mha"  # Options: "mha", "mqa", "gqa"
-    attention_output_projection: bool = True
-
-    norm_first: bool = True
-    shared_layer_groups: list[list[int]] = Field(default_factory=list)
-    n_kv_heads: Optional[int] = None
-    rope_theta: float = 10000.0
-
-    prediction_length: int
-    decoding_support: int = Field(1, gt=0)
-    decoding_spec: Optional[DecodingSpecConfig] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def default_specs(cls, values):
-        if not isinstance(values, dict):
-            return values
-        values = dict(values)
-        positional_encoding = values.get("positional_encoding", "learned")
-        if (
-            positional_encoding in {"range", "range_concat"}
-            and "positional_encoding_scope" not in values
-        ):
-            values["positional_encoding_scope"] = "global"
-        if values.get("decoding_spec") is None:
-            values["decoding_spec"] = {"type": "linear"}
-        if values.get("ingestion_spec") is not None:
-            return values
-        dim_model = values.get("dim_model")
-        if dim_model is None:
-            return values
-        values["ingestion_spec"] = {
-            "type": "direct_embed",
-            "output_dim": (
-                dim_model - 1 if positional_encoding == "range_concat" else dim_model
-            ),
-        }
-        return values
+    ingestion: IngestionComponentConfig
+    backbone: BackboneComponentConfig
+    decoder: DecoderComponentConfig
 
     @model_validator(mode="after")
-    def validate_ingestion_spec_shape(self):
-        if self.ingestion_spec is None:
-            self.ingestion_spec = DirectEmbedIngestionConfig(output_dim=self.dim_model)
-
-        if isinstance(self.ingestion_spec, dict):
-            if not self.ingestion_spec:
-                raise ValueError(
-                    "model_spec.ingestion_spec must define at least one "
-                    "named ingestion"
-                )
-            for branch_name in self.ingestion_spec:
-                _validate_module_dict_key(
-                    branch_name, f"Composite ingestion branch {branch_name!r}"
-                )
-            if self.ingestion_merge is None:
-                self.ingestion_merge = IngestionMergeConfig()
+    def validate_component_contracts(self):
+        dim_model = self.backbone.architecture.dim_model
         if (
-            not isinstance(self.ingestion_spec, dict)
-            and self.ingestion_merge is not None
+            self.ingestion.type != "composite"
+            and self.ingestion.output_dim != dim_model
         ):
             raise ValueError(
-                "model_spec.ingestion_merge is only valid when "
-                "ingestion_spec defines multiple named ingestions"
-            )
-
-        return self
-
-    @model_validator(mode="after")
-    def validate_decoding_spec_present(self):
-        if self.decoding_spec is None:
-            self.decoding_spec = LinearDecodingConfig()
-        if isinstance(self.decoding_spec, dict):
-            if not self.decoding_spec:
-                raise ValueError(
-                    "model_spec.decoding_spec must define at least one " "named decoder"
-                )
-            for branch_name in self.decoding_spec:
-                _validate_module_dict_key(
-                    branch_name, f"Target decoding branch {branch_name!r}"
-                )
-        return self
-
-    @model_validator(mode="after")
-    def validate_shared_layer_groups(self):
-        seen_layers: set[int] = set()
-        for group in self.shared_layer_groups:
-            if len(group) < 2:
-                raise ValueError(
-                    "model_spec.shared_layer_groups entries must contain at "
-                    "least two layer indices"
-                )
-
-            group_layers = set(group)
-            if len(group_layers) != len(group):
-                raise ValueError(
-                    "model_spec.shared_layer_groups entries cannot contain "
-                    f"duplicate layer indices: {group}"
-                )
-
-            invalid_layers = [
-                layer for layer in group if layer < 0 or layer >= self.num_layers
-            ]
-            if invalid_layers:
-                raise ValueError(
-                    "model_spec.shared_layer_groups references layer indices "
-                    f"outside [0, {self.num_layers - 1}]: {invalid_layers}"
-                )
-
-            overlapping_layers = group_layers & seen_layers
-            if overlapping_layers:
-                raise ValueError(
-                    "model_spec.shared_layer_groups cannot reference a layer "
-                    f"in multiple groups: {sorted(overlapping_layers)}"
-                )
-            seen_layers.update(group_layers)
-
-        return self
-
-    @field_validator("activation_fn")
-    @classmethod
-    def validate_activation(cls, v):
-        if v not in ["relu", "gelu", "swiglu"]:
-            raise ValueError(f"Invalid activation_fn: {v}")
-        return v
-
-    @field_validator("normalization")
-    @classmethod
-    def validate_normalization(cls, v):
-        if v not in ["layer_norm", "rmsnorm"]:
-            raise ValueError(f"Invalid normalization: {v}")
-        return v
-
-    @field_validator("positional_encoding")
-    @classmethod
-    def validate_pos_encoding(cls, v):
-        if v not in ["learned", "rope", "range", "range_concat"]:
-            raise ValueError(f"Invalid positional_encoding: {v}")
-        return v
-
-    @field_validator("positional_encoding_scope")
-    @classmethod
-    def validate_pos_encoding_scope(cls, v):
-        if v not in ["per_feature", "global"]:
-            raise ValueError(f"Invalid positional_encoding_scope: {v}")
-        return v
-
-    @model_validator(mode="after")
-    def validate_positional_encoding_combination(self):
-        if (
-            self.positional_encoding in {"range", "range_concat"}
-            and self.positional_encoding_scope != "global"
-        ):
-            raise ValueError(
-                f"positional_encoding {self.positional_encoding!r} requires "
-                "positional_encoding_scope 'global'"
+                "model_spec.ingestion.output_dim must equal "
+                "model_spec.backbone.architecture.dim_model: "
+                f"{self.ingestion.output_dim} != {dim_model}"
             )
         return self
-
-    @field_validator("attention_type")
-    @classmethod
-    def validate_attention_type(cls, v):
-        if v not in ["mha", "mqa", "gqa"]:
-            raise ValueError(f"Invalid attention_type: {v}")
-        return v
-
-    @field_validator("auxiliary_input_columns")
-    @classmethod
-    def validate_auxiliary_input_columns(cls, v):
-        _validate_column_list_unique(v, "model_spec.auxiliary_input_columns")
-        return v
-
-    @field_validator("n_head")
-    @classmethod
-    def validate_n_head(cls, v, info):
-        dim_model = info.data.get("dim_model")
-        if v is None:
-            raise ValueError("n_heads is None")
-        if dim_model is None:
-            raise ValueError("dim_model is None")
-        if dim_model % v != 0:
-            raise ValueError(f"dim_model {dim_model} not divisible by n_head {v}")
-        return v
-
-    @field_validator("n_kv_heads")
-    @classmethod
-    def validate_n_kv_heads(cls, v, info):
-        n_head = info.data.get("n_head")
-        attn_type = info.data.get("attention_type")
-
-        if v is not None:
-            if n_head and n_head % v != 0:
-                raise ValueError(f"n_head {n_head} not divisible by n_kv_heads {v}")
-            if n_head and v > n_head:
-                raise ValueError(f"n_kv_heads {v} > n_head {n_head}")
-
-            if attn_type == "mqa" and v != 1:
-                raise ValueError(f"n_kv_heads must be 1 for mqa, got {v}")
-            if attn_type == "mha" and v != n_head:
-                raise ValueError(f"n_kv_heads must equal n_head for mha, got {v}")
-        else:
-            if attn_type in ["gqa", "mqa"]:
-                raise ValueError(f"n_kv_heads must be specified for {attn_type}")
-
-        return v
 
 
 _PathT = TypeVar("_PathT")
@@ -1319,16 +1350,22 @@ class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
             target_offset=effective_target_offset,
         )
         objective_class.validate_prediction_length(
-            self.model_spec.prediction_length,
+            self.model_spec.decoder.prediction_length,
             self.context_length,
             usage="training",
         )
+        max_context_length = self.model_spec.backbone.architecture.max_context_length
+        if self.context_length > max_context_length:
+            raise ValueError(
+                f"context_length {self.context_length} exceeds backbone "
+                f"max_context_length {max_context_length}"
+            )
         decoded_context_length = (
-            self.context_length - self.model_spec.decoding_support + 1
+            self.context_length - self.model_spec.decoder.support + 1
         )
-        if self.model_spec.decoding_support > self.context_length:
-            raise ValueError("model_spec.decoding_support cannot exceed context_length")
-        if self.model_spec.prediction_length > decoded_context_length:
+        if self.model_spec.decoder.support > self.context_length:
+            raise ValueError("model_spec.decoder.support cannot exceed context_length")
+        if self.model_spec.decoder.prediction_length > decoded_context_length:
             raise ValueError(
                 "model_spec.prediction_length cannot exceed the number of "
                 "decoded positions produced by decoding_support"
@@ -1510,7 +1547,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
             )
         resolve_window_view(self.storage_layout, self.window_view)
         get_objective_class(self.training_objective).validate_prediction_length(
-            self.model_spec.prediction_length,
+            self.model_spec.decoder.prediction_length,
             self.window_view.context_length,
             usage="training",
         )
@@ -1712,35 +1749,35 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
 
     @model_validator(mode="after")
     def validate_auxiliary_input_columns(self):
-        auxiliary_columns = set(self.model_spec.auxiliary_input_columns)
+        auxiliary_columns = set(self.model_spec.ingestion.auxiliary_input_columns)
         missing_columns = auxiliary_columns - set(self.input_columns)
         if missing_columns:
             raise ValueError(
-                "model_spec.auxiliary_input_columns references unknown input "
+                "model_spec.ingestion.auxiliary_input_columns references unknown input "
                 f"columns: {sorted(missing_columns)}"
             )
 
         return self
 
     @model_validator(mode="after")
-    def validate_decoding_spec(self):
-        decoding_support = self.model_spec.decoding_support
+    def validate_decoder(self):
+        decoder_support = self.model_spec.decoder.support
         context_length = self.window_view.context_length
-        if decoding_support > context_length:
+        if decoder_support > context_length:
             raise ValueError(
-                "model_spec.decoding_support must be in the range "
-                f"[1, context_length], got decoding_support={decoding_support} "
+                "model_spec.decoder.support must be in the range "
+                f"[1, context_length], got support={decoder_support} "
                 f"and context_length={context_length}."
             )
 
-        decoded_context_length = context_length - decoding_support + 1
-        if self.model_spec.prediction_length > decoded_context_length:
+        decoded_context_length = context_length - decoder_support + 1
+        if self.model_spec.decoder.prediction_length > decoded_context_length:
             raise ValueError(
-                "model_spec.prediction_length cannot exceed the number of "
-                "decoded positions produced by decoding_support. Got "
-                f"prediction_length={self.model_spec.prediction_length}, "
+                "model_spec.decoder.prediction_length cannot exceed the number of "
+                "decoded positions produced by decoder support. Got "
+                f"prediction_length={self.model_spec.decoder.prediction_length}, "
                 f"decoded_context_length={decoded_context_length}, "
-                f"decoding_support={decoding_support}."
+                f"support={decoder_support}."
             )
 
         from sequifier.model.decoders import resolve_decoding_plan
@@ -1749,7 +1786,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
         return self
 
     @model_validator(mode="after")
-    def validate_ingestion_spec_branches(self):
+    def validate_ingestion(self):
         # Keep public configuration models independent from runtime modules while
         # using the same resolver for cross-field validation and construction.
         # The local import avoids a config/model import cycle at module load time.
