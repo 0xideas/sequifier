@@ -287,6 +287,8 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch._dynamo</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">yaml</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">beartype</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">optuna.trial</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrialState</span>
 
 <span class="n">torch</span><span class="o">.</span><span class="n">_dynamo</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">suppress_errors</span> <span class="o">=</span> <span class="kc">True</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.hyperparameter_search_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
@@ -299,6 +301,9 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.yaml</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModelDumper</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.logging_paths</span><span class="w"> </span><span class="kn">import</span> <span class="n">model_log_directory</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.training.metrics</span><span class="w"> </span><span class="kn">import</span> <span class="n">VALIDATION_FIELDS</span>  <span class="c1"># noqa: E402</span>
+
+<span class="n">_DUPLICATE_OF_USER_ATTR</span> <span class="o">=</span> <span class="s2">&quot;sequifier_duplicate_of&quot;</span>
+<span class="n">_MAX_CONSECUTIVE_DUPLICATE_PROPOSALS</span> <span class="o">=</span> <span class="mi">1000</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">create_sampler</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">BaseSampler</span><span class="p">:</span>
@@ -320,9 +325,12 @@
         <span class="n">libc</span><span class="o">.</span><span class="n">prctl</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">signal</span><span class="o">.</span><span class="n">SIGTERM</span><span class="p">)</span>  <span class="c1"># PR_SET_PDEATHSIG = 1</span></div>
 
 
-<div class="viewcode-block" id="objective"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.objective">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">objective</span><span class="p">(</span><span class="n">trial</span><span class="p">:</span> <span class="n">optuna</span><span class="o">.</span><span class="n">Trial</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]]:</span>
+<div class="viewcode-block" id="objective"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.objective">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">objective</span><span class="p">(</span>
+    <span class="n">trial</span><span class="p">:</span> <span class="n">optuna</span><span class="o">.</span><span class="n">Trial</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">run_config</span><span class="p">:</span> <span class="n">Any</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Run one Optuna trial through the CLI trainer and validation metrics.&quot;&quot;&quot;</span>
-    <span class="n">run_config</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">trial</span><span class="o">.</span><span class="n">number</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">run_config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">run_config</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">trial</span><span class="o">.</span><span class="n">number</span><span class="p">)</span>
     <span class="n">run_name</span> <span class="o">=</span> <span class="n">run_config</span><span class="o">.</span><span class="n">model_name</span>
 
     <span class="n">config_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
@@ -527,6 +535,74 @@
     <span class="k">return</span> <span class="n">best_val_loss</span></div>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">_parameter_signature</span><span class="p">(</span><span class="n">params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return a stable identity for one fully sampled Optuna parameter set.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span>
+        <span class="n">params</span><span class="p">,</span>
+        <span class="n">allow_nan</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="n">separators</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;,&quot;</span><span class="p">,</span> <span class="s2">&quot;:&quot;</span><span class="p">),</span>
+        <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_trained_parameter_signatures</span><span class="p">(</span><span class="n">study</span><span class="p">:</span> <span class="n">optuna</span><span class="o">.</span><span class="n">Study</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Map trained parameter sets to the first trial that used each set.&quot;&quot;&quot;</span>
+    <span class="n">signatures</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">trained_states</span> <span class="o">=</span> <span class="p">(</span><span class="n">TrialState</span><span class="o">.</span><span class="n">COMPLETE</span><span class="p">,</span> <span class="n">TrialState</span><span class="o">.</span><span class="n">PRUNED</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">trial</span> <span class="ow">in</span> <span class="n">study</span><span class="o">.</span><span class="n">get_trials</span><span class="p">(</span><span class="n">deepcopy</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">states</span><span class="o">=</span><span class="n">trained_states</span><span class="p">):</span>
+        <span class="n">signatures</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="n">_parameter_signature</span><span class="p">(</span><span class="n">trial</span><span class="o">.</span><span class="n">params</span><span class="p">),</span> <span class="n">trial</span><span class="o">.</span><span class="n">number</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">signatures</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_optimize_distinct_trials</span><span class="p">(</span><span class="n">study</span><span class="p">:</span> <span class="n">optuna</span><span class="o">.</span><span class="n">Study</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">n_trials</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Run ``n_trials`` novel sampled configurations through the objective.&quot;&quot;&quot;</span>
+    <span class="n">trained_signatures</span> <span class="o">=</span> <span class="n">_trained_parameter_signatures</span><span class="p">(</span><span class="n">study</span><span class="p">)</span>
+    <span class="n">accepted_trials</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">consecutive_duplicates</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="k">while</span> <span class="n">accepted_trials</span> <span class="o">&lt;</span> <span class="n">n_trials</span><span class="p">:</span>
+        <span class="n">trial</span> <span class="o">=</span> <span class="n">study</span><span class="o">.</span><span class="n">ask</span><span class="p">()</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">run_config</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">trial</span><span class="o">.</span><span class="n">number</span><span class="p">)</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">Exception</span><span class="p">,</span> <span class="ne">KeyboardInterrupt</span><span class="p">):</span>
+            <span class="n">study</span><span class="o">.</span><span class="n">tell</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">state</span><span class="o">=</span><span class="n">TrialState</span><span class="o">.</span><span class="n">FAIL</span><span class="p">)</span>
+            <span class="k">raise</span>
+
+        <span class="n">signature</span> <span class="o">=</span> <span class="n">_parameter_signature</span><span class="p">(</span><span class="n">trial</span><span class="o">.</span><span class="n">params</span><span class="p">)</span>
+        <span class="n">duplicate_of</span> <span class="o">=</span> <span class="n">trained_signatures</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">signature</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">duplicate_of</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">trial</span><span class="o">.</span><span class="n">set_user_attr</span><span class="p">(</span><span class="n">_DUPLICATE_OF_USER_ATTR</span><span class="p">,</span> <span class="n">duplicate_of</span><span class="p">)</span>
+            <span class="n">study</span><span class="o">.</span><span class="n">tell</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">state</span><span class="o">=</span><span class="n">TrialState</span><span class="o">.</span><span class="n">FAIL</span><span class="p">)</span>
+            <span class="n">consecutive_duplicates</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;Skipping duplicate hyperparameter trial </span><span class="si">{}</span><span class="s2"> (already trained &quot;</span>
+                <span class="s2">&quot;as trial </span><span class="si">{}</span><span class="s2">).&quot;</span><span class="p">,</span>
+                <span class="n">trial</span><span class="o">.</span><span class="n">number</span><span class="p">,</span>
+                <span class="n">duplicate_of</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="n">consecutive_duplicates</span> <span class="o">&gt;=</span> <span class="n">_MAX_CONSECUTIVE_DUPLICATE_PROPOSALS</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+                    <span class="s2">&quot;Unable to sample a novel hyperparameter configuration after &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">consecutive_duplicates</span><span class="si">}</span><span class="s2"> consecutive duplicate proposals. &quot;</span>
+                    <span class="s2">&quot;The search space may be exhausted.&quot;</span>
+                <span class="p">)</span>
+            <span class="k">continue</span>
+
+        <span class="n">consecutive_duplicates</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="n">objective</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">run_config</span><span class="o">=</span><span class="n">run_config</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">optuna</span><span class="o">.</span><span class="n">TrialPruned</span><span class="p">:</span>
+            <span class="n">study</span><span class="o">.</span><span class="n">tell</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">state</span><span class="o">=</span><span class="n">TrialState</span><span class="o">.</span><span class="n">PRUNED</span><span class="p">)</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">Exception</span><span class="p">,</span> <span class="ne">KeyboardInterrupt</span><span class="p">):</span>
+            <span class="n">study</span><span class="o">.</span><span class="n">tell</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">state</span><span class="o">=</span><span class="n">TrialState</span><span class="o">.</span><span class="n">FAIL</span><span class="p">)</span>
+            <span class="k">raise</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">study</span><span class="o">.</span><span class="n">tell</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+
+        <span class="n">trained_signatures</span><span class="p">[</span><span class="n">signature</span><span class="p">]</span> <span class="o">=</span> <span class="n">trial</span><span class="o">.</span><span class="n">number</span>
+        <span class="n">accepted_trials</span> <span class="o">+=</span> <span class="mi">1</span>
+
+
 <div class="viewcode-block" id="hyperparameter_search"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.hyperparameter_search">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">hyperparameter_search</span><span class="p">(</span><span class="n">config_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">skip_metadata</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Load config, create Optuna study, and optimize trials.&quot;&quot;&quot;</span>
@@ -574,7 +650,11 @@
             <span class="s2">&quot;n_trials/n_samples must be specified for hyperparameter search.&quot;</span>
         <span class="p">)</span>
 
-    <span class="n">study</span><span class="o">.</span><span class="n">optimize</span><span class="p">(</span><span class="k">lambda</span> <span class="n">trial</span><span class="p">:</span> <span class="n">objective</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">config</span><span class="p">),</span> <span class="n">n_trials</span><span class="o">=</span><span class="n">n_trials</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">search_strategy</span> <span class="o">==</span> <span class="s2">&quot;grid&quot;</span><span class="p">:</span>
+        <span class="n">study</span><span class="o">.</span><span class="n">optimize</span><span class="p">(</span><span class="k">lambda</span> <span class="n">trial</span><span class="p">:</span> <span class="n">objective</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">config</span><span class="p">),</span> <span class="n">n_trials</span><span class="o">=</span><span class="n">n_trials</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="n">n_trials</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="n">_optimize_distinct_trials</span><span class="p">(</span><span class="n">study</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">n_trials</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="n">is_multivariate</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Best trials (Pareto front):&quot;</span><span class="p">)</span>
