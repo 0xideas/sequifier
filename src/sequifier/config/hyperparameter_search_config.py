@@ -440,13 +440,13 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     optimizer: list[DotDict] = Field(
         default_factory=lambda: [DotDict({"name": "Adam"})]
     )
+    scheduler_step_on: str = "epoch"
     scheduler: list[DotDict] = Field(
         default_factory=lambda: [
             DotDict({"name": "StepLR", "step_size": 1, "gamma": 0.99})
         ]
     )
     resume: Optional[ResumeConfig] = None
-    scheduler_step_on: str = "epoch"
     distributed: bool = False
     load_full_data_to_ram: bool = True
     max_ram_gb: Union[int, float] = 16
