@@ -272,11 +272,11 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.helpers</h1><div class="highlight"><pre>
-<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">glob</span>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">csv</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">glob</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">hashlib</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">collections.abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">Mapping</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
@@ -291,12 +291,29 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">ValidationError</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span>
 
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.logging_paths</span><span class="w"> </span><span class="kn">import</span> <span class="n">rank_log_prefix</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.objectives</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">ALLOWED_OBJECTIVE_NAMES</span><span class="p">,</span>
     <span class="n">OBJECTIVE_NAME_MESSAGE</span><span class="p">,</span>
     <span class="n">get_objective_class</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">SPECIAL_TOKEN_IDS</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_events_and_reports_filter</span><span class="p">(</span><span class="n">record</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Keep non-warning, non-metric-console records in the narrative log.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">(</span>
+        <span class="n">record</span><span class="p">[</span><span class="s2">&quot;level&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">no</span> <span class="o">&lt;</span> <span class="n">logger</span><span class="o">.</span><span class="n">level</span><span class="p">(</span><span class="s2">&quot;WARNING&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">no</span>
+        <span class="ow">and</span> <span class="n">record</span><span class="p">[</span><span class="s2">&quot;extra&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;log_channel&quot;</span><span class="p">)</span> <span class="o">!=</span> <span class="s2">&quot;metric&quot;</span>
+    <span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_warnings_and_errors_filter</span><span class="p">(</span><span class="n">record</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Keep warnings and errors in their dedicated operational log.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">record</span><span class="p">[</span><span class="s2">&quot;level&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">no</span> <span class="o">&gt;=</span> <span class="n">logger</span><span class="o">.</span><span class="n">level</span><span class="p">(</span><span class="s2">&quot;WARNING&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">no</span>
+
+
+<span class="n">_LOGGER_CONFIGURATION</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 
 <span class="n">PANDAS_TO_TORCH_TYPES</span> <span class="o">=</span> <span class="p">{</span>
     <span class="s2">&quot;Float64&quot;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span>
@@ -1085,7 +1102,18 @@
 
 <div class="viewcode-block" id="configure_logger"><a class="viewcode-back" href="../../api.html#sequifier.helpers.configure_logger">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">configure_logger</span><span class="p">(</span><span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">rank</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Configure console plus rank-scoped debug/info log files.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Configure console plus exclusive rank-scoped operational log files.&quot;&quot;&quot;</span>
+    <span class="k">global</span> <span class="n">_LOGGER_CONFIGURATION</span>
+    <span class="n">normalized_rank</span> <span class="o">=</span> <span class="mi">0</span> <span class="k">if</span> <span class="n">rank</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">rank</span>
+    <span class="n">configuration</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">getpid</span><span class="p">(),</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">project_root</span><span class="p">),</span>
+        <span class="n">model_name</span><span class="p">,</span>
+        <span class="n">normalized_rank</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">_LOGGER_CONFIGURATION</span> <span class="o">==</span> <span class="n">configuration</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">logger</span>
+
     <span class="n">logger</span><span class="o">.</span><span class="n">remove</span><span class="p">()</span>
 
     <span class="k">if</span> <span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">rank</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -1095,28 +1123,29 @@
             <span class="n">level</span><span class="o">=</span><span class="s2">&quot;INFO&quot;</span><span class="p">,</span>
         <span class="p">)</span>
 
-    <span class="n">log_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;logs&quot;</span><span class="p">)</span>
-    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">log_dir</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">prefix</span> <span class="o">=</span> <span class="n">rank_log_prefix</span><span class="p">(</span><span class="n">project_root</span><span class="p">,</span> <span class="n">model_name</span><span class="p">,</span> <span class="n">normalized_rank</span><span class="p">)</span>
+    <span class="n">prefix</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
-    <span class="n">rank_str</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;rank</span><span class="si">{</span><span class="n">rank</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">rank</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="s2">&quot;rank0&quot;</span>
-
-    <span class="n">file_2_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">log_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;sequifier-</span><span class="si">{</span><span class="n">model_name</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">rank_str</span><span class="si">}</span><span class="s2">-2.txt&quot;</span><span class="p">)</span>
+    <span class="n">events_path</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">-events-reports.log&quot;</span>
     <span class="n">logger</span><span class="o">.</span><span class="n">add</span><span class="p">(</span>
-        <span class="n">file_2_path</span><span class="p">,</span>
+        <span class="n">events_path</span><span class="p">,</span>
         <span class="n">level</span><span class="o">=</span><span class="s2">&quot;DEBUG&quot;</span><span class="p">,</span>
         <span class="nb">format</span><span class="o">=</span><span class="s2">&quot;{time:YYYY-MM-DD HH:mm:ss} | </span><span class="si">{level}</span><span class="s2"> | </span><span class="si">{message}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="nb">filter</span><span class="o">=</span><span class="n">_events_and_reports_filter</span><span class="p">,</span>
         <span class="n">enqueue</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
         <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;a&quot;</span><span class="p">,</span>
     <span class="p">)</span>
 
-    <span class="n">file_3_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">log_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;sequifier-</span><span class="si">{</span><span class="n">model_name</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">rank_str</span><span class="si">}</span><span class="s2">-3.txt&quot;</span><span class="p">)</span>
+    <span class="n">warnings_path</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">-warnings-errors.log&quot;</span>
     <span class="n">logger</span><span class="o">.</span><span class="n">add</span><span class="p">(</span>
-        <span class="n">file_3_path</span><span class="p">,</span>
-        <span class="n">level</span><span class="o">=</span><span class="s2">&quot;INFO&quot;</span><span class="p">,</span>
+        <span class="n">warnings_path</span><span class="p">,</span>
+        <span class="n">level</span><span class="o">=</span><span class="s2">&quot;WARNING&quot;</span><span class="p">,</span>
         <span class="nb">format</span><span class="o">=</span><span class="s2">&quot;{time:YYYY-MM-DD HH:mm:ss} | </span><span class="si">{level}</span><span class="s2"> | </span><span class="si">{message}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="nb">filter</span><span class="o">=</span><span class="n">_warnings_and_errors_filter</span><span class="p">,</span>
         <span class="n">enqueue</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
         <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;a&quot;</span><span class="p">,</span>
     <span class="p">)</span>
+    <span class="n">_LOGGER_CONFIGURATION</span> <span class="o">=</span> <span class="n">configuration</span>
     <span class="k">return</span> <span class="n">logger</span></div>
 
 
@@ -1186,36 +1215,34 @@
 <div class="viewcode-block" id="get_last_training_batch_timedelta"><a class="viewcode-back" href="../../api.html#sequifier.helpers.get_last_training_batch_timedelta">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">get_last_training_batch_timedelta</span><span class="p">(</span>
     <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">rank</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;.&quot;</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return seconds between the last two mid-epoch train log entries.&quot;&quot;&quot;</span>
-    <span class="n">log_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-        <span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;logs&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;sequifier-</span><span class="si">{</span><span class="n">model_name</span><span class="si">}</span><span class="s2">-rank</span><span class="si">{</span><span class="n">rank</span><span class="si">}</span><span class="s2">-2.txt&quot;</span>
-    <span class="p">)</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return seconds between the last two structured train observations.&quot;&quot;&quot;</span>
+    <span class="n">metrics_path</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">rank_log_prefix</span><span class="p">(</span><span class="n">project_root</span><span class="p">,</span><span class="w"> </span><span class="n">model_name</span><span class="p">,</span><span class="w"> </span><span class="n">rank</span><span class="p">)</span><span class="si">}</span><span class="s2">-training.csv&quot;</span>
 
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">log_path</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Log file not found: </span><span class="si">{</span><span class="n">log_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">metrics_path</span><span class="p">):</span>
+        <span class="n">observations</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">metrics_path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">,</span> <span class="n">newline</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">csv</span><span class="o">.</span><span class="n">DictReader</span><span class="p">(</span><span class="n">file</span><span class="p">):</span>
+                <span class="k">if</span> <span class="n">row</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;metric&quot;</span><span class="p">)</span> <span class="o">!=</span> <span class="s2">&quot;loss&quot;</span> <span class="ow">or</span> <span class="n">row</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;target&quot;</span><span class="p">)</span> <span class="o">!=</span> <span class="s2">&quot;__total__&quot;</span><span class="p">:</span>
+                    <span class="k">continue</span>
+                <span class="n">timestamp</span> <span class="o">=</span> <span class="n">row</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;timestamp_utc&quot;</span><span class="p">)</span>
+                <span class="n">session_id</span> <span class="o">=</span> <span class="n">row</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;session_id&quot;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">timestamp</span> <span class="ow">and</span> <span class="n">session_id</span><span class="p">:</span>
+                    <span class="n">observations</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">session_id</span><span class="p">,</span> <span class="n">timestamp</span><span class="p">))</span>
 
-    <span class="n">train_log_pattern</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span>
-        <span class="sa">r</span><span class="s2">&quot;^(\d</span><span class="si">{4}</span><span class="s2">-\d</span><span class="si">{2}</span><span class="s2">-\d</span><span class="si">{2}</span><span class="s2"> \d</span><span class="si">{2}</span><span class="s2">:\d</span><span class="si">{2}</span><span class="s2">:\d</span><span class="si">{2}</span><span class="s2">)\s+\|.*?\[INFO\] Epoch.*?Batch&quot;</span>
-    <span class="p">)</span>
+        <span class="n">latest_session</span> <span class="o">=</span> <span class="n">observations</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="n">observations</span> <span class="k">else</span> <span class="kc">None</span>
+        <span class="n">timestamps</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">datetime</span><span class="o">.</span><span class="n">fromisoformat</span><span class="p">(</span><span class="n">timestamp</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot;Z&quot;</span><span class="p">,</span> <span class="s2">&quot;+00:00&quot;</span><span class="p">))</span>
+            <span class="k">for</span> <span class="n">session_id</span><span class="p">,</span> <span class="n">timestamp</span> <span class="ow">in</span> <span class="n">observations</span>
+            <span class="k">if</span> <span class="n">session_id</span> <span class="o">==</span> <span class="n">latest_session</span>
+        <span class="p">]</span>
 
-    <span class="n">timestamps</span> <span class="o">=</span> <span class="p">[]</span>
-
-    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">log_path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
-        <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">file</span><span class="p">:</span>
-            <span class="n">match</span> <span class="o">=</span> <span class="n">train_log_pattern</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">line</span><span class="p">)</span>
-            <span class="k">if</span> <span class="n">match</span><span class="p">:</span>
-                <span class="n">timestamps</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-                    <span class="n">datetime</span><span class="o">.</span><span class="n">strptime</span><span class="p">(</span><span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="s2">&quot;%Y-%m-</span><span class="si">%d</span><span class="s2"> %H:%M:%S&quot;</span><span class="p">)</span>
-                <span class="p">)</span>
-
-    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">timestamps</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;Not enough mid-epoch training logs found in the file to calculate a timedelta.&quot;</span>
-        <span class="p">)</span>
-
-    <span class="n">t1</span><span class="p">,</span> <span class="n">t2</span> <span class="o">=</span> <span class="n">timestamps</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="n">timestamps</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-
-    <span class="k">return</span> <span class="p">(</span><span class="n">t2</span> <span class="o">-</span> <span class="n">t1</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span></div>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">timestamps</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Not enough structured training observations found to calculate &quot;</span>
+                <span class="s2">&quot;a timedelta.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">timestamps</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">timestamps</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">])</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span>
+    <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Training metrics file not found: </span><span class="si">{</span><span class="n">metrics_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
 </pre></div>
         </article>
       </div>

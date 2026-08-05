@@ -312,9 +312,7 @@
 
         <span class="n">all_columns</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">)))</span>
 
-        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;[INFO] Loading training dataset into memory from &#39;</span><span class="si">{</span><span class="n">data_path</span><span class="si">}</span><span class="s2">&#39;...&quot;</span>
-        <span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Loading training dataset into memory from &#39;</span><span class="si">{</span><span class="n">data_path</span><span class="si">}</span><span class="s2">&#39;...&quot;</span><span class="p">)</span>
         <span class="n">data_df</span> <span class="o">=</span> <span class="n">read_data</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span><span class="p">)</span>
 
         <span class="n">column_data_types</span> <span class="o">=</span> <span class="p">{</span>
@@ -346,7 +344,7 @@
             <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span><span class="p">[</span><span class="n">key</span><span class="p">]</span><span class="o">.</span><span class="n">pin_memory</span><span class="p">()</span>
 
-        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] Dataset loaded with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2"> samples.&quot;</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Dataset loaded with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2"> samples.&quot;</span><span class="p">)</span>
 
 <div class="viewcode-block" id="SequifierDatasetFromFile.set_epoch"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.set_epoch">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">epoch</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Set the shuffle epoch.&quot;&quot;&quot;</span>

@@ -1055,7 +1055,7 @@ command-specific Pydantic model.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="sequifier.hyperparameter_search.objective">
 <span class="sig-prename descclassname"><span class="pre">sequifier.hyperparameter_search.</span></span><span class="sig-name descname"><span class="pre">objective</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">trial</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Trial</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/hyperparameter_search.html#objective"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.hyperparameter_search.objective" title="Permalink to this definition">¶</a></dt>
-<dd><p>Run one Optuna trial through the CLI trainer and metrics JSONL.</p>
+<dd><p>Run one Optuna trial through the CLI trainer and validation metrics.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -1148,7 +1148,7 @@ command-specific Pydantic model.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="sequifier.helpers.configure_logger">
 <span class="sig-prename descclassname"><span class="pre">sequifier.helpers.</span></span><span class="sig-name descname"><span class="pre">configure_logger</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/helpers.html#configure_logger"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.helpers.configure_logger" title="Permalink to this definition">¶</a></dt>
-<dd><p>Configure console plus rank-scoped debug/info log files.</p>
+<dd><p>Configure console plus exclusive rank-scoped operational log files.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -1178,7 +1178,7 @@ command-specific Pydantic model.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="sequifier.helpers.get_last_training_batch_timedelta">
 <span class="sig-prename descclassname"><span class="pre">sequifier.helpers.</span></span><span class="sig-name descname"><span class="pre">get_last_training_batch_timedelta</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'.'</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">float</span></span></span><a class="reference internal" href="_modules/sequifier/helpers.html#get_last_training_batch_timedelta"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.helpers.get_last_training_batch_timedelta" title="Permalink to this definition">¶</a></dt>
-<dd><p>Return seconds between the last two mid-epoch train log entries.</p>
+<dd><p>Return seconds between the last two structured train observations.</p>
 </dd></dl>
 
 <dl class="py function">
