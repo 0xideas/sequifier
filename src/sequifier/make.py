@@ -46,7 +46,6 @@ model_spec:
     initialization: {} # optional ingestion initialization overrides
     feature_embedding_dims: null # optional, e.g. {EXAMPLE_INPUT_COLUMN_NAME: 128}; unnecessary if all inputs share one numeric kind
   backbone:
-    id: shared-backbone-v1
     architecture:
       dim_model: 128
       max_context_length: 512
@@ -68,6 +67,7 @@ model_spec:
       dropout: 0.2
       shared_layer_groups: []
     repository:
+      backbone_id: shared-backbone-v1
       path: checkpoints/backbones/shared-backbone-v1
       load_policy: if_exists
       publish: true
@@ -100,9 +100,6 @@ training_spec:
     total_steps: PLEASE FILL
     three_phase: false
   scheduler_step_on: batch
-  resume:
-    policy: if_exists
-    checkpoint_path: checkpoints/runs/PLEASE_FILL_RUN_ID/latest.pt
 """
 
 infer_config_string = """project_root: .

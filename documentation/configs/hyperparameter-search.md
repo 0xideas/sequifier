@@ -188,7 +188,7 @@ dim_feedforward:
 | --- | --- | --- | --- |
 | `dim_model` | `list[int]` | **Yes** | Internal dimension of the Transformer. |
 | `max_context_length` | `int` | No | Maximum context supported by every sampled backbone. Defaults to `2048`. |
-| `backbone_id` | `str` | No | Prefix for sampled backbone IDs. The exact architecture fingerprint is appended automatically. |
+| `backbone_id` | `str` | No | Prefix for generated repository `backbone_id` values. The exact architecture fingerprint is appended automatically. |
 | `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
@@ -267,7 +267,7 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `bert_spec` | `dict` | Conditional | `null` | Required if `training_objective` includes `bert`; samples BERT masking settings. |
 | `next_occurrence_config` | `dict` | Conditional | `null` | Required if `training_objective` includes `next_occurrence`; configures the categorical target column and target values. |
 | `optimizer` | `list[dict]` | **Yes** | - | List of optimizer configs. |
-| `resume` | `dict` | No | `{policy: never}` | Run-checkpoint resume policy and optional explicit checkpoint path. Sampled backbones are not published. |
+| `resume` | `dict` or `null` | No | `null` (`policy: never`) | Run-checkpoint resume policy and optional explicit checkpoint path. Omitting it or setting it to `null` disables resume. Sampled backbones are not published. |
 | `save_interval_epochs` | `int` | **Yes** | - | Checkpoint save frequency. |
 | `scheduler_step_on` | `str` | No | `epoch` | When to step the scheduler: `epoch` or `batch`. |
 | `save_latest_interval_minutes`| `float`| No | `null` | Time interval to overwrite a "latest" checkpoint. |

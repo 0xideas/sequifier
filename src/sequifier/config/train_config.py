@@ -755,6 +755,7 @@ class BackboneArchitectureConfig(BaseModel):
 class BackboneRepositoryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    backbone_id: StrictStr = Field(..., min_length=1)
     path: str
     load_policy: Literal["if_exists", "required"] = "if_exists"
     publish: bool = True
@@ -764,9 +765,8 @@ class BackboneRepositoryConfig(BaseModel):
 class BackboneComponentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: StrictStr = Field(..., min_length=1)
     architecture: BackboneArchitectureConfig
-    repository: BackboneRepositoryConfig
+    repository: Optional[BackboneRepositoryConfig] = None
     initialization: ModelInitializationConfig = Field(
         default_factory=ModelInitializationConfig
     )
@@ -1061,7 +1061,7 @@ class TrainingSpecModel(BaseModel):
     bert_spec: Optional[BERTSpecModel] = None
     next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
 
-    resume: ResumeConfig = Field(default_factory=ResumeConfig)
+    resume: Optional[ResumeConfig] = None
     enforce_determinism: bool = False
     distributed: bool = False
     load_full_data_to_ram: bool = True

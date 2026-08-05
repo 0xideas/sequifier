@@ -453,7 +453,6 @@ model_spec:
     output_dim: 128
 
   backbone:
-    id: shared-small-v1
     architecture:
       dim_model: 128
       max_context_length: 512
@@ -475,6 +474,7 @@ model_spec:
       dropout: 0.1
       shared_layer_groups: []
     repository:
+      backbone_id: shared-small-v1
       path: checkpoints/backbones/shared-small-v1
       load_policy: if_exists
       publish: true
@@ -503,21 +503,29 @@ Component-specific `initialization` mappings may be placed inside each of
 
 #### Shared backbone repository
 
-At startup, a complete run checkpoint takes precedence. Otherwise Sequifier
-loads the revision referenced by the backbone repository's `latest.json`; with
-`load_policy: required`, a missing revision is an error. Compatibility requires
-the exact canonical fingerprint of `backbone.architecture`, exact tensor keys
-and shapes, and supported tensor dtypes.
+`backbone.repository` is optional. When it is omitted, Sequifier neither loads
+nor publishes shared-backbone checkpoints and does not create a shared-backbone
+repository directory. Run checkpoints and complete-model exports are unaffected.
+
+When a repository is configured, `backbone_id` is required and identifies the
+logical shared backbone. At startup, a complete run checkpoint takes precedence.
+Otherwise Sequifier loads the revision referenced by the repository's
+`latest.json`; with `load_policy: required`, a missing revision is an error.
+Compatibility requires the same `backbone_id`, the exact canonical fingerprint
+of `backbone.architecture`, exact tensor keys and shapes, and supported tensor
+dtypes. Set `publish: false` for a load-only repository.
 
 Successful normal completion, early stopping, and handled keyboard interruption
 export the complete model before publishing the final (not best-validation)
-backbone. Revisions are immutable. Updating `latest.json` uses compare-and-swap
-against the revision loaded at startup, so a concurrent publisher cannot
-silently overwrite another run.
+backbone when repository publication is enabled. Revisions are immutable.
+Updating `latest.json` uses compare-and-swap against the revision loaded at
+startup, so a concurrent publisher cannot silently overwrite another run.
 
 #### Run resume
 
-`continue_training` has been replaced by an explicit policy:
+`resume` is optional. Omitting it or setting it to `null` behaves as
+`resume: {policy: never}`. Configure it only when the run should load a complete
+checkpoint:
 
 ```yaml
 training_spec:
@@ -868,7 +876,7 @@ model_spec:
 | `world_size` | `int` | No | `1` | Number of distributed processes/GPUs. |
 | `backend` | `str` | No | `nccl` | The distributed training backend to use (e.g., `nccl` for GPUs, `gloo` for CPUs). Only relevant if `distributed: true`. |
 | `device_max_concat_length`| `int` | No | `12` | Controls recursive tensor concatenation to prevent CUDA kernel limits on specific hardware. Lower this if you encounter "CUDA error: too many resources requested for launch". |
-| `resume` | `dict` | No | `{policy: never}` | Run-checkpoint policy (`never`, `if_exists`, or `required`) and optional `checkpoint_path`. This is separate from shared-backbone initialization. |
+| `resume` | `dict` or `null` | No | `null` (`policy: never`) | Run-checkpoint policy (`never`, `if_exists`, or `required`) and optional `checkpoint_path`. Omitting it or setting it to `null` disables resume. This is separate from shared-backbone initialization. |
 | `distributed` | `bool` | No | `false`| Enable multi-GPU training (DDP or FSDP). Requires `read_format: pt` or `read_format: parquet` and folder-style sharded data. |
 | `load_full_data_to_ram`| `bool` | No | `true` | If `false`, uses lazy loading (requires `read_format: pt` or `read_format: parquet`). |
 | `layer_type_dtypes` | `dict` | No | `null` | Map of layer types (`linear`, `embedding`, `conv`, `norm`, `decoder`) to dtypes (`float32`, `float16`, `bfloat16`, `float64`, `float8_e4m3fn`, `float8_e5m2`). Used for mixed-precision/quantization. Must be `null` with FSDP. |
@@ -1067,9 +1075,9 @@ After running `train`, the following are generated:
       * `sequifier-[NAME]-best-[EPOCH].onnx`: The model with the lowest validation loss.
       * `sequifier-[NAME]-last-[EPOCH].onnx`: The model state at the final epoch.
       * *Note:* If `export_embedding_model: true`, you will also see files such as `sequifier-[NAME]-best-embedding-[EPOCH].onnx` or `.pt`, depending on export settings.
-2.  **Run checkpoints:** Located at the configured `training_spec.resume.checkpoint_path`, with immutable epoch/batch checkpoints beside `latest.pt`.
+2.  **Run checkpoints:** Located at `training_spec.resume.checkpoint_path` when configured, otherwise at `checkpoints/runs/<model_name>/latest.pt`, with immutable epoch/batch checkpoints beside `latest.pt`.
       * These contain complete training state and are selected with `resume.policy`.
-3.  **Shared backbones:** Located at `model_spec.backbone.repository.path`.
+3.  **Shared backbones (when configured):** Located at `model_spec.backbone.repository.path`.
       * `latest.json` points to immutable `revisions/<revision_id>/weights.pt` and `manifest.json` files.
 4.  **Logs:** Located in `logs/`.
       * Detailed logs of training loss, validation loss, and learning rate per epoch/batch.
@@ -1473,7 +1481,7 @@ dim_feedforward:
 | --- | --- | --- | --- |
 | `dim_model` | `list[int]` | **Yes** | Internal dimension of the Transformer. |
 | `max_context_length` | `int` | No | Maximum context supported by every sampled backbone. Defaults to `2048`. |
-| `backbone_id` | `str` | No | Prefix for sampled backbone IDs. The exact architecture fingerprint is appended automatically. |
+| `backbone_id` | `str` | No | Prefix for generated repository `backbone_id` values. The exact architecture fingerprint is appended automatically. |
 | `num_layers` | `list` or `Distribution` | **Yes** | Number of layers. |
 | `n_head` | `list[int]` | **Yes** | Number of attention heads. |
 | `dim_feedforward` | `list` or `Distribution` | **Yes** | Feedforward network dimension. |
@@ -1552,7 +1560,7 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `bert_spec` | `dict` | Conditional | `null` | Required if `training_objective` includes `bert`; samples BERT masking settings. |
 | `next_occurrence_config` | `dict` | Conditional | `null` | Required if `training_objective` includes `next_occurrence`; configures the categorical target column and target values. |
 | `optimizer` | `list[dict]` | **Yes** | - | List of optimizer configs. |
-| `resume` | `dict` | No | `{policy: never}` | Run-checkpoint resume policy and optional explicit checkpoint path. Sampled backbones are not published. |
+| `resume` | `dict` or `null` | No | `null` (`policy: never`) | Run-checkpoint resume policy and optional explicit checkpoint path. Omitting it or setting it to `null` disables resume. Sampled backbones are not published. |
 | `save_interval_epochs` | `int` | **Yes** | - | Checkpoint save frequency. |
 | `scheduler_step_on` | `str` | No | `epoch` | When to step the scheduler: `epoch` or `batch`. |
 | `save_latest_interval_minutes`| `float`| No | `null` | Time interval to overwrite a "latest" checkpoint. |

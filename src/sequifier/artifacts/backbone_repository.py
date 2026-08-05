@@ -103,12 +103,14 @@ def latest_pointer(repository_path: Path) -> dict[str, Any] | None:
 
 
 def select_revision(backbone_config: Any, project_root: str) -> dict[str, Any] | None:
-    repository_path = resolve_repository_path(
-        backbone_config.repository.path, project_root
-    )
+    repository = backbone_config.repository
+    if repository is None:
+        return None
+
+    repository_path = resolve_repository_path(repository.path, project_root)
     pointer = latest_pointer(repository_path)
     if pointer is None:
-        if backbone_config.repository.load_policy == "required":
+        if repository.load_policy == "required":
             raise FileNotFoundError(
                 f"Required backbone revision does not exist in {repository_path}."
             )
@@ -134,7 +136,7 @@ def select_revision(backbone_config: Any, project_root: str) -> dict[str, Any] |
     checks = {
         "artifact_type": (manifest.get("artifact_type"), ARTIFACT_TYPE),
         "format_version": (manifest.get("format_version"), FORMAT_VERSION),
-        "backbone_id": (manifest.get("backbone_id"), backbone_config.id),
+        "backbone_id": (manifest.get("backbone_id"), repository.backbone_id),
         "revision_id": (manifest.get("revision_id"), revision_id),
         "architecture_fingerprint": (
             manifest.get("architecture_fingerprint"),
@@ -226,9 +228,11 @@ def publish_revision(
     source_run_id: str,
     source_epoch: int,
 ) -> dict[str, Any]:
-    repository_path = resolve_repository_path(
-        backbone_config.repository.path, project_root
-    )
+    repository = backbone_config.repository
+    if repository is None:
+        return {"success": False, "reason": "repository_not_configured"}
+
+    repository_path = resolve_repository_path(repository.path, project_root)
     revisions_path = repository_path / "revisions"
     revisions_path.mkdir(parents=True, exist_ok=True)
     lock_path = repository_path / "lock"
@@ -266,7 +270,7 @@ def publish_revision(
         manifest = {
             "artifact_type": ARTIFACT_TYPE,
             "format_version": FORMAT_VERSION,
-            "backbone_id": backbone_config.id,
+            "backbone_id": repository.backbone_id,
             "revision_id": revision_id,
             "parent_revision_id": parent_revision_id,
             "architecture_fingerprint": architecture_fingerprint(architecture),

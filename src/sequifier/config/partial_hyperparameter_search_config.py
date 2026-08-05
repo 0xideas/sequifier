@@ -610,10 +610,15 @@ def _model_sampling_values(model_spec: BaseModel) -> dict[str, Any]:
         )
 
     architecture = model_spec.backbone.architecture
+    repository = model_spec.backbone.repository
     return {
         "dim_model": architecture.dim_model,
         "max_context_length": architecture.max_context_length,
-        "backbone_id": model_spec.backbone.id,
+        "backbone_id": (
+            repository.backbone_id
+            if repository is not None
+            else "hyperparameter-search"
+        ),
         "ingestion_spec": ingestion_spec,
         "ingestion_merge": ingestion_merge,
         "allow_shared_ingestion_columns": ingestion.allow_shared_columns,

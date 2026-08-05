@@ -442,7 +442,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             DotDict({"name": "StepLR", "step_size": 1, "gamma": 0.99})
         ]
     )
-    resume: ResumeConfig = Field(default_factory=ResumeConfig)
+    resume: Optional[ResumeConfig] = None
     scheduler_step_on: str = "epoch"
     distributed: bool = False
     load_full_data_to_ram: bool = True
@@ -961,7 +961,6 @@ class ModelSpecHyperparameterSampling(BaseModel):
             {
                 "ingestion": ingestion,
                 "backbone": {
-                    "id": f"{self.backbone_id}-{architecture_key}",
                     "architecture": {
                         "dim_model": dim_model,
                         "max_context_length": self.max_context_length,
@@ -988,6 +987,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
                         "shared_layer_groups": self.shared_layer_groups,
                     },
                     "repository": {
+                        "backbone_id": f"{self.backbone_id}-{architecture_key}",
                         "path": (
                             "checkpoints/backbones/hyperparameter-search/"
                             + architecture_key
@@ -1002,20 +1002,24 @@ class ModelSpecHyperparameterSampling(BaseModel):
             }
         )
         fingerprint = architecture_fingerprint(model_spec.backbone.architecture)
-        repository = model_spec.backbone.repository.model_copy(
+        repository_template = model_spec.backbone.repository
+        if repository_template is None:
+            raise RuntimeError(
+                "Hyperparameter-search model construction did not create its "
+                "backbone repository template."
+            )
+        repository = repository_template.model_copy(
             update={
                 "path": (
                     "checkpoints/backbones/hyperparameter-search/" + fingerprint[:16]
-                )
+                ),
+                "backbone_id": f"{self.backbone_id}-{fingerprint[:16]}",
             }
         )
         return model_spec.model_copy(
             update={
                 "backbone": model_spec.backbone.model_copy(
-                    update={
-                        "id": f"{self.backbone_id}-{fingerprint[:16]}",
-                        "repository": repository,
-                    }
+                    update={"repository": repository}
                 )
             }
         )
@@ -1514,23 +1518,27 @@ class HyperparameterSearchConfig(BaseModel):
         architecture = model_spec.backbone.architecture.model_copy(
             update={"dropout": training_config.backbone_dropout}
         )
-        fingerprint = architecture_fingerprint(architecture)
-        repository = model_spec.backbone.repository.model_copy(
-            update={
-                "path": os.path.join(
-                    os.path.dirname(model_spec.backbone.repository.path),
-                    fingerprint[:16],
-                ),
-            }
-        )
+        repository_template = model_spec.backbone.repository
+        if repository_template is None:
+            repository = None
+        else:
+            fingerprint = architecture_fingerprint(architecture)
+            repository = repository_template.model_copy(
+                update={
+                    "backbone_id": (
+                        repository_template.backbone_id.rsplit("-", 1)[0]
+                        + f"-{fingerprint[:16]}"
+                    ),
+                    "path": os.path.join(
+                        os.path.dirname(repository_template.path),
+                        fingerprint[:16],
+                    ),
+                }
+            )
         model_spec = model_spec.model_copy(
             update={
                 "backbone": model_spec.backbone.model_copy(
                     update={
-                        "id": (
-                            model_spec.backbone.id.rsplit("-", 1)[0]
-                            + f"-{fingerprint[:16]}"
-                        ),
                         "architecture": architecture,
                         "repository": repository,
                     }

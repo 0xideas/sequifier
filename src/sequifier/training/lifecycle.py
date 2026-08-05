@@ -8,6 +8,8 @@ from sequifier.artifacts.run_checkpoint import checkpoint_path
 
 def publish_final_backbone(model: Any, source_epoch: int) -> dict[str, Any]:
     config = model.hparams.model_spec.backbone
+    if config.repository is None:
+        return {"success": False, "reason": "repository_not_configured"}
     if not config.repository.publish:
         return {"success": False, "reason": "publication_disabled"}
     return publish_revision(
