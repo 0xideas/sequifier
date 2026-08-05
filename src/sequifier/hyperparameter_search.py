@@ -13,6 +13,8 @@ import optuna
 import torch._dynamo
 import yaml
 from beartype import beartype
+from loguru import logger
+from optuna.trial import TrialState
 
 torch._dynamo.config.suppress_errors = True
 from sequifier.config.hyperparameter_search_config import (  # noqa: E402
@@ -25,6 +27,9 @@ from sequifier.helpers import (  # noqa: E402
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 from sequifier.logging_paths import model_log_directory  # noqa: E402
 from sequifier.training.metrics import VALIDATION_FIELDS  # noqa: E402
+
+_DUPLICATE_OF_USER_ATTR = "sequifier_duplicate_of"
+_MAX_CONSECUTIVE_DUPLICATE_PROPOSALS = 1000
 
 
 def create_sampler(config: Any) -> optuna.samplers.BaseSampler:
@@ -46,9 +51,12 @@ def set_pdeathsig():
         libc.prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG = 1
 
 
-def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
+def objective(
+    trial: optuna.Trial, config, run_config: Any = None
+) -> Union[float, tuple[float, ...]]:
     """Run one Optuna trial through the CLI trainer and validation metrics."""
-    run_config = config.sample_trial(trial, trial.number)
+    if run_config is None:
+        run_config = config.sample_trial(trial, trial.number)
     run_name = run_config.model_name
 
     config_path = os.path.join(
@@ -253,6 +261,74 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
     return best_val_loss
 
 
+def _parameter_signature(params: dict[str, Any]) -> str:
+    """Return a stable identity for one fully sampled Optuna parameter set."""
+    return json.dumps(
+        params,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _trained_parameter_signatures(study: optuna.Study) -> dict[str, int]:
+    """Map trained parameter sets to the first trial that used each set."""
+    signatures: dict[str, int] = {}
+    trained_states = (TrialState.COMPLETE, TrialState.PRUNED)
+    for trial in study.get_trials(deepcopy=False, states=trained_states):
+        signatures.setdefault(_parameter_signature(trial.params), trial.number)
+    return signatures
+
+
+def _optimize_distinct_trials(study: optuna.Study, config: Any, n_trials: int) -> None:
+    """Run ``n_trials`` novel sampled configurations through the objective."""
+    trained_signatures = _trained_parameter_signatures(study)
+    accepted_trials = 0
+    consecutive_duplicates = 0
+
+    while accepted_trials < n_trials:
+        trial = study.ask()
+        try:
+            run_config = config.sample_trial(trial, trial.number)
+        except (Exception, KeyboardInterrupt):
+            study.tell(trial, state=TrialState.FAIL)
+            raise
+
+        signature = _parameter_signature(trial.params)
+        duplicate_of = trained_signatures.get(signature)
+        if duplicate_of is not None:
+            trial.set_user_attr(_DUPLICATE_OF_USER_ATTR, duplicate_of)
+            study.tell(trial, state=TrialState.FAIL)
+            consecutive_duplicates += 1
+            logger.info(
+                "Skipping duplicate hyperparameter trial {} (already trained "
+                "as trial {}).",
+                trial.number,
+                duplicate_of,
+            )
+            if consecutive_duplicates >= _MAX_CONSECUTIVE_DUPLICATE_PROPOSALS:
+                raise RuntimeError(
+                    "Unable to sample a novel hyperparameter configuration after "
+                    f"{consecutive_duplicates} consecutive duplicate proposals. "
+                    "The search space may be exhausted."
+                )
+            continue
+
+        consecutive_duplicates = 0
+        try:
+            value = objective(trial, config, run_config=run_config)
+        except optuna.TrialPruned:
+            study.tell(trial, state=TrialState.PRUNED)
+        except (Exception, KeyboardInterrupt):
+            study.tell(trial, state=TrialState.FAIL)
+            raise
+        else:
+            study.tell(trial, value)
+
+        trained_signatures[signature] = trial.number
+        accepted_trials += 1
+
+
 @beartype
 def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     """Load config, create Optuna study, and optimize trials."""
@@ -300,7 +376,11 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
             "n_trials/n_samples must be specified for hyperparameter search."
         )
 
-    study.optimize(lambda trial: objective(trial, config), n_trials=n_trials)
+    if config.search_strategy == "grid":
+        study.optimize(lambda trial: objective(trial, config), n_trials=n_trials)
+    else:
+        assert n_trials is not None
+        _optimize_distinct_trials(study, config, n_trials)
 
     if is_multivariate:
         print("\nBest trials (Pareto front):")

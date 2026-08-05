@@ -112,6 +112,15 @@ The configuration is defined in a YAML file. To define the search space, fields 
 | `validation_data_path` | `str` | No | Metadata split 1 | Path to validation data. |
 | `read_format` | `str` | No | `parquet` | Format of preprocessed training data (`parquet`, `csv`, or `pt`). |
 
+For `bayesian` and `sample` searches, `n_samples` counts novel runs. If Optuna
+proposes the exact parameters of a completed or pruned trial in the same study,
+Sequifier records the proposal as a failed duplicate and immediately asks for
+another one without writing a run config or starting training. Because Optuna
+assigns the trial number before the duplicate can be identified, generated run
+numbers may contain gaps. After 1,000 consecutive duplicate proposals,
+Sequifier reports that the search space may be exhausted instead of retrying
+indefinitely.
+
 ### 2. Custom Evaluation & Multi-Objective Search
 
 By default, Sequifier optimizes for the best validation loss. However, you can configure it to optimize for custom downstream metrics (like accuracy, precision, or custom business logic) by providing an evaluation script. If multiple metrics are provided, Optuna will execute a **multi-objective search** to find the Pareto front.
