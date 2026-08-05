@@ -693,7 +693,7 @@ class BackboneNormalizationConfig(BaseModel):
 class BackbonePositionEncodingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["learned", "rope", "range", "sinusoidal"] = "learned"
+    type: Literal["learned", "rope", "range", "range_concat", "sinusoidal"] = "learned"
     theta: float = Field(10000.0, gt=0.0)
 
 
@@ -713,8 +713,28 @@ class BackboneArchitectureConfig(BaseModel):
     position_encoding: BackbonePositionEncodingConfig = Field(
         default_factory=BackbonePositionEncodingConfig
     )
+    positional_encoding_scope: Literal["per_feature", "global"] = "per_feature"
     dropout: float = Field(0.0, ge=0.0, lt=1.0)
     shared_layer_groups: list[list[int]] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_global_position_scope(cls, values):
+        if not isinstance(values, dict):
+            return values
+        position_encoding = values.get("position_encoding", {})
+        position_type = (
+            position_encoding.get("type", "learned")
+            if isinstance(position_encoding, dict)
+            else getattr(position_encoding, "type", "learned")
+        )
+        if (
+            position_type in {"range", "range_concat", "sinusoidal"}
+            and "positional_encoding_scope" not in values
+        ):
+            values = dict(values)
+            values["positional_encoding_scope"] = "global"
+        return values
 
     @model_validator(mode="after")
     def validate_architecture(self):
@@ -729,6 +749,16 @@ class BackboneArchitectureConfig(BaseModel):
                 raise ValueError(
                     f"RoPE requires an even head dimension, got {head_dim}"
                 )
+        if (
+            self.position_encoding.type in {"range", "range_concat", "sinusoidal"}
+            and self.positional_encoding_scope != "global"
+        ):
+            raise ValueError(
+                f"position_encoding type {self.position_encoding.type!r} requires "
+                "positional_encoding_scope 'global'"
+            )
+        if self.position_encoding.type == "range_concat" and self.dim_model < 2:
+            raise ValueError("range_concat requires dim_model to be at least 2")
 
         seen_layers: set[int] = set()
         for group in self.shared_layer_groups:
@@ -1207,20 +1237,6 @@ class ModelSpecModel(BaseModel):
     ingestion: IngestionComponentConfig
     backbone: BackboneComponentConfig
     decoder: DecoderComponentConfig
-
-    @model_validator(mode="after")
-    def validate_component_contracts(self):
-        dim_model = self.backbone.architecture.dim_model
-        if (
-            self.ingestion.type != "composite"
-            and self.ingestion.output_dim != dim_model
-        ):
-            raise ValueError(
-                "model_spec.ingestion.output_dim must equal "
-                "model_spec.backbone.architecture.dim_model: "
-                f"{self.ingestion.output_dim} != {dim_model}"
-            )
-        return self
 
 
 _PathT = TypeVar("_PathT")

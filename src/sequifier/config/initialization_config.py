@@ -230,17 +230,21 @@ class ModelInitializationSamplingConfig(
             )
         return ModelInitializationConfig(values)
 
-    def sample_trial(self, trial: Any) -> ModelInitializationConfig:
+    def sample_trial(
+        self,
+        trial: Any,
+        parameter_prefix: str = "initialization",
+    ) -> ModelInitializationConfig:
         """Sample candidate methods and return one concrete initialization config."""
 
         values: dict[LayerGroup, LayerGroupInitialization] = {}
         for group, sampling in self.root.items():
-            parameter_prefix = f"initialization_{group.replace('.', '_')}"
+            group_prefix = f"{parameter_prefix}_{group.replace('.', '_')}"
             values[group] = LayerGroupInitialization(
                 weight=(
                     self._sample_method(
                         trial,
-                        f"{parameter_prefix}_weight_idx",
+                        f"{group_prefix}_weight_idx",
                         sampling.weight,
                     )
                     if sampling.weight is not None
@@ -249,7 +253,7 @@ class ModelInitializationSamplingConfig(
                 bias=(
                     self._sample_method(
                         trial,
-                        f"{parameter_prefix}_bias_idx",
+                        f"{group_prefix}_bias_idx",
                         sampling.bias,
                     )
                     if sampling.bias is not None
