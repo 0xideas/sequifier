@@ -34,7 +34,7 @@ The only requirement is having sequifier installed, and having input data in the
 
 There are six standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, and `visualize-training`.
 
-`make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates predictions, probabilities, or embeddings from data in the preprocessed format, `hyperparameter-search` executes multiple training runs using Optuna to find optimal configurations, and `visualize-training` parses training logs to generate interactive HTML plots of your loss curves.
+`make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates predictions, probabilities, or embeddings from data in the preprocessed format, `hyperparameter-search` executes multiple training runs using Optuna to find optimal configurations, and `visualize-training` reads structured training metrics to generate interactive HTML plots of your loss curves.
 
 There are documentation pages for each command, except make:
 
@@ -868,8 +868,8 @@ model_spec:
 | `save_interval_val_loss` | `bool` | No | `true` | Whether to calculate validation loss at the moment of the batch interval save. |
 | `calculate_validation_loss_on_initialization` | `bool` | No | `true` | Determines if a validation pass runs before epoch 1 begins. |
 | `early_stopping_epochs`| `int` | No | `null` | Stop training if validation loss doesn't improve for N epochs. |
-| `log_interval` | `int` | No | `10` | Print training logs every N batches. |
-| `class_share_log_columns`| `list[str]`| No | `[]` | Columns for which to log the predicted class distribution in validation. |
+| `log_interval` | `int` | No | `10` | Record structured training metrics every N batches. |
+| `class_share_log_columns`| `list[str]`| No | `[]` | Columns whose predicted validation distributions are recorded in the class-share CSV. |
 | `enforce_determinism` | `bool` | No | `false` | Force deterministic algorithms (slower, but reproducible). |
 | `num_workers` | `int` | No | `0` | Number of subprocesses for data loading. |
 | `max_ram_gb` | `float` | No | `16` | RAM limit (GB) for the cache when using lazy loading. |
@@ -885,6 +885,18 @@ model_spec:
 | `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly true or false if `data_parallelism` is `FSDP`. Must be `null` otherwise. |
 | `torch_compile` | `str` | No | `outer` | Controls torch.compile. Options are `outer` (compiles the whole model), `inner` (compiles individual transformer layers, for FSDP), or `none` (no compilation). |
 | `float32_matmul_precision` | `str` | No | `highest` | Sets the internal PyTorch matmul precision. Options are `highest`, `high`, or `medium`. |
+
+Training creates five semantic outputs under `logs/` for rank 0:
+
+* `sequifier-[MODEL]-rank0-events-reports.log`
+* `sequifier-[MODEL]-rank0-warnings-errors.log`
+* `sequifier-[MODEL]-rank0-training.csv`
+* `sequifier-[MODEL]-rank0-validation.csv`
+* `sequifier-[MODEL]-rank0-validation-class-shares.csv`
+
+Nonzero ranks write only their two operational `.log` files. The structured CSVs contain globally reduced metrics, so rank 0 is their sole writer. The class-share CSV is created even when `class_share_log_columns` is empty; in that case it contains only its schema header.
+
+The training and validation tables use tidy rows: `target: __total__` identifies the aggregate loss and additional rows hold per-target losses. Validation rows use `evaluation_kind` (`initial`, `interval`, or `epoch_end`) and an `evaluation_id`. Class-share rows use the same `evaluation_id` and contain the global class ID, label, predicted count, total valid count, and share. Only nonzero classes are written; a `no_valid_predictions` status row records an empty distribution.
 
 
 ### 5\. System & Export
@@ -1252,7 +1264,7 @@ When using a folder of files as input, sequifier creates a directory containing 
 
 # Visualize Training Command Guide
 
-The `sequifier visualize-training` command parses the log files generated during training and hyperparameter search to create interactive Plotly HTML visualizations of the training and validation losses. It supports viewing a single model's progress or comparing multiple models side-by-side.
+The `sequifier visualize-training` command reads the structured metric files generated during training and hyperparameter search to create interactive Plotly HTML visualizations of the training and validation losses. It supports viewing a single model's progress or comparing multiple models side-by-side.
 
 ## Usage
 
@@ -1279,7 +1291,7 @@ Unlike other commands that rely on a YAML config, `visualize-training` is config
 | `--bucket-training-batches` | `int` | `null` | Smooths the training loss curve by averaging the loss over a specified number of batches. **Must be a multiple of the logged batch interval** used during training. |
 | `--project-root` | `str` | `.` | The root directory of your Sequifier project. |
 
-The command reads rank-0 logs from `logs/sequifier-[MODEL_NAME]-rank0-3.txt`, falling back to `rank0-2.txt`.
+The command reads `logs/sequifier-[MODEL_NAME]-rank0-training.csv` and `logs/sequifier-[MODEL_NAME]-rank0-validation.csv`.
 
 ## Outputs
 
@@ -1568,8 +1580,8 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `save_interval_batches` | `int` | No | `null` | Batch interval to save a unique, batch-specific checkpoint. |
 | `save_interval_val_loss` | `bool` | No | `true` | Whether to calculate validation loss at the moment of the batch interval save. |
 | `calculate_validation_loss_on_initialization` | `bool` | No | `false` | Determines if a validation pass runs before epoch 1 begins. Standard `train` defaults this field to `true`. |
-| `log_interval` | `int` | No | `10` | Logging frequency (batches). |
-| `class_share_log_columns`| `list[str]`| No | `[]` | Columns for which to log the predicted class distribution in validation. |
+| `log_interval` | `int` | No | `10` | Structured training metric frequency (batches). |
+| `class_share_log_columns`| `list[str]`| No | `[]` | Columns whose predicted validation distributions are recorded in the class-share CSV. |
 | `early_stopping_epochs`| `int` | No | `null` | Stop if validation metric doesn't improve. |
 | `num_workers` | `int` | No | `0` | Data loading subprocesses. |
 | `loss_weights` | `dict` | No | `null` | Weights for multi-objective loss. |
@@ -1673,7 +1685,7 @@ If you define multiple metrics in `evaluation_metrics` (e.g., you want to maximi
 2. **Generated Configs:** Located in `model_config_write_path` (e.g., `configs/hp_search/`).
       * Valid, standalone `train.yaml` files generated for each trial.
 3. **Logs:** Located in `logs/`.
-      * Includes individual training logs and JSONL files (`sequifier-[RUN]-metrics.jsonl`) tracking the validation curve.
+      * Includes rank-scoped operational logs and rank-0 structured training, validation, and class-share CSV files. Optuna tails `sequifier-[RUN]-rank0-validation.csv` for intermediate validation loss.
 4.  **Models & Checkpoints:**
       * Saved in `models/` and `checkpoints/` with filenames including the run number (e.g., `models/sequifier-my-search-run-5-best-10.onnx`).
 5. **Evaluations (Optional):**

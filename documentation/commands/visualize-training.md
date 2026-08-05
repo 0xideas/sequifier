@@ -1,6 +1,6 @@
 # Visualize Training Command Guide
 
-The `sequifier visualize-training` command parses the log files generated during training and hyperparameter search to create interactive Plotly HTML visualizations of the training and validation losses. It supports viewing a single model's progress or comparing multiple models side-by-side.
+The `sequifier visualize-training` command reads the structured metric files generated during training and hyperparameter search to create interactive Plotly HTML visualizations of the training and validation losses. It supports viewing a single model's progress or comparing multiple models side-by-side.
 
 ## Usage
 
@@ -27,7 +27,7 @@ Unlike other commands that rely on a YAML config, `visualize-training` is config
 | `--bucket-training-batches` | `int` | `null` | Smooths the training loss curve by averaging the loss over a specified number of batches. **Must be a multiple of the logged batch interval** used during training. |
 | `--project-root` | `str` | `.` | The root directory of your Sequifier project. |
 
-The command reads rank-0 logs from `logs/sequifier-[MODEL_NAME]-rank0-3.txt`, falling back to `rank0-2.txt`.
+The command reads `logs/sequifier-[MODEL_NAME]-rank0-training.csv` and `logs/sequifier-[MODEL_NAME]-rank0-validation.csv`.
 
 ## Outputs
 

@@ -38,9 +38,7 @@ class SequifierDatasetFromFile(IterableDataset):
 
         all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
-        logger.info(
-            f"[INFO] Loading training dataset into memory from '{data_path}'..."
-        )
+        logger.info(f"Loading training dataset into memory from '{data_path}'...")
         data_df = read_data(data_path, config.read_format)
 
         column_data_types = {
@@ -72,7 +70,7 @@ class SequifierDatasetFromFile(IterableDataset):
             for key in self.sequences:
                 self.sequences[key] = self.sequences[key].pin_memory()
 
-        logger.info(f"[INFO] Dataset loaded with {self.n_samples} samples.")
+        logger.info(f"Dataset loaded with {self.n_samples} samples.")
 
     def set_epoch(self, epoch: int):
         """Set the shuffle epoch."""

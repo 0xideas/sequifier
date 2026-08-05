@@ -22,6 +22,7 @@ import torch._dynamo  # noqa: E402
 import torch.distributed as dist  # noqa: E402
 import torch.multiprocessing as mp  # noqa: E402
 from beartype import beartype  # noqa: E402
+from loguru import logger as loguru_logger  # noqa: E402
 from packaging import version  # noqa: E402
 from torch import Tensor, nn  # noqa: E402
 from torch.amp.grad_scaler import GradScaler  # noqa: E402
@@ -118,6 +119,7 @@ from sequifier.training.lifecycle import (  # noqa: E402
     publish_final_backbone,
     write_terminal_manifest,
 )
+from sequifier.training.metrics import StructuredMetricWriters  # noqa: E402
 
 
 def cleanup():
@@ -169,6 +171,7 @@ def create_dummy_data_and_metadata(
 
 
 @beartype
+@loguru_logger.catch(message="Training worker failed", reraise=True)
 def train_worker(
     local_rank: int,
     world_size: int,
@@ -254,6 +257,10 @@ def train_worker(
     )
 
     model = TransformerModel(config, rank=global_rank, local_rank=local_rank)
+    if config.training_spec.distributed:
+        run_id_object = [model.run_id if global_rank == 0 else None]
+        dist.broadcast_object_list(run_id_object, src=0)
+        model.run_id = str(run_id_object[0])
     model._data_loader_generators = {
         "train": train_loader_generator,
         "valid": valid_loader_generator,
@@ -293,12 +300,13 @@ def train_worker(
                 checkpoint.get("best_model_state_dict"),
                 checkpoint.get("rng_state"),
                 checkpoint.get("data_loader_generator_states"),
+                checkpoint.get("run_id"),
             )
         else:
             model.start_epoch = 1
             model.start_batch = 0
             logger.info(
-                f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
+                f"Initializing new model with {format_number(pytorch_total_params)} parameters."
             )
 
         if config.device.startswith("cuda"):
@@ -365,13 +373,14 @@ def train_worker(
                 checkpoint.get("best_model_state_dict"),
                 checkpoint.get("rng_state"),
                 checkpoint.get("data_loader_generator_states"),
+                checkpoint.get("run_id"),
             )
 
         else:
             model.start_epoch = 1
             model.start_batch = 0
             logger.info(
-                f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
+                f"Initializing new model with {format_number(pytorch_total_params)} parameters."
             )
 
         if config.device.startswith("cuda"):
@@ -411,12 +420,13 @@ def train_worker(
                 checkpoint.get("best_model_state_dict"),
                 checkpoint.get("rng_state"),
                 checkpoint.get("data_loader_generator_states"),
+                checkpoint.get("run_id"),
             )
         else:
             model.start_epoch = 1
             model.start_batch = 0
             logger.info(
-                f"[INFO] Initializing new model with {format_number(pytorch_total_params)} parameters."
+                f"Initializing new model with {format_number(pytorch_total_params)} parameters."
             )
 
         if config.device.startswith("cuda"):
@@ -671,6 +681,9 @@ class TransformerModel(SequifierModel):
         self.rank = rank
 
         self.model_name = hparams.model_name or uuid.uuid4().hex[:8]
+        self.run_id = uuid.uuid4().hex
+        self.session_id = uuid.uuid4().hex
+        self.metric_writers: Optional[StructuredMetricWriters] = None
 
         self._initialize_log_file()
 
@@ -793,7 +806,7 @@ class TransformerModel(SequifierModel):
         for component_name, initialization in component_initializers.items():
             if initialization.root:
                 self.logger.info(
-                    f"[INFO] Applying {component_name} initialization overrides: "
+                    f"Applying {component_name} initialization overrides: "
                     f"{initialization.model_dump(mode='json')}"
                 )
             initialize_model_weights(getattr(self, component_name), initialization)
@@ -871,7 +884,7 @@ class TransformerModel(SequifierModel):
         if not layer_config:
             return
 
-        self.logger.info(f"[INFO] Applying custom layer dtypes: {layer_config}")
+        self.logger.info(f"Applying custom layer dtypes: {layer_config}")
 
         for name, module in self.named_modules():
             if isinstance(module, nn.Linear):
@@ -1110,7 +1123,8 @@ class TransformerModel(SequifierModel):
             if should_prune:
                 if self.rank == 0:
                     self.logger.info(
-                        "[INFO] Pruning signal received from Optuna orchestrator. Tearing down cooperatively."
+                        "Pruning signal received from Optuna orchestrator. "
+                        "Tearing down cooperatively."
                     )
                 if self.hparams.training_spec.distributed:
                     cleanup()
@@ -1214,7 +1228,7 @@ class TransformerModel(SequifierModel):
         checkpoint_metadata = checkpoint.get("checkpoint_metadata")
         if checkpoint_metadata is None:
             self.logger.warning(
-                "[WARNING] Checkpoint has no compatibility metadata; "
+                "Checkpoint has no compatibility metadata; "
                 "continuing with legacy resume behavior."
             )
             return
@@ -1308,7 +1322,7 @@ class TransformerModel(SequifierModel):
         if rank < len(rng_states):
             return rng_states[rank]
         self.logger.warning(
-            "[WARNING] Checkpoint has no RNG state for this rank; "
+            "Checkpoint has no RNG state for this rank; "
             "using rank 0 RNG state as a fallback."
         )
         return rng_states[0]
@@ -1329,7 +1343,7 @@ class TransformerModel(SequifierModel):
             return
         if not isinstance(states, dict):
             self.logger.warning(
-                "[WARNING] Checkpoint DataLoader generator state is not a dictionary; "
+                "Checkpoint DataLoader generator state is not a dictionary; "
                 "using freshly seeded DataLoader generators."
             )
             return
@@ -1348,13 +1362,14 @@ class TransformerModel(SequifierModel):
         best_model_state_dict: Any,
         rng_states: Any,
         data_loader_generator_states: Any,
+        run_id: Any = None,
     ) -> None:
         """Restore non-model training state from a checkpoint payload."""
         if scaler_state_dict is not None:
             self.scaler.load_state_dict(scaler_state_dict)
         elif self.scaler.is_enabled():
             self.logger.warning(
-                "[WARNING] Checkpoint has no GradScaler state; "
+                "Checkpoint has no GradScaler state; "
                 "resuming with a freshly initialized scaler."
             )
 
@@ -1363,6 +1378,8 @@ class TransformerModel(SequifierModel):
         self._resume_best_model_state_dict = best_model_state_dict
         self._resume_rng_state = self._select_rng_state_for_rank(rng_states)
         self._resume_data_loader_generator_states = data_loader_generator_states
+        if isinstance(run_id, str) and run_id:
+            self.run_id = run_id
 
     @beartype
     def _restore_rng_state(self) -> None:
@@ -1370,7 +1387,7 @@ class TransformerModel(SequifierModel):
         rng_state = self._resume_rng_state
         if rng_state is None:
             self.logger.warning(
-                "[WARNING] Checkpoint has no RNG state; stochastic training will "
+                "Checkpoint has no RNG state; stochastic training will "
                 "continue from the current process RNG state."
             )
             return
@@ -1395,7 +1412,14 @@ class TransformerModel(SequifierModel):
         ddp_model: Optional[nn.Module] = None,
     ) -> None:
         """Run epochs, validation, checkpointing, export, and interruption cleanup."""
-        self.logger.info(f"--- Starting Training for model: {self.model_name} ---")
+        if self.rank == 0 and self.metric_writers is None:
+            self.metric_writers = StructuredMetricWriters(
+                self.project_root, self.model_name, self.rank
+            )
+        self.logger.info(
+            f"--- Starting Training for model: {self.model_name} | "
+            f"run: {self.run_id} | session: {self.session_id} ---"
+        )
 
         best_val_loss: float = float(self._resume_best_val_loss)
         n_epochs_no_improvement = self._resume_n_epochs_no_improvement
@@ -1420,7 +1444,15 @@ class TransformerModel(SequifierModel):
                 elapsed = 0.0
 
                 self._log_epoch_results(
-                    0, 0, elapsed, total_loss, total_losses, class_counts, 0
+                    0,
+                    0,
+                    elapsed,
+                    total_loss,
+                    total_losses,
+                    class_counts,
+                    0,
+                    len(train_loader),
+                    "initial",
                 )
             for epoch in range(self.start_epoch, self.hparams.training_spec.epochs + 1):
                 if (
@@ -1458,6 +1490,8 @@ class TransformerModel(SequifierModel):
                     total_losses,
                     class_counts,
                     epoch * len(train_loader),
+                    len(train_loader),
+                    "epoch_end",
                 )
 
                 if total_loss < best_val_loss:
@@ -1491,7 +1525,7 @@ class TransformerModel(SequifierModel):
                 self._check_and_terminate()
         except KeyboardInterrupt:
             completion_reason = "keyboard_interruption"
-            self.logger.info("[WARNING] Training interrupted; exporting final state.")
+            self.logger.warning("Training interrupted; exporting final state.")
         except BaseException as error:
             if self.rank == 0:
                 is_pruned = isinstance(error, SystemExit) and error.code == 143
@@ -1513,7 +1547,7 @@ class TransformerModel(SequifierModel):
         if best_model_state is None:
             if self.rank == 0:
                 self.logger.info(
-                    "[INFO] No validation improvement... Saving last model as 'best'."
+                    "No validation improvement... Saving last model as 'best'."
                 )
             best_model_state = last_model_state
 
@@ -1572,16 +1606,16 @@ class TransformerModel(SequifierModel):
         publication = finalization["publication"]
         if publication.get("success"):
             self.logger.info(
-                f"[INFO] Published backbone revision {publication['revision_id']}."
+                f"Published backbone revision {publication['revision_id']}."
             )
         elif publication.get("reason") == "compare_and_swap_conflict":
             self.logger.warning(
-                "[WARNING] Backbone publication lost a compare-and-swap race; "
+                "Backbone publication lost a compare-and-swap race; "
                 "complete model exports remain valid."
             )
         elif publication.get("reason") == "publication_error":
             self.logger.warning(
-                "[WARNING] Complete model exports succeeded, but backbone "
+                "Complete model exports succeeded, but backbone "
                 f"publication failed: {publication.get('error')}"
             )
         self.logger.info("--- Training Complete ---")
@@ -1731,7 +1765,7 @@ class TransformerModel(SequifierModel):
 
                 batches_aggregated += 1
                 if (batch_count + 1) % self.log_interval == 0:
-                    avg_train_loss, _ = self._finalize_loss_components(
+                    avg_train_loss, avg_train_losses = self._finalize_loss_components(
                         train_loss_sums,
                         train_token_count,
                         target_names,
@@ -1743,8 +1777,30 @@ class TransformerModel(SequifierModel):
                         s_per_batch = (time.time() - start_time) / max(
                             1, batches_aggregated
                         )
-                        self.logger.info(
-                            f"[INFO] Epoch {epoch:3d} | Batch {(batch_count+1):5d}/{num_batches:5d} | Loss: {format_number(avg_train_loss.detach().cpu().item())} | LR: {format_number(learning_rate)} | S/Batch {format_number(s_per_batch)}"
+                        global_step = (epoch - 1) * num_batches + batch_count + 1
+                        if self.metric_writers is None:
+                            raise RuntimeError(
+                                "Rank 0 structured metric writers are not initialized."
+                            )
+                        self.metric_writers.write_training(
+                            run_id=self.run_id,
+                            session_id=self.session_id,
+                            epoch=epoch,
+                            batch=batch_count + 1,
+                            batches_total=num_batches,
+                            global_step=global_step,
+                            window_batches=batches_aggregated,
+                            total_loss=avg_train_loss,
+                            target_losses=avg_train_losses,
+                            learning_rate=learning_rate,
+                            seconds_per_batch=s_per_batch,
+                        )
+                        self.logger.bind(log_channel="metric").info(
+                            f"Epoch {epoch:3d} | Batch {(batch_count+1):5d}/"
+                            f"{num_batches:5d} | Loss: "
+                            f"{format_number(avg_train_loss.detach().cpu().item())} | "
+                            f"LR: {format_number(learning_rate)} | "
+                            f"S/Batch {format_number(s_per_batch)}"
                         )
 
                     train_loss_sums, train_token_count = self._new_loss_accumulators(
@@ -1816,13 +1872,15 @@ class TransformerModel(SequifierModel):
                                 or self.rank == 0
                             ):
                                 self._log_epoch_results(
-                                    0,
+                                    epoch,
                                     batch_count + 1,
                                     elapsed_since_batch_save,
                                     val_loss,
                                     val_losses,
                                     class_counts,
                                     current_global_step,
+                                    num_batches,
+                                    "interval",
                                 )
                                 val_loss_batch[0] = float(val_loss)
                             self._check_and_terminate()
@@ -2527,7 +2585,7 @@ class TransformerModel(SequifierModel):
 
             if is_different_type:
                 self.logger.info(
-                    "[INFO] Casting model to float32 for ONNX export compatibility..."
+                    "Casting model to float32 for ONNX export compatibility..."
                 )
                 # Safe to deepcopy since `model` is already a pure CPU, unwrapped PyTorch module here.
                 model_to_export = model._copy_model().float()
@@ -2698,6 +2756,7 @@ class TransformerModel(SequifierModel):
             "scaler_state_dict": self.scaler.state_dict(),
             "rng_state": rng_state,
             "data_loader_generator_states": data_loader_generator_states,
+            "run_id": self.run_id,
             "best_val_loss": float(best_val_loss),
             "n_epochs_no_improvement": int(n_epochs_no_improvement),
             "best_model_state_dict": best_model_state_dict,
@@ -2723,7 +2782,7 @@ class TransformerModel(SequifierModel):
             finally:
                 with contextlib.suppress(OSError):
                     os.remove(latest_temp_path)
-        self.logger.info(f"[INFO] Saved checkpoint to {output_path}")
+        self.logger.info(f"Saved checkpoint to {output_path}")
 
     @beartype
     def _get_optimizer(self, params: Any, **kwargs):
@@ -2766,50 +2825,25 @@ class TransformerModel(SequifierModel):
         total_losses: dict[str, np.float32],
         class_counts: ClassCounts,
         global_step: int,
+        batches_total: int,
+        evaluation_kind: str,
     ) -> None:
-        """Log validation metrics and class shares from rank 0."""
+        """Write validation losses and class shares from rank 0."""
         if self.rank == 0:
             learning_rate = self.optimizer.state_dict()["param_groups"][0]["lr"]
 
-            log_string = f"[INFO] Validation | Epoch: {epoch:3d} | Batch: {batch} | Loss: {format_number(total_loss)} | Baseline Loss: {format_number(self.baseline_loss)} | Time: {elapsed:5.2f}s | LR {format_number(learning_rate)}"
-
-            self.logger.info("-" * 89)
-            self.logger.info(log_string)
-
-            metrics_file = os.path.join(
-                self.project_root, "logs", f"sequifier-{self.model_name}-metrics.jsonl"
-            )
-            with open(metrics_file, "a") as f:
-                f.write(
-                    json.dumps(
-                        {
-                            "epoch": epoch,
-                            "batch": batch,
-                            "global_step": global_step,
-                            "val_loss": float(total_loss),
-                            "elapsed": elapsed,
-                        }
-                    )
-                    + "\n"
-                )
-                f.flush()
-                os.fsync(f.fileno())
-
-            if len(total_losses) > 1:
-                loss_strs = [
-                    f"{key}_loss: {format_number(value)}"
-                    for key, value in total_losses.items()
-                ]
-                self.logger.info("[INFO]  - " + ", ".join(loss_strs))
-
+            class_distributions: dict[str, list[dict[str, Any]]] = {}
+            class_share_summaries: list[str] = []
             for categorical_column in self.class_share_log_columns:
                 counts = class_counts[categorical_column].to(torch.int64)
                 total = counts.sum()
+                total_count = int(total.item())
 
-                if total.item() == 0:
+                if total_count == 0:
+                    class_distributions[categorical_column] = []
                     self.logger.warning(
-                        "[WARNING] No valid predictions available for "
-                        f"class-share column {categorical_column!r}."
+                        "No valid predictions available for class-share column "
+                        f"{categorical_column!r}."
                     )
                     continue
 
@@ -2817,19 +2851,74 @@ class TransformerModel(SequifierModel):
                     torch.float32 if counts.device.type == "mps" else torch.float64
                 )
                 shares = counts.to(share_dtype) / total
-
-                value_shares = " | ".join(
-                    f"{self.index_maps[categorical_column][self.target_decoder_ids[categorical_column][class_id]]}: "
-                    f"{shares[class_id].item():5.5f}"
-                    for class_id in range(counts.numel())
-                    if counts[class_id].item() > 0
+                distribution: list[dict[str, Any]] = []
+                display_shares = []
+                for class_id in range(counts.numel()):
+                    count = int(counts[class_id].item())
+                    if count == 0:
+                        continue
+                    global_class_id = self.target_decoder_ids[categorical_column][
+                        class_id
+                    ]
+                    class_label = self.index_maps[categorical_column][global_class_id]
+                    share = float(shares[class_id].item())
+                    distribution.append(
+                        {
+                            "class_id": global_class_id,
+                            "class_label": class_label,
+                            "count": count,
+                            "total_count": total_count,
+                            "share": share,
+                        }
+                    )
+                    display_shares.append(f"{class_label}: {share:5.5f}")
+                class_distributions[categorical_column] = distribution
+                class_share_summaries.append(
+                    f"{categorical_column} (n={total_count}): "
+                    + " | ".join(display_shares)
                 )
 
-                self.logger.info(
-                    f"[INFO] {categorical_column} (n={total.item()}): {value_shares}"
+            if self.metric_writers is None:
+                raise RuntimeError(
+                    "Rank 0 structured metric writers are not initialized."
                 )
+            self.metric_writers.write_validation(
+                run_id=self.run_id,
+                session_id=self.session_id,
+                evaluation_kind=evaluation_kind,
+                epoch=epoch,
+                batch=batch,
+                batches_total=batches_total,
+                global_step=global_step,
+                total_loss=total_loss,
+                target_losses=total_losses,
+                baseline_loss=self.baseline_loss,
+                baseline_target_losses=self.baseline_losses,
+                class_distributions=class_distributions,
+                learning_rate=learning_rate,
+                elapsed_seconds=elapsed,
+            )
 
-            self.logger.info("-" * 89)
+            metric_logger = self.logger.bind(log_channel="metric")
+            metric_logger.info("-" * 89)
+            metric_logger.info(
+                f"Validation | Epoch: {epoch:3d} | Batch: {batch} | "
+                f"Loss: {format_number(total_loss)} | "
+                f"Baseline Loss: {format_number(self.baseline_loss)} | "
+                f"Time: {elapsed:5.2f}s | LR {format_number(learning_rate)}"
+            )
+
+            if len(total_losses) > 1:
+                loss_strs = [
+                    f"{key}_loss: {format_number(value)}"
+                    for key, value in total_losses.items()
+                ]
+                metric_logger.info(" - " + ", ".join(loss_strs))
+
+            for summary in class_share_summaries:
+                metric_logger.info(summary)
+
+            metric_logger.info("-" * 89)
 
 
 @beartype
@@ -2874,7 +2963,7 @@ def load_inference_model(
         else:
             raise ValueError(f"Unknown PT model type: {model_type!r}")
 
-        model.logger.info(f"[INFO] Loading model weights from {model_path}")
+        model.logger.info(f"Loading model weights from {model_path}")
         model.load_state_dict(model_state["model_state_dict"])
 
         model.eval()

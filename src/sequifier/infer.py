@@ -436,7 +436,7 @@ def infer_worker(
     normalize_real_columns: bool,
 ):
     """Load data, instantiate models, and run the configured inference mode."""
-    logger.info(f"[INFO] Reading data from '{config.data_path}'...")
+    logger.info(f"Reading data from '{config.data_path}'...")
     is_folder_input = os.path.isdir(
         normalize_path(config.data_path, config.project_root)
     )
@@ -548,7 +548,7 @@ def infer_worker(
             f".{inferer.inference_model_type}", ""
         )
 
-        logger.info(f"[INFO] Inferring for {model_id}")
+        logger.info(f"Inferring for {model_id}")
         if config.model_type == "generative":
             infer_generative(config, inferer, model_id, dataset, column_data_types)
         if config.model_type == "embedding":
@@ -809,7 +809,7 @@ def infer_embedding(
         embeddings_path = os.path.join(
             config.project_root, "outputs", "embeddings", file_name
         )
-        logger.info(f"[INFO] Writing predictions to '{embeddings_path}'")
+        logger.info(f"Writing predictions to '{embeddings_path}'")
         write_data(
             embeddings_df,
             embeddings_path,
@@ -977,9 +977,7 @@ def infer_generative(
                     probabilities_path = os.path.join(
                         config.project_root, "outputs", "probabilities", file_name
                     )
-                    logger.info(
-                        f"[INFO] Writing probabilities to '{probabilities_path}'"
-                    )
+                    logger.info(f"Writing probabilities to '{probabilities_path}'")
                     # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
                     write_data(
                         pl.DataFrame(
@@ -1025,7 +1023,7 @@ def infer_generative(
         predictions_path = os.path.join(
             config.project_root, "outputs", "predictions", file_name
         )
-        logger.info(f"[INFO] Writing predictions to '{predictions_path}'")
+        logger.info(f"Writing predictions to '{predictions_path}'")
         write_data(
             predictions,
             predictions_path,

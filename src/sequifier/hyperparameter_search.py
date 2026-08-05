@@ -1,3 +1,4 @@
+import csv
 import ctypes
 import json
 import os
@@ -22,6 +23,7 @@ from sequifier.helpers import (  # noqa: E402
     get_last_training_batch_timedelta,
 )
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
+from sequifier.training.metrics import VALIDATION_FIELDS  # noqa: E402
 
 
 def create_sampler(config: Any) -> optuna.samplers.BaseSampler:
@@ -44,7 +46,7 @@ def set_pdeathsig():
 
 
 def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
-    """Run one Optuna trial through the CLI trainer and metrics JSONL."""
+    """Run one Optuna trial through the CLI trainer and validation metrics."""
     run_config = config.sample_trial(trial, trial.number)
     run_name = run_config.model_name
 
@@ -63,6 +65,27 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
 
     os.environ["SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"] = "1"
 
+    validation_path = os.path.join(
+        config.project_root,
+        "logs",
+        f"sequifier-{run_name}-rank0-validation.csv",
+    )
+    prune_path = os.path.join(
+        config.project_root, "logs", f"sequifier-{run_name}.prune"
+    )
+    consumed_evaluation_ids: set[str] = set()
+    if os.path.exists(validation_path):
+        with open(validation_path, "r", encoding="utf-8", newline="") as file:
+            reader = csv.DictReader(file)
+            if reader.fieldnames != VALIDATION_FIELDS:
+                raise ValueError(
+                    f"Unexpected validation metrics schema in {validation_path}: "
+                    f"{reader.fieldnames!r}"
+                )
+            consumed_evaluation_ids.update(
+                row["evaluation_id"] for row in reader if row.get("evaluation_id")
+            )
+
     env = os.environ.copy()
     cmd = ["sequifier", "train", f"--config-path={config_path}"]
     process = subprocess.Popen(
@@ -71,94 +94,84 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
         preexec_fn=set_pdeathsig if sys.platform.startswith("linux") else None,
     )
 
-    metrics_path = os.path.join(
-        config.project_root, "logs", f"sequifier-{run_name}-metrics.jsonl"
-    )
-    prune_path = os.path.join(
-        config.project_root, "logs", f"sequifier-{run_name}.prune"
-    )
-
-    last_read_pos = 0
     best_val_loss = float("inf")
     completed_epochs = 0
 
     def consume_metrics(
-        last_read_pos: int, best_val_loss: float, completed_epochs: int
-    ) -> tuple[int, float, int]:
-        """Read complete metric lines; report/prune single-objective trials."""
-        if os.path.exists(metrics_path):
-            with open(metrics_path, "r") as f:
-                f.seek(last_read_pos)
-                while True:
-                    line = f.readline()
-                    if not line or (not line.endswith("\n")):
-                        break  # Reached end of currently written data
-                    try:
-                        data = json.loads(line)
-                        val_loss = data.get("val_loss")
-                        global_step = data.get("global_step")
-                        metric_epoch = data.get("epoch")
+        best_val_loss: float, completed_epochs: int
+    ) -> tuple[float, int]:
+        """Read complete validation rows; report/prune single-objective trials."""
+        if os.path.exists(validation_path):
+            with open(validation_path, "r", encoding="utf-8", newline="") as file:
+                reader = csv.DictReader(file)
+                if reader.fieldnames != VALIDATION_FIELDS:
+                    raise ValueError(
+                        f"Unexpected validation metrics schema in "
+                        f"{validation_path}: {reader.fieldnames!r}"
+                    )
+                for data in reader:
+                    evaluation_id = data.get("evaluation_id")
+                    if (
+                        not evaluation_id
+                        or evaluation_id in consumed_evaluation_ids
+                        or data.get("metric") != "loss"
+                        or data.get("target") != "__total__"
+                        or not data.get("value")
+                        or not data.get("global_step")
+                        or not data.get("epoch")
+                    ):
+                        continue
 
-                        if metric_epoch is not None:
-                            completed_epochs = max(completed_epochs, int(metric_epoch))
+                    val_loss = float(data["value"])
+                    global_step = int(data["global_step"])
+                    metric_epoch = int(data["epoch"])
+                    if data.get("evaluation_kind") == "epoch_end":
+                        completed_epochs = max(completed_epochs, metric_epoch)
 
-                        if global_step is not None and val_loss is not None:
-                            is_multi_objective = (
-                                config.evaluation_metrics is not None
-                                and len(config.evaluation_metrics) > 1
+                    is_multi_objective = (
+                        config.evaluation_metrics is not None
+                        and len(config.evaluation_metrics) > 1
+                    )
+                    if not is_multi_objective:
+                        trial.report(val_loss, global_step)
+                        best_val_loss = min(best_val_loss, val_loss)
+
+                        if config.pruning_warmup_batches is not None:
+                            warmup_complete = (
+                                global_step >= config.pruning_warmup_batches
                             )
-                            if not is_multi_objective:
-                                trial.report(val_loss, global_step)
-                                best_val_loss = min(best_val_loss, val_loss)
-
-                                if config.pruning_warmup_batches is not None:
-                                    warmup_complete = (
-                                        global_step >= config.pruning_warmup_batches
+                        else:
+                            pruning_warmup_epochs = config.pruning_warmup_epochs or 0
+                            warmup_complete = completed_epochs >= pruning_warmup_epochs
+                        if (
+                            config.prune_trials
+                            and warmup_complete
+                            and trial.should_prune()
+                        ):
+                            open(prune_path, "w").close()
+                            try:
+                                try:
+                                    timedelta = get_last_training_batch_timedelta(
+                                        run_name, 0, config.project_root
                                     )
-                                else:
-                                    pruning_warmup_epochs = (
-                                        config.pruning_warmup_epochs or 0
-                                    )
-                                    warmup_complete = (
-                                        completed_epochs >= pruning_warmup_epochs
-                                    )
-                                if (
-                                    config.prune_trials
-                                    and warmup_complete
-                                    and trial.should_prune()
-                                ):
-                                    open(prune_path, "w").close()
-                                    try:
-                                        try:
-                                            timedelta = (
-                                                get_last_training_batch_timedelta(
-                                                    run_name, 0, config.project_root
-                                                )
-                                            )
-                                            timeout_val = (timedelta * 2) + 30
-                                        except (ValueError, FileNotFoundError):
-                                            timeout_val = 60.0
+                                    timeout_val = (timedelta * 2) + 30
+                                except (ValueError, FileNotFoundError):
+                                    timeout_val = 60.0
 
-                                        process.wait(timeout=timeout_val)
-                                    except subprocess.TimeoutExpired:
-                                        process.kill()
-                                    raise optuna.TrialPruned()
-
-                        last_read_pos = f.tell()
-
-                    except json.JSONDecodeError:
-                        break
-        return last_read_pos, best_val_loss, completed_epochs
+                                process.wait(timeout=timeout_val)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                            raise optuna.TrialPruned()
+                    consumed_evaluation_ids.add(evaluation_id)
+        return best_val_loss, completed_epochs
 
     while process.poll() is None:
-        last_read_pos, best_val_loss, completed_epochs = consume_metrics(
-            last_read_pos, best_val_loss, completed_epochs
+        best_val_loss, completed_epochs = consume_metrics(
+            best_val_loss, completed_epochs
         )
         time.sleep(2)
 
-    _, best_val_loss, _ = consume_metrics(
-        last_read_pos, best_val_loss, completed_epochs
-    )
+    best_val_loss, _ = consume_metrics(best_val_loss, completed_epochs)
 
     exit_code = process.returncode
     if exit_code == 143:

@@ -56,9 +56,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             configured_model_window_stride(config),
         )
 
-        logger.info(
-            f"[INFO] Loading training dataset into memory from '{self.data_dir}'..."
-        )
+        logger.info(f"Loading training dataset into memory from '{self.data_dir}'...")
 
         all_sequences: Dict[str, list[torch.Tensor]] = {
             col: [] for col in set(config.input_columns + config.target_columns)
@@ -98,7 +96,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         self.total_batches = self._calculate_total_batches(self.target_samples)
 
         logger.info(
-            f"[INFO] Dataset loaded into RAM with {self.target_samples} samples and {self.total_batches} batches."
+            f"Dataset loaded into RAM with {self.target_samples} samples and {self.total_batches} batches."
         )
 
     def _calculate_total_batches(self, target_samples: int) -> int:

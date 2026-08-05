@@ -1,51 +1,49 @@
-import re
+"""Pivot Sequifier's tidy validation metric table into one row per evaluation."""
+
 import sys
+from pathlib import Path
 
 import pandas as pd
 
 
-def process_logs(file_path):
-    with open(file_path, "r") as f:
-        lines = f.readlines()
+def process_metrics(file_path: str) -> Path:
+    """Write a wide loss-only table next to a structured validation CSV."""
+    source = Path(file_path)
+    metrics = pd.read_csv(source)
+    losses = metrics[metrics["metric"].isin(["loss", "baseline_loss"])].copy()
+    losses["measurement"] = losses["metric"] + "." + losses["target"]
 
-    data = []
-    # Regex for summary line
-    summary_pattern = re.compile(
-        r"Validation \| Epoch:\s+(\d+) \| Loss:\s+([\d\.e\+-]+) \| Baseline Loss:\s+([\d\.e\+-]+)"
-    )
+    context_columns = [
+        "schema_version",
+        "run_id",
+        "session_id",
+        "timestamp_utc",
+        "model",
+        "rank",
+        "evaluation_id",
+        "evaluation_kind",
+        "epoch",
+        "batch",
+        "batches_total",
+        "global_step",
+        "learning_rate",
+        "elapsed_seconds",
+    ]
+    table = losses.pivot(
+        index=context_columns,
+        columns="measurement",
+        values="value",
+    ).reset_index()
+    table.columns.name = None
 
-    for i, line in enumerate(lines):
-        match = summary_pattern.search(line)
-        if match:
-            # Extract Global metrics
-            row = {
-                "epoch": int(match.group(1)),
-                "global_val_loss": float(match.group(2)),
-                "global_baseline_loss": float(match.group(3)),
-            }
-
-            # Extract variable losses from the immediate next line
-            # Finds patterns like 'variable_name: 1.23e-4'
-            if i + 1 < len(lines):
-                row.update(
-                    {
-                        k: float(v)
-                        for k, v in re.findall(
-                            r"([\w_]+):\s+([\d\.e\+-]+)", lines[i + 1]
-                        )
-                    }
-                )
-
-            data.append(row)
-
-    # Export
-    output_path = file_path.replace(".txt", ".csv")
-    pd.DataFrame(data).to_csv(output_path, index=False)
-    print(f"Extracted {len(data)} epochs to {output_path}")
+    output_path = source.with_name(f"{source.stem}-wide.csv")
+    table.to_csv(output_path, index=False)
+    print(f"Extracted {len(table)} validation evaluations to {output_path}")
+    return output_path
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        process_logs(sys.argv[1])
-    else:
-        print("Usage: python script.py <path_to_log_file>")
+    if len(sys.argv) != 2:
+        print("Usage: python extract_validation_losses_to_table.py <validation.csv>")
+        raise SystemExit(2)
+    process_metrics(sys.argv[1])

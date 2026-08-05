@@ -1175,8 +1175,8 @@ class TrainingSpecModel(BaseModel):
                         f"scheduler total steps: {v['total_steps']} != {info_dict.get('epochs')}: total epochs"
                     )
             else:
-                logger.info(
-                    f"[WARNING] {v['total_steps']} scheduler steps at {info_dict.get('epochs')} epochs implies {v['total_steps']/info_dict.get('epochs'):.2f} batches. Does this seem correct?"
+                logger.warning(
+                    f"{v['total_steps']} scheduler steps at {info_dict.get('epochs')} epochs implies {v['total_steps']/info_dict.get('epochs'):.2f} batches. Does this seem correct?"
                 )
         return v
 

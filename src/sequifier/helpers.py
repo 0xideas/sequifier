@@ -1,8 +1,8 @@
+import csv
 import glob
 import hashlib
 import os
 import random
-import re
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -23,6 +23,22 @@ from sequifier.objectives import (
     get_objective_class,
 )
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
+
+
+def _events_and_reports_filter(record: dict[str, Any]) -> bool:
+    """Keep non-warning, non-metric-console records in the narrative log."""
+    return (
+        record["level"].no < logger.level("WARNING").no
+        and record["extra"].get("log_channel") != "metric"
+    )
+
+
+def _warnings_and_errors_filter(record: dict[str, Any]) -> bool:
+    """Keep warnings and errors in their dedicated operational log."""
+    return record["level"].no >= logger.level("WARNING").no
+
+
+_LOGGER_CONFIGURATION: tuple[int, str, str, int] | None = None
 
 PANDAS_TO_TORCH_TYPES = {
     "Float64": torch.float64,
@@ -811,7 +827,18 @@ def derive_target_column_types(
 
 @beartype
 def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0):
-    """Configure console plus rank-scoped debug/info log files."""
+    """Configure console plus exclusive rank-scoped operational log files."""
+    global _LOGGER_CONFIGURATION
+    normalized_rank = 0 if rank is None else rank
+    configuration = (
+        os.getpid(),
+        os.path.abspath(project_root),
+        model_name,
+        normalized_rank,
+    )
+    if _LOGGER_CONFIGURATION == configuration:
+        return logger
+
     logger.remove()
 
     if rank == 0 or rank is None:
@@ -826,23 +853,30 @@ def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0
 
     rank_str = f"rank{rank}" if rank is not None else "rank0"
 
-    file_2_path = os.path.join(log_dir, f"sequifier-{model_name}-{rank_str}-2.txt")
+    events_path = os.path.join(
+        log_dir, f"sequifier-{model_name}-{rank_str}-events-reports.log"
+    )
     logger.add(
-        file_2_path,
+        events_path,
         level="DEBUG",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+        filter=_events_and_reports_filter,
         enqueue=True,
         mode="a",
     )
 
-    file_3_path = os.path.join(log_dir, f"sequifier-{model_name}-{rank_str}-3.txt")
+    warnings_path = os.path.join(
+        log_dir, f"sequifier-{model_name}-{rank_str}-warnings-errors.log"
+    )
     logger.add(
-        file_3_path,
-        level="INFO",
+        warnings_path,
+        level="WARNING",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+        filter=_warnings_and_errors_filter,
         enqueue=True,
         mode="a",
     )
+    _LOGGER_CONFIGURATION = configuration
     return logger
 
 
@@ -912,33 +946,35 @@ def get_best_model_path(
 def get_last_training_batch_timedelta(
     model_name: str, rank: int, project_root: str = "."
 ) -> float:
-    """Return seconds between the last two mid-epoch train log entries."""
-    log_path = os.path.join(
-        project_root, "logs", f"sequifier-{model_name}-rank{rank}-2.txt"
+    """Return seconds between the last two structured train observations."""
+    metrics_path = os.path.join(
+        project_root,
+        "logs",
+        f"sequifier-{model_name}-rank{rank}-training.csv",
     )
 
-    if not os.path.exists(log_path):
-        raise FileNotFoundError(f"Log file not found: {log_path}")
+    if os.path.exists(metrics_path):
+        observations = []
+        with open(metrics_path, "r", encoding="utf-8", newline="") as file:
+            for row in csv.DictReader(file):
+                if row.get("metric") != "loss" or row.get("target") != "__total__":
+                    continue
+                timestamp = row.get("timestamp_utc")
+                session_id = row.get("session_id")
+                if timestamp and session_id:
+                    observations.append((session_id, timestamp))
 
-    train_log_pattern = re.compile(
-        r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\|.*?\[INFO\] Epoch.*?Batch"
-    )
+        latest_session = observations[-1][0] if observations else None
+        timestamps = [
+            datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            for session_id, timestamp in observations
+            if session_id == latest_session
+        ]
 
-    timestamps = []
-
-    with open(log_path, "r", encoding="utf-8") as file:
-        for line in file:
-            match = train_log_pattern.search(line)
-            if match:
-                timestamps.append(
-                    datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
-                )
-
-    if len(timestamps) < 2:
-        raise ValueError(
-            "Not enough mid-epoch training logs found in the file to calculate a timedelta."
-        )
-
-    t1, t2 = timestamps[-2], timestamps[-1]
-
-    return (t2 - t1).total_seconds()
+        if len(timestamps) < 2:
+            raise ValueError(
+                "Not enough structured training observations found to calculate "
+                "a timedelta."
+            )
+        return (timestamps[-1] - timestamps[-2]).total_seconds()
+    raise FileNotFoundError(f"Training metrics file not found: {metrics_path}")

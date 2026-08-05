@@ -60,7 +60,7 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         )
 
         logger.info(
-            f"[INFO] Loading Parquet folder dataset into memory from '{self.data_dir}'..."
+            f"Loading Parquet folder dataset into memory from '{self.data_dir}'..."
         )
 
         column_torch_types = {
@@ -120,7 +120,7 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         self.total_batches = self._calculate_total_batches(self.target_samples)
 
         logger.info(
-            f"[INFO] Parquet Dataset loaded into RAM with {self.target_samples} samples and {self.total_batches} batches."
+            f"Parquet Dataset loaded into RAM with {self.target_samples} samples and {self.total_batches} batches."
         )
 
     def _calculate_total_batches(self, target_samples: int) -> int:
