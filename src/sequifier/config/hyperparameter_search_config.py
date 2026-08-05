@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import os
 import warnings
 from dataclasses import dataclass
@@ -403,6 +404,7 @@ class SampledTrainingConfig:
     training_objective: str
     device: str
     backbone_dropout: float
+    ingestion_dropout: Optional[float] = None
 
 
 class TrainingSpecHyperparameterSampling(BaseModel):
@@ -432,6 +434,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
     accumulation_steps: OptionalOptunaInt
     gradient_clip: OptionalOptunaFloat = None
     dropout: OptunaFloat = [0.0]
+    ingestion_dropout: Optional[OptunaFloat] = None
 
     loss_weights: Optional[dict[str, float]] = None
     optimizer: list[DotDict] = Field(
@@ -466,6 +469,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         training_objective: str,
         batch_size: int,
         dropout: float,
+        ingestion_dropout: Optional[float],
         accumulation_steps: Optional[int],
         gradient_clip: Optional[float],
         bert_spec: Optional[BERTSpecModel] = None,
@@ -520,6 +524,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             training_objective=training_objective,
             device=self.device,
             backbone_dropout=dropout,
+            ingestion_dropout=ingestion_dropout,
         )
 
     def validation_model(
@@ -552,6 +557,11 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             training_objective=objective,
             batch_size=_validation_space_values("batch_size", self.batch_size)[0],
             dropout=_validation_space_values("dropout", self.dropout)[0],
+            ingestion_dropout=(
+                _validation_space_values("ingestion_dropout", self.ingestion_dropout)[0]
+                if self.ingestion_dropout is not None
+                else None
+            ),
             accumulation_steps=_validation_space_values(
                 "accumulation_steps",
                 self.accumulation_steps,
@@ -576,12 +586,18 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             else 1
             for objective_name in self.training_objective
         )
+        ingestion_dropout_combinations = (
+            grid_space_size("ingestion_dropout", self.ingestion_dropout)
+            if self.ingestion_dropout is not None
+            else 1
+        )
         return (
             len(self.learning_rate)
             * len(self.optimizer)
             * objective_combinations
             * grid_space_size("batch_size", self.batch_size)
             * grid_space_size("dropout", self.dropout)
+            * ingestion_dropout_combinations
             * grid_space_size("accumulation_steps", self.accumulation_steps)
             * gradient_clip_combinations
         )
@@ -671,6 +687,8 @@ class TrainingSpecHyperparameterSampling(BaseModel):
 
         _validation_space_values("batch_size", self.batch_size)
         _validation_space_values("dropout", self.dropout)
+        if self.ingestion_dropout is not None:
+            _validation_space_values("ingestion_dropout", self.ingestion_dropout)
         _validation_space_values("accumulation_steps", self.accumulation_steps)
         if isinstance(self.gradient_clip, (list, FloatDistribution)):
             _validation_space_values("gradient_clip", self.gradient_clip)
@@ -792,6 +810,11 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         )
         batch_size = sample_param(trial, "batch_size", self.batch_size)
         dropout = sample_param(trial, "dropout", self.dropout)
+        ingestion_dropout = (
+            sample_param(trial, "ingestion_dropout", self.ingestion_dropout)
+            if self.ingestion_dropout is not None
+            else None
+        )
         accumulation_steps = sample_param(
             trial, "accumulation_steps", self.accumulation_steps
         )
@@ -802,7 +825,9 @@ class TrainingSpecHyperparameterSampling(BaseModel):
         )
 
         logger.info(
-            f"{training_objective = } - {learning_rate = } - {batch_size = } - {dropout = } - {gradient_clip = } - {optimizer = }"
+            f"{training_objective = } - {learning_rate = } - {batch_size = } - "
+            f"{dropout = } - {ingestion_dropout = } - {gradient_clip = } - "
+            f"{optimizer = }"
         )
 
         return self._build_training_spec(
@@ -811,6 +836,7 @@ class TrainingSpecHyperparameterSampling(BaseModel):
             training_objective=training_objective,
             batch_size=batch_size,
             dropout=dropout,
+            ingestion_dropout=ingestion_dropout,
             accumulation_steps=accumulation_steps,
             gradient_clip=gradient_clip,
             bert_spec=bert_spec,
@@ -837,6 +863,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
     initialization: ModelInitializationSamplingConfig = Field(
         default_factory=ModelInitializationSamplingConfig
     )
+    ingestion_initialization: Optional[ModelInitializationSamplingConfig] = None
+    backbone_initialization: Optional[ModelInitializationSamplingConfig] = None
+    decoder_initialization: Optional[ModelInitializationSamplingConfig] = None
     n_head: list[int]
 
     dim_feedforward: OptunaInt
@@ -848,6 +877,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
     activation_fn: list[str]
     normalization: list[str]
     positional_encoding: list[str]
+    positional_encoding_scope: list[str] = Field(
+        default_factory=lambda: ["per_feature"]
+    )
     attention_type: list[str]
     attention_output_projection: list[bool] = Field(default_factory=lambda: [True])
 
@@ -883,6 +915,55 @@ class ModelSpecHyperparameterSampling(BaseModel):
             return self.decoding_spec[decoding_spec_index]
         return cast(Optional[DecodingSpecConfig], self.decoding_spec)
 
+    def _validation_initializations(
+        self,
+    ) -> tuple[
+        ModelInitializationConfig,
+        ModelInitializationConfig,
+        ModelInitializationConfig,
+    ]:
+        fallback = self.initialization.validation_config()
+        return tuple(
+            (
+                sampling.validation_config()
+                if sampling is not None
+                else fallback.model_copy(deep=True)
+            )
+            for sampling in (
+                self.ingestion_initialization,
+                self.backbone_initialization,
+                self.decoder_initialization,
+            )
+        )  # type: ignore[return-value]
+
+    def _sample_initializations(
+        self, trial: Any
+    ) -> tuple[
+        ModelInitializationConfig,
+        ModelInitializationConfig,
+        ModelInitializationConfig,
+    ]:
+        component_sampling = (
+            ("ingestion", self.ingestion_initialization),
+            ("backbone", self.backbone_initialization),
+            ("decoder", self.decoder_initialization),
+        )
+        fallback = (
+            self.initialization.sample_trial(trial)
+            if any(sampling is None for _, sampling in component_sampling)
+            else None
+        )
+        return tuple(
+            (
+                sampling.sample_trial(
+                    trial, parameter_prefix=f"{component}_initialization"
+                )
+                if sampling is not None
+                else cast(ModelInitializationConfig, fallback).model_copy(deep=True)
+            )
+            for component, sampling in component_sampling
+        )  # type: ignore[return-value]
+
     def _build_model_spec(
         self,
         *,
@@ -894,20 +975,24 @@ class ModelSpecHyperparameterSampling(BaseModel):
         activation_fn: str,
         normalization: str,
         positional_encoding: str,
+        positional_encoding_scope: str,
         attention_type: str,
         attention_output_projection: bool,
         norm_first: bool,
         n_kv_heads: Optional[int],
         rope_theta: float,
-        initialization: ModelInitializationConfig,
+        ingestion_initialization: ModelInitializationConfig,
+        backbone_initialization: ModelInitializationConfig,
+        decoder_initialization: ModelInitializationConfig,
     ) -> ModelSpecModel:
         dim_model = self.dim_model[width_index]
+        transformer_input_width = dim_model - int(positional_encoding == "range_concat")
         ingestion_spec = self._ingestion_spec_for_width(width_index)
         ingestion_merge = self._ingestion_merge_for_width(width_index)
         if ingestion_spec is None:
             ingestion: dict[str, Any] = {
                 "type": "direct_embed",
-                "output_dim": dim_model,
+                "output_dim": transformer_input_width,
             }
         elif isinstance(ingestion_spec, dict):
             ingestion = {
@@ -929,7 +1014,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
                 "allow_shared_columns": self.allow_shared_ingestion_columns,
                 "allow_unused_input_columns": self.allow_unused_input_columns,
                 "auxiliary_input_columns": self.auxiliary_input_columns,
-                "initialization": initialization.model_dump(mode="python"),
+                "initialization": ingestion_initialization.model_dump(mode="python"),
             }
         )
 
@@ -949,7 +1034,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             {
                 "prediction_length": self.prediction_length,
                 "support": decoding_support,
-                "initialization": initialization.model_dump(mode="python"),
+                "initialization": decoder_initialization.model_dump(mode="python"),
             }
         )
 
@@ -983,6 +1068,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
                             "type": positional_encoding,
                             "theta": rope_theta,
                         },
+                        "positional_encoding_scope": positional_encoding_scope,
                         "dropout": 0.0,
                         "shared_layer_groups": self.shared_layer_groups,
                     },
@@ -996,7 +1082,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
                         "publish": False,
                         "conflict_policy": "compare_and_swap",
                     },
-                    "initialization": initialization.model_dump(mode="python"),
+                    "initialization": backbone_initialization.model_dump(mode="python"),
                 },
                 "decoder": decoder,
             }
@@ -1035,6 +1121,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
         activation_fn: Optional[str] = None,
         normalization: Optional[str] = None,
         positional_encoding: Optional[str] = None,
+        positional_encoding_scope: Optional[str] = None,
         attention_type: Optional[str] = None,
         attention_output_projection: Optional[bool] = None,
         norm_first: Optional[bool] = None,
@@ -1046,6 +1133,16 @@ class ModelSpecHyperparameterSampling(BaseModel):
             self.positional_encoding[0]
             if positional_encoding is None
             else positional_encoding
+        )
+        sampled_scope = (
+            self.positional_encoding_scope[0]
+            if positional_encoding_scope is None
+            else positional_encoding_scope
+        )
+        selected_scope = (
+            "global"
+            if selected_positional_encoding in {"range", "range_concat", "sinusoidal"}
+            else sampled_scope
         )
         if n_kv_heads is _DEFAULT_KV_HEADS:
             selected_kv_heads = self._valid_kv_heads_for_width(width_index)[0]
@@ -1065,6 +1162,11 @@ class ModelSpecHyperparameterSampling(BaseModel):
                     self.decoding_support,
                 )[0]
             )
+        (
+            ingestion_initialization,
+            backbone_initialization,
+            decoder_initialization,
+        ) = self._validation_initializations()
         return self._build_model_spec(
             width_index=width_index,
             dim_feedforward=(
@@ -1085,6 +1187,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             activation_fn=activation_fn or self.activation_fn[0],
             normalization=normalization or self.normalization[0],
             positional_encoding=selected_positional_encoding,
+            positional_encoding_scope=selected_scope,
             attention_type=attention_type or self.attention_type[0],
             attention_output_projection=(
                 self.attention_output_projection[0]
@@ -1098,7 +1201,9 @@ class ModelSpecHyperparameterSampling(BaseModel):
                 if rope_theta is None
                 else rope_theta
             ),
-            initialization=self.initialization.validation_config(),
+            ingestion_initialization=ingestion_initialization,
+            backbone_initialization=backbone_initialization,
+            decoder_initialization=decoder_initialization,
         )
 
     def grid_size(self) -> int:
@@ -1121,6 +1226,27 @@ class ModelSpecHyperparameterSampling(BaseModel):
         decoding_spec_combinations = (
             len(self.decoding_spec) if isinstance(self.decoding_spec, list) else 1
         )
+        component_initialization_combinations = math.prod(
+            sampling.grid_size()
+            for sampling in (
+                self.ingestion_initialization,
+                self.backbone_initialization,
+                self.decoder_initialization,
+            )
+            if sampling is not None
+        )
+        fallback_initialization_combinations = (
+            self.initialization.grid_size()
+            if any(
+                sampling is None
+                for sampling in (
+                    self.ingestion_initialization,
+                    self.backbone_initialization,
+                    self.decoder_initialization,
+                )
+            )
+            else 1
+        )
         return (
             width_and_kv_head_combinations
             * decoding_support_combinations
@@ -1131,10 +1257,12 @@ class ModelSpecHyperparameterSampling(BaseModel):
             * len(self.activation_fn)
             * len(self.normalization)
             * len(self.positional_encoding)
+            * len(self.positional_encoding_scope)
             * len(self.attention_type)
             * len(self.attention_output_projection)
             * len(self.norm_first)
-            * self.initialization.grid_size()
+            * component_initialization_combinations
+            * fallback_initialization_combinations
         )
 
     @field_validator("decoding_support")
@@ -1232,6 +1360,7 @@ class ModelSpecHyperparameterSampling(BaseModel):
             "activation_fn": self.activation_fn,
             "normalization": self.normalization,
             "positional_encoding": self.positional_encoding,
+            "positional_encoding_scope": self.positional_encoding_scope,
             "attention_type": self.attention_type,
             "attention_output_projection": self.attention_output_projection,
             "norm_first": self.norm_first,
@@ -1304,16 +1433,21 @@ class ModelSpecHyperparameterSampling(BaseModel):
 
         for width_index in range(len(self.dim_model)):
             for positional_encoding in self.positional_encoding:
-                candidates.append(
-                    (
-                        "width/positional encoding combination "
-                        f"({width_index}, {positional_encoding!r})",
-                        {
-                            "width_index": width_index,
-                            "positional_encoding": positional_encoding,
-                        },
+                for positional_encoding_scope in self.positional_encoding_scope:
+                    candidates.append(
+                        (
+                            "width/positional encoding combination "
+                            f"({width_index}, {positional_encoding!r}, "
+                            f"{positional_encoding_scope!r})",
+                            {
+                                "width_index": width_index,
+                                "positional_encoding": positional_encoding,
+                                "positional_encoding_scope": (
+                                    positional_encoding_scope
+                                ),
+                            },
+                        )
                     )
-                )
             for attention_type in self.attention_type:
                 for n_kv_heads in self._valid_kv_heads_for_width(width_index):
                     candidates.append(
@@ -1362,12 +1496,24 @@ class ModelSpecHyperparameterSampling(BaseModel):
         dim_feedforward = sample_param(trial, "dim_feedforward", self.dim_feedforward)
         num_layers = sample_param(trial, "num_layers", self.num_layers)
         rope_theta = sample_param(trial, "rope_theta", self.rope_theta)
-        initialization = self.initialization.sample_trial(trial)
+        (
+            ingestion_initialization,
+            backbone_initialization,
+            decoder_initialization,
+        ) = self._sample_initializations(trial)
 
         activation_fn = trial.suggest_categorical("activation_fn", self.activation_fn)
         normalization = trial.suggest_categorical("normalization", self.normalization)
         positional_encoding = trial.suggest_categorical(
             "positional_encoding", self.positional_encoding
+        )
+        sampled_positional_encoding_scope = trial.suggest_categorical(
+            "positional_encoding_scope", self.positional_encoding_scope
+        )
+        positional_encoding_scope = (
+            "global"
+            if positional_encoding in {"range", "range_concat", "sinusoidal"}
+            else sampled_positional_encoding_scope
         )
         attention_type = trial.suggest_categorical(
             "attention_type", self.attention_type
@@ -1392,7 +1538,11 @@ class ModelSpecHyperparameterSampling(BaseModel):
             n_kv_heads = trial.suggest_categorical("n_kv_heads", valid_kv_heads)
 
         logger.info(
-            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - {activation_fn = } - {normalization = } - {positional_encoding = } - {attention_type = } - {attention_output_projection = } - {norm_first = } - {n_kv_heads = } - {rope_theta = } "
+            f"{dim_model = } - {dim_feedforward = } - {num_layers = } - "
+            f"{activation_fn = } - {normalization = } - "
+            f"{positional_encoding = } - {positional_encoding_scope = } - "
+            f"{attention_type = } - {attention_output_projection = } - "
+            f"{norm_first = } - {n_kv_heads = } - {rope_theta = } "
         )
 
         return self._build_model_spec(
@@ -1404,12 +1554,15 @@ class ModelSpecHyperparameterSampling(BaseModel):
             activation_fn=activation_fn,
             normalization=normalization,
             positional_encoding=positional_encoding,
+            positional_encoding_scope=positional_encoding_scope,
             attention_type=attention_type,
             attention_output_projection=attention_output_projection,
             norm_first=norm_first,
             n_kv_heads=n_kv_heads,
             rope_theta=rope_theta,
-            initialization=initialization,
+            ingestion_initialization=ingestion_initialization,
+            backbone_initialization=backbone_initialization,
+            decoder_initialization=decoder_initialization,
         )
 
 
@@ -1518,6 +1671,19 @@ class HyperparameterSearchConfig(BaseModel):
         architecture = model_spec.backbone.architecture.model_copy(
             update={"dropout": training_config.backbone_dropout}
         )
+        ingestion = model_spec.ingestion
+        if training_config.ingestion_dropout is not None:
+            ingestion_updates: dict[str, Any] = {
+                "dropout": training_config.ingestion_dropout
+            }
+            if ingestion.type == "composite":
+                ingestion_updates["branches"] = {
+                    name: branch.model_copy(
+                        update={"dropout": training_config.ingestion_dropout}
+                    )
+                    for name, branch in ingestion.branches.items()
+                }
+            ingestion = ingestion.model_copy(update=ingestion_updates)
         repository_template = model_spec.backbone.repository
         if repository_template is None:
             repository = None
@@ -1537,12 +1703,13 @@ class HyperparameterSearchConfig(BaseModel):
             )
         model_spec = model_spec.model_copy(
             update={
+                "ingestion": ingestion,
                 "backbone": model_spec.backbone.model_copy(
                     update={
                         "architecture": architecture,
                         "repository": repository,
                     }
-                )
+                ),
             }
         )
         if not objective_class.forward_looking:

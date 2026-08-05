@@ -171,6 +171,7 @@ SEARCH_FIELD_POLICIES: dict[ConfigPath, SearchFieldPolicy] = {
             ("model_spec", "activation_fn"),
             ("model_spec", "normalization"),
             ("model_spec", "positional_encoding"),
+            ("model_spec", "positional_encoding_scope"),
             ("model_spec", "attention_type"),
             ("model_spec", "attention_output_projection"),
             ("model_spec", "norm_first"),
@@ -183,6 +184,7 @@ SEARCH_FIELD_POLICIES: dict[ConfigPath, SearchFieldPolicy] = {
             ("training_spec", "accumulation_steps"),
             ("training_spec", "gradient_clip"),
             ("training_spec", "dropout"),
+            ("training_spec", "ingestion_dropout"),
             ("training_spec", "optimizer"),
             ("training_spec", "scheduler"),
             ("training_spec", "bert_spec", "masking_probability"),
@@ -624,7 +626,15 @@ def _model_sampling_values(model_spec: BaseModel) -> dict[str, Any]:
         "allow_shared_ingestion_columns": ingestion.allow_shared_columns,
         "allow_unused_input_columns": ingestion.allow_unused_input_columns,
         "auxiliary_input_columns": list(ingestion.auxiliary_input_columns),
-        "initialization": model_spec.backbone.initialization.model_dump(mode="python"),
+        "ingestion_initialization": model_spec.ingestion.initialization.model_dump(
+            mode="python"
+        ),
+        "backbone_initialization": model_spec.backbone.initialization.model_dump(
+            mode="python"
+        ),
+        "decoder_initialization": model_spec.decoder.initialization.model_dump(
+            mode="python"
+        ),
         "n_head": architecture.attention.n_heads,
         "dim_feedforward": architecture.feed_forward.dim,
         "num_layers": architecture.num_layers,
@@ -634,6 +644,7 @@ def _model_sampling_values(model_spec: BaseModel) -> dict[str, Any]:
         "activation_fn": architecture.feed_forward.activation,
         "normalization": architecture.normalization.type,
         "positional_encoding": architecture.position_encoding.type,
+        "positional_encoding_scope": architecture.positional_encoding_scope,
         "attention_type": architecture.attention.type,
         "attention_output_projection": architecture.attention.output_projection,
         "norm_first": architecture.normalization.norm_first,
@@ -853,6 +864,11 @@ def compile_hyperparameter_search_override_config(
         _MODEL_WIDTH_GROUP,
         inherited_values=_model_sampling_values(base_model.model_spec),
     )
+    if _is_configured(overrides, ("model_spec", "initialization")):
+        for component in ("ingestion", "backbone", "decoder"):
+            component_field = f"{component}_initialization"
+            if not _is_configured(overrides, ("model_spec", component_field)):
+                model_sampling.pop(component_field, None)
     training_sampling = _compile_sampling_section(
         config_path,
         base_model.training_spec,

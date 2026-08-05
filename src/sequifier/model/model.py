@@ -1,10 +1,13 @@
 from torch import Tensor, nn
 
+from sequifier.model.dtypes import cast_floating_to_module_dtype
+
 
 class SequifierModel(nn.Module):
     """A Sequifier network with three explicit, checkpointable components."""
 
     ingestion: nn.Module
+    ingestion_adapter: nn.Module
     backbone: nn.Module
     decoder: nn.Module
 
@@ -26,6 +29,7 @@ class SequifierModel(nn.Module):
             )
         if ingestion is not None and backbone is not None and decoder is not None:
             self.ingestion = ingestion
+            self.ingestion_adapter = nn.Identity()
             self.backbone = backbone
             self.decoder = decoder
         if decoding_support <= 0:
@@ -39,6 +43,9 @@ class SequifierModel(nn.Module):
         attention_mask: Tensor | None,
     ) -> Tensor:
         hidden = self.ingestion(features, metadata)
+        hidden = self.ingestion_adapter(
+            cast_floating_to_module_dtype(hidden, self.ingestion_adapter)
+        )
         return self.encode_ingested(hidden, metadata, attention_mask)
 
     def encode_ingested(
@@ -47,10 +54,11 @@ class SequifierModel(nn.Module):
         metadata: dict[str, Tensor],
         attention_mask: Tensor | None,
     ) -> Tensor:
-        if hidden.shape[-1] != self.backbone.dim_model:
+        expected_width = getattr(self.backbone, "input_dim", self.backbone.dim_model)
+        if hidden.shape[-1] != expected_width:
             raise ValueError(
-                "Ingestion output width must equal backbone dim_model: "
-                f"{hidden.shape[-1]} != {self.backbone.dim_model}."
+                "Adapted ingestion output width must equal backbone input_dim: "
+                f"{hidden.shape[-1]} != {expected_width}."
             )
         valid_mask = metadata["attention_valid_mask"].bool()
         if valid_mask.shape != hidden.shape[:2]:

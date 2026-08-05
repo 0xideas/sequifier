@@ -77,6 +77,7 @@ class _ModelWeightInitializer:
         for module in self.model.modules():
             for attribute in (
                 "pos_encoder",
+                "position_embedding",
                 "global_position_encoder",
                 "axis_embedding_layers",
             ):
@@ -94,6 +95,12 @@ class _ModelWeightInitializer:
     def _ingestion_projection_module_ids(self) -> set[int]:
         projections: set[int] = set()
         for module in self.model.modules():
+            if (
+                isinstance(module, nn.Linear)
+                and getattr(module, "_sequifier_layer_group", None)
+                == "ingestion.output_projection"
+            ):
+                projections.add(id(module))
             for attribute in (
                 "output_projection_layer",
                 "input_projection",

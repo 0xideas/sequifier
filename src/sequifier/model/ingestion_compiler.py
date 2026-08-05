@@ -350,7 +350,10 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
             f"columns: {sorted(unexpected_unused_columns)}"
         )
 
-    transformer_input_width = model_spec.backbone.architecture.dim_model
+    architecture = model_spec.backbone.architecture
+    transformer_input_width = architecture.dim_model - int(
+        architecture.position_encoding.type == "range_concat"
+    )
     return IngestionPlan(
         branches=tuple(branches),
         merge_type=merge_type,
@@ -534,7 +537,11 @@ def compile_feature_ingestion(
         hparams=hparams,
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
-        add_ingestion_position=False,
+        add_ingestion_position=(
+            hparams.model_spec.backbone.architecture.position_encoding.type == "learned"
+            and hparams.model_spec.backbone.architecture.positional_encoding_scope
+            == "per_feature"
+        ),
     )
     built_branches = {
         branch.name: INGESTION_HANDLERS[branch.config.type].build(branch, context)

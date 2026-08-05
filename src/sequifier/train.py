@@ -97,6 +97,7 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
 from sequifier.logging_paths import model_log_directory  # noqa: E402
 from sequifier.model.backbone import TransformerBackbone  # noqa: E402
 from sequifier.model.decoders import build_target_decoding  # noqa: E402
+from sequifier.model.dtypes import cast_floating_to_module_dtype  # noqa: E402
 from sequifier.model.ingestion_compiler import compile_feature_ingestion  # noqa: E402
 from sequifier.model.initialization import initialize_model_weights  # noqa: E402
 from sequifier.model.layers import RMSNorm  # noqa: E402
@@ -751,11 +752,14 @@ class TransformerModel(SequifierModel):
             device_max_concat_length=hparams.training_spec.device_max_concat_length,
         )
         self.ingestion = built_ingestion.module
-        if built_ingestion.width != self.dim_model:
-            raise ValueError(
-                "Ingestion compiler violated the backbone input contract: "
-                f"{built_ingestion.width} != {self.dim_model}."
-            )
+        self.ingestion_adapter = (
+            nn.Identity()
+            if built_ingestion.width == backbone.input_dim
+            else nn.Linear(built_ingestion.width, backbone.input_dim)
+        )
+        self.ingestion_adapter._sequifier_layer_group = (  # type: ignore[attr-defined]
+            "ingestion.output_projection"
+        )
         self.backbone = backbone
 
         self.prediction_length = hparams.model_spec.decoder.prediction_length
@@ -801,6 +805,7 @@ class TransformerModel(SequifierModel):
 
         component_initializers = {
             "ingestion": hparams.model_spec.ingestion.initialization,
+            "ingestion_adapter": hparams.model_spec.ingestion.initialization,
             "backbone": hparams.model_spec.backbone.initialization,
             "decoder": hparams.model_spec.decoder.initialization,
         }
@@ -1008,6 +1013,9 @@ class TransformerModel(SequifierModel):
         """Encode inputs into contextual hidden states."""
         valid_mask = metadata["attention_valid_mask"].bool()  # type: ignore
         ingestion_output = self.ingestion(src, metadata)
+        ingestion_output = self.ingestion_adapter(
+            cast_floating_to_module_dtype(ingestion_output, self.ingestion_adapter)
+        )
         mask = self._build_attention_mask(valid_mask, dtype=ingestion_output.dtype)
         hidden = self.encode_ingested(ingestion_output, metadata, mask)
         return hidden.transpose(0, 1)
