@@ -275,8 +275,8 @@ Most fields here are lists for sampling, but some are scalar values fixed for al
 | `save_interval_batches` | `int` | No | `null` | Batch interval to save a unique, batch-specific checkpoint. |
 | `save_interval_val_loss` | `bool` | No | `true` | Whether to calculate validation loss at the moment of the batch interval save. |
 | `calculate_validation_loss_on_initialization` | `bool` | No | `false` | Determines if a validation pass runs before epoch 1 begins. Standard `train` defaults this field to `true`. |
-| `log_interval` | `int` | No | `10` | Logging frequency (batches). |
-| `class_share_log_columns`| `list[str]`| No | `[]` | Columns for which to log the predicted class distribution in validation. |
+| `log_interval` | `int` | No | `10` | Structured training metric frequency (batches). |
+| `class_share_log_columns`| `list[str]`| No | `[]` | Columns whose predicted validation distributions are recorded in the class-share CSV. |
 | `early_stopping_epochs`| `int` | No | `null` | Stop if validation metric doesn't improve. |
 | `num_workers` | `int` | No | `0` | Data loading subprocesses. |
 | `loss_weights` | `dict` | No | `null` | Weights for multi-objective loss. |
@@ -380,7 +380,7 @@ If you define multiple metrics in `evaluation_metrics` (e.g., you want to maximi
 2. **Generated Configs:** Located in `model_config_write_path` (e.g., `configs/hp_search/`).
       * Valid, standalone `train.yaml` files generated for each trial.
 3. **Logs:** Located in `logs/`.
-      * Includes individual training logs and JSONL files (`sequifier-[RUN]-metrics.jsonl`) tracking the validation curve.
+      * Includes rank-scoped operational logs and rank-0 structured training, validation, and class-share CSV files. Optuna tails `sequifier-[RUN]-rank0-validation.csv` for intermediate validation loss.
 4.  **Models & Checkpoints:**
       * Saved in `models/` and `checkpoints/` with filenames including the run number (e.g., `models/sequifier-my-search-run-5-best-10.onnx`).
 5. **Evaluations (Optional):**

@@ -1,5 +1,5 @@
 import argparse
-import glob
+import csv
 import os
 import re
 from dataclasses import dataclass, field
@@ -13,20 +13,8 @@ from loguru import logger
 from plotly.subplots import make_subplots
 
 from sequifier.helpers import configure_logger
-
-VAL_PATTERN = re.compile(
-    r"\[INFO\] Validation\s+\|\s*Epoch:\s*(\d+)\s+\|\s*Batch:\s*(\d+)\s+\|\s*Loss:\s*([^\s\|]+)\s+\|\s*Baseline Loss:\s*([^\s\|]+)"
-)
-VAR_PATTERN = re.compile(r"\[INFO\]\s+-\s+(.*)")
-TRAIN_PATTERN = re.compile(
-    r"\[INFO\] Epoch\s*(\d+)\s+\|\s*Batch\s*(\d+)/\s*(\d+)\s+\|\s*Loss:\s*([^\s\|]+)"
-)
-
-
-class LogParsingError(Exception):
-    """Malformed training log line."""
-
-    pass
+from sequifier.logging_paths import rank_log_prefix
+from sequifier.training.metrics import TOTAL_TARGET
 
 
 class DataContinuityError(Exception):
@@ -46,193 +34,77 @@ class TrainingMetrics:
         default_factory=dict
     )
 
-    def clear_state(self) -> None:
-        """Clear parsed metrics after a detected run restart."""
-        self.val_losses.clear()
-        self.baseline_losses.clear()
-        self.var_losses.clear()
-        self.train_losses.clear()
 
-
-class LogParser:
-    """Stateful parser for sequifier training logs."""
+class StructuredMetricsParser:
+    """Read rank-0 training and validation tables for the latest logical run."""
 
     def __init__(self, model_name: str):
         self.model = model_name
-        self.metrics = TrainingMetrics()
-        self.current_epoch: Optional[int] = None
-        self.current_batch: Optional[int] = None
-        self.expected_num_batches: Optional[int] = None
-        self.pending_var_loss_epoch: Optional[float] = None
 
     @beartype
-    def parse_file(self, log_file: str) -> TrainingMetrics:
-        with open(log_file, "r") as f:
-            for line_num, line in enumerate(f, 1):
-                try:
-                    self._process_line(line)
-                except Exception as e:
-                    raise LogParsingError(f"[{self.model} Line {line_num}]: {e}")
-
-        self._validate_final_metrics()
-        return self.metrics
-
-    @beartype
-    def _process_line(self, line: str) -> None:
-        """Dispatch one log line to the matching parser."""
-        if "[INFO] Validation | Epoch:" in line:
-            self._process_validation(line)
-        elif self.pending_var_loss_epoch is not None and "[INFO]  - " in line:
-            self._process_var_loss(line)
-        elif "[INFO] Epoch" in line and "| Batch" in line:
-            self._process_training(line)
-        elif "[INFO] Epoch" in line or "[INFO] Validation" in line:
-            self.pending_var_loss_epoch = None
-
-    @beartype
-    def _process_validation(self, line: str) -> None:
-        match = VAL_PATTERN.search(line)
-        if not match:
-            raise LogParsingError(f"Malformed Validation log -> '{line.strip()}'")
-
-        epoch = int(match.group(1))
-        batch = int(match.group(2))
-        val_loss = parse_number(match.group(3))
-        baseline = parse_number(match.group(4))
-
-        if (epoch == 0 and batch == 0) or (
-            self.current_epoch is not None and epoch < self.current_epoch and epoch != 0
-        ):
-            self.metrics.clear_state()
-            self.current_epoch = None
-            self.current_batch = None
-            self.expected_num_batches = None
-
-        if (
-            epoch == 0
-            and batch > 0
-            and self.current_epoch is not None
-            and self.expected_num_batches is not None
-        ):
-            calc_epoch = self.current_epoch - 1 + (batch / self.expected_num_batches)
-        elif self.expected_num_batches is not None and batch > 0:
-            calc_epoch = epoch - 1 + (batch / self.expected_num_batches)
-        else:
-            calc_epoch = float(epoch)
-
-        self.metrics.val_losses[calc_epoch] = val_loss
-        self.metrics.baseline_losses[calc_epoch] = baseline
-        self.pending_var_loss_epoch = calc_epoch
-
-    @beartype
-    def _process_var_loss(self, line: str) -> None:
-        match = VAR_PATTERN.search(line)
-        if not match:
-            raise LogParsingError(f"Malformed Variable Loss log -> '{line.strip()}'")
-
-        for part in match.group(1).split(","):
-            if ":" not in part:
-                raise LogParsingError(
-                    f"Missing ':' in variable loss pair -> '{part.strip()}'"
-                )
-
-            var_name, v_loss_str = part.split(":", 1)
-            var_name = var_name.strip().replace("_loss", "")
-
-            if var_name not in self.metrics.var_losses:
-                self.metrics.var_losses[var_name] = {}
-
-            self.metrics.var_losses[var_name][self.pending_var_loss_epoch] = (
-                parse_number(v_loss_str)
-            )
-
-        self.pending_var_loss_epoch = None
-
-    @beartype
-    def _process_training(self, line: str) -> None:
-        match = TRAIN_PATTERN.search(line)
-        if not match:
-            raise LogParsingError(f"Malformed Training Batch log -> '{line.strip()}'")
-
-        epoch, batch, num_batches = map(int, match.groups()[:3])
-        loss = parse_number(match.group(4))
-
-        self._validate_chronology(epoch, batch, num_batches)
-
-        self.current_epoch = epoch
-        self.current_batch = batch
-        self.expected_num_batches = num_batches
-
-        if epoch == 1 and batch == 1 and 0 not in self.metrics.train_losses:
-            self._handle_epoch_1_restart()
-
-        if epoch not in self.metrics.train_losses:
-            self.metrics.train_losses[epoch] = {}
-
-        if batch in self.metrics.train_losses[epoch]:
-            raise DataContinuityError(
-                f"Duplicate batch {batch} recorded for Epoch {epoch}."
-            )
-
-        self.metrics.train_losses[epoch][batch] = (num_batches, loss)
-
-    @beartype
-    def _validate_chronology(self, epoch: int, batch: int, num_batches: int) -> None:
-        if self.current_epoch is not None and self.current_batch is not None:
-            if epoch == self.current_epoch and batch <= self.current_batch:
-                raise DataContinuityError(
-                    f"Batch monotonicity violated (was {self.current_batch}, now {batch})."
-                )
-            if epoch not in (self.current_epoch, self.current_epoch + 1) and not (
-                epoch == 1 and batch <= num_batches
-            ):
-                raise DataContinuityError(
-                    f"Epoch transition violated (was {self.current_epoch}, now {epoch})."
-                )
-
-        if (
-            self.expected_num_batches is not None
-            and num_batches != self.expected_num_batches
-        ):
-            if epoch == self.current_epoch:
-                raise DataContinuityError(
-                    f"Inconsistent num_batches mid-epoch (was {self.expected_num_batches}, now {num_batches})."
-                )
-
-    def _handle_epoch_1_restart(self) -> None:
-        """Handle restarts that resume at epoch 1 without epoch 0 logs."""
-        if 0.0 not in self.metrics.val_losses:
-            self.metrics.clear_state()
-        else:
-            self.metrics.train_losses.clear()
-            self.metrics.val_losses = {0.0: self.metrics.val_losses[0.0]}
-            self.metrics.baseline_losses = {0.0: self.metrics.baseline_losses[0.0]}
-            for v_name in list(self.metrics.var_losses.keys()):
-                if 0.0 in self.metrics.var_losses[v_name]:
-                    self.metrics.var_losses[v_name] = {
-                        0.0: self.metrics.var_losses[v_name][0.0]
-                    }
-                else:
-                    self.metrics.var_losses[v_name] = {}
-
-    def _validate_final_metrics(self) -> None:
-        if not self.metrics.train_losses:
+    def parse_files(self, training_file: str, validation_file: str) -> TrainingMetrics:
+        training_rows = self._read_rows(training_file)
+        validation_rows = self._read_rows(validation_file)
+        total_training_rows = [
+            row
+            for row in training_rows
+            if row.get("metric") == "loss" and row.get("target") == TOTAL_TARGET
+        ]
+        if not total_training_rows:
             raise DataContinuityError(
                 f"[{self.model}]: No valid training loss data found."
             )
-        if not self.metrics.val_losses:
+        run_id = total_training_rows[-1]["run_id"]
+        metrics = TrainingMetrics()
+
+        for row in total_training_rows:
+            if row.get("run_id") != run_id:
+                continue
+            epoch = int(row["epoch"])
+            batch = int(row["batch"])
+            batches_total = int(row["batches_total"])
+            metrics.train_losses.setdefault(epoch, {})[batch] = (
+                batches_total,
+                float(row["value"]),
+            )
+
+        for row in validation_rows:
+            if row.get("run_id") != run_id:
+                continue
+            epoch_position = self._epoch_position(row)
+            metric = row.get("metric")
+            target = row.get("target")
+            value = float(row["value"])
+            if metric == "loss" and target == TOTAL_TARGET:
+                metrics.val_losses[epoch_position] = value
+            elif metric == "baseline_loss" and target == TOTAL_TARGET:
+                metrics.baseline_losses[epoch_position] = value
+            elif metric == "loss" and target:
+                metrics.var_losses.setdefault(target, {})[epoch_position] = value
+
+        if not metrics.val_losses:
             raise DataContinuityError(
                 f"[{self.model}]: No valid validation loss data found."
             )
-        if not self.metrics.baseline_losses:
+        if not metrics.baseline_losses:
             raise DataContinuityError(f"[{self.model}]: No baseline loss data found.")
+        return metrics
 
+    @staticmethod
+    def _read_rows(path: str) -> list[dict[str, str]]:
+        with open(path, "r", encoding="utf-8", newline="") as file:
+            return list(csv.DictReader(file))
 
-@beartype
-def parse_number(val: str) -> float:
-    """Parse finite floats and literal NaN."""
-    val = val.strip()
-    return np.nan if val == "NaN" else float(val)
+    @staticmethod
+    def _epoch_position(row: dict[str, str]) -> float:
+        epoch = int(row["epoch"])
+        batch = int(row["batch"])
+        batches_total = int(row["batches_total"])
+        if row.get("evaluation_kind") == "initial":
+            return 0.0
+        if batch > 0 and batches_total > 0:
+            return round(epoch - 1 + batch / batches_total, 8)
+        return float(epoch)
 
 
 @beartype
@@ -247,25 +119,19 @@ def parse_args_to_models(args: argparse.Namespace) -> list[str]:
 
 
 @beartype
-def get_log_filepath(args: argparse.Namespace, model: str) -> str:
-    """Return the rank-0 log path for a model."""
-    log_pattern = os.path.join(
-        args.project_root, "logs", f"sequifier-{model}-rank0-3.txt"
-    )
-    log_files = glob.glob(log_pattern)
-
-    if not log_files:
-        log_pattern = os.path.join(
-            args.project_root, "logs", f"sequifier-{model}-rank0-2.txt"
-        )
-        log_files = glob.glob(log_pattern)
-
-    if not log_files:
+def get_metrics_filepaths(args: argparse.Namespace, model: str) -> tuple[str, str]:
+    """Return the rank-0 training and validation metric paths for a model."""
+    prefix = rank_log_prefix(args.project_root, model, 0)
+    training_file = f"{prefix}-training.csv"
+    validation_file = f"{prefix}-validation.csv"
+    missing = [
+        path for path in (training_file, validation_file) if not os.path.isfile(path)
+    ]
+    if missing:
         raise FileNotFoundError(
-            f"No log files found for model '{model}' matching the expected pattern."
+            f"Structured metric files not found for model {model!r}: {missing!r}"
         )
-
-    return log_files[0]
+    return training_file, validation_file
 
 
 @beartype
@@ -527,7 +393,7 @@ def generate_html_report(
 
 @beartype
 def visualize_training(args: argparse.Namespace) -> None:
-    """Parse logs and write training visualization HTML."""
+    """Read structured metrics and write training visualization HTML."""
     models = parse_args_to_models(args)
     if not models:
         raise ValueError("No models provided to visualize.")
@@ -536,16 +402,14 @@ def visualize_training(args: argparse.Namespace) -> None:
     all_data = {}
 
     for model in models:
-        # Initialize Loguru for the current model.
-        # This will wipe previous handlers and route output to the current model's logs.
+        # Route visualization events to the current model's operational logs.
         configure_logger(args.project_root, model, rank=0)
 
-        logger.info(f"Parsing log file for model: {model}")
-        log_file = get_log_filepath(args, model)
+        logger.info(f"Parsing structured metrics for model: {model}")
+        training_file, validation_file = get_metrics_filepaths(args, model)
 
-        # Instantiate parser and extract metrics
-        parser = LogParser(model)
-        metrics = parser.parse_file(log_file)
+        parser = StructuredMetricsParser(model)
+        metrics = parser.parse_files(training_file, validation_file)
 
         formatted_data = format_plot_data(metrics, bucket_batches, model)
         all_data[model] = formatted_data

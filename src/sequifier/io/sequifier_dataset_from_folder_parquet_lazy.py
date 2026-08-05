@@ -100,7 +100,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         self.target_samples = self._get_target_samples()
         self.total_batches = self._calculate_total_batches(self.target_samples)
         logger.info(
-            f"[INFO] Lazy Parquet Dataset mapped with {self.target_samples} samples and {self.total_batches} batches."
+            f"Lazy Parquet Dataset mapped with {self.target_samples} samples and {self.total_batches} batches."
         )
 
     def _calculate_total_batches(self, target_samples: int) -> int:

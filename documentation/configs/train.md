@@ -519,8 +519,8 @@ model_spec:
 | `save_interval_val_loss` | `bool` | No | `true` | Whether to calculate validation loss at the moment of the batch interval save. |
 | `calculate_validation_loss_on_initialization` | `bool` | No | `true` | Determines if a validation pass runs before epoch 1 begins. |
 | `early_stopping_epochs`| `int` | No | `null` | Stop training if validation loss doesn't improve for N epochs. |
-| `log_interval` | `int` | No | `10` | Print training logs every N batches. |
-| `class_share_log_columns`| `list[str]`| No | `[]` | Columns for which to log the predicted class distribution in validation. |
+| `log_interval` | `int` | No | `10` | Record structured training metrics every N batches. |
+| `class_share_log_columns`| `list[str]`| No | `[]` | Columns whose predicted validation distributions are recorded in the class-share CSV. |
 | `enforce_determinism` | `bool` | No | `false` | Force deterministic algorithms (slower, but reproducible). |
 | `num_workers` | `int` | No | `0` | Number of subprocesses for data loading. |
 | `max_ram_gb` | `float` | No | `16` | RAM limit (GB) for the cache when using lazy loading. |
@@ -536,6 +536,18 @@ model_spec:
 | `fsdp_cpu_offload` | `Optional[bool]` | No | `null` | Must be explicitly true or false if `data_parallelism` is `FSDP`. Must be `null` otherwise. |
 | `torch_compile` | `str` | No | `outer` | Controls torch.compile. Options are `outer` (compiles the whole model), `inner` (compiles individual transformer layers, for FSDP), or `none` (no compilation). |
 | `float32_matmul_precision` | `str` | No | `highest` | Sets the internal PyTorch matmul precision. Options are `highest`, `high`, or `medium`. |
+
+Training creates five semantic outputs under `logs/` for rank 0:
+
+* `sequifier-[MODEL]-rank0-events-reports.log`
+* `sequifier-[MODEL]-rank0-warnings-errors.log`
+* `sequifier-[MODEL]-rank0-training.csv`
+* `sequifier-[MODEL]-rank0-validation.csv`
+* `sequifier-[MODEL]-rank0-validation-class-shares.csv`
+
+Nonzero ranks write only their two operational `.log` files. The structured CSVs contain globally reduced metrics, so rank 0 is their sole writer. The class-share CSV is created even when `class_share_log_columns` is empty; in that case it contains only its schema header.
+
+The training and validation tables use tidy rows: `target: __total__` identifies the aggregate loss and additional rows hold per-target losses. Validation rows use `evaluation_kind` (`initial`, `interval`, or `epoch_end`) and an `evaluation_id`. Class-share rows use the same `evaluation_id` and contain the global class ID, label, predicted count, total valid count, and share. Only nonzero classes are written; a `no_valid_predictions` status row records an empty distribution.
 
 
 ### 5\. System & Export
