@@ -274,14 +274,12 @@
           <h1>Source code for sequifier.train</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">contextlib</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">copy</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">glob</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">hashlib</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">asdict</span>
 
@@ -289,7 +287,7 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">time</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">uuid</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span><span class="p">,</span> <span class="n">cast</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>  <span class="c1"># noqa: E402</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">onnx</span>  <span class="c1"># noqa: E402</span>
@@ -305,7 +303,6 @@
     <span class="n">StateDictOptions</span><span class="p">,</span>
     <span class="n">get_model_state_dict</span><span class="p">,</span>
     <span class="n">get_optimizer_state_dict</span><span class="p">,</span>
-    <span class="n">set_model_state_dict</span><span class="p">,</span>
     <span class="n">set_optimizer_state_dict</span><span class="p">,</span>
 <span class="p">)</span>
 
@@ -342,6 +339,8 @@
 <span class="p">)</span>
 <span class="n">WIDE_UNSIGNED_EMBEDDING_INDEX_DTYPES</span> <span class="o">=</span> <span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">uint32</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">uint64</span><span class="p">)</span>
 
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.artifacts.model_export</span><span class="w"> </span><span class="kn">import</span> <span class="n">pt_bundle</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.artifacts.run_checkpoint</span><span class="w"> </span><span class="kn">import</span> <span class="n">checkpoint_path</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModel</span><span class="p">,</span> <span class="n">load_train_config</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.distributed.env</span><span class="w"> </span><span class="kn">import</span> <span class="n">setup_distributed_env</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
@@ -368,16 +367,30 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.sequifier_dataset_from_folder_pt_lazy</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
     <span class="n">SequifierDatasetFromFolderPtLazy</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.backbone</span><span class="w"> </span><span class="kn">import</span> <span class="n">TransformerBackbone</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.decoders</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_target_decoding</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.dtypes</span><span class="w"> </span><span class="kn">import</span> <span class="n">cast_floating_to_module_dtype</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.ingestion_compiler</span><span class="w"> </span><span class="kn">import</span> <span class="n">compile_feature_ingestion</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.initialization</span><span class="w"> </span><span class="kn">import</span> <span class="n">initialize_model_weights</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">RMSNorm</span><span class="p">,</span> <span class="n">SequifierEncoderLayer</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">RMSNorm</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.model</span><span class="w"> </span><span class="kn">import</span> <span class="n">SequifierModel</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.objectives</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_objective</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.optimizers.optimizers</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_optimizer_class</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
     <span class="n">ONNX_CATEGORICAL_TARGET_CODECS_KEY</span><span class="p">,</span>
     <span class="n">resolve_categorical_decoder_ids</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.training.distributed</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
+    <span class="n">broadcast_initial_state</span><span class="p">,</span>
+    <span class="n">broadcast_publication_result</span><span class="p">,</span>
+    <span class="n">verify_loaded_revision</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.training.initial_state</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
+    <span class="n">load_model_initial_state</span><span class="p">,</span>
+    <span class="n">select_initial_state</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.training.lifecycle</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
+    <span class="n">publish_final_backbone</span><span class="p">,</span>
+    <span class="n">write_terminal_manifest</span><span class="p">,</span>
 <span class="p">)</span>
 
 
@@ -521,21 +534,27 @@
     <span class="p">}</span>
     <span class="n">base_model</span> <span class="o">=</span> <span class="n">model</span>
 
-    <span class="n">latest_model_path</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">_get_latest_model_name</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
+        <span class="n">selected_source</span> <span class="o">=</span> <span class="n">broadcast_initial_state</span><span class="p">(</span>
+            <span class="n">select_initial_state</span><span class="p">(</span><span class="n">config</span><span class="p">)</span> <span class="k">if</span> <span class="n">global_rank</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">global_rank</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">selected_source</span> <span class="o">=</span> <span class="n">select_initial_state</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+    <span class="n">checkpoint</span> <span class="o">=</span> <span class="n">load_model_initial_state</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">selected_source</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
+        <span class="n">verify_loaded_revision</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">_backbone_parent_revision_id</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">checkpoint</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">_validate_checkpoint_compatibility</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">))</span>
+
     <span class="n">pytorch_total_params</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">model</span><span class="o">.</span><span class="n">parameters</span><span class="p">())</span>
-    <span class="n">checkpoint</span> <span class="o">=</span> <span class="kc">None</span>
 
     <span class="c1"># Initialize Optimizer</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
         <span class="n">params_to_optimize</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">parameters</span><span class="p">()</span>
         <span class="n">model</span><span class="o">.</span><span class="n">initialize_optimizer</span><span class="p">(</span><span class="n">params</span><span class="o">=</span><span class="n">params_to_optimize</span><span class="p">)</span>
 
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">continue_training</span> <span class="ow">and</span> <span class="n">latest_model_path</span><span class="p">:</span>
-            <span class="n">checkpoint</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
-                <span class="n">latest_model_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span>
-            <span class="p">)</span>
-            <span class="n">model</span><span class="o">.</span><span class="n">_validate_checkpoint_compatibility</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">))</span>
-            <span class="n">model</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">[</span><span class="s2">&quot;model_state_dict&quot;</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">checkpoint</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">model</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">[</span><span class="s2">&quot;optimizer_state_dict&quot;</span><span class="p">])</span>
             <span class="n">model</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">[</span><span class="s2">&quot;scheduler_state_dict&quot;</span><span class="p">])</span>
             <span class="n">base_model</span><span class="o">.</span><span class="n">start_epoch</span><span class="p">,</span> <span class="n">base_model</span><span class="o">.</span><span class="n">start_batch</span> <span class="o">=</span> <span class="n">_checkpoint_start_position</span><span class="p">(</span>
@@ -601,105 +620,25 @@
         <span class="n">params_to_optimize</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">parameters</span><span class="p">()</span>
         <span class="n">model</span><span class="o">.</span><span class="n">initialize_optimizer</span><span class="p">(</span><span class="n">params</span><span class="o">=</span><span class="n">params_to_optimize</span><span class="p">)</span>
 
-        <span class="n">resume_signal</span> <span class="o">=</span> <span class="p">[</span>
-            <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">continue_training</span> <span class="ow">and</span> <span class="n">latest_model_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="k">if</span> <span class="n">global_rank</span> <span class="o">==</span> <span class="mi">0</span>
-            <span class="k">else</span> <span class="kc">None</span>
-        <span class="p">]</span>
-        <span class="n">dist</span><span class="o">.</span><span class="n">broadcast_object_list</span><span class="p">(</span><span class="n">resume_signal</span><span class="p">,</span> <span class="n">src</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-        <span class="n">did_resume</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="nb">bool</span><span class="p">,</span> <span class="n">resume_signal</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
-
-        <span class="k">if</span> <span class="n">did_resume</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">global_rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-                <span class="k">if</span> <span class="n">latest_model_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-                    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Rank 0 selected resume without a checkpoint.&quot;</span><span class="p">)</span>
-                <span class="n">checkpoint</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
-                    <span class="n">latest_model_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span>
-                <span class="p">)</span>
-                <span class="n">full_msd</span> <span class="o">=</span> <span class="n">checkpoint</span><span class="p">[</span><span class="s2">&quot;model_state_dict&quot;</span><span class="p">]</span>
-                <span class="n">full_osd</span> <span class="o">=</span> <span class="n">checkpoint</span><span class="p">[</span><span class="s2">&quot;optimizer_state_dict&quot;</span><span class="p">]</span>
-                <span class="n">start_epoch</span><span class="p">,</span> <span class="n">start_batch</span> <span class="o">=</span> <span class="n">_checkpoint_start_position</span><span class="p">(</span>
-                    <span class="n">checkpoint</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">)</span>
-                <span class="p">)</span>
-                <span class="n">resume_state</span> <span class="o">=</span> <span class="p">{</span>
-                    <span class="s2">&quot;scaler_state_dict&quot;</span><span class="p">:</span> <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;scaler_state_dict&quot;</span><span class="p">),</span>
-                    <span class="s2">&quot;best_val_loss&quot;</span><span class="p">:</span> <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;best_val_loss&quot;</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)),</span>
-                    <span class="s2">&quot;n_epochs_no_improvement&quot;</span><span class="p">:</span> <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
-                        <span class="s2">&quot;n_epochs_no_improvement&quot;</span><span class="p">,</span> <span class="mi">0</span>
-                    <span class="p">),</span>
-                    <span class="s2">&quot;has_best_model_state_dict&quot;</span><span class="p">:</span> <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;best_model_state_dict&quot;</span><span class="p">)</span>
-                    <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span>
-                    <span class="s2">&quot;rng_state&quot;</span><span class="p">:</span> <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;rng_state&quot;</span><span class="p">),</span>
-                    <span class="s2">&quot;data_loader_generator_states&quot;</span><span class="p">:</span> <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
-                        <span class="s2">&quot;data_loader_generator_states&quot;</span>
-                    <span class="p">),</span>
-                    <span class="s2">&quot;checkpoint_metadata&quot;</span><span class="p">:</span> <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;checkpoint_metadata&quot;</span><span class="p">),</span>
-                <span class="p">}</span>
-
-                <span class="n">meta</span> <span class="o">=</span> <span class="p">[</span>
-                    <span class="n">start_epoch</span><span class="p">,</span>
-                    <span class="n">start_batch</span><span class="p">,</span>
-                    <span class="n">checkpoint</span><span class="p">[</span><span class="s2">&quot;scheduler_state_dict&quot;</span><span class="p">],</span>
-                    <span class="n">full_msd</span><span class="p">,</span>
-                    <span class="n">full_osd</span><span class="p">,</span>
-                    <span class="n">resume_state</span><span class="p">,</span>
-                <span class="p">]</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="n">meta</span> <span class="o">=</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
-
-            <span class="c1"># Broadcast the checkpoint data to all ranks simultaneously</span>
-            <span class="n">dist</span><span class="o">.</span><span class="n">broadcast_object_list</span><span class="p">(</span><span class="n">meta</span><span class="p">,</span> <span class="n">src</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-
-            <span class="c1"># Unpack on all ranks. The placeholder Nones are replaced by broadcast.</span>
-            <span class="p">(</span>
-                <span class="n">start_epoch_obj</span><span class="p">,</span>
-                <span class="n">start_batch_obj</span><span class="p">,</span>
-                <span class="n">sched_state_obj</span><span class="p">,</span>
-                <span class="n">full_msd_obj</span><span class="p">,</span>
-                <span class="n">full_osd_obj</span><span class="p">,</span>
-                <span class="n">resume_state_obj</span><span class="p">,</span>
-            <span class="p">)</span> <span class="o">=</span> <span class="n">meta</span>
-            <span class="n">model</span><span class="o">.</span><span class="n">start_epoch</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="n">start_epoch_obj</span><span class="p">)</span>
-            <span class="n">model</span><span class="o">.</span><span class="n">start_batch</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="n">start_batch_obj</span><span class="p">)</span>
-            <span class="n">sched_state</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span> <span class="n">sched_state_obj</span><span class="p">)</span>
-            <span class="n">full_msd</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span> <span class="n">full_msd_obj</span><span class="p">)</span>
-            <span class="n">full_osd</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">full_osd_obj</span><span class="p">)</span>
-            <span class="n">resume_state</span> <span class="o">=</span> <span class="n">cast</span><span class="p">(</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">resume_state_obj</span><span class="p">)</span>
-            <span class="n">model</span><span class="o">.</span><span class="n">_validate_checkpoint_compatibility</span><span class="p">(</span>
-                <span class="p">{</span><span class="s2">&quot;checkpoint_metadata&quot;</span><span class="p">:</span> <span class="n">resume_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;checkpoint_metadata&quot;</span><span class="p">)},</span>
-                <span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">),</span>
+        <span class="k">if</span> <span class="n">checkpoint</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">model</span><span class="o">.</span><span class="n">start_epoch</span><span class="p">,</span> <span class="n">model</span><span class="o">.</span><span class="n">start_batch</span> <span class="o">=</span> <span class="n">_checkpoint_start_position</span><span class="p">(</span>
+                <span class="n">checkpoint</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">)</span>
             <span class="p">)</span>
-
             <span class="n">options</span> <span class="o">=</span> <span class="n">StateDictOptions</span><span class="p">(</span><span class="n">full_state_dict</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">cpu_offload</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-
-            <span class="n">set_model_state_dict</span><span class="p">(</span>
-                <span class="n">base_model</span><span class="p">,</span>
-                <span class="n">model_state_dict</span><span class="o">=</span><span class="n">full_msd</span><span class="p">,</span>
-                <span class="n">options</span><span class="o">=</span><span class="n">options</span><span class="p">,</span>
-            <span class="p">)</span>
-
             <span class="n">set_optimizer_state_dict</span><span class="p">(</span>
                 <span class="n">base_model</span><span class="p">,</span>
                 <span class="n">base_model</span><span class="o">.</span><span class="n">optimizer</span><span class="p">,</span>
-                <span class="n">optim_state_dict</span><span class="o">=</span><span class="n">full_osd</span><span class="p">,</span>
+                <span class="n">optim_state_dict</span><span class="o">=</span><span class="n">checkpoint</span><span class="p">[</span><span class="s2">&quot;optimizer_state_dict&quot;</span><span class="p">],</span>
                 <span class="n">options</span><span class="o">=</span><span class="n">options</span><span class="p">,</span>
             <span class="p">)</span>
-
-            <span class="k">if</span> <span class="n">sched_state</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="n">base_model</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">sched_state</span><span class="p">)</span>
-            <span class="n">best_model_state_dict</span> <span class="o">=</span> <span class="kc">None</span>
-            <span class="k">if</span> <span class="n">resume_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;has_best_model_state_dict&quot;</span><span class="p">):</span>
-                <span class="k">if</span> <span class="n">global_rank</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">checkpoint</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-                    <span class="n">best_model_state_dict</span> <span class="o">=</span> <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;best_model_state_dict&quot;</span><span class="p">)</span>
-                <span class="k">else</span><span class="p">:</span>
-                    <span class="n">best_model_state_dict</span> <span class="o">=</span> <span class="p">{}</span>
+            <span class="n">base_model</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">[</span><span class="s2">&quot;scheduler_state_dict&quot;</span><span class="p">])</span>
             <span class="n">model</span><span class="o">.</span><span class="n">_apply_checkpoint_training_state</span><span class="p">(</span>
-                <span class="n">resume_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;scaler_state_dict&quot;</span><span class="p">),</span>
-                <span class="n">resume_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;best_val_loss&quot;</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)),</span>
-                <span class="n">resume_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;n_epochs_no_improvement&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
-                <span class="n">best_model_state_dict</span><span class="p">,</span>
-                <span class="n">resume_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;rng_state&quot;</span><span class="p">),</span>
-                <span class="n">resume_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;data_loader_generator_states&quot;</span><span class="p">),</span>
+                <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;scaler_state_dict&quot;</span><span class="p">),</span>
+                <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;best_val_loss&quot;</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)),</span>
+                <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;n_epochs_no_improvement&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
+                <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;best_model_state_dict&quot;</span><span class="p">),</span>
+                <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;rng_state&quot;</span><span class="p">),</span>
+                <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;data_loader_generator_states&quot;</span><span class="p">),</span>
             <span class="p">)</span>
 
         <span class="k">else</span><span class="p">:</span>
@@ -723,7 +662,7 @@
 
             <span class="n">dist</span><span class="o">.</span><span class="n">barrier</span><span class="p">()</span>
 
-        <span class="k">if</span> <span class="n">did_resume</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">checkpoint</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">base_model</span><span class="o">.</span><span class="n">_restore_rng_state</span><span class="p">()</span>
             <span class="n">base_model</span><span class="o">.</span><span class="n">_restore_data_loader_generator_states</span><span class="p">()</span>
 
@@ -733,12 +672,7 @@
         <span class="n">params_to_optimize</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">parameters</span><span class="p">()</span>
         <span class="n">model</span><span class="o">.</span><span class="n">initialize_optimizer</span><span class="p">(</span><span class="n">params</span><span class="o">=</span><span class="n">params_to_optimize</span><span class="p">)</span>
 
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">continue_training</span> <span class="ow">and</span> <span class="n">latest_model_path</span><span class="p">:</span>
-            <span class="n">checkpoint</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
-                <span class="n">latest_model_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span>
-            <span class="p">)</span>
-            <span class="n">base_model</span><span class="o">.</span><span class="n">_validate_checkpoint_compatibility</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">))</span>
-            <span class="n">base_model</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">[</span><span class="s2">&quot;model_state_dict&quot;</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">checkpoint</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">base_model</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">[</span><span class="s2">&quot;optimizer_state_dict&quot;</span><span class="p">])</span>
             <span class="n">base_model</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">[</span><span class="s2">&quot;scheduler_state_dict&quot;</span><span class="p">])</span>
             <span class="n">base_model</span><span class="o">.</span><span class="n">start_epoch</span><span class="p">,</span> <span class="n">base_model</span><span class="o">.</span><span class="n">start_batch</span> <span class="o">=</span> <span class="n">_checkpoint_start_position</span><span class="p">(</span>
@@ -996,7 +930,7 @@
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="p">(</span><span class="n">features</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">)</span>
 
 
-<div class="viewcode-block" id="TransformerModel"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TransformerModel</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+<div class="viewcode-block" id="TransformerModel"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TransformerModel</span><span class="p">(</span><span class="n">SequifierModel</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Sequifier transformer plus train/eval/export routines.&quot;&quot;&quot;</span>
 
 <div class="viewcode-block" id="TransformerModel.__init__"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.__init__">[docs]</a>    <span class="nd">@beartype</span>
@@ -1066,64 +1000,32 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">early_stopping_epochs</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span> <span class="o">=</span> <span class="n">hparams</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">objective</span> <span class="o">=</span> <span class="n">create_objective</span><span class="p">(</span><span class="n">hparams</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">dim_model</span>
-
-        <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">positional_encoding</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding_scope</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">positional_encoding_scope</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">use_rope</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span> <span class="o">==</span> <span class="s2">&quot;rope&quot;</span>
+        <span class="n">architecture</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">architecture</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span> <span class="o">=</span> <span class="n">architecture</span><span class="o">.</span><span class="n">dim_model</span>
+        <span class="n">backbone</span> <span class="o">=</span> <span class="n">TransformerBackbone</span><span class="p">(</span><span class="n">architecture</span><span class="p">)</span>
         <span class="n">built_ingestion</span> <span class="o">=</span> <span class="n">compile_feature_ingestion</span><span class="p">(</span>
             <span class="n">hparams</span><span class="o">=</span><span class="n">hparams</span><span class="p">,</span>
-            <span class="n">direct_real_dtype_provider</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_ingestion_direct_real_dtype</span><span class="p">,</span>
+            <span class="n">direct_real_dtype_provider</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="p">(</span>
+                <span class="n">backbone</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">ff</span><span class="o">.</span><span class="n">get_first_layer_dtype</span><span class="p">()</span>
+            <span class="p">),</span>
             <span class="n">device_max_concat_length</span><span class="o">=</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">device_max_concat_length</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span> <span class="o">=</span> <span class="n">built_ingestion</span><span class="o">.</span><span class="n">module</span>
-        <span class="n">transformer_input_width</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span> <span class="o">-</span> <span class="nb">int</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span> <span class="o">==</span> <span class="s2">&quot;range_concat&quot;</span>
-        <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_adapter</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">nn</span><span class="o">.</span><span class="n">Identity</span><span class="p">()</span>
-            <span class="k">if</span> <span class="n">built_ingestion</span><span class="o">.</span><span class="n">width</span> <span class="o">==</span> <span class="n">transformer_input_width</span>
-            <span class="k">else</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">built_ingestion</span><span class="o">.</span><span class="n">width</span><span class="p">,</span> <span class="n">transformer_input_width</span><span class="p">)</span>
-        <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">global_position_encoder</span> <span class="o">=</span> <span class="kc">None</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">range_position_projection</span> <span class="o">=</span> <span class="kc">None</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">global_position_drop</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">dropout</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">register_buffer</span><span class="p">(</span>
-            <span class="s2">&quot;range_position_values&quot;</span><span class="p">,</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_build_range_position_values</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">),</span>
-            <span class="n">persistent</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding_scope</span> <span class="o">==</span> <span class="s2">&quot;global&quot;</span><span class="p">:</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span> <span class="o">==</span> <span class="s2">&quot;learned&quot;</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">global_position_encoder</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Embedding</span><span class="p">(</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span>
-                <span class="p">)</span>
-            <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span> <span class="o">==</span> <span class="s2">&quot;range&quot;</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">range_position_projection</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span>
-                <span class="p">)</span>
-
-        <span class="bp">self</span><span class="o">.</span><span class="n">layers</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_encoder_layers</span><span class="p">(</span><span class="n">hparams</span><span class="p">)</span>
-
-        <span class="k">if</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">norm_first</span><span class="p">:</span>
-            <span class="n">NormClass</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">RMSNorm</span>
-                <span class="k">if</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">normalization</span> <span class="o">==</span> <span class="s2">&quot;rmsnorm&quot;</span>
-                <span class="k">else</span> <span class="n">nn</span><span class="o">.</span><span class="n">LayerNorm</span>
+        <span class="k">if</span> <span class="n">built_ingestion</span><span class="o">.</span><span class="n">width</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Ingestion compiler violated the backbone input contract: &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">built_ingestion</span><span class="o">.</span><span class="n">width</span><span class="si">}</span><span class="s2"> != </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="si">}</span><span class="s2">.&quot;</span>
             <span class="p">)</span>
-            <span class="n">norm_eps</span> <span class="o">=</span> <span class="mf">1e-6</span> <span class="k">if</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">normalization</span> <span class="o">==</span> <span class="s2">&quot;rmsnorm&quot;</span> <span class="k">else</span> <span class="mf">1e-3</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">final_norm</span> <span class="o">=</span> <span class="n">NormClass</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="n">norm_eps</span><span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">final_norm</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Identity</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">backbone</span> <span class="o">=</span> <span class="n">backbone</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">prediction_length</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">decoding_support</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoding_support</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">prediction_length</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">decoding_support</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">support</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">decoded_context_length</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoding_support</span> <span class="o">+</span> <span class="mi">1</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span> <span class="o">=</span> <span class="n">build_target_decoding</span><span class="p">(</span>
             <span class="n">hparams</span><span class="p">,</span> <span class="n">target_n_classes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">target_n_classes</span>
         <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">softmax</span> <span class="o">=</span> <span class="n">ModuleDict</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">softmax</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
         <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">target_column_type</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
             <span class="k">if</span> <span class="n">target_column_type</span> <span class="o">==</span> <span class="s2">&quot;categorical&quot;</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">softmax</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">LogSoftmax</span><span class="p">(</span><span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
@@ -1157,12 +1059,18 @@
             <span class="n">persistent</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
         <span class="p">)</span>
 
-        <span class="k">if</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">initialization</span><span class="o">.</span><span class="n">root</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-                <span class="s2">&quot;[INFO] Applying model initialization overrides: &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">initialization</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s1">&#39;json&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="p">)</span>
-        <span class="n">initialize_model_weights</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">initialization</span><span class="p">)</span>
+        <span class="n">component_initializers</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;ingestion&quot;</span><span class="p">:</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">initialization</span><span class="p">,</span>
+            <span class="s2">&quot;backbone&quot;</span><span class="p">:</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">initialization</span><span class="p">,</span>
+            <span class="s2">&quot;decoder&quot;</span><span class="p">:</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">initialization</span><span class="p">,</span>
+        <span class="p">}</span>
+        <span class="k">for</span> <span class="n">component_name</span><span class="p">,</span> <span class="n">initialization</span> <span class="ow">in</span> <span class="n">component_initializers</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">initialization</span><span class="o">.</span><span class="n">root</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;[INFO] Applying </span><span class="si">{</span><span class="n">component_name</span><span class="si">}</span><span class="s2"> initialization overrides: &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">initialization</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s1">&#39;json&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+            <span class="n">initialize_model_weights</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">component_name</span><span class="p">),</span> <span class="n">initialization</span><span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">scheduler_step_on</span>
 
@@ -1173,8 +1081,6 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">save_interval_minutes</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">save_interval_minutes</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">save_interval_batches</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">save_interval_batches</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">save_interval_val_loss</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">save_interval_val_loss</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">continue_training</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">continue_training</span>
-
         <span class="n">use_scaler</span> <span class="o">=</span> <span class="kc">False</span>
         <span class="k">if</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="p">:</span>
             <span class="k">if</span> <span class="s2">&quot;float16&quot;</span> <span class="ow">in</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
@@ -1187,10 +1093,15 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">_resume_rng_state</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_resume_data_loader_generator_states</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_data_loader_generators</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_batch</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_backbone_parent_revision_id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_apply_layer_dtypes</span><span class="p">()</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">)</span></div>
+        <span class="bp">self</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">criterion</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">criterion</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+            <span class="n">criterion</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">)</span></div>
 
     <span class="nd">@property</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">encoder</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ModuleDict</span><span class="p">:</span>
@@ -1200,33 +1111,16 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">pos_encoder</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="p">,</span> <span class="s2">&quot;pos_encoder&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">_build_encoder_layer</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hparams</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">SequifierEncoderLayer</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">SequifierEncoderLayer</span><span class="p">(</span>
-            <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="p">,</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">,</span>
-            <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">n_head</span><span class="p">,</span>
-            <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">dim_feedforward</span><span class="p">,</span>
-            <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">dropout</span><span class="p">,</span>
-            <span class="n">hparams</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span>
-        <span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">_build_encoder_layers</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hparams</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">nn</span><span class="o">.</span><span class="n">ModuleList</span><span class="p">:</span>
-        <span class="n">layers</span> <span class="o">=</span> <span class="p">[</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_build_encoder_layer</span><span class="p">(</span><span class="n">hparams</span><span class="p">)</span>
-            <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">num_layers</span><span class="p">)</span>
-        <span class="p">]</span>
-        <span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">shared_layer_groups</span><span class="p">:</span>
-            <span class="n">shared_layer</span> <span class="o">=</span> <span class="n">layers</span><span class="p">[</span><span class="n">group</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span>
-            <span class="k">for</span> <span class="n">layer_idx</span> <span class="ow">in</span> <span class="n">group</span><span class="p">[</span><span class="mi">1</span><span class="p">:]:</span>
-                <span class="n">layers</span><span class="p">[</span><span class="n">layer_idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">shared_layer</span>
-        <span class="k">return</span> <span class="n">nn</span><span class="o">.</span><span class="n">ModuleList</span><span class="p">(</span><span class="n">layers</span><span class="p">)</span>
+    <span class="nd">@property</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">layers</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">nn</span><span class="o">.</span><span class="n">ModuleList</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">layers</span>
 
     <span class="nd">@property</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">real_columns_direct</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
         <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="p">,</span> <span class="s2">&quot;real_columns_direct&quot;</span><span class="p">,</span> <span class="p">[])</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_ingestion_direct_real_dtype</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">:</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">ff</span><span class="o">.</span><span class="n">get_first_layer_dtype</span><span class="p">()</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">ff</span><span class="o">.</span><span class="n">get_first_layer_dtype</span><span class="p">()</span>
 
 <div class="viewcode-block" id="TransformerModel.initialize_optimizer"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.initialize_optimizer">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">initialize_optimizer</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="n">Any</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -1290,9 +1184,9 @@
                     <span class="n">criterion</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="n">criterion</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">target_dtype</span><span class="p">)</span>
 
     <span class="nd">@beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_init_criterion</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hparams</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ModuleDict</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_init_criterion</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hparams</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Build unreduced per-target loss modules.&quot;&quot;&quot;</span>
-        <span class="n">criterion</span> <span class="o">=</span> <span class="n">ModuleDict</span><span class="p">()</span>
+        <span class="n">criterion</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
         <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">:</span>
             <span class="n">criterion_name</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">criterion</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span>
             <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="p">,</span> <span class="n">criterion_name</span><span class="p">):</span>
@@ -1330,30 +1224,9 @@
         <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">triu</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">sz</span><span class="p">,</span> <span class="n">sz</span><span class="p">)</span> <span class="o">*</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;-inf&quot;</span><span class="p">),</span> <span class="n">diagonal</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_build_range_position_values</span><span class="p">(</span><span class="n">context_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return fixed slot coordinates in [-1, 1] for global range encoding.&quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="n">context_length</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
-            <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="o">-</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="n">steps</span><span class="o">=</span><span class="n">context_length</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-
-    <span class="nd">@staticmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_filter_key</span><span class="p">(</span><span class="n">dict_</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">key</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return a copy without key.&quot;&quot;&quot;</span>
         <span class="k">return</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">dict_</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">k</span> <span class="o">!=</span> <span class="n">key</span><span class="p">}</span>
-
-    <span class="nd">@conditional_beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_recursive_concat</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">srcs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Concatenate tensors in chunks to avoid device concat limits.&quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">srcs</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">device_max_concat_length</span><span class="p">:</span>
-            <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span><span class="n">srcs</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">srcs_inner</span> <span class="o">=</span> <span class="p">[]</span>
-            <span class="k">for</span> <span class="n">start</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">srcs</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">device_max_concat_length</span><span class="p">):</span>
-                <span class="n">src</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_recursive_concat</span><span class="p">(</span>
-                    <span class="n">srcs</span><span class="p">[</span><span class="n">start</span> <span class="p">:</span> <span class="n">start</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">device_max_concat_length</span><span class="p">]</span>
-                <span class="p">)</span>
-                <span class="n">srcs_inner</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">src</span><span class="p">)</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_recursive_concat</span><span class="p">(</span><span class="n">srcs_inner</span><span class="p">)</span>
 
     <span class="nd">@conditional_beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_build_attention_mask</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">valid_mask</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
@@ -1388,89 +1261,16 @@
 
         <span class="k">return</span> <span class="n">base_mask</span> <span class="o">+</span> <span class="n">padding_mask</span>
 
-    <span class="nd">@conditional_beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_zero_padding_positions</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">valid_mask</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Zero padded query positions after attention/FFN layers.&quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">masked_fill</span><span class="p">(</span><span class="o">~</span><span class="n">valid_mask</span><span class="p">[:,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">],</span> <span class="mf">0.0</span><span class="p">)</span>
-
-    <span class="nd">@conditional_beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_global_position_indices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return absolute window-slot indices shared across feature channels.&quot;&quot;&quot;</span>
-        <span class="n">pos</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">pos</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">1</span><span class="p">)</span>
-
-    <span class="nd">@conditional_beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">_apply_global_position</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Apply model-level positional encoding after ingestion.&quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Input sequence length (</span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2">) must match &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;context_length (</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="si">}</span><span class="s2">) for global position encoding.&quot;</span>
-            <span class="p">)</span>
-
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_position_encoder</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">pos_embedding</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_position_encoder</span><span class="p">(</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">_global_position_indices</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-            <span class="p">)</span>
-            <span class="n">pos_embedding</span> <span class="o">=</span> <span class="n">pos_embedding</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_position_drop</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="n">pos_embedding</span><span class="p">)</span>
-
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">range_position_projection</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">position_channel</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">range_position_values</span><span class="o">.</span><span class="n">to</span><span class="p">(</span>
-                <span class="n">device</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span>
-            <span class="p">)</span>
-            <span class="n">position_channel</span> <span class="o">=</span> <span class="n">position_channel</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">expand</span><span class="p">(</span>
-                <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span>
-            <span class="p">)</span>
-            <span class="n">positioned</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">((</span><span class="n">x</span><span class="p">,</span> <span class="n">position_channel</span><span class="p">),</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
-            <span class="n">positioned</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">range_position_projection</span><span class="p">(</span>
-                <span class="n">cast_floating_to_module_dtype</span><span class="p">(</span>
-                    <span class="n">positioned</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">range_position_projection</span>
-                <span class="p">)</span>
-            <span class="p">)</span>
-            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_position_drop</span><span class="p">(</span><span class="n">positioned</span><span class="p">)</span>
-
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span> <span class="o">==</span> <span class="s2">&quot;range_concat&quot;</span><span class="p">:</span>
-            <span class="n">position_channel</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">range_position_values</span><span class="o">.</span><span class="n">to</span><span class="p">(</span>
-                <span class="n">device</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span>
-            <span class="p">)</span>
-            <span class="n">position_channel</span> <span class="o">=</span> <span class="n">position_channel</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">expand</span><span class="p">(</span>
-                <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span>
-            <span class="p">)</span>
-            <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">((</span><span class="n">x</span><span class="p">,</span> <span class="n">position_channel</span><span class="p">),</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
-
-        <span class="k">return</span> <span class="n">x</span>
-
 <div class="viewcode-block" id="TransformerModel.forward_inner"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.forward_inner">[docs]</a>    <span class="nd">@conditional_beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">forward_inner</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">src</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span> <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Encode inputs into contextual hidden states.&quot;&quot;&quot;</span>
-        <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="p">(</span><span class="n">src</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
-        <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_adapter</span><span class="p">(</span>
-            <span class="n">cast_floating_to_module_dtype</span><span class="p">(</span><span class="n">src2</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_adapter</span><span class="p">)</span>
-        <span class="p">)</span>
-
         <span class="n">valid_mask</span> <span class="o">=</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;attention_valid_mask&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">bool</span><span class="p">()</span>  <span class="c1"># type: ignore</span>
-        <span class="k">if</span> <span class="n">valid_mask</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">src2</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">]:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Invalid attention mask shape: got </span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">valid_mask</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span><span class="si">}</span><span class="s2">, &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;expected </span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">src2</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="mi">2</span><span class="p">])</span><span class="si">}</span><span class="s2"> = (batch_size, context_length). &quot;</span>
-                <span class="s2">&quot;Check attention_valid_mask / leftPadLength construction.&quot;</span>
-            <span class="p">)</span>
-        <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_apply_global_position</span><span class="p">(</span><span class="n">src2</span><span class="p">)</span>
-        <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_zero_padding_positions</span><span class="p">(</span><span class="n">src2</span><span class="p">,</span> <span class="n">valid_mask</span><span class="p">)</span>
-
-        <span class="n">mask</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_attention_mask</span><span class="p">(</span><span class="n">valid_mask</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">src2</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
-
-        <span class="k">for</span> <span class="n">layer</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">:</span>
-            <span class="n">src2</span> <span class="o">=</span> <span class="n">layer</span><span class="p">(</span><span class="n">src2</span><span class="p">,</span> <span class="n">src_mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
-            <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_zero_padding_positions</span><span class="p">(</span><span class="n">src2</span><span class="p">,</span> <span class="n">valid_mask</span><span class="p">)</span>
-
-        <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">final_norm</span><span class="p">(</span><span class="n">cast_floating_to_module_dtype</span><span class="p">(</span><span class="n">src2</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">final_norm</span><span class="p">))</span>
-        <span class="n">src2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_zero_padding_positions</span><span class="p">(</span><span class="n">src2</span><span class="p">,</span> <span class="n">valid_mask</span><span class="p">)</span>
-
-        <span class="k">return</span> <span class="n">src2</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span></div>
+        <span class="n">ingestion_output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="p">(</span><span class="n">src</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+        <span class="n">mask</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_attention_mask</span><span class="p">(</span><span class="n">valid_mask</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ingestion_output</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="n">hidden</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encode_ingested</span><span class="p">(</span><span class="n">ingestion_output</span><span class="p">,</span> <span class="n">metadata</span><span class="p">,</span> <span class="n">mask</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">hidden</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="TransformerModel.forward_embed"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.forward_embed">[docs]</a>    <span class="nd">@conditional_beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">forward_embed</span><span class="p">(</span>
@@ -1628,7 +1428,6 @@
             <span class="p">),</span>
             <span class="s2">&quot;training_objective&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_objective</span><span class="p">,</span>
             <span class="s2">&quot;seed&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">seed</span><span class="p">,</span>
-            <span class="s2">&quot;dropout&quot;</span><span class="p">:</span> <span class="n">training_spec</span><span class="o">.</span><span class="n">dropout</span><span class="p">,</span>
             <span class="s2">&quot;bert_spec&quot;</span><span class="p">:</span> <span class="n">bert_spec</span><span class="p">,</span>
             <span class="s2">&quot;next_occurrence_config&quot;</span><span class="p">:</span> <span class="n">next_occurrence_config</span><span class="p">,</span>
             <span class="s2">&quot;criterion&quot;</span><span class="p">:</span> <span class="n">training_spec</span><span class="o">.</span><span class="n">criterion</span><span class="p">,</span>
@@ -1876,6 +1675,7 @@
         <span class="n">n_epochs_no_improvement</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_resume_n_epochs_no_improvement</span>
         <span class="n">last_epoch</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span> <span class="o">-</span> <span class="mi">1</span>
         <span class="n">best_model_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_resume_best_model_state_dict</span>
+        <span class="n">completion_reason</span> <span class="o">=</span> <span class="s2">&quot;normal_completion&quot;</span>
 
         <span class="k">try</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">last_latest_save_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
@@ -1898,134 +1698,92 @@
                 <span class="p">)</span>
             <span class="k">for</span> <span class="n">epoch</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">epochs</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
                 <span class="k">if</span> <span class="p">(</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span> <span class="ow">is</span> <span class="kc">None</span>
-                    <span class="ow">or</span> <span class="n">n_epochs_no_improvement</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span>
-                <span class="p">)</span> <span class="ow">and</span> <span class="p">(</span>
-                    <span class="n">epoch</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span>
-                    <span class="ow">or</span> <span class="n">epoch</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span>
-                    <span class="ow">and</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">total_loss</span><span class="p">)</span>  <span class="c1"># type: ignore # noqa: F821</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                    <span class="ow">and</span> <span class="n">n_epochs_no_improvement</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span>
                 <span class="p">):</span>
-                    <span class="n">epoch_start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+                    <span class="n">completion_reason</span> <span class="o">=</span> <span class="s2">&quot;early_stopping&quot;</span>
+                    <span class="k">break</span>
+                <span class="k">if</span> <span class="n">epoch</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_epoch</span> <span class="ow">and</span> <span class="n">np</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">total_loss</span><span class="p">):</span>  <span class="c1"># type: ignore # noqa: F821</span>
+                    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Validation loss became NaN.&quot;</span><span class="p">)</span>
 
-                    <span class="n">train_loader</span><span class="o">.</span><span class="n">dataset</span><span class="o">.</span><span class="n">set_epoch</span><span class="p">(</span><span class="n">epoch</span><span class="p">)</span>
-                    <span class="n">valid_loader</span><span class="o">.</span><span class="n">dataset</span><span class="o">.</span><span class="n">set_epoch</span><span class="p">(</span><span class="n">epoch</span><span class="p">)</span>
+                <span class="n">epoch_start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+                <span class="n">train_loader</span><span class="o">.</span><span class="n">dataset</span><span class="o">.</span><span class="n">set_epoch</span><span class="p">(</span><span class="n">epoch</span><span class="p">)</span>
+                <span class="n">valid_loader</span><span class="o">.</span><span class="n">dataset</span><span class="o">.</span><span class="n">set_epoch</span><span class="p">(</span><span class="n">epoch</span><span class="p">)</span>
 
-                    <span class="bp">self</span><span class="o">.</span><span class="n">_train_epoch</span><span class="p">(</span>
-                        <span class="n">train_loader</span><span class="p">,</span>
-                        <span class="n">valid_loader</span><span class="p">,</span>
-                        <span class="n">epoch</span><span class="p">,</span>
-                        <span class="n">ddp_model</span><span class="p">,</span>
-                        <span class="n">best_val_loss</span><span class="p">,</span>
-                        <span class="n">n_epochs_no_improvement</span><span class="p">,</span>
-                        <span class="n">best_model_state</span><span class="p">,</span>
-                    <span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_train_epoch</span><span class="p">(</span>
+                    <span class="n">train_loader</span><span class="p">,</span>
+                    <span class="n">valid_loader</span><span class="p">,</span>
+                    <span class="n">epoch</span><span class="p">,</span>
+                    <span class="n">ddp_model</span><span class="p">,</span>
+                    <span class="n">best_val_loss</span><span class="p">,</span>
+                    <span class="n">n_epochs_no_improvement</span><span class="p">,</span>
+                    <span class="n">best_model_state</span><span class="p">,</span>
+                <span class="p">)</span>
 
-                    <span class="n">total_loss</span><span class="p">,</span> <span class="n">total_losses</span><span class="p">,</span> <span class="n">class_counts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_evaluate</span><span class="p">(</span>
-                        <span class="n">valid_loader</span><span class="p">,</span> <span class="n">ddp_model</span>
-                    <span class="p">)</span>
-                    <span class="n">elapsed</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">epoch_start_time</span>
+                <span class="n">total_loss</span><span class="p">,</span> <span class="n">total_losses</span><span class="p">,</span> <span class="n">class_counts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_evaluate</span><span class="p">(</span>
+                    <span class="n">valid_loader</span><span class="p">,</span> <span class="n">ddp_model</span>
+                <span class="p">)</span>
+                <span class="n">elapsed</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">epoch_start_time</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_log_epoch_results</span><span class="p">(</span>
+                    <span class="n">epoch</span><span class="p">,</span>
+                    <span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">),</span>
+                    <span class="n">elapsed</span><span class="p">,</span>
+                    <span class="n">total_loss</span><span class="p">,</span>
+                    <span class="n">total_losses</span><span class="p">,</span>
+                    <span class="n">class_counts</span><span class="p">,</span>
+                    <span class="n">epoch</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">),</span>
+                <span class="p">)</span>
 
-                    <span class="n">total_expected_batches</span> <span class="o">=</span> <span class="n">epoch</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">)</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">_log_epoch_results</span><span class="p">(</span>
-                        <span class="n">epoch</span><span class="p">,</span>
-                        <span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">),</span>
-                        <span class="n">elapsed</span><span class="p">,</span>
-                        <span class="n">total_loss</span><span class="p">,</span>
-                        <span class="n">total_losses</span><span class="p">,</span>
-                        <span class="n">class_counts</span><span class="p">,</span>
-                        <span class="n">total_expected_batches</span><span class="p">,</span>
-                    <span class="p">)</span>
-
-                    <span class="k">if</span> <span class="n">total_loss</span> <span class="o">&lt;</span> <span class="n">best_val_loss</span><span class="p">:</span>
-                        <span class="n">best_val_loss</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">total_loss</span><span class="p">)</span>
-                        <span class="n">best_model_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_full_state_dict</span><span class="p">(</span><span class="n">ddp_model</span><span class="p">)</span>
-                        <span class="n">n_epochs_no_improvement</span> <span class="o">=</span> <span class="mi">0</span>
-                    <span class="k">else</span><span class="p">:</span>
-                        <span class="n">n_epochs_no_improvement</span> <span class="o">+=</span> <span class="mi">1</span>
-
-                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">==</span> <span class="s2">&quot;epoch&quot;</span><span class="p">:</span>
-                        <span class="k">if</span> <span class="p">(</span>
-                            <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="p">,</span> <span class="s2">&quot;total_steps&quot;</span><span class="p">)</span>
-                            <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">last_epoch</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">total_steps</span>
-                        <span class="p">):</span>
-                            <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
-
-                    <span class="k">if</span> <span class="n">epoch</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">save_interval_epochs</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-                        <span class="bp">self</span><span class="o">.</span><span class="n">_save</span><span class="p">(</span>
-                            <span class="n">epoch</span><span class="p">,</span>
-                            <span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span>
-                            <span class="n">total_loss</span><span class="p">,</span>
-                            <span class="n">ddp_model</span><span class="o">=</span><span class="n">ddp_model</span><span class="p">,</span>
-                            <span class="n">suffix</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;epoch-</span><span class="si">{</span><span class="n">epoch</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
-                            <span class="n">best_val_loss</span><span class="o">=</span><span class="n">best_val_loss</span><span class="p">,</span>
-                            <span class="n">n_epochs_no_improvement</span><span class="o">=</span><span class="n">n_epochs_no_improvement</span><span class="p">,</span>
-                            <span class="n">best_model_state_dict</span><span class="o">=</span><span class="n">best_model_state</span><span class="p">,</span>
-                            <span class="n">num_batches</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">),</span>
-                        <span class="p">)</span>
-
-                    <span class="n">last_epoch</span> <span class="o">=</span> <span class="n">epoch</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">_check_and_terminate</span><span class="p">()</span>
-        <span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;=&quot;</span> <span class="o">*</span> <span class="mi">89</span><span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;[WARNING] Training interrupted by user (Ctrl+C).&quot;</span><span class="p">)</span>
-
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
-                <span class="n">dist</span><span class="o">.</span><span class="n">barrier</span><span class="p">()</span>
-
-            <span class="n">answer_list</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;n&quot;</span><span class="p">]</span>
-
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-                <span class="k">try</span><span class="p">:</span>
-                    <span class="n">answer</span> <span class="o">=</span> <span class="p">(</span>
-                        <span class="nb">input</span><span class="p">(</span>
-                            <span class="s2">&quot;Do you want to export the &#39;best&#39; and &#39;last&#39; models? (y/n): &quot;</span>
-                        <span class="p">)</span>
-                        <span class="o">.</span><span class="n">lower</span><span class="p">()</span>
-                        <span class="o">.</span><span class="n">strip</span><span class="p">()</span>
-                    <span class="p">)</span>
-                    <span class="k">if</span> <span class="n">answer</span> <span class="o">==</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span>
-                        <span class="n">answer_list</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;y&quot;</span>
-                <span class="k">except</span> <span class="ne">EOFError</span><span class="p">:</span>  <span class="c1"># Handle non-interactive environments</span>
-                    <span class="n">answer_list</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;n&quot;</span>
-
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
-                <span class="n">dist</span><span class="o">.</span><span class="n">broadcast_object_list</span><span class="p">(</span><span class="n">answer_list</span><span class="p">,</span> <span class="n">src</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-
-            <span class="k">if</span> <span class="n">answer_list</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span>
-                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;[INFO] User opted to export models.&quot;</span><span class="p">)</span>
-
-                <span class="k">if</span> <span class="n">last_epoch</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">best_model_state</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-                        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-                            <span class="sa">f</span><span class="s2">&quot;[INFO] Exporting &#39;last&#39; model from epoch </span><span class="si">{</span><span class="n">last_epoch</span><span class="si">}</span><span class="s2">...&quot;</span>
-                        <span class="p">)</span>
-
-                    <span class="c1"># FSDP state extraction is collective; only rank 0 writes the result.</span>
-                    <span class="n">last_model_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_full_state_dict</span><span class="p">(</span><span class="n">ddp_model</span><span class="p">)</span>
-
-                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-                        <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="n">last_model_state</span><span class="p">,</span> <span class="s2">&quot;last&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">)</span>
-
-                        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-                            <span class="s2">&quot;[INFO] Exporting &#39;best&#39; model (based on best val loss)...&quot;</span>
-                        <span class="p">)</span>
-                        <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="n">best_model_state</span><span class="p">,</span> <span class="s2">&quot;best&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">)</span>
-                        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;[INFO] Models exported.&quot;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">total_loss</span> <span class="o">&lt;</span> <span class="n">best_val_loss</span><span class="p">:</span>
+                    <span class="n">best_val_loss</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">total_loss</span><span class="p">)</span>
+                    <span class="n">best_model_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_full_state_dict</span><span class="p">(</span><span class="n">ddp_model</span><span class="p">)</span>
+                    <span class="n">n_epochs_no_improvement</span> <span class="o">=</span> <span class="mi">0</span>
                 <span class="k">else</span><span class="p">:</span>
-                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-                        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-                            <span class="s2">&quot;[INFO] Could not export model as no epoch ran.&quot;</span>
-                        <span class="p">)</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;[INFO] User opted *not* to export. Exiting.&quot;</span><span class="p">)</span>
+                    <span class="n">n_epochs_no_improvement</span> <span class="o">+=</span> <span class="mi">1</span>
+
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">==</span> <span class="s2">&quot;epoch&quot;</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="p">(</span>
+                        <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="p">,</span> <span class="s2">&quot;total_steps&quot;</span><span class="p">)</span>
+                        <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">last_epoch</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">total_steps</span>
+                    <span class="p">):</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
+
+                <span class="k">if</span> <span class="n">epoch</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">save_interval_epochs</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_save</span><span class="p">(</span>
+                        <span class="n">epoch</span><span class="p">,</span>
+                        <span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span>
+                        <span class="n">total_loss</span><span class="p">,</span>
+                        <span class="n">ddp_model</span><span class="o">=</span><span class="n">ddp_model</span><span class="p">,</span>
+                        <span class="n">suffix</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;epoch-</span><span class="si">{</span><span class="n">epoch</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                        <span class="n">best_val_loss</span><span class="o">=</span><span class="n">best_val_loss</span><span class="p">,</span>
+                        <span class="n">n_epochs_no_improvement</span><span class="o">=</span><span class="n">n_epochs_no_improvement</span><span class="p">,</span>
+                        <span class="n">best_model_state_dict</span><span class="o">=</span><span class="n">best_model_state</span><span class="p">,</span>
+                        <span class="n">num_batches</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">train_loader</span><span class="p">),</span>
+                    <span class="p">)</span>
+
+                <span class="n">last_epoch</span> <span class="o">=</span> <span class="n">epoch</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_check_and_terminate</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
+            <span class="n">completion_reason</span> <span class="o">=</span> <span class="s2">&quot;keyboard_interruption&quot;</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;[WARNING] Training interrupted; exporting final state.&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">BaseException</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">is_pruned</span> <span class="o">=</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">error</span><span class="p">,</span> <span class="ne">SystemExit</span><span class="p">)</span> <span class="ow">and</span> <span class="n">error</span><span class="o">.</span><span class="n">code</span> <span class="o">==</span> <span class="mi">143</span>
+                <span class="n">write_terminal_manifest</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="p">,</span>
+                    <span class="n">status</span><span class="o">=</span><span class="s2">&quot;pruned&quot;</span> <span class="k">if</span> <span class="n">is_pruned</span> <span class="k">else</span> <span class="s2">&quot;failed&quot;</span><span class="p">,</span>
+                    <span class="n">completion_reason</span><span class="o">=</span><span class="s2">&quot;optuna_pruning&quot;</span> <span class="k">if</span> <span class="n">is_pruned</span> <span class="k">else</span> <span class="s2">&quot;exception&quot;</span><span class="p">,</span>
+                    <span class="n">source_epoch</span><span class="o">=</span><span class="n">last_epoch</span><span class="p">,</span>
+                    <span class="n">exports_succeeded</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                    <span class="n">publication</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;success&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;reason&quot;</span><span class="p">:</span> <span class="s2">&quot;not_attempted&quot;</span><span class="p">},</span>
+                <span class="p">)</span>
+            <span class="k">raise</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
             <span class="n">dist</span><span class="o">.</span><span class="n">barrier</span><span class="p">()</span>
 
+        <span class="c1"># Complete export needs one full final model. FSDP extraction is collective.</span>
         <span class="n">last_model_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_full_state_dict</span><span class="p">(</span><span class="n">ddp_model</span><span class="p">)</span>
-
         <span class="k">if</span> <span class="n">best_model_state</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
@@ -2033,10 +1791,74 @@
                 <span class="p">)</span>
             <span class="n">best_model_state</span> <span class="o">=</span> <span class="n">last_model_state</span>
 
+        <span class="n">finalization</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="n">last_model_state</span><span class="p">,</span> <span class="s2">&quot;last&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">,</span> <span class="n">clean</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="n">best_model_state</span><span class="p">,</span> <span class="s2">&quot;best&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">,</span> <span class="n">clean</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;--- Training Complete ---&quot;</span><span class="p">)</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">exported_last_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span>
+                    <span class="n">last_model_state</span><span class="p">,</span> <span class="s2">&quot;last&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">,</span> <span class="n">clean</span><span class="o">=</span><span class="kc">True</span>
+                <span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_export</span><span class="p">(</span><span class="n">best_model_state</span><span class="p">,</span> <span class="s2">&quot;best&quot;</span><span class="p">,</span> <span class="n">last_epoch</span><span class="p">,</span> <span class="n">clean</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">exported_last_model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Rank 0 did not construct an export model.&quot;</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+                <span class="n">finalization</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="s2">&quot;exports_succeeded&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+                    <span class="s2">&quot;publication&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;success&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;reason&quot;</span><span class="p">:</span> <span class="s2">&quot;not_attempted&quot;</span><span class="p">},</span>
+                    <span class="s2">&quot;error&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">error</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">error</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                <span class="p">}</span>
+                <span class="n">write_terminal_manifest</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="p">,</span>
+                    <span class="n">status</span><span class="o">=</span><span class="s2">&quot;failed&quot;</span><span class="p">,</span>
+                    <span class="n">completion_reason</span><span class="o">=</span><span class="s2">&quot;export_failure&quot;</span><span class="p">,</span>
+                    <span class="n">source_epoch</span><span class="o">=</span><span class="n">last_epoch</span><span class="p">,</span>
+                    <span class="n">exports_succeeded</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                    <span class="n">publication</span><span class="o">=</span><span class="n">finalization</span><span class="p">[</span><span class="s2">&quot;publication&quot;</span><span class="p">],</span>
+                <span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="n">publication</span> <span class="o">=</span> <span class="n">publish_final_backbone</span><span class="p">(</span>
+                        <span class="n">exported_last_model</span><span class="p">,</span> <span class="n">source_epoch</span><span class="o">=</span><span class="n">last_epoch</span>
+                    <span class="p">)</span>
+                <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+                    <span class="n">publication</span> <span class="o">=</span> <span class="p">{</span>
+                        <span class="s2">&quot;success&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+                        <span class="s2">&quot;reason&quot;</span><span class="p">:</span> <span class="s2">&quot;publication_error&quot;</span><span class="p">,</span>
+                        <span class="s2">&quot;error&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">error</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">error</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                    <span class="p">}</span>
+                <span class="n">finalization</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;exports_succeeded&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">&quot;publication&quot;</span><span class="p">:</span> <span class="n">publication</span><span class="p">}</span>
+                <span class="n">write_terminal_manifest</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="p">,</span>
+                    <span class="n">status</span><span class="o">=</span><span class="s2">&quot;complete&quot;</span><span class="p">,</span>
+                    <span class="n">completion_reason</span><span class="o">=</span><span class="n">completion_reason</span><span class="p">,</span>
+                    <span class="n">source_epoch</span><span class="o">=</span><span class="n">last_epoch</span><span class="p">,</span>
+                    <span class="n">exports_succeeded</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                    <span class="n">publication</span><span class="o">=</span><span class="n">publication</span><span class="p">,</span>
+                <span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Distributed training requires a process rank.&quot;</span><span class="p">)</span>
+            <span class="n">finalization</span> <span class="o">=</span> <span class="n">broadcast_publication_result</span><span class="p">(</span><span class="n">finalization</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">finalization</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">finalization</span><span class="p">[</span><span class="s2">&quot;exports_succeeded&quot;</span><span class="p">]:</span>
+            <span class="n">error</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">finalization</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">finalization</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;error&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Complete-model export failed: </span><span class="si">{</span><span class="n">error</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">publication</span> <span class="o">=</span> <span class="n">finalization</span><span class="p">[</span><span class="s2">&quot;publication&quot;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">publication</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;success&quot;</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;[INFO] Published backbone revision </span><span class="si">{</span><span class="n">publication</span><span class="p">[</span><span class="s1">&#39;revision_id&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">elif</span> <span class="n">publication</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;reason&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;compare_and_swap_conflict&quot;</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+                <span class="s2">&quot;[WARNING] Backbone publication lost a compare-and-swap race; &quot;</span>
+                <span class="s2">&quot;complete model exports remain valid.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">elif</span> <span class="n">publication</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;reason&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;publication_error&quot;</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+                <span class="s2">&quot;[WARNING] Complete model exports succeeded, but backbone &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;publication failed: </span><span class="si">{</span><span class="n">publication</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;error&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;--- Training Complete ---&quot;</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
             <span class="n">dist</span><span class="o">.</span><span class="n">barrier</span><span class="p">()</span></div>
@@ -2930,20 +2752,25 @@
         <span class="n">suffix</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">epoch</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
         <span class="n">clean</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="s2">&quot;TransformerModel&quot;</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Export configured model variants from rank 0.&quot;&quot;&quot;</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="k">return</span>
+            <span class="k">return</span> <span class="kc">None</span>
 
         <span class="c1"># Instantiate a clean, decoupled CPU model for the export phase</span>
         <span class="k">if</span> <span class="n">clean</span><span class="p">:</span>
             <span class="n">export_hparams</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="p">)</span>
             <span class="n">export_hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">torch_compile</span> <span class="o">=</span> <span class="s2">&quot;none&quot;</span>
+            <span class="n">export_hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="n">export_hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="n">export_hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">fsdp_cpu_offload</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="n">export_hparams</span><span class="o">.</span><span class="n">device</span> <span class="o">=</span> <span class="s2">&quot;cpu&quot;</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">export_hparams</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span>
 
         <span class="n">export_model</span> <span class="o">=</span> <span class="n">TransformerModel</span><span class="p">(</span><span class="n">export_hparams</span><span class="p">)</span>
         <span class="n">export_model</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">state_dict</span><span class="p">)</span>
+        <span class="n">export_model</span><span class="o">.</span><span class="n">_backbone_parent_revision_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_backbone_parent_revision_id</span>
         <span class="n">export_model</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
 
         <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;models&quot;</span><span class="p">),</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
@@ -2953,6 +2780,7 @@
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">export_embedding_model</span><span class="p">:</span>
             <span class="n">model2</span> <span class="o">=</span> <span class="n">TransformerEmbeddingModel</span><span class="p">(</span><span class="n">export_model</span><span class="p">)</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">_export_model</span><span class="p">(</span><span class="n">model2</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">-embedding&quot;</span><span class="p">,</span> <span class="n">epoch</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">export_model</span>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_export_model</span><span class="p">(</span>
@@ -3081,10 +2909,7 @@
                 <span class="sa">f</span><span class="s2">&quot;sequifier-</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model_name</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">epoch</span><span class="si">}</span><span class="s2">.pt&quot;</span><span class="p">,</span>
             <span class="p">)</span>
             <span class="n">torch</span><span class="o">.</span><span class="n">save</span><span class="p">(</span>
-                <span class="p">{</span>
-                    <span class="s2">&quot;model_state_dict&quot;</span><span class="p">:</span> <span class="n">model</span><span class="o">.</span><span class="n">state_dict</span><span class="p">(),</span>
-                    <span class="s2">&quot;export_with_dropout&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">export_with_dropout</span><span class="p">,</span>
-                <span class="p">},</span>
+                <span class="n">pt_bundle</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">export_with_dropout</span><span class="p">),</span>
                 <span class="n">export_path</span><span class="p">,</span>
             <span class="p">)</span>
 
@@ -3131,14 +2956,10 @@
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
             <span class="k">return</span>
 
-        <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;checkpoints&quot;</span><span class="p">),</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-
-        <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model_name</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">.pt&quot;</span>
-
-        <span class="n">output_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
-            <span class="s2">&quot;checkpoints&quot;</span><span class="p">,</span>
-            <span class="n">file_name</span><span class="p">,</span>
+        <span class="n">latest_path</span> <span class="o">=</span> <span class="n">checkpoint_path</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="p">)</span>
+        <span class="n">latest_path</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">output_path</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">latest_path</span> <span class="k">if</span> <span class="n">suffix</span> <span class="o">==</span> <span class="s2">&quot;latest&quot;</span> <span class="k">else</span> <span class="n">latest_path</span><span class="o">.</span><span class="n">with_name</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">.pt&quot;</span><span class="p">)</span>
         <span class="p">)</span>
 
         <span class="n">checkpoint</span> <span class="o">=</span> <span class="p">{</span>
@@ -3154,14 +2975,11 @@
             <span class="s2">&quot;best_val_loss&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">best_val_loss</span><span class="p">),</span>
             <span class="s2">&quot;n_epochs_no_improvement&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_epochs_no_improvement</span><span class="p">),</span>
             <span class="s2">&quot;best_model_state_dict&quot;</span><span class="p">:</span> <span class="n">best_model_state_dict</span><span class="p">,</span>
+            <span class="s2">&quot;backbone_parent_revision_id&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_backbone_parent_revision_id</span><span class="p">,</span>
             <span class="s2">&quot;loss&quot;</span><span class="p">:</span> <span class="n">val_loss</span><span class="p">,</span>
         <span class="p">}</span>
 
-        <span class="n">temp_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
-            <span class="s2">&quot;checkpoints&quot;</span><span class="p">,</span>
-            <span class="sa">f</span><span class="s2">&quot;.</span><span class="si">{</span><span class="n">file_name</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">uuid</span><span class="o">.</span><span class="n">uuid4</span><span class="p">()</span><span class="o">.</span><span class="n">hex</span><span class="si">}</span><span class="s2">.tmp&quot;</span><span class="p">,</span>
-        <span class="p">)</span>
+        <span class="n">temp_path</span> <span class="o">=</span> <span class="n">output_path</span><span class="o">.</span><span class="n">with_name</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;.</span><span class="si">{</span><span class="n">output_path</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">uuid</span><span class="o">.</span><span class="n">uuid4</span><span class="p">()</span><span class="o">.</span><span class="n">hex</span><span class="si">}</span><span class="s2">.tmp&quot;</span><span class="p">)</span>
         <span class="k">try</span><span class="p">:</span>
             <span class="n">torch</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">,</span> <span class="n">temp_path</span><span class="p">)</span>
             <span class="n">os</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">temp_path</span><span class="p">,</span> <span class="n">output_path</span><span class="p">)</span>
@@ -3169,6 +2987,16 @@
             <span class="k">with</span> <span class="n">contextlib</span><span class="o">.</span><span class="n">suppress</span><span class="p">(</span><span class="ne">OSError</span><span class="p">):</span>
                 <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">temp_path</span><span class="p">)</span>
             <span class="k">raise</span>
+        <span class="k">if</span> <span class="n">output_path</span> <span class="o">!=</span> <span class="n">latest_path</span><span class="p">:</span>
+            <span class="n">latest_temp_path</span> <span class="o">=</span> <span class="n">latest_path</span><span class="o">.</span><span class="n">with_name</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;.</span><span class="si">{</span><span class="n">latest_path</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">uuid</span><span class="o">.</span><span class="n">uuid4</span><span class="p">()</span><span class="o">.</span><span class="n">hex</span><span class="si">}</span><span class="s2">.tmp&quot;</span>
+            <span class="p">)</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">torch</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">,</span> <span class="n">latest_temp_path</span><span class="p">)</span>
+                <span class="n">os</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">latest_temp_path</span><span class="p">,</span> <span class="n">latest_path</span><span class="p">)</span>
+            <span class="k">finally</span><span class="p">:</span>
+                <span class="k">with</span> <span class="n">contextlib</span><span class="o">.</span><span class="n">suppress</span><span class="p">(</span><span class="ne">OSError</span><span class="p">):</span>
+                    <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">latest_temp_path</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] Saved checkpoint to </span><span class="si">{</span><span class="n">output_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
     <span class="nd">@beartype</span>
@@ -3198,24 +3026,9 @@
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_get_latest_model_name</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the newest checkpoint path for this model name.&quot;&quot;&quot;</span>
-        <span class="n">checkpoint_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;checkpoints&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">glob</span><span class="o">.</span><span class="n">escape</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model_name</span><span class="p">)</span><span class="si">}</span><span class="s2">-*.pt&quot;</span>
-        <span class="p">)</span>
-        <span class="n">checkpoint_name_re</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span>
-            <span class="sa">rf</span><span class="s2">&quot;^</span><span class="si">{</span><span class="n">re</span><span class="o">.</span><span class="n">escape</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model_name</span><span class="p">)</span><span class="si">}</span><span class="s2">-(?:latest|epoch-\d+(?:-batch-\d+)?)\.pt$&quot;</span>
-        <span class="p">)</span>
-
-        <span class="n">files</span> <span class="o">=</span> <span class="n">glob</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="n">checkpoint_path</span><span class="p">)</span>
-        <span class="n">files</span> <span class="o">=</span> <span class="p">[</span>
-            <span class="n">file</span>
-            <span class="k">for</span> <span class="n">file</span> <span class="ow">in</span> <span class="n">files</span>
-            <span class="k">if</span> <span class="n">checkpoint_name_re</span><span class="o">.</span><span class="n">fullmatch</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">file</span><span class="p">)[</span><span class="mi">1</span><span class="p">])</span>
-        <span class="p">]</span>
-        <span class="k">if</span> <span class="n">files</span><span class="p">:</span>
-            <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="n">files</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">getmtime</span><span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">return</span> <span class="kc">None</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return the explicitly configured run checkpoint when it exists.&quot;&quot;&quot;</span>
+        <span class="n">path</span> <span class="o">=</span> <span class="n">checkpoint_path</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="n">path</span><span class="p">)</span> <span class="k">if</span> <span class="n">path</span><span class="o">.</span><span class="n">is_file</span><span class="p">()</span> <span class="k">else</span> <span class="kc">None</span>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_log_epoch_results</span><span class="p">(</span>
@@ -3297,36 +3110,45 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">load_inference_model</span><span class="p">(</span>
     <span class="n">model_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">model_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-    <span class="n">training_config_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">training_config_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
     <span class="n">args_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
     <span class="n">device</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">infer_with_dropout</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Load a PT checkpoint as a generative or embedding inference module.&quot;&quot;&quot;</span>
-    <span class="n">skip_metadata</span> <span class="o">=</span> <span class="n">args_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;skip_metadata&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
-    <span class="n">args_config_subset</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">args_config</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">k</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;model_path&quot;</span><span class="p">,</span> <span class="s2">&quot;data_path&quot;</span><span class="p">]</span>
-    <span class="p">}</span>
-    <span class="n">training_config</span> <span class="o">=</span> <span class="n">load_train_config</span><span class="p">(</span>
-        <span class="n">training_config_path</span><span class="p">,</span> <span class="n">args_config_subset</span><span class="p">,</span> <span class="n">skip_metadata</span>
+    <span class="n">model_state</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
+        <span class="n">model_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">(</span><span class="n">device</span><span class="p">),</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span>
     <span class="p">)</span>
+    <span class="n">embedded_config</span> <span class="o">=</span> <span class="n">model_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;training_config&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">embedded_config</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">training_config</span> <span class="o">=</span> <span class="n">TrainModel</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span><span class="n">embedded_config</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">training_config_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;PyTorch model has no embedded training config and &quot;</span>
+                <span class="s2">&quot;training_config_path was not provided.&quot;</span>
+            <span class="p">)</span>
+        <span class="n">skip_metadata</span> <span class="o">=</span> <span class="n">args_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;skip_metadata&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="n">args_config_subset</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">args_config</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">k</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;model_path&quot;</span><span class="p">,</span> <span class="s2">&quot;data_path&quot;</span><span class="p">]</span>
+        <span class="p">}</span>
+        <span class="n">training_config</span> <span class="o">=</span> <span class="n">load_train_config</span><span class="p">(</span>
+            <span class="n">training_config_path</span><span class="p">,</span> <span class="n">args_config_subset</span><span class="p">,</span> <span class="n">skip_metadata</span>
+        <span class="p">)</span>
 
     <span class="n">training_config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">torch_compile</span> <span class="o">=</span> <span class="s2">&quot;none&quot;</span>
+    <span class="n">training_config</span><span class="o">.</span><span class="n">device</span> <span class="o">=</span> <span class="n">device</span>
 
     <span class="k">with</span> <span class="n">torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">():</span>
-        <span class="n">model</span> <span class="o">=</span> <span class="n">TransformerModel</span><span class="p">(</span><span class="n">training_config</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">model_type</span> <span class="o">==</span> <span class="s2">&quot;generative&quot;</span><span class="p">:</span>
             <span class="n">model</span> <span class="o">=</span> <span class="n">TransformerModel</span><span class="p">(</span><span class="n">training_config</span><span class="p">)</span>
         <span class="k">elif</span> <span class="n">model_type</span> <span class="o">==</span> <span class="s2">&quot;embedding&quot;</span><span class="p">:</span>
             <span class="n">model_inner</span> <span class="o">=</span> <span class="n">TransformerModel</span><span class="p">(</span><span class="n">training_config</span><span class="p">)</span>
             <span class="n">model</span> <span class="o">=</span> <span class="n">TransformerEmbeddingModel</span><span class="p">(</span><span class="n">model_inner</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">assert</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;impossible&quot;</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown PT model type: </span><span class="si">{</span><span class="n">model_type</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
 
         <span class="n">model</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] Loading model weights from </span><span class="si">{</span><span class="n">model_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="n">model_state</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
-            <span class="n">model_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">(</span><span class="n">device</span><span class="p">),</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span>
-        <span class="p">)</span>
         <span class="n">model</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">model_state</span><span class="p">[</span><span class="s2">&quot;model_state_dict&quot;</span><span class="p">])</span>
 
         <span class="n">model</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>

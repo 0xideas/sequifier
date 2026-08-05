@@ -292,9 +292,9 @@
 <span class="c1"># fields from one discriminator variant from leaking into another variant.</span>
 <span class="n">DEFAULT_ATOMIC_PATHS</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">]</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">(</span>
     <span class="p">{</span>
-        <span class="p">(</span><span class="s2">&quot;model_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;ingestion_spec&quot;</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">&quot;model_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;ingestion_merge&quot;</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">&quot;model_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;decoding_spec&quot;</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">&quot;model_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;ingestion&quot;</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">&quot;model_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;backbone&quot;</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">&quot;model_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;decoder&quot;</span><span class="p">),</span>
         <span class="p">(</span><span class="s2">&quot;training_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;optimizer&quot;</span><span class="p">),</span>
         <span class="p">(</span><span class="s2">&quot;training_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;scheduler&quot;</span><span class="p">),</span>
         <span class="p">(</span><span class="s2">&quot;training_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;bert_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;span_masking&quot;</span><span class="p">),</span>

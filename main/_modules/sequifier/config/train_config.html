@@ -402,7 +402,29 @@
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">root</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
 
 
-<span class="k">class</span><span class="w"> </span><span class="nc">DirectEmbedIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">IngestionComponentBase</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Settings shared by every feature-ingestion component.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="n">allow_shared_columns</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">allow_unused_input_columns</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">auxiliary_input_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+    <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">lt</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+    <span class="n">initialization</span><span class="p">:</span> <span class="n">ModelInitializationConfig</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
+        <span class="n">default_factory</span><span class="o">=</span><span class="n">ModelInitializationConfig</span>
+    <span class="p">)</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;auxiliary_input_columns&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_auxiliary_input_columns</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="n">_validate_column_list_unique</span><span class="p">(</span>
+            <span class="n">value</span><span class="p">,</span> <span class="s2">&quot;model_spec.ingestion.auxiliary_input_columns&quot;</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">value</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">DirectEmbedIngestionConfig</span><span class="p">(</span><span class="n">IngestionComponentBase</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Use the existing flat-column embedding path.&quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
@@ -426,7 +448,7 @@
         <span class="k">return</span> <span class="n">v</span>
 
 
-<span class="k">class</span><span class="w"> </span><span class="nc">PassThroughIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">PassThroughIngestionConfig</span><span class="p">(</span><span class="n">IngestionComponentBase</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Pass real-valued columns through without per-feature encoders.&quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
@@ -443,7 +465,7 @@
         <span class="k">return</span> <span class="n">v</span>
 
 
-<span class="k">class</span><span class="w"> </span><span class="nc">FeaturePoolIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">FeaturePoolIngestionConfig</span><span class="p">(</span><span class="n">IngestionComponentBase</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Encode columns as feature tokens before pooling to one time token.&quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
@@ -459,7 +481,7 @@
         <span class="k">return</span> <span class="n">v</span>
 
 
-<span class="k">class</span><span class="w"> </span><span class="nc">GroupedIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">GroupedIngestionConfig</span><span class="p">(</span><span class="n">IngestionComponentBase</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Encode configured column groups and merge them within one branch.&quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
@@ -488,7 +510,7 @@
         <span class="k">return</span> <span class="bp">self</span>
 
 
-<span class="k">class</span><span class="w"> </span><span class="nc">SiameseIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">SiameseIngestionConfig</span><span class="p">(</span><span class="n">IngestionComponentBase</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Apply one shared scalar encoder across the branch columns.&quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
@@ -504,7 +526,7 @@
         <span class="k">return</span> <span class="n">v</span>
 
 
-<span class="k">class</span><span class="w"> </span><span class="nc">TemporalConvIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">TemporalConvIngestionConfig</span><span class="p">(</span><span class="n">IngestionComponentBase</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Encode columns, then apply Conv1D over the time axis.&quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
@@ -717,7 +739,7 @@
         <span class="k">return</span> <span class="bp">self</span>
 
 
-<span class="k">class</span><span class="w"> </span><span class="nc">StructuredIngestionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">StructuredIngestionConfig</span><span class="p">(</span><span class="n">IngestionComponentBase</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Consume a top-level cartesian layout.&quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
@@ -762,6 +784,38 @@
 
 
 <span class="n">IngestionSpecConfig</span> <span class="o">=</span> <span class="n">BranchIngestionConfig</span> <span class="o">|</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">BranchIngestionConfig</span><span class="p">]</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">CompositeIngestionConfig</span><span class="p">(</span><span class="n">IngestionComponentBase</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Combine independently configured ingestion branches.&quot;&quot;&quot;</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;composite&quot;</span><span class="p">]</span>
+    <span class="n">branches</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">BranchIngestionConfig</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">merge</span><span class="p">:</span> <span class="n">IngestionMergeConfig</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="n">IngestionMergeConfig</span><span class="p">)</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;branches&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_branch_names</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">branches</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">branch_name</span> <span class="ow">in</span> <span class="n">branches</span><span class="p">:</span>
+            <span class="n">_validate_module_dict_key</span><span class="p">(</span>
+                <span class="n">branch_name</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Composite ingestion branch </span><span class="si">{</span><span class="n">branch_name</span><span class="si">!r}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">branches</span>
+
+
+<span class="n">IngestionComponentConfig</span> <span class="o">=</span> <span class="n">Annotated</span><span class="p">[</span>
+    <span class="n">Union</span><span class="p">[</span>
+        <span class="n">DirectEmbedIngestionConfig</span><span class="p">,</span>
+        <span class="n">PassThroughIngestionConfig</span><span class="p">,</span>
+        <span class="n">FeaturePoolIngestionConfig</span><span class="p">,</span>
+        <span class="n">GroupedIngestionConfig</span><span class="p">,</span>
+        <span class="n">SiameseIngestionConfig</span><span class="p">,</span>
+        <span class="n">TemporalConvIngestionConfig</span><span class="p">,</span>
+        <span class="n">StructuredIngestionConfig</span><span class="p">,</span>
+        <span class="n">CompositeIngestionConfig</span><span class="p">,</span>
+    <span class="p">],</span>
+    <span class="n">Field</span><span class="p">(</span><span class="n">discriminator</span><span class="o">=</span><span class="s2">&quot;type&quot;</span><span class="p">),</span>
+<span class="p">]</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">LinearDecodingConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
@@ -824,6 +878,172 @@
 
 
 <span class="n">DecodingSpecConfig</span> <span class="o">=</span> <span class="n">BranchDecodingConfig</span> <span class="o">|</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">BranchDecodingConfig</span><span class="p">]</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">DecoderComponentBase</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Settings shared by every target-decoder component.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="n">prediction_length</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">support</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">initialization</span><span class="p">:</span> <span class="n">ModelInitializationConfig</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
+        <span class="n">default_factory</span><span class="o">=</span><span class="n">ModelInitializationConfig</span>
+    <span class="p">)</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">LinearDecoderComponentConfig</span><span class="p">(</span><span class="n">DecoderComponentBase</span><span class="p">,</span> <span class="n">LinearDecodingConfig</span><span class="p">):</span>
+    <span class="k">pass</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">MLPDecoderComponentConfig</span><span class="p">(</span><span class="n">DecoderComponentBase</span><span class="p">,</span> <span class="n">MLPDecodingConfig</span><span class="p">):</span>
+    <span class="k">pass</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">CompositeDecoderComponentConfig</span><span class="p">(</span><span class="n">DecoderComponentBase</span><span class="p">):</span>
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;composite&quot;</span><span class="p">]</span>
+    <span class="n">branches</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">BranchDecodingConfig</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;branches&quot;</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_branch_names</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">branches</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">branch_name</span> <span class="ow">in</span> <span class="n">branches</span><span class="p">:</span>
+            <span class="n">_validate_module_dict_key</span><span class="p">(</span>
+                <span class="n">branch_name</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Target decoding branch </span><span class="si">{</span><span class="n">branch_name</span><span class="si">!r}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">branches</span>
+
+
+<span class="n">DecoderComponentConfig</span> <span class="o">=</span> <span class="n">Annotated</span><span class="p">[</span>
+    <span class="n">Union</span><span class="p">[</span>
+        <span class="n">LinearDecoderComponentConfig</span><span class="p">,</span>
+        <span class="n">MLPDecoderComponentConfig</span><span class="p">,</span>
+        <span class="n">CompositeDecoderComponentConfig</span><span class="p">,</span>
+    <span class="p">],</span>
+    <span class="n">Field</span><span class="p">(</span><span class="n">discriminator</span><span class="o">=</span><span class="s2">&quot;type&quot;</span><span class="p">),</span>
+<span class="p">]</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">BackboneAttentionConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;mha&quot;</span><span class="p">,</span> <span class="s2">&quot;mqa&quot;</span><span class="p">,</span> <span class="s2">&quot;gqa&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;mha&quot;</span>
+    <span class="n">n_heads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">n_kv_heads</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">output_projection</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_heads</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_kv_heads</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s2">&quot;gqa&quot;</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;gqa requires n_kv_heads&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">n_kv_heads</span> <span class="o">=</span> <span class="mi">1</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s2">&quot;mqa&quot;</span> <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_heads</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_heads</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_kv_heads</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;n_heads </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_heads</span><span class="si">}</span><span class="s2"> must be divisible by n_kv_heads &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_kv_heads</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s2">&quot;mha&quot;</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_kv_heads</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_heads</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;mha requires n_kv_heads to equal n_heads&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s2">&quot;mqa&quot;</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_kv_heads</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;mqa requires n_kv_heads to equal 1&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">BackboneFeedForwardConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="n">dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">activation</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;relu&quot;</span><span class="p">,</span> <span class="s2">&quot;gelu&quot;</span><span class="p">,</span> <span class="s2">&quot;swiglu&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;swiglu&quot;</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">BackboneNormalizationConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;layer_norm&quot;</span><span class="p">,</span> <span class="s2">&quot;rmsnorm&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;rmsnorm&quot;</span>
+    <span class="n">norm_first</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">BackbonePositionEncodingConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;learned&quot;</span><span class="p">,</span> <span class="s2">&quot;rope&quot;</span><span class="p">,</span> <span class="s2">&quot;range&quot;</span><span class="p">,</span> <span class="s2">&quot;sinusoidal&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;learned&quot;</span>
+    <span class="n">theta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mf">10000.0</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mf">0.0</span><span class="p">)</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">BackboneArchitectureConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;All and only fields that determine shared-backbone compatibility.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="n">dim_model</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">max_context_length</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">num_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">attention</span><span class="p">:</span> <span class="n">BackboneAttentionConfig</span>
+    <span class="n">feed_forward</span><span class="p">:</span> <span class="n">BackboneFeedForwardConfig</span>
+    <span class="n">normalization</span><span class="p">:</span> <span class="n">BackboneNormalizationConfig</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
+        <span class="n">default_factory</span><span class="o">=</span><span class="n">BackboneNormalizationConfig</span>
+    <span class="p">)</span>
+    <span class="n">position_encoding</span><span class="p">:</span> <span class="n">BackbonePositionEncodingConfig</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
+        <span class="n">default_factory</span><span class="o">=</span><span class="n">BackbonePositionEncodingConfig</span>
+    <span class="p">)</span>
+    <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">lt</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+    <span class="n">shared_layer_groups</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_architecture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">n_heads</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">attention</span><span class="o">.</span><span class="n">n_heads</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span> <span class="o">%</span> <span class="n">n_heads</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;dim_model </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="si">}</span><span class="s2"> must be divisible by n_heads </span><span class="si">{</span><span class="n">n_heads</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">position_encoding</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s2">&quot;rope&quot;</span><span class="p">:</span>
+            <span class="n">head_dim</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span> <span class="o">//</span> <span class="n">n_heads</span>
+            <span class="k">if</span> <span class="n">head_dim</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;RoPE requires an even head dimension, got </span><span class="si">{</span><span class="n">head_dim</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+
+        <span class="n">seen_layers</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">shared_layer_groups</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">group</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">group</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">group</span><span class="p">)):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;shared_layer_groups entries must contain at least two unique &quot;</span>
+                    <span class="s2">&quot;layer indices&quot;</span>
+                <span class="p">)</span>
+            <span class="n">invalid</span> <span class="o">=</span> <span class="p">[</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">group</span> <span class="k">if</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">i</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_layers</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">invalid</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;shared_layer_groups references indices outside the backbone: &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">invalid</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+            <span class="n">overlap</span> <span class="o">=</span> <span class="n">seen_layers</span> <span class="o">&amp;</span> <span class="nb">set</span><span class="p">(</span><span class="n">group</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">overlap</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;shared_layer_groups cannot overlap: &quot;</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">overlap</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="p">)</span>
+            <span class="n">seen_layers</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">group</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">BackboneRepositoryConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="n">backbone_id</span><span class="p">:</span> <span class="n">StrictStr</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">path</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">load_policy</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;if_exists&quot;</span><span class="p">,</span> <span class="s2">&quot;required&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;if_exists&quot;</span>
+    <span class="n">publish</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">conflict_policy</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;compare_and_swap&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;compare_and_swap&quot;</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">BackboneComponentConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="n">architecture</span><span class="p">:</span> <span class="n">BackboneArchitectureConfig</span>
+    <span class="n">repository</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BackboneRepositoryConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">initialization</span><span class="p">:</span> <span class="n">ModelInitializationConfig</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
+        <span class="n">default_factory</span><span class="o">=</span><span class="n">ModelInitializationConfig</span>
+    <span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_validate_class_share_log_columns</span><span class="p">(</span><span class="n">config_values</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -1064,6 +1284,24 @@
     <span class="n">target_values</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">NextOccurrenceTargetValue</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 
 
+<span class="k">class</span><span class="w"> </span><span class="nc">ResumeConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Policy for resuming the same run from its complete checkpoint.&quot;&quot;&quot;</span>
+
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+
+    <span class="n">policy</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;never&quot;</span><span class="p">,</span> <span class="s2">&quot;if_exists&quot;</span><span class="p">,</span> <span class="s2">&quot;required&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;never&quot;</span>
+    <span class="n">checkpoint_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_checkpoint_path</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">policy</span> <span class="o">==</span> <span class="s2">&quot;required&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">checkpoint_path</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;training_spec.resume.checkpoint_path is required when policy is &quot;</span>
+                <span class="s2">&quot;&#39;required&#39;&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
 <div class="viewcode-block" id="TrainingSpecModel"><a class="viewcode-back" href="../../../api.html#sequifier.config.train_config.TrainingSpecModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TrainingSpecModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Training loop, optimization, precision, and distribution settings.&quot;&quot;&quot;</span>
 
@@ -1086,7 +1324,6 @@
     <span class="n">class_weights</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">accumulation_steps</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">gradient_clip</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">dropout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
     <span class="n">loss_weights</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">optimizer</span><span class="p">:</span> <span class="n">DotDict</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">DotDict</span><span class="p">({</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Adam&quot;</span><span class="p">}))</span>
     <span class="n">scheduler</span><span class="p">:</span> <span class="n">DotDict</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
@@ -1098,7 +1335,7 @@
     <span class="n">bert_spec</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BERTSpecModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">next_occurrence_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">NextOccurrenceConfigModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
 
-    <span class="n">continue_training</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">resume</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ResumeConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">enforce_determinism</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">distributed</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">load_full_data_to_ram</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
@@ -1237,233 +1474,27 @@
 
 
 <div class="viewcode-block" id="ModelSpecModel"><a class="viewcode-back" href="../../../api.html#sequifier.config.train_config.ModelSpecModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">ModelSpecModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Transformer architecture settings.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;The three independently configured runtime model components.&quot;&quot;&quot;</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">arbitrary_types_allowed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
 
-    <span class="n">ingestion_spec</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">IngestionSpecConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">ingestion_merge</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">IngestionMergeConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">allow_shared_ingestion_columns</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
-    <span class="n">allow_unused_input_columns</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
-    <span class="n">auxiliary_input_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-    <span class="n">initialization</span><span class="p">:</span> <span class="n">ModelInitializationConfig</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
-        <span class="n">default_factory</span><span class="o">=</span><span class="n">ModelInitializationConfig</span>
-    <span class="p">)</span>
-    <span class="n">dim_model</span><span class="p">:</span> <span class="nb">int</span>
-    <span class="n">n_head</span><span class="p">:</span> <span class="nb">int</span>
-    <span class="n">dim_feedforward</span><span class="p">:</span> <span class="nb">int</span>
-    <span class="n">num_layers</span><span class="p">:</span> <span class="nb">int</span>
-
-    <span class="n">activation_fn</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;swiglu&quot;</span>  <span class="c1"># Options: &quot;relu&quot;, &quot;gelu&quot;, &quot;swiglu&quot;</span>
-    <span class="n">normalization</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;rmsnorm&quot;</span>  <span class="c1"># Options: &quot;layer_norm&quot;, &quot;rmsnorm&quot;</span>
-    <span class="n">positional_encoding</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="s2">&quot;learned&quot;</span>  <span class="c1"># Options: &quot;learned&quot;, &quot;rope&quot;, &quot;range&quot;, &quot;range_concat&quot;</span>
-    <span class="p">)</span>
-    <span class="n">positional_encoding_scope</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;per_feature&quot;</span>  <span class="c1"># Options: &quot;per_feature&quot;, &quot;global&quot;</span>
-    <span class="n">attention_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;mha&quot;</span>  <span class="c1"># Options: &quot;mha&quot;, &quot;mqa&quot;, &quot;gqa&quot;</span>
-    <span class="n">attention_output_projection</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
-
-    <span class="n">norm_first</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
-    <span class="n">shared_layer_groups</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-    <span class="n">n_kv_heads</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">rope_theta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">10000.0</span>
-
-    <span class="n">prediction_length</span><span class="p">:</span> <span class="nb">int</span>
-    <span class="n">decoding_support</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">decoding_spec</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DecodingSpecConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-
-    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">default_specs</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">values</span><span class="p">):</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
-            <span class="k">return</span> <span class="n">values</span>
-        <span class="n">values</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
-        <span class="n">positional_encoding</span> <span class="o">=</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;positional_encoding&quot;</span><span class="p">,</span> <span class="s2">&quot;learned&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="p">(</span>
-            <span class="n">positional_encoding</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;range&quot;</span><span class="p">,</span> <span class="s2">&quot;range_concat&quot;</span><span class="p">}</span>
-            <span class="ow">and</span> <span class="s2">&quot;positional_encoding_scope&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">values</span>
-        <span class="p">):</span>
-            <span class="n">values</span><span class="p">[</span><span class="s2">&quot;positional_encoding_scope&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;global&quot;</span>
-        <span class="k">if</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;decoding_spec&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="n">values</span><span class="p">[</span><span class="s2">&quot;decoding_spec&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;linear&quot;</span><span class="p">}</span>
-        <span class="k">if</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;ingestion_spec&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">return</span> <span class="n">values</span>
-        <span class="n">dim_model</span> <span class="o">=</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;dim_model&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">dim_model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">return</span> <span class="n">values</span>
-        <span class="n">values</span><span class="p">[</span><span class="s2">&quot;ingestion_spec&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;direct_embed&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;output_dim&quot;</span><span class="p">:</span> <span class="p">(</span>
-                <span class="n">dim_model</span> <span class="o">-</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">positional_encoding</span> <span class="o">==</span> <span class="s2">&quot;range_concat&quot;</span> <span class="k">else</span> <span class="n">dim_model</span>
-            <span class="p">),</span>
-        <span class="p">}</span>
-        <span class="k">return</span> <span class="n">values</span>
+    <span class="n">ingestion</span><span class="p">:</span> <span class="n">IngestionComponentConfig</span>
+    <span class="n">backbone</span><span class="p">:</span> <span class="n">BackboneComponentConfig</span>
+    <span class="n">decoder</span><span class="p">:</span> <span class="n">DecoderComponentConfig</span>
 
     <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_ingestion_spec_shape</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span> <span class="o">=</span> <span class="n">DirectEmbedIngestionConfig</span><span class="p">(</span><span class="n">output_dim</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">)</span>
-
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;model_spec.ingestion_spec must define at least one &quot;</span>
-                    <span class="s2">&quot;named ingestion&quot;</span>
-                <span class="p">)</span>
-            <span class="k">for</span> <span class="n">branch_name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">:</span>
-                <span class="n">_validate_module_dict_key</span><span class="p">(</span>
-                    <span class="n">branch_name</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Composite ingestion branch </span><span class="si">{</span><span class="n">branch_name</span><span class="si">!r}</span><span class="s2">&quot;</span>
-                <span class="p">)</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_merge</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_merge</span> <span class="o">=</span> <span class="n">IngestionMergeConfig</span><span class="p">()</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_component_contracts</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">dim_model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">architecture</span><span class="o">.</span><span class="n">dim_model</span>
         <span class="k">if</span> <span class="p">(</span>
-            <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span>
-            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_merge</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">type</span> <span class="o">!=</span> <span class="s2">&quot;composite&quot;</span>
+            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">output_dim</span> <span class="o">!=</span> <span class="n">dim_model</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;model_spec.ingestion_merge is only valid when &quot;</span>
-                <span class="s2">&quot;ingestion_spec defines multiple named ingestions&quot;</span>
+                <span class="s2">&quot;model_spec.ingestion.output_dim must equal &quot;</span>
+                <span class="s2">&quot;model_spec.backbone.architecture.dim_model: &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">output_dim</span><span class="si">}</span><span class="s2"> != </span><span class="si">{</span><span class="n">dim_model</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="p">)</span>
-
-        <span class="k">return</span> <span class="bp">self</span>
-
-    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_decoding_spec_present</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoding_spec</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">decoding_spec</span> <span class="o">=</span> <span class="n">LinearDecodingConfig</span><span class="p">()</span>
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">decoding_spec</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoding_spec</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;model_spec.decoding_spec must define at least one &quot;</span> <span class="s2">&quot;named decoder&quot;</span>
-                <span class="p">)</span>
-            <span class="k">for</span> <span class="n">branch_name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoding_spec</span><span class="p">:</span>
-                <span class="n">_validate_module_dict_key</span><span class="p">(</span>
-                    <span class="n">branch_name</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Target decoding branch </span><span class="si">{</span><span class="n">branch_name</span><span class="si">!r}</span><span class="s2">&quot;</span>
-                <span class="p">)</span>
-        <span class="k">return</span> <span class="bp">self</span>
-
-    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_shared_layer_groups</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="n">seen_layers</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
-        <span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">shared_layer_groups</span><span class="p">:</span>
-            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">group</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;model_spec.shared_layer_groups entries must contain at &quot;</span>
-                    <span class="s2">&quot;least two layer indices&quot;</span>
-                <span class="p">)</span>
-
-            <span class="n">group_layers</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">group</span><span class="p">)</span>
-            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_layers</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">group</span><span class="p">):</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;model_spec.shared_layer_groups entries cannot contain &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;duplicate layer indices: </span><span class="si">{</span><span class="n">group</span><span class="si">}</span><span class="s2">&quot;</span>
-                <span class="p">)</span>
-
-            <span class="n">invalid_layers</span> <span class="o">=</span> <span class="p">[</span>
-                <span class="n">layer</span> <span class="k">for</span> <span class="n">layer</span> <span class="ow">in</span> <span class="n">group</span> <span class="k">if</span> <span class="n">layer</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">layer</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_layers</span>
-            <span class="p">]</span>
-            <span class="k">if</span> <span class="n">invalid_layers</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;model_spec.shared_layer_groups references layer indices &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;outside [0, </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">num_layers</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2">]: </span><span class="si">{</span><span class="n">invalid_layers</span><span class="si">}</span><span class="s2">&quot;</span>
-                <span class="p">)</span>
-
-            <span class="n">overlapping_layers</span> <span class="o">=</span> <span class="n">group_layers</span> <span class="o">&amp;</span> <span class="n">seen_layers</span>
-            <span class="k">if</span> <span class="n">overlapping_layers</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;model_spec.shared_layer_groups cannot reference a layer &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;in multiple groups: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">overlapping_layers</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
-                <span class="p">)</span>
-            <span class="n">seen_layers</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">group_layers</span><span class="p">)</span>
-
-        <span class="k">return</span> <span class="bp">self</span>
-
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;activation_fn&quot;</span><span class="p">)</span>
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_activation</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;relu&quot;</span><span class="p">,</span> <span class="s2">&quot;gelu&quot;</span><span class="p">,</span> <span class="s2">&quot;swiglu&quot;</span><span class="p">]:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid activation_fn: </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">v</span>
-
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;normalization&quot;</span><span class="p">)</span>
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_normalization</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;layer_norm&quot;</span><span class="p">,</span> <span class="s2">&quot;rmsnorm&quot;</span><span class="p">]:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid normalization: </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">v</span>
-
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;positional_encoding&quot;</span><span class="p">)</span>
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_pos_encoding</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;learned&quot;</span><span class="p">,</span> <span class="s2">&quot;rope&quot;</span><span class="p">,</span> <span class="s2">&quot;range&quot;</span><span class="p">,</span> <span class="s2">&quot;range_concat&quot;</span><span class="p">]:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid positional_encoding: </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">v</span>
-
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;positional_encoding_scope&quot;</span><span class="p">)</span>
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_pos_encoding_scope</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;per_feature&quot;</span><span class="p">,</span> <span class="s2">&quot;global&quot;</span><span class="p">]:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid positional_encoding_scope: </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">v</span>
-
-    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_positional_encoding_combination</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">if</span> <span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;range&quot;</span><span class="p">,</span> <span class="s2">&quot;range_concat&quot;</span><span class="p">}</span>
-            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding_scope</span> <span class="o">!=</span> <span class="s2">&quot;global&quot;</span>
-        <span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;positional_encoding </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">positional_encoding</span><span class="si">!r}</span><span class="s2"> requires &quot;</span>
-                <span class="s2">&quot;positional_encoding_scope &#39;global&#39;&quot;</span>
-            <span class="p">)</span>
-        <span class="k">return</span> <span class="bp">self</span>
-
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;attention_type&quot;</span><span class="p">)</span>
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_attention_type</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;mha&quot;</span><span class="p">,</span> <span class="s2">&quot;mqa&quot;</span><span class="p">,</span> <span class="s2">&quot;gqa&quot;</span><span class="p">]:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid attention_type: </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">v</span>
-
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;auxiliary_input_columns&quot;</span><span class="p">)</span>
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_auxiliary_input_columns</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
-        <span class="n">_validate_column_list_unique</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="s2">&quot;model_spec.auxiliary_input_columns&quot;</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">v</span>
-
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;n_head&quot;</span><span class="p">)</span>
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_n_head</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">info</span><span class="p">):</span>
-        <span class="n">dim_model</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;dim_model&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;n_heads is None&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">dim_model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;dim_model is None&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">dim_model</span> <span class="o">%</span> <span class="n">v</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;dim_model </span><span class="si">{</span><span class="n">dim_model</span><span class="si">}</span><span class="s2"> not divisible by n_head </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">v</span>
-
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;n_kv_heads&quot;</span><span class="p">)</span>
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_n_kv_heads</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">info</span><span class="p">):</span>
-        <span class="n">n_head</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;n_head&quot;</span><span class="p">)</span>
-        <span class="n">attn_type</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;attention_type&quot;</span><span class="p">)</span>
-
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">n_head</span> <span class="ow">and</span> <span class="n">n_head</span> <span class="o">%</span> <span class="n">v</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;n_head </span><span class="si">{</span><span class="n">n_head</span><span class="si">}</span><span class="s2"> not divisible by n_kv_heads </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-            <span class="k">if</span> <span class="n">n_head</span> <span class="ow">and</span> <span class="n">v</span> <span class="o">&gt;</span> <span class="n">n_head</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;n_kv_heads </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2"> &gt; n_head </span><span class="si">{</span><span class="n">n_head</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-
-            <span class="k">if</span> <span class="n">attn_type</span> <span class="o">==</span> <span class="s2">&quot;mqa&quot;</span> <span class="ow">and</span> <span class="n">v</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;n_kv_heads must be 1 for mqa, got </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-            <span class="k">if</span> <span class="n">attn_type</span> <span class="o">==</span> <span class="s2">&quot;mha&quot;</span> <span class="ow">and</span> <span class="n">v</span> <span class="o">!=</span> <span class="n">n_head</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;n_kv_heads must equal n_head for mha, got </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">attn_type</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;gqa&quot;</span><span class="p">,</span> <span class="s2">&quot;mqa&quot;</span><span class="p">]:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;n_kv_heads must be specified for </span><span class="si">{</span><span class="n">attn_type</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-
-        <span class="k">return</span> <span class="n">v</span></div>
+        <span class="k">return</span> <span class="bp">self</span></div>
 
 
 <span class="n">_PathT</span> <span class="o">=</span> <span class="n">TypeVar</span><span class="p">(</span><span class="s2">&quot;_PathT&quot;</span><span class="p">)</span>
@@ -1593,16 +1624,22 @@
             <span class="n">target_offset</span><span class="o">=</span><span class="n">effective_target_offset</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="n">objective_class</span><span class="o">.</span><span class="n">validate_prediction_length</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span>
             <span class="n">usage</span><span class="o">=</span><span class="s2">&quot;training&quot;</span><span class="p">,</span>
         <span class="p">)</span>
+        <span class="n">max_context_length</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">architecture</span><span class="o">.</span><span class="n">max_context_length</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span> <span class="o">&gt;</span> <span class="n">max_context_length</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;context_length </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="si">}</span><span class="s2"> exceeds backbone &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;max_context_length </span><span class="si">{</span><span class="n">max_context_length</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="p">)</span>
         <span class="n">decoded_context_length</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoding_support</span> <span class="o">+</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">support</span> <span class="o">+</span> <span class="mi">1</span>
         <span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoding_support</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;model_spec.decoding_support cannot exceed context_length&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">&gt;</span> <span class="n">decoded_context_length</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">support</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;model_spec.decoder.support cannot exceed context_length&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">&gt;</span> <span class="n">decoded_context_length</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="s2">&quot;model_spec.prediction_length cannot exceed the number of &quot;</span>
                 <span class="s2">&quot;decoded positions produced by decoding_support&quot;</span>
@@ -1784,7 +1821,7 @@
             <span class="p">)</span>
         <span class="n">resolve_window_view</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="p">)</span>
         <span class="n">get_objective_class</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span><span class="p">)</span><span class="o">.</span><span class="n">validate_prediction_length</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span>
             <span class="n">usage</span><span class="o">=</span><span class="s2">&quot;training&quot;</span><span class="p">,</span>
         <span class="p">)</span>
@@ -1986,35 +2023,35 @@
 
     <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_auxiliary_input_columns</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="n">auxiliary_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">auxiliary_input_columns</span><span class="p">)</span>
+        <span class="n">auxiliary_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">auxiliary_input_columns</span><span class="p">)</span>
         <span class="n">missing_columns</span> <span class="o">=</span> <span class="n">auxiliary_columns</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">missing_columns</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;model_spec.auxiliary_input_columns references unknown input &quot;</span>
+                <span class="s2">&quot;model_spec.ingestion.auxiliary_input_columns references unknown input &quot;</span>
                 <span class="sa">f</span><span class="s2">&quot;columns: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">missing_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
             <span class="p">)</span>
 
         <span class="k">return</span> <span class="bp">self</span>
 
     <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_decoding_spec</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="n">decoding_support</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoding_support</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_decoder</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">decoder_support</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">support</span>
         <span class="n">context_length</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span>
-        <span class="k">if</span> <span class="n">decoding_support</span> <span class="o">&gt;</span> <span class="n">context_length</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">decoder_support</span> <span class="o">&gt;</span> <span class="n">context_length</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;model_spec.decoding_support must be in the range &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;[1, context_length], got decoding_support=</span><span class="si">{</span><span class="n">decoding_support</span><span class="si">}</span><span class="s2"> &quot;</span>
+                <span class="s2">&quot;model_spec.decoder.support must be in the range &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;[1, context_length], got support=</span><span class="si">{</span><span class="n">decoder_support</span><span class="si">}</span><span class="s2"> &quot;</span>
                 <span class="sa">f</span><span class="s2">&quot;and context_length=</span><span class="si">{</span><span class="n">context_length</span><span class="si">}</span><span class="s2">.&quot;</span>
             <span class="p">)</span>
 
-        <span class="n">decoded_context_length</span> <span class="o">=</span> <span class="n">context_length</span> <span class="o">-</span> <span class="n">decoding_support</span> <span class="o">+</span> <span class="mi">1</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">&gt;</span> <span class="n">decoded_context_length</span><span class="p">:</span>
+        <span class="n">decoded_context_length</span> <span class="o">=</span> <span class="n">context_length</span> <span class="o">-</span> <span class="n">decoder_support</span> <span class="o">+</span> <span class="mi">1</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">&gt;</span> <span class="n">decoded_context_length</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;model_spec.prediction_length cannot exceed the number of &quot;</span>
-                <span class="s2">&quot;decoded positions produced by decoding_support. Got &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;prediction_length=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">, &quot;</span>
+                <span class="s2">&quot;model_spec.decoder.prediction_length cannot exceed the number of &quot;</span>
+                <span class="s2">&quot;decoded positions produced by decoder support. Got &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;prediction_length=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">, &quot;</span>
                 <span class="sa">f</span><span class="s2">&quot;decoded_context_length=</span><span class="si">{</span><span class="n">decoded_context_length</span><span class="si">}</span><span class="s2">, &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;decoding_support=</span><span class="si">{</span><span class="n">decoding_support</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;support=</span><span class="si">{</span><span class="n">decoder_support</span><span class="si">}</span><span class="s2">.&quot;</span>
             <span class="p">)</span>
 
         <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.decoders</span><span class="w"> </span><span class="kn">import</span> <span class="n">resolve_decoding_plan</span>
@@ -2023,7 +2060,7 @@
         <span class="k">return</span> <span class="bp">self</span>
 
     <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_ingestion_spec_branches</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_ingestion</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="c1"># Keep public configuration models independent from runtime modules while</span>
         <span class="c1"># using the same resolver for cross-field validation and construction.</span>
         <span class="c1"># The local import avoids a config/model import cycle at module load time.</span>

@@ -288,7 +288,7 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.infer_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">InfererModel</span><span class="p">,</span> <span class="n">load_inferer_config</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_train_config</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModel</span><span class="p">,</span> <span class="n">load_train_config</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">,</span>
     <span class="n">configure_determinism</span><span class="p">,</span>
@@ -730,17 +730,29 @@
     <span class="k">for</span> <span class="n">model_path</span> <span class="ow">in</span> <span class="n">model_paths</span><span class="p">:</span>
         <span class="n">target_decoder_ids</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">if</span> <span class="n">model_path</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;.pt&quot;</span><span class="p">):</span>
-            <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_config_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;training_config_path is required for PyTorch models&quot;</span><span class="p">)</span>
-            <span class="n">training_config</span> <span class="o">=</span> <span class="n">load_train_config</span><span class="p">(</span>
-                <span class="n">config</span><span class="o">.</span><span class="n">training_config_path</span><span class="p">,</span>
-                <span class="p">{</span>
-                    <span class="n">key</span><span class="p">:</span> <span class="n">value</span>
-                    <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">args_config</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-                    <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;model_path&quot;</span><span class="p">,</span> <span class="s2">&quot;data_path&quot;</span><span class="p">]</span>
-                <span class="p">},</span>
-                <span class="n">args_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;skip_metadata&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span>
+            <span class="n">model_state</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
+                <span class="n">normalize_path</span><span class="p">(</span><span class="n">model_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">),</span>
+                <span class="n">map_location</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span>
+                <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
             <span class="p">)</span>
+            <span class="n">embedded_config</span> <span class="o">=</span> <span class="n">model_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;training_config&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">embedded_config</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">training_config</span> <span class="o">=</span> <span class="n">TrainModel</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span><span class="n">embedded_config</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">training_config_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">training_config</span> <span class="o">=</span> <span class="n">load_train_config</span><span class="p">(</span>
+                    <span class="n">config</span><span class="o">.</span><span class="n">training_config_path</span><span class="p">,</span>
+                    <span class="p">{</span>
+                        <span class="n">key</span><span class="p">:</span> <span class="n">value</span>
+                        <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">args_config</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                        <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;model_path&quot;</span><span class="p">,</span> <span class="s2">&quot;data_path&quot;</span><span class="p">]</span>
+                    <span class="p">},</span>
+                    <span class="n">args_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;skip_metadata&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span>
+                <span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;PyTorch model has no embedded training config and &quot;</span>
+                    <span class="s2">&quot;training_config_path was not provided.&quot;</span>
+                <span class="p">)</span>
             <span class="n">target_column_types</span> <span class="o">=</span> <span class="n">training_config</span><span class="o">.</span><span class="n">target_column_types</span>
             <span class="k">if</span> <span class="n">target_column_types</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;target_column_types must be provided or derived&quot;</span><span class="p">)</span>
@@ -1651,8 +1663,6 @@
                 <span class="bp">self</span><span class="o">.</span><span class="n">model_type</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_config_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;training_config_path is required for PyTorch models&quot;</span><span class="p">)</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">inference_model</span> <span class="o">=</span> <span class="n">load_inference_model</span><span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">model_type</span><span class="p">,</span>
                 <span class="n">normalize_path</span><span class="p">(</span><span class="n">model_path</span><span class="p">,</span> <span class="n">project_root</span><span class="p">),</span>
