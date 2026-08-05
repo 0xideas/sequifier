@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from sequifier.logging_paths import rank_log_prefix
+
 METRICS_SCHEMA_VERSION = 1
 TOTAL_TARGET = "__total__"
 
@@ -112,17 +114,28 @@ class _CsvAppender:
 class StructuredMetricWriters:
     """Own the three rank-0 structured metric tables for one model."""
 
-    def __init__(self, project_root: str, model_name: str, rank: int) -> None:
-        log_dir = Path(project_root) / "logs"
-        prefix = f"sequifier-{model_name}-rank{rank}"
+    def __init__(
+        self,
+        project_root: str,
+        model_name: str,
+        rank: int,
+        *,
+        class_share_columns: Iterable[str] = (),
+    ) -> None:
+        prefix = rank_log_prefix(project_root, model_name, rank)
         self.model_name = model_name
         self.rank = rank
-        self.training_path = log_dir / f"{prefix}-training.csv"
-        self.validation_path = log_dir / f"{prefix}-validation.csv"
-        self.class_share_path = log_dir / f"{prefix}-validation-class-shares.csv"
+        self.class_share_columns = tuple(class_share_columns)
+        self.training_path = Path(f"{prefix}-training.csv")
+        self.validation_path = Path(f"{prefix}-validation.csv")
+        self.class_share_path = Path(f"{prefix}-validation-class-shares.csv")
         self._training = _CsvAppender(self.training_path, TRAINING_FIELDS)
         self._validation = _CsvAppender(self.validation_path, VALIDATION_FIELDS)
-        self._class_shares = _CsvAppender(self.class_share_path, CLASS_SHARE_FIELDS)
+        self._class_shares = (
+            _CsvAppender(self.class_share_path, CLASS_SHARE_FIELDS)
+            if self.class_share_columns
+            else None
+        )
 
     def _common(
         self,
@@ -281,5 +294,11 @@ class StructuredMetricWriters:
                         "status": "ok",
                     }
                 )
-        self._class_shares.append(class_rows, durable=True)
+        if class_rows and self._class_shares is None:
+            raise ValueError(
+                "Class-share rows were provided without configured class-share "
+                "columns."
+            )
+        if self._class_shares is not None:
+            self._class_shares.append(class_rows, durable=True)
         return evaluation_id

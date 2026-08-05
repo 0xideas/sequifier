@@ -23,6 +23,7 @@ from sequifier.helpers import (  # noqa: E402
     get_last_training_batch_timedelta,
 )
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
+from sequifier.logging_paths import model_log_directory  # noqa: E402
 from sequifier.training.metrics import VALIDATION_FIELDS  # noqa: E402
 
 
@@ -65,14 +66,10 @@ def objective(trial: optuna.Trial, config) -> Union[float, tuple[float, ...]]:
 
     os.environ["SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"] = "1"
 
-    validation_path = os.path.join(
-        config.project_root,
-        "logs",
-        f"sequifier-{run_name}-rank0-validation.csv",
-    )
-    prune_path = os.path.join(
-        config.project_root, "logs", f"sequifier-{run_name}.prune"
-    )
+    log_dir = model_log_directory(config.project_root, run_name)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    validation_path = str(log_dir / f"sequifier-{run_name}-rank0-validation.csv")
+    prune_path = str(log_dir / f"sequifier-{run_name}.prune")
     consumed_evaluation_ids: set[str] = set()
     if os.path.exists(validation_path):
         with open(validation_path, "r", encoding="utf-8", newline="") as file:

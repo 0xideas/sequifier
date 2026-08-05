@@ -94,6 +94,7 @@ from sequifier.io.sequifier_dataset_from_folder_pt import (  # noqa: E402
 from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
     SequifierDatasetFromFolderPtLazy,
 )
+from sequifier.logging_paths import model_log_directory  # noqa: E402
 from sequifier.model.backbone import TransformerBackbone  # noqa: E402
 from sequifier.model.decoders import build_target_decoding  # noqa: E402
 from sequifier.model.ingestion_compiler import compile_feature_ingestion  # noqa: E402
@@ -1108,7 +1109,8 @@ class TransformerModel(SequifierModel):
             should_prune = 0
             if self.rank == 0:
                 prune_file = os.path.join(
-                    self.project_root, "logs", f"sequifier-{self.model_name}.prune"
+                    model_log_directory(self.project_root, self.model_name),
+                    f"sequifier-{self.model_name}.prune",
                 )
                 if os.path.exists(prune_file):
                     should_prune = 1
@@ -1414,7 +1416,10 @@ class TransformerModel(SequifierModel):
         """Run epochs, validation, checkpointing, export, and interruption cleanup."""
         if self.rank == 0 and self.metric_writers is None:
             self.metric_writers = StructuredMetricWriters(
-                self.project_root, self.model_name, self.rank
+                self.project_root,
+                self.model_name,
+                self.rank,
+                class_share_columns=self.class_share_log_columns,
             )
         self.logger.info(
             f"--- Starting Training for model: {self.model_name} | "

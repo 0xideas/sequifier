@@ -17,6 +17,7 @@ from loguru import logger
 from pydantic import ValidationError
 from torch import Tensor
 
+from sequifier.logging_paths import rank_log_prefix
 from sequifier.objectives import (
     ALLOWED_OBJECTIVE_NAMES,
     OBJECTIVE_NAME_MESSAGE,
@@ -848,14 +849,10 @@ def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0
             level="INFO",
         )
 
-    log_dir = os.path.join(project_root, "logs")
-    os.makedirs(log_dir, exist_ok=True)
+    prefix = rank_log_prefix(project_root, model_name, normalized_rank)
+    prefix.parent.mkdir(parents=True, exist_ok=True)
 
-    rank_str = f"rank{rank}" if rank is not None else "rank0"
-
-    events_path = os.path.join(
-        log_dir, f"sequifier-{model_name}-{rank_str}-events-reports.log"
-    )
+    events_path = f"{prefix}-events-reports.log"
     logger.add(
         events_path,
         level="DEBUG",
@@ -865,9 +862,7 @@ def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0
         mode="a",
     )
 
-    warnings_path = os.path.join(
-        log_dir, f"sequifier-{model_name}-{rank_str}-warnings-errors.log"
-    )
+    warnings_path = f"{prefix}-warnings-errors.log"
     logger.add(
         warnings_path,
         level="WARNING",
@@ -947,11 +942,7 @@ def get_last_training_batch_timedelta(
     model_name: str, rank: int, project_root: str = "."
 ) -> float:
     """Return seconds between the last two structured train observations."""
-    metrics_path = os.path.join(
-        project_root,
-        "logs",
-        f"sequifier-{model_name}-rank{rank}-training.csv",
-    )
+    metrics_path = f"{rank_log_prefix(project_root, model_name, rank)}-training.csv"
 
     if os.path.exists(metrics_path):
         observations = []

@@ -13,6 +13,7 @@ from loguru import logger
 from plotly.subplots import make_subplots
 
 from sequifier.helpers import configure_logger
+from sequifier.logging_paths import rank_log_prefix
 from sequifier.training.metrics import TOTAL_TARGET
 
 
@@ -120,9 +121,9 @@ def parse_args_to_models(args: argparse.Namespace) -> list[str]:
 @beartype
 def get_metrics_filepaths(args: argparse.Namespace, model: str) -> tuple[str, str]:
     """Return the rank-0 training and validation metric paths for a model."""
-    log_dir = os.path.join(args.project_root, "logs")
-    training_file = os.path.join(log_dir, f"sequifier-{model}-rank0-training.csv")
-    validation_file = os.path.join(log_dir, f"sequifier-{model}-rank0-validation.csv")
+    prefix = rank_log_prefix(args.project_root, model, 0)
+    training_file = f"{prefix}-training.csv"
+    validation_file = f"{prefix}-validation.csv"
     missing = [
         path for path in (training_file, validation_file) if not os.path.isfile(path)
     ]
