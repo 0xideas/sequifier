@@ -596,7 +596,14 @@ def _model_sampling_values(model_spec: BaseModel) -> dict[str, Any]:
         }
         ingestion_merge = ingestion.merge.model_dump(mode="python")
     else:
-        ingestion_spec = ingestion.model_dump(mode="python")
+        ingestion_spec = ingestion.model_dump(
+            mode="python",
+            exclude={
+                "initialization",
+                "freezing",
+                "freezing_except",
+            },
+        )
         ingestion_merge = None
 
     decoder = model_spec.decoder
@@ -608,7 +615,13 @@ def _model_sampling_values(model_spec: BaseModel) -> dict[str, Any]:
     else:
         decoding_spec = decoder.model_dump(
             mode="python",
-            exclude={"prediction_length", "support", "initialization"},
+            exclude={
+                "prediction_length",
+                "support",
+                "initialization",
+                "freezing",
+                "freezing_except",
+            },
         )
 
     architecture = model_spec.backbone.architecture
@@ -635,6 +648,12 @@ def _model_sampling_values(model_spec: BaseModel) -> dict[str, Any]:
         "decoder_initialization": model_spec.decoder.initialization.model_dump(
             mode="python"
         ),
+        "ingestion_freezing": model_spec.ingestion.freezing,
+        "ingestion_freezing_except": model_spec.ingestion.freezing_except,
+        "backbone_freezing": model_spec.backbone.freezing,
+        "backbone_freezing_except": model_spec.backbone.freezing_except,
+        "decoder_freezing": model_spec.decoder.freezing,
+        "decoder_freezing_except": model_spec.decoder.freezing_except,
         "n_head": architecture.attention.n_heads,
         "dim_feedforward": architecture.feed_forward.dim,
         "num_layers": architecture.num_layers,

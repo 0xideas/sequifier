@@ -28,6 +28,7 @@ from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
+from sequifier.config.freezing_config import LayerFreezingConfigFields
 from sequifier.config.initialization_config import ModelInitializationConfig
 from sequifier.config.metadata import (
     DatasetMetadata,
@@ -132,7 +133,7 @@ class FeatureLayoutRegistryModel(RootModel[dict[str, CartesianLayoutModel]]):
         return self.root[key]
 
 
-class IngestionComponentBase(BaseModel):
+class IngestionComponentBase(LayerFreezingConfigFields):
     """Settings shared by every feature-ingestion component."""
 
     model_config = ConfigDict(extra="forbid")
@@ -610,7 +611,7 @@ BranchDecodingConfig = Annotated[
 DecodingSpecConfig = BranchDecodingConfig | dict[str, BranchDecodingConfig]
 
 
-class DecoderComponentBase(BaseModel):
+class DecoderComponentBase(LayerFreezingConfigFields):
     """Settings shared by every target-decoder component."""
 
     model_config = ConfigDict(extra="forbid")
@@ -796,7 +797,7 @@ class BackboneRepositoryConfig(BaseModel):
     conflict_policy: Literal["compare_and_swap"] = "compare_and_swap"
 
 
-class BackboneComponentConfig(BaseModel):
+class BackboneComponentConfig(LayerFreezingConfigFields):
     model_config = ConfigDict(extra="forbid")
 
     architecture: BackboneArchitectureConfig

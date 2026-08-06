@@ -1,6 +1,7 @@
 """Centralized, configurable trainable-parameter initialization."""
 
 import math
+import warnings
 from collections.abc import Iterable
 from typing import Optional, TypeAlias, cast
 
@@ -9,8 +10,10 @@ from torch import Tensor, nn
 
 from sequifier.config.initialization_config import (
     InitializationMethodConfig,
+    InitializationTarget,
     LayerGroup,
     ModelInitializationConfig,
+    ParameterKind,
 )
 from sequifier.model.decoders import TargetDecoderBranch, TargetDecoding
 from sequifier.model.ingestions import (
@@ -51,6 +54,7 @@ class _ModelWeightInitializer:
         self.model = model
         self.initialization = initialization or ModelInitializationConfig()
         self.initialized_parameter_ids: set[int] = set()
+        self.matched_override_targets: set[InitializationTarget] = set()
         self.position_embedding_module_ids = self._position_embedding_module_ids()
         self.ingestion_projection_module_ids = self._ingestion_projection_module_ids()
         self.decoder_output_module_ids = self._decoder_output_module_ids()
@@ -146,7 +150,7 @@ class _ModelWeightInitializer:
     def _override_method(
         self,
         group: LayerGroup,
-        parameter_kind: str,
+        parameter_kind: ParameterKind,
     ) -> Optional[InitializationMethodConfig]:
         override = self.initialization.override_for(group)
         if override is None:
@@ -160,7 +164,7 @@ class _ModelWeightInitializer:
     def _apply_override(
         self,
         group: LayerGroup,
-        parameter_kind: str,
+        parameter_kind: ParameterKind,
         parameters: Iterable[Optional[Tensor]],
     ) -> bool:
         method = self._override_method(group, parameter_kind)
@@ -172,7 +176,7 @@ class _ModelWeightInitializer:
     def _apply_method(
         self,
         group: LayerGroup,
-        parameter_kind: str,
+        parameter_kind: ParameterKind,
         parameters: Iterable[Optional[Tensor]],
         config: InitializationMethodConfig,
     ) -> None:
@@ -183,6 +187,8 @@ class _ModelWeightInitializer:
         ]
         if not tensors:
             return
+
+        self.matched_override_targets.add((group, parameter_kind))
 
         method = config.method
         if method == "preserve":
@@ -550,7 +556,20 @@ class _ModelWeightInitializer:
 def initialize_model_weights(
     model: nn.Module,
     initialization: Optional[ModelInitializationConfig] = None,
-) -> None:
-    """Initialize model parameters using current defaults plus configured overrides."""
+    *,
+    warn_unmatched: bool = True,
+) -> set[InitializationTarget]:
+    """Initialize parameters and return the configured targets that matched."""
 
-    _ModelWeightInitializer(model, initialization).initialize()
+    initializer = _ModelWeightInitializer(model, initialization)
+    initializer.initialize()
+    unmatched = initializer.initialization.configured_targets().difference(
+        initializer.matched_override_targets
+    )
+    if warn_unmatched and unmatched:
+        targets = ", ".join(f"{group}.{kind}" for group, kind in sorted(unmatched))
+        warnings.warn(
+            f"Initialization overrides matched no parameters: {targets}",
+            stacklevel=2,
+        )
+    return initializer.matched_override_targets

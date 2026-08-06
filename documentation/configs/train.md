@@ -151,6 +151,8 @@ settings such as `allow_shared_columns`, `allow_unused_input_columns`, and
 
 Component-specific `initialization` mappings may be placed inside each of
 `ingestion`, `backbone`, and `decoder`. Selectors are relative to that component.
+The same components accept mutually exclusive `freezing` and `freezing_except`
+semantic-group lists.
 
 #### Shared backbone repository
 
@@ -208,9 +210,13 @@ model_spec:
           method: normal
           mean: 0.0
           std: 0.02
-        bias:
-          method: zeros
+        bias: zeros
 ```
+
+Methods whose required arguments are satisfied by their defaults may be written
+as a string, as with `zeros` above. The expanded `{method: ...}` form remains
+available for every method. Resolved configurations always use the expanded,
+canonical form.
 
 Supported groups are `embedding.input`, `embedding.position`,
 `ingestion.output_projection`, `real_feature_projection`,
@@ -225,7 +231,58 @@ Supported methods are `preserve`, `normal`, `uniform`, `xavier_uniform`,
 `xavier_uniform`; `glorot_uniform` and `glorot_normal` are also accepted.
 Xavier methods accept `gain` and `fan_mode` (`per_tensor` or `joint`). Kaiming
 methods accept `a`, `mode`, and `nonlinearity`. `preserve` leaves the value
-created by the PyTorch module constructor unchanged.
+created by the PyTorch module constructor unchanged. An override that matches no
+parameter in the assembled model produces a warning.
+
+#### Layer Freezing
+
+Each model component accepts `freezing` and `freezing_except` beside its
+`initialization` mapping. Both fields default to `null`, and at most one may be
+non-null on a component.
+
+`freezing` freezes only the named semantic layer groups:
+
+```yaml
+model_spec:
+  backbone:
+    architecture: # ...
+    freezing:
+      - embedding.position
+      - attention.qkv
+```
+
+`freezing_except` freezes the entire component except for the named groups:
+
+```yaml
+model_spec:
+  backbone:
+    architecture: # ...
+    freezing_except:
+      - attention.output
+      - normalization
+```
+
+The supported names are the same semantic groups listed under Model
+Initialization. A selector applies to every occurrence of that group within the
+component; it does not select an individual transformer-layer index or raw
+PyTorch module path. The ingestion policy also applies to the automatically
+created ingestion output adapter.
+
+An empty `freezing` list freezes nothing. An empty `freezing_except` list freezes
+the whole component. Duplicate or unknown group names are rejected. A
+`freezing` group that is valid but absent from the assembled component produces
+a warning. An absent `freezing_except` group is an error because it could
+otherwise freeze substantially more of the component than intended.
+
+When neither field is configured on any component, Sequifier retains its
+existing parameter flags and optimizer construction exactly. With an active
+policy, only trainable parameters are added to the optimizer, and configuring
+the complete model with no trainable parameters is an error.
+
+Full-run resume requires the same ordered set of trainable parameters stored in
+the checkpoint. To apply a different freezing policy to existing weights, load
+a shared-backbone revision and begin a new run with a new optimizer instead of
+resuming a complete run checkpoint.
 
 #### Feature Layout And Ingestion Layers
 

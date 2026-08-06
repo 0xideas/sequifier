@@ -102,6 +102,7 @@ from sequifier.model.embedding import (  # noqa: E402
     ONNX_EMBEDDING_LAYER_NAMES_KEY,
     parse_embedding_layer_name,
 )
+from sequifier.model.freezing import apply_model_freezing  # noqa: E402
 from sequifier.model.ingestion_compiler import compile_feature_ingestion  # noqa: E402
 from sequifier.model.initialization import initialize_model_weights  # noqa: E402
 from sequifier.model.layers import RMSNorm  # noqa: E402
@@ -174,6 +175,30 @@ def create_dummy_data_and_metadata(
         )
     }
     return dummy_data, dummy_metadata
+
+
+def _compile_unique_layers(layers: nn.ModuleList) -> None:
+    """Compile each distinct layer once while preserving shared-layer aliases."""
+    compiled_layers: dict[int, nn.Module] = {}
+    for index, layer in enumerate(layers):
+        layer_id = id(layer)
+        compiled_layer = compiled_layers.get(layer_id)
+        if compiled_layer is None:
+            compiled_layer = torch.compile(layer)
+            compiled_layers[layer_id] = compiled_layer
+        layers[index] = compiled_layer
+
+
+def _canonical_parameter_name(name: str) -> str:
+    """Return a parameter name independent of torch.compile wrappers."""
+    return name.replace("_orig_mod.", "")
+
+
+def _canonical_parameter_names(value: Any) -> Any:
+    """Canonicalize a checkpoint parameter-name list when it has the expected form."""
+    if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
+        return value
+    return [_canonical_parameter_name(name) for name in value]
 
 
 @beartype
@@ -290,7 +315,7 @@ def train_worker(
 
     # Initialize Optimizer
     if not config.training_spec.distributed:
-        params_to_optimize = model.parameters()
+        params_to_optimize = model.parameters_to_optimize()
         model.initialize_optimizer(params=params_to_optimize)
 
         if checkpoint is not None:
@@ -311,16 +336,28 @@ def train_worker(
         else:
             model.start_epoch = 1
             model.start_batch = 0
-            logger.info(
-                f"Initializing new model with {format_number(pytorch_total_params)} parameters."
-            )
+            if model._freezing_active:
+                trainable_params = sum(
+                    parameter.numel()
+                    for parameter in model.parameters()
+                    if parameter.requires_grad
+                )
+                logger.info(
+                    "Initializing new model with "
+                    f"{format_number(pytorch_total_params)} parameters "
+                    f"({format_number(trainable_params)} trainable)."
+                )
+            else:
+                logger.info(
+                    "Initializing new model with "
+                    f"{format_number(pytorch_total_params)} parameters."
+                )
 
         if config.device.startswith("cuda"):
             if torch_compile == "outer":
                 model = torch.compile(model)
             elif torch_compile == "inner":
-                for i in range(len(model.layers)):
-                    model.layers[i] = torch.compile(model.layers[i])
+                _compile_unique_layers(model.layers)
 
         if checkpoint is not None:
             base_model._restore_rng_state()
@@ -351,13 +388,19 @@ def train_worker(
 
         if config.training_spec.fsdp_cpu_offload:
             fsdp_kwargs["offload_policy"] = OffloadPolicy()
+
+        sharded_layer_ids: set[int] = set()
         for layer in model.layers:
+            layer_id = id(layer)
+            if layer_id in sharded_layer_ids:
+                continue
             fully_shard(layer, **fsdp_kwargs)
+            sharded_layer_ids.add(layer_id)
 
         fully_shard(model, **fsdp_kwargs)
         dist.barrier()
 
-        params_to_optimize = model.parameters()
+        params_to_optimize = model.parameters_to_optimize()
         model.initialize_optimizer(params=params_to_optimize)
 
         if checkpoint is not None:
@@ -385,14 +428,26 @@ def train_worker(
         else:
             model.start_epoch = 1
             model.start_batch = 0
-            logger.info(
-                f"Initializing new model with {format_number(pytorch_total_params)} parameters."
-            )
+            if model._freezing_active:
+                trainable_params = sum(
+                    parameter.numel()
+                    for parameter in model.parameters()
+                    if parameter.requires_grad
+                )
+                logger.info(
+                    "Initializing new model with "
+                    f"{format_number(pytorch_total_params)} parameters "
+                    f"({format_number(trainable_params)} trainable)."
+                )
+            else:
+                logger.info(
+                    "Initializing new model with "
+                    f"{format_number(pytorch_total_params)} parameters."
+                )
 
         if config.device.startswith("cuda"):
             if torch_compile == "inner":
-                for i in range(len(model.layers)):
-                    model.layers[i] = torch.compile(model.layers[i])
+                _compile_unique_layers(model.layers)
 
         if config.device.startswith("cuda"):
             dummy_data, dummy_metadata = create_dummy_data_and_metadata(
@@ -410,7 +465,7 @@ def train_worker(
         model.train_model(train_loader, valid_loader, ddp_model=base_model)
         cleanup()
     elif config.training_spec.data_parallelism == "DDP":  # DDP
-        params_to_optimize = model.parameters()
+        params_to_optimize = model.parameters_to_optimize()
         model.initialize_optimizer(params=params_to_optimize)
 
         if checkpoint is not None:
@@ -431,9 +486,22 @@ def train_worker(
         else:
             model.start_epoch = 1
             model.start_batch = 0
-            logger.info(
-                f"Initializing new model with {format_number(pytorch_total_params)} parameters."
-            )
+            if model._freezing_active:
+                trainable_params = sum(
+                    parameter.numel()
+                    for parameter in model.parameters()
+                    if parameter.requires_grad
+                )
+                logger.info(
+                    "Initializing new model with "
+                    f"{format_number(pytorch_total_params)} parameters "
+                    f"({format_number(trainable_params)} trainable)."
+                )
+            else:
+                logger.info(
+                    "Initializing new model with "
+                    f"{format_number(pytorch_total_params)} parameters."
+                )
 
         if config.device.startswith("cuda"):
             if torch_compile == "outer":
@@ -448,8 +516,9 @@ def train_worker(
             )
 
             if config.training_spec.layer_autocast:
-                with torch.no_grad(), torch.autocast(
-                    device_type="cuda", dtype=torch.bfloat16
+                with (
+                    torch.no_grad(),
+                    torch.autocast(device_type="cuda", dtype=torch.bfloat16),
                 ):
                     _ = ddp_model(dummy_data, dummy_metadata, False)
             else:
@@ -838,13 +907,117 @@ class TransformerModel(SequifierModel):
             "backbone": hparams.model_spec.backbone.initialization,
             "decoder": hparams.model_spec.decoder.initialization,
         }
+        configured_initialization_targets = set()
+        matched_initialization_targets = set()
         for component_name, initialization in component_initializers.items():
             if initialization.root:
                 self.logger.info(
                     f"Applying {component_name} initialization overrides: "
                     f"{initialization.model_dump(mode='json')}"
                 )
-            initialize_model_weights(getattr(self, component_name), initialization)
+            configured_initialization_targets.update(
+                initialization.configured_targets()
+            )
+            matched_initialization_targets.update(
+                initialize_model_weights(
+                    getattr(self, component_name),
+                    initialization,
+                    warn_unmatched=False,
+                )
+            )
+        unmatched_initialization_targets = (
+            configured_initialization_targets - matched_initialization_targets
+        )
+        if unmatched_initialization_targets:
+            targets = ", ".join(
+                f"{group}.{kind}"
+                for group, kind in sorted(unmatched_initialization_targets)
+            )
+            self.logger.warning(
+                f"Initialization overrides matched no parameters: {targets}"
+            )
+
+        component_freezing_policies = {
+            "ingestion": (
+                hparams.model_spec.ingestion,
+                (self.ingestion, self.ingestion_adapter),
+            ),
+            "backbone": (hparams.model_spec.backbone, (self.backbone,)),
+            "decoder": (hparams.model_spec.decoder, (self.decoder,)),
+        }
+        self._freezing_active = any(
+            config.has_freezing_policy
+            for config, _ in component_freezing_policies.values()
+        )
+        if self._freezing_active:
+            for component_name, (
+                freezing_config,
+                component_modules,
+            ) in component_freezing_policies.items():
+                if not freezing_config.has_freezing_policy:
+                    continue
+                matched_groups = set()
+                for component_module in component_modules:
+                    result = apply_model_freezing(
+                        component_module,
+                        freezing=freezing_config.freezing,
+                        freezing_except=freezing_config.freezing_except,
+                        warn_unmatched=False,
+                    )
+                    matched_groups.update(result.matched_groups)
+
+                configured_groups = set(
+                    freezing_config.freezing
+                    if freezing_config.freezing is not None
+                    else freezing_config.freezing_except or []
+                )
+                unmatched_groups = configured_groups.difference(matched_groups)
+                if unmatched_groups:
+                    group_names = ", ".join(sorted(unmatched_groups))
+                    if freezing_config.freezing_except is not None:
+                        raise ValueError(
+                            f"{component_name} freezing_except groups matched no "
+                            f"parameters: {group_names}"
+                        )
+                    self.logger.warning(
+                        f"{component_name} freezing groups matched no parameters: "
+                        f"{group_names}"
+                    )
+
+                policy_name = (
+                    "freezing"
+                    if freezing_config.freezing is not None
+                    else "freezing_except"
+                )
+                component_parameters = tuple(
+                    {
+                        id(parameter): parameter
+                        for component_module in component_modules
+                        for parameter in component_module.parameters()
+                    }.values()
+                )
+                frozen_count = sum(
+                    parameter.numel()
+                    for parameter in component_parameters
+                    if not parameter.requires_grad
+                )
+                trainable_count = sum(
+                    parameter.numel()
+                    for parameter in component_parameters
+                    if parameter.requires_grad
+                )
+                self.logger.info(
+                    f"Applied {component_name} {policy_name}: "
+                    f"groups={sorted(configured_groups)}, "
+                    f"matched={sorted(matched_groups)}, "
+                    f"frozen_parameters={frozen_count}, "
+                    f"trainable_parameters={trainable_count}"
+                )
+            if not any(parameter.requires_grad for parameter in self.parameters()):
+                raise ValueError(
+                    "The configured freezing policies leave the model with no "
+                    "trainable parameters."
+                )
 
         self.scheduler_step_on = hparams.training_spec.scheduler_step_on
 
@@ -900,7 +1073,7 @@ class TransformerModel(SequifierModel):
     def initialize_optimizer(self, params: Any = None) -> None:
         """Create optimizer and scheduler from training config."""
         if params is None:
-            params = self.parameters()
+            params = self.parameters_to_optimize()
 
         opt_kwargs = dict(self.hparams.training_spec.optimizer)
         self.optimizer = self._get_optimizer(
@@ -910,6 +1083,21 @@ class TransformerModel(SequifierModel):
         sched_kwargs = dict(self.hparams.training_spec.scheduler)
         self.scheduler = self._get_scheduler(**self._filter_key(sched_kwargs, "name"))
         self.scheduler_step_on = self.hparams.training_spec.scheduler_step_on
+
+    def parameters_to_optimize(self):
+        """Return the legacy iterator or the active policy's trainable parameters."""
+
+        if not self._freezing_active:
+            return self.parameters()
+        trainable_parameters = [
+            parameter for parameter in self.parameters() if parameter.requires_grad
+        ]
+        if not trainable_parameters:
+            raise ValueError(
+                "The configured freezing policies leave the model with no "
+                "trainable parameters."
+            )
+        return trainable_parameters
 
     @beartype
     def _apply_layer_dtypes(self) -> None:
@@ -1228,6 +1416,14 @@ class TransformerModel(SequifierModel):
             if training_spec.next_occurrence_config is not None
             else None
         )
+        model_spec = self.hparams.model_spec.model_dump(mode="json")
+        for component_name in ("ingestion", "backbone", "decoder"):
+            component = model_spec[component_name]
+            if component.get("freezing") is None:
+                component.pop("freezing", None)
+            if component.get("freezing_except") is None:
+                component.pop("freezing_except", None)
+
         compatibility_settings = {
             "model_name": self.model_name,
             "read_format": self.hparams.read_format,
@@ -1278,8 +1474,14 @@ class TransformerModel(SequifierModel):
                 if self.hparams.feature_layout is not None
                 else None
             ),
-            "model_spec": self.hparams.model_spec.model_dump(mode="json"),
+            "model_spec": model_spec,
         }
+        if self._freezing_active:
+            compatibility_settings["trainable_parameter_names"] = [
+                _canonical_parameter_name(name)
+                for name, parameter in self.named_parameters(remove_duplicate=True)
+                if parameter.requires_grad
+            ]
         provenance = {
             "data_path": normalize_path(self.hparams.data_path, self.project_root),
             "validation_data_path": normalize_path(
@@ -1327,9 +1529,22 @@ class TransformerModel(SequifierModel):
             raise ValueError(
                 "Checkpoint compatibility metadata is missing resume_settings."
             )
+        saved_settings = dict(saved_settings)
+        if "trainable_parameter_names" in saved_settings:
+            saved_settings["trainable_parameter_names"] = _canonical_parameter_names(
+                saved_settings["trainable_parameter_names"]
+            )
 
         current_metadata = self._checkpoint_compatibility_metadata(num_batches)
         current_settings = current_metadata["resume_settings"]
+        saved_trainable_parameters = saved_settings.get("trainable_parameter_names")
+        current_trainable_parameters = current_settings.get("trainable_parameter_names")
+        if saved_trainable_parameters != current_trainable_parameters:
+            raise ValueError(
+                "Checkpoint trainable parameters do not match the current freezing "
+                "configuration. Resume requires an identical trainable parameter "
+                "set; use backbone initialization to start a new optimizer."
+            )
         mismatches = []
         for key, current_value in current_settings.items():
             saved_value = saved_settings.get(key)
@@ -1348,7 +1563,16 @@ class TransformerModel(SequifierModel):
 
         saved_fingerprint = checkpoint_metadata.get("config_fingerprint")
         current_fingerprint = current_metadata["config_fingerprint"]
-        if saved_fingerprint != current_fingerprint:
+        normalized_saved_fingerprint_input = json.dumps(
+            saved_settings, sort_keys=True, default=str
+        ).encode("utf-8")
+        normalized_saved_fingerprint = hashlib.sha256(
+            normalized_saved_fingerprint_input
+        ).hexdigest()
+        if (
+            saved_fingerprint != current_fingerprint
+            and normalized_saved_fingerprint != current_fingerprint
+        ):
             warnings.warn(
                 "Checkpoint configuration fingerprint mismatch: "
                 f"checkpoint={saved_fingerprint!r}, current={current_fingerprint!r}"
@@ -1878,7 +2102,7 @@ class TransformerModel(SequifierModel):
                             seconds_per_batch=s_per_batch,
                         )
                         self.logger.bind(log_channel="metric").info(
-                            f"Epoch {epoch:3d} | Batch {(batch_count+1):5d}/"
+                            f"Epoch {epoch:3d} | Batch {(batch_count + 1):5d}/"
                             f"{num_batches:5d} | Loss: "
                             f"{format_number(avg_train_loss.detach().cpu().item())} | "
                             f"LR: {format_number(learning_rate)} | "
@@ -2737,10 +2961,11 @@ class TransformerModel(SequifierModel):
                 logging.getLogger("torch.onnx").setLevel(logging.ERROR)
             except (ImportError, AttributeError):
                 torch.onnx.disable_log()  # Fallback for older PyTorch versions
-            with warnings.catch_warnings(), open(
-                os.devnull, "w"
-            ) as fnull, contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(
-                fnull
+            with (
+                warnings.catch_warnings(),
+                open(os.devnull, "w") as fnull,
+                contextlib.redirect_stdout(fnull),
+                contextlib.redirect_stderr(fnull),
             ):  # Ignore ONLY the specific messages we understand and expect
                 warnings.filterwarnings(
                     "ignore",

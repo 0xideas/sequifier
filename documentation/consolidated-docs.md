@@ -509,6 +509,8 @@ settings such as `allow_shared_columns`, `allow_unused_input_columns`, and
 
 Component-specific `initialization` mappings may be placed inside each of
 `ingestion`, `backbone`, and `decoder`. Selectors are relative to that component.
+The same components accept mutually exclusive `freezing` and `freezing_except`
+semantic-group lists.
 
 #### Shared backbone repository
 
@@ -566,9 +568,13 @@ model_spec:
           method: normal
           mean: 0.0
           std: 0.02
-        bias:
-          method: zeros
+        bias: zeros
 ```
+
+Methods whose required arguments are satisfied by their defaults may be written
+as a string, as with `zeros` above. The expanded `{method: ...}` form remains
+available for every method. Resolved configurations always use the expanded,
+canonical form.
 
 Supported groups are `embedding.input`, `embedding.position`,
 `ingestion.output_projection`, `real_feature_projection`,
@@ -583,7 +589,58 @@ Supported methods are `preserve`, `normal`, `uniform`, `xavier_uniform`,
 `xavier_uniform`; `glorot_uniform` and `glorot_normal` are also accepted.
 Xavier methods accept `gain` and `fan_mode` (`per_tensor` or `joint`). Kaiming
 methods accept `a`, `mode`, and `nonlinearity`. `preserve` leaves the value
-created by the PyTorch module constructor unchanged.
+created by the PyTorch module constructor unchanged. An override that matches no
+parameter in the assembled model produces a warning.
+
+#### Layer Freezing
+
+Each model component accepts `freezing` and `freezing_except` beside its
+`initialization` mapping. Both fields default to `null`, and at most one may be
+non-null on a component.
+
+`freezing` freezes only the named semantic layer groups:
+
+```yaml
+model_spec:
+  backbone:
+    architecture: # ...
+    freezing:
+      - embedding.position
+      - attention.qkv
+```
+
+`freezing_except` freezes the entire component except for the named groups:
+
+```yaml
+model_spec:
+  backbone:
+    architecture: # ...
+    freezing_except:
+      - attention.output
+      - normalization
+```
+
+The supported names are the same semantic groups listed under Model
+Initialization. A selector applies to every occurrence of that group within the
+component; it does not select an individual transformer-layer index or raw
+PyTorch module path. The ingestion policy also applies to the automatically
+created ingestion output adapter.
+
+An empty `freezing` list freezes nothing. An empty `freezing_except` list freezes
+the whole component. Duplicate or unknown group names are rejected. A
+`freezing` group that is valid but absent from the assembled component produces
+a warning. An absent `freezing_except` group is an error because it could
+otherwise freeze substantially more of the component than intended.
+
+When neither field is configured on any component, Sequifier retains its
+existing parameter flags and optimizer construction exactly. With an active
+policy, only trainable parameters are added to the optimizer, and configuring
+the complete model with no trainable parameters is an error.
+
+Full-run resume requires the same ordered set of trainable parameters stored in
+the checkpoint. To apply a different freezing policy to existing weights, load
+a shared-backbone revision and begin a new run with a new optimizer instead of
+resuming a complete run checkpoint.
 
 #### Feature Layout And Ingestion Layers
 
@@ -1541,6 +1598,8 @@ dim_feedforward:
 | `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named branches. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. Any required projection is owned by the sampled ingestion. |
 | `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. Supports `concat`, `sum`, `gated`, or `attention`. If omitted for multiple ingestions, defaults to `{type: concat}` and produces `dim_model`. |
 | `initialization` | `dict` | No | Per-layer-group initialization configuration. Each `weight` or `bias` entry may be one fixed method or a `candidates` list sampled independently. Uses the same direct group mapping as `sequifier train`. |
+| `ingestion_freezing`, `backbone_freezing`, `decoder_freezing` | `list[str]` or `null` | No | Fixed semantic groups to freeze in the corresponding component. |
+| `ingestion_freezing_except`, `backbone_freezing_except`, `decoder_freezing_except` | `list[str]` or `null` | No | Fixed semantic groups to keep trainable while freezing the rest of the corresponding component. Mutually exclusive with that component's `*_freezing` field. |
 | `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. Defaults to `false`. |
 | `auxiliary_input_columns` | `list[str]` | No | Input columns that are intentionally kept in `batch.inputs` but must not be consumed by sampled ingestion configs. Defaults to `[]`. |
 | `allow_unused_input_columns` | `bool` | No | Allows sampled train configs to leave input columns unused and log the unused names. Defaults to `false`; prefer `auxiliary_input_columns` for intentional auxiliary inputs. |
@@ -1584,17 +1643,34 @@ model_hyperparameter_sampling:
       weight:
         candidates:
           - {method: normal, mean: 0.0, std: 0.02}
-          - {method: xavier_uniform, gain: 1.0}
-      bias: {method: zeros}
+          - xavier_uniform
+      bias: zeros
     attention.qkv:
-      weight: {method: preserve}
+      weight: preserve
 ```
 
 Here Optuna samples the decoder output weight method while the decoder bias and
 attention weights remain fixed. Candidate lists on different groups and
 parameter kinds are sampled independently and contribute their cartesian
 product to grid-search sizing. Each sampled training config contains only the
-selected concrete methods, in the regular `model_spec.initialization` format.
+selected concrete methods, in the regular expanded and canonical
+`model_spec.initialization` format. String shorthand is accepted whenever a
+method's required arguments are satisfied by defaults.
+
+Layer freezing is fixed for all trials rather than sampled. Use the component
+fields at the same level as `initialization`, for example:
+
+```yaml
+model_hyperparameter_sampling:
+  backbone_freezing_except:
+    - attention.output
+    - normalization
+  decoder_freezing: []
+```
+
+These fields use the same semantics, validation, and layer-group names as
+`sequifier train`. Only one of `*_freezing` and `*_freezing_except` may be
+non-null for a given component.
 
 ### 6. Training Hyperparameters (`training_hyperparameter_sampling`)
 Most fields here are lists for sampling, but some are scalar values fixed for all runs.

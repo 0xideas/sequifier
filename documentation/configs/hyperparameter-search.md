@@ -205,6 +205,8 @@ dim_feedforward:
 | `ingestion_spec` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired ingestion config. A dict may be one ingestion definition or a mapping of named branches. If a list is provided, it must have the same length as `dim_model` and is paired by index. Defaults to `{type: direct_embed, output_dim: dim_model}`. Any required projection is owned by the sampled ingestion. |
 | `ingestion_merge` | `dict`, `list[dict]`, or `null` | No | Fixed or dim-model-paired merge config for named multi-ingestion configs. Supports `concat`, `sum`, `gated`, or `attention`. If omitted for multiple ingestions, defaults to `{type: concat}` and produces `dim_model`. |
 | `initialization` | `dict` | No | Per-layer-group initialization configuration. Each `weight` or `bias` entry may be one fixed method or a `candidates` list sampled independently. Uses the same direct group mapping as `sequifier train`. |
+| `ingestion_freezing`, `backbone_freezing`, `decoder_freezing` | `list[str]` or `null` | No | Fixed semantic groups to freeze in the corresponding component. |
+| `ingestion_freezing_except`, `backbone_freezing_except`, `decoder_freezing_except` | `list[str]` or `null` | No | Fixed semantic groups to keep trainable while freezing the rest of the corresponding component. Mutually exclusive with that component's `*_freezing` field. |
 | `allow_shared_ingestion_columns` | `bool` | No | Allows named ingestion streams to share flat input columns. Defaults to `false`. |
 | `auxiliary_input_columns` | `list[str]` | No | Input columns that are intentionally kept in `batch.inputs` but must not be consumed by sampled ingestion configs. Defaults to `[]`. |
 | `allow_unused_input_columns` | `bool` | No | Allows sampled train configs to leave input columns unused and log the unused names. Defaults to `false`; prefer `auxiliary_input_columns` for intentional auxiliary inputs. |
@@ -248,17 +250,34 @@ model_hyperparameter_sampling:
       weight:
         candidates:
           - {method: normal, mean: 0.0, std: 0.02}
-          - {method: xavier_uniform, gain: 1.0}
-      bias: {method: zeros}
+          - xavier_uniform
+      bias: zeros
     attention.qkv:
-      weight: {method: preserve}
+      weight: preserve
 ```
 
 Here Optuna samples the decoder output weight method while the decoder bias and
 attention weights remain fixed. Candidate lists on different groups and
 parameter kinds are sampled independently and contribute their cartesian
 product to grid-search sizing. Each sampled training config contains only the
-selected concrete methods, in the regular `model_spec.initialization` format.
+selected concrete methods, in the regular expanded and canonical
+`model_spec.initialization` format. String shorthand is accepted whenever a
+method's required arguments are satisfied by defaults.
+
+Layer freezing is fixed for all trials rather than sampled. Use the component
+fields at the same level as `initialization`, for example:
+
+```yaml
+model_hyperparameter_sampling:
+  backbone_freezing_except:
+    - attention.output
+    - normalization
+  decoder_freezing: []
+```
+
+These fields use the same semantics, validation, and layer-group names as
+`sequifier train`. Only one of `*_freezing` and `*_freezing_except` may be
+non-null for a given component.
 
 ### 6. Training Hyperparameters (`training_hyperparameter_sampling`)
 Most fields here are lists for sampling, but some are scalar values fixed for all runs.
