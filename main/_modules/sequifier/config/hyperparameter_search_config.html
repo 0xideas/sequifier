@@ -289,6 +289,7 @@
     <span class="n">Field</span><span class="p">,</span>
     <span class="n">ValidationError</span><span class="p">,</span>
     <span class="n">field_validator</span><span class="p">,</span>
+    <span class="n">model_serializer</span><span class="p">,</span>
     <span class="n">model_validator</span><span class="p">,</span>
 <span class="p">)</span>
 
@@ -298,6 +299,7 @@
     <span class="n">ModelInitializationConfig</span><span class="p">,</span>
     <span class="n">ModelInitializationSamplingConfig</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.layer_groups</span><span class="w"> </span><span class="kn">import</span> <span class="n">LayerGroup</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.metadata</span><span class="w"> </span><span class="kn">import</span> <span class="n">DatasetMetadata</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.probabilities</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProbabilityDistribution</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
@@ -1141,6 +1143,12 @@
     <span class="n">ingestion_initialization</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ModelInitializationSamplingConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">backbone_initialization</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ModelInitializationSamplingConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">decoder_initialization</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ModelInitializationSamplingConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">ingestion_freezing</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">LayerGroup</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">ingestion_freezing_except</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">LayerGroup</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">backbone_freezing</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">LayerGroup</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">backbone_freezing_except</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">LayerGroup</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">decoder_freezing</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">LayerGroup</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">decoder_freezing_except</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">LayerGroup</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">n_head</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
 
     <span class="n">dim_feedforward</span><span class="p">:</span> <span class="n">OptunaInt</span>
@@ -1162,6 +1170,34 @@
     <span class="n">shared_layer_groups</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
     <span class="n">n_kv_heads</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span>
     <span class="n">rope_theta</span><span class="p">:</span> <span class="n">OptunaFloat</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_freezing_policies</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">component</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;ingestion&quot;</span><span class="p">,</span> <span class="s2">&quot;backbone&quot;</span><span class="p">,</span> <span class="s2">&quot;decoder&quot;</span><span class="p">):</span>
+            <span class="n">freezing</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">component</span><span class="si">}</span><span class="s2">_freezing&quot;</span><span class="p">)</span>
+            <span class="n">freezing_except</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">component</span><span class="si">}</span><span class="s2">_freezing_except&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">freezing</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">freezing_except</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">component</span><span class="si">}</span><span class="s2">_freezing and </span><span class="si">{</span><span class="n">component</span><span class="si">}</span><span class="s2">_freezing_except are &quot;</span>
+                    <span class="s2">&quot;mutually exclusive; only one may be non-null&quot;</span>
+                <span class="p">)</span>
+            <span class="k">for</span> <span class="n">field_name</span><span class="p">,</span> <span class="n">groups</span> <span class="ow">in</span> <span class="p">(</span>
+                <span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">component</span><span class="si">}</span><span class="s2">_freezing&quot;</span><span class="p">,</span> <span class="n">freezing</span><span class="p">),</span>
+                <span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">component</span><span class="si">}</span><span class="s2">_freezing_except&quot;</span><span class="p">,</span> <span class="n">freezing_except</span><span class="p">),</span>
+            <span class="p">):</span>
+                <span class="k">if</span> <span class="n">groups</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">groups</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">groups</span><span class="p">)):</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">field_name</span><span class="si">}</span><span class="s2"> cannot contain duplicates&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="nd">@model_serializer</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;wrap&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">serialize_freezing_policies</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">serializer</span><span class="p">):</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="n">serializer</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">component</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;ingestion&quot;</span><span class="p">,</span> <span class="s2">&quot;backbone&quot;</span><span class="p">,</span> <span class="s2">&quot;decoder&quot;</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">suffix</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;freezing&quot;</span><span class="p">,</span> <span class="s2">&quot;freezing_except&quot;</span><span class="p">):</span>
+                <span class="n">field_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">component</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="k">if</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">field_name</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">field_name</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">values</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_ingestion_spec_for_width</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">width_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion_spec</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
@@ -1290,6 +1326,8 @@
                 <span class="s2">&quot;allow_unused_input_columns&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">allow_unused_input_columns</span><span class="p">,</span>
                 <span class="s2">&quot;auxiliary_input_columns&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">auxiliary_input_columns</span><span class="p">,</span>
                 <span class="s2">&quot;initialization&quot;</span><span class="p">:</span> <span class="n">ingestion_initialization</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">),</span>
+                <span class="s2">&quot;freezing&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_freezing</span><span class="p">,</span>
+                <span class="s2">&quot;freezing_except&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_freezing_except</span><span class="p">,</span>
             <span class="p">}</span>
         <span class="p">)</span>
 
@@ -1310,6 +1348,8 @@
                 <span class="s2">&quot;prediction_length&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
                 <span class="s2">&quot;support&quot;</span><span class="p">:</span> <span class="n">decoding_support</span><span class="p">,</span>
                 <span class="s2">&quot;initialization&quot;</span><span class="p">:</span> <span class="n">decoder_initialization</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">),</span>
+                <span class="s2">&quot;freezing&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder_freezing</span><span class="p">,</span>
+                <span class="s2">&quot;freezing_except&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder_freezing_except</span><span class="p">,</span>
             <span class="p">}</span>
         <span class="p">)</span>
 
@@ -1358,6 +1398,8 @@
                         <span class="s2">&quot;conflict_policy&quot;</span><span class="p">:</span> <span class="s2">&quot;compare_and_swap&quot;</span><span class="p">,</span>
                     <span class="p">},</span>
                     <span class="s2">&quot;initialization&quot;</span><span class="p">:</span> <span class="n">backbone_initialization</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">),</span>
+                    <span class="s2">&quot;freezing&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">backbone_freezing</span><span class="p">,</span>
+                    <span class="s2">&quot;freezing_except&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">backbone_freezing_except</span><span class="p">,</span>
                 <span class="p">},</span>
                 <span class="s2">&quot;decoder&quot;</span><span class="p">:</span> <span class="n">decoder</span><span class="p">,</span>
             <span class="p">}</span>
