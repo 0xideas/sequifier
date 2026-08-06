@@ -13,7 +13,16 @@ from sequifier.helpers import ModelWindowView, StoredWindowLayout
 
 def represent_sequifier_object(dumper, data):
     """Represent sequifier config objects as plain YAML mappings."""
-    return dumper.represent_dict(data.__dict__)
+    values = dict(data.__dict__)
+    for field_name in ("freezing", "freezing_except"):
+        if values.get(field_name) is None:
+            values.pop(field_name, None)
+    for component_name in ("ingestion", "backbone", "decoder"):
+        for suffix in ("freezing", "freezing_except"):
+            field_name = f"{component_name}_{suffix}"
+            if values.get(field_name) is None:
+                values.pop(field_name, None)
+    return dumper.represent_dict(values)
 
 
 def represent_dot_dict(dumper, data):

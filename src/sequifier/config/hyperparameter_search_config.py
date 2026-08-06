@@ -15,6 +15,7 @@ from pydantic import (
     Field,
     ValidationError,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -24,6 +25,7 @@ from sequifier.config.initialization_config import (
     ModelInitializationConfig,
     ModelInitializationSamplingConfig,
 )
+from sequifier.config.layer_groups import LayerGroup
 from sequifier.config.metadata import DatasetMetadata
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.config.train_config import (
@@ -867,6 +869,12 @@ class ModelSpecHyperparameterSampling(BaseModel):
     ingestion_initialization: Optional[ModelInitializationSamplingConfig] = None
     backbone_initialization: Optional[ModelInitializationSamplingConfig] = None
     decoder_initialization: Optional[ModelInitializationSamplingConfig] = None
+    ingestion_freezing: Optional[list[LayerGroup]] = None
+    ingestion_freezing_except: Optional[list[LayerGroup]] = None
+    backbone_freezing: Optional[list[LayerGroup]] = None
+    backbone_freezing_except: Optional[list[LayerGroup]] = None
+    decoder_freezing: Optional[list[LayerGroup]] = None
+    decoder_freezing_except: Optional[list[LayerGroup]] = None
     n_head: list[int]
 
     dim_feedforward: OptunaInt
@@ -888,6 +896,34 @@ class ModelSpecHyperparameterSampling(BaseModel):
     shared_layer_groups: list[list[int]] = Field(default_factory=list)
     n_kv_heads: list[Optional[int]]
     rope_theta: OptunaFloat
+
+    @model_validator(mode="after")
+    def validate_freezing_policies(self):
+        for component in ("ingestion", "backbone", "decoder"):
+            freezing = getattr(self, f"{component}_freezing")
+            freezing_except = getattr(self, f"{component}_freezing_except")
+            if freezing is not None and freezing_except is not None:
+                raise ValueError(
+                    f"{component}_freezing and {component}_freezing_except are "
+                    "mutually exclusive; only one may be non-null"
+                )
+            for field_name, groups in (
+                (f"{component}_freezing", freezing),
+                (f"{component}_freezing_except", freezing_except),
+            ):
+                if groups is not None and len(groups) != len(set(groups)):
+                    raise ValueError(f"{field_name} cannot contain duplicates")
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_freezing_policies(self, serializer):
+        values = serializer(self)
+        for component in ("ingestion", "backbone", "decoder"):
+            for suffix in ("freezing", "freezing_except"):
+                field_name = f"{component}_{suffix}"
+                if getattr(self, field_name) is None:
+                    values.pop(field_name, None)
+        return values
 
     def _ingestion_spec_for_width(self, width_index: int):
         if isinstance(self.ingestion_spec, list):
@@ -1016,6 +1052,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
                 "allow_unused_input_columns": self.allow_unused_input_columns,
                 "auxiliary_input_columns": self.auxiliary_input_columns,
                 "initialization": ingestion_initialization.model_dump(mode="python"),
+                "freezing": self.ingestion_freezing,
+                "freezing_except": self.ingestion_freezing_except,
             }
         )
 
@@ -1036,6 +1074,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
                 "prediction_length": self.prediction_length,
                 "support": decoding_support,
                 "initialization": decoder_initialization.model_dump(mode="python"),
+                "freezing": self.decoder_freezing,
+                "freezing_except": self.decoder_freezing_except,
             }
         )
 
@@ -1084,6 +1124,8 @@ class ModelSpecHyperparameterSampling(BaseModel):
                         "conflict_policy": "compare_and_swap",
                     },
                     "initialization": backbone_initialization.model_dump(mode="python"),
+                    "freezing": self.backbone_freezing,
+                    "freezing_except": self.backbone_freezing_except,
                 },
                 "decoder": decoder,
             }
