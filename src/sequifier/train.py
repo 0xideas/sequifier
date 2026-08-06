@@ -177,6 +177,30 @@ def create_dummy_data_and_metadata(
     return dummy_data, dummy_metadata
 
 
+def _compile_unique_layers(layers: nn.ModuleList) -> None:
+    """Compile each distinct layer once while preserving shared-layer aliases."""
+    compiled_layers: dict[int, nn.Module] = {}
+    for index, layer in enumerate(layers):
+        layer_id = id(layer)
+        compiled_layer = compiled_layers.get(layer_id)
+        if compiled_layer is None:
+            compiled_layer = torch.compile(layer)
+            compiled_layers[layer_id] = compiled_layer
+        layers[index] = compiled_layer
+
+
+def _canonical_parameter_name(name: str) -> str:
+    """Return a parameter name independent of torch.compile wrappers."""
+    return name.replace("_orig_mod.", "")
+
+
+def _canonical_parameter_names(value: Any) -> Any:
+    """Canonicalize a checkpoint parameter-name list when it has the expected form."""
+    if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
+        return value
+    return [_canonical_parameter_name(name) for name in value]
+
+
 @beartype
 @loguru_logger.catch(message="Training worker failed", reraise=True)
 def train_worker(
@@ -333,8 +357,7 @@ def train_worker(
             if torch_compile == "outer":
                 model = torch.compile(model)
             elif torch_compile == "inner":
-                for i in range(len(model.layers)):
-                    model.layers[i] = torch.compile(model.layers[i])
+                _compile_unique_layers(model.layers)
 
         if checkpoint is not None:
             base_model._restore_rng_state()
@@ -365,8 +388,14 @@ def train_worker(
 
         if config.training_spec.fsdp_cpu_offload:
             fsdp_kwargs["offload_policy"] = OffloadPolicy()
+
+        sharded_layer_ids: set[int] = set()
         for layer in model.layers:
+            layer_id = id(layer)
+            if layer_id in sharded_layer_ids:
+                continue
             fully_shard(layer, **fsdp_kwargs)
+            sharded_layer_ids.add(layer_id)
 
         fully_shard(model, **fsdp_kwargs)
         dist.barrier()
@@ -418,8 +447,7 @@ def train_worker(
 
         if config.device.startswith("cuda"):
             if torch_compile == "inner":
-                for i in range(len(model.layers)):
-                    model.layers[i] = torch.compile(model.layers[i])
+                _compile_unique_layers(model.layers)
 
         if config.device.startswith("cuda"):
             dummy_data, dummy_metadata = create_dummy_data_and_metadata(
@@ -1450,7 +1478,7 @@ class TransformerModel(SequifierModel):
         }
         if self._freezing_active:
             compatibility_settings["trainable_parameter_names"] = [
-                name
+                _canonical_parameter_name(name)
                 for name, parameter in self.named_parameters(remove_duplicate=True)
                 if parameter.requires_grad
             ]
@@ -1501,6 +1529,11 @@ class TransformerModel(SequifierModel):
             raise ValueError(
                 "Checkpoint compatibility metadata is missing resume_settings."
             )
+        saved_settings = dict(saved_settings)
+        if "trainable_parameter_names" in saved_settings:
+            saved_settings["trainable_parameter_names"] = _canonical_parameter_names(
+                saved_settings["trainable_parameter_names"]
+            )
 
         current_metadata = self._checkpoint_compatibility_metadata(num_batches)
         current_settings = current_metadata["resume_settings"]
@@ -1530,7 +1563,16 @@ class TransformerModel(SequifierModel):
 
         saved_fingerprint = checkpoint_metadata.get("config_fingerprint")
         current_fingerprint = current_metadata["config_fingerprint"]
-        if saved_fingerprint != current_fingerprint:
+        normalized_saved_fingerprint_input = json.dumps(
+            saved_settings, sort_keys=True, default=str
+        ).encode("utf-8")
+        normalized_saved_fingerprint = hashlib.sha256(
+            normalized_saved_fingerprint_input
+        ).hexdigest()
+        if (
+            saved_fingerprint != current_fingerprint
+            and normalized_saved_fingerprint != current_fingerprint
+        ):
             warnings.warn(
                 "Checkpoint configuration fingerprint mismatch: "
                 f"checkpoint={saved_fingerprint!r}, current={current_fingerprint!r}"
