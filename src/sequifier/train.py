@@ -98,6 +98,10 @@ from sequifier.logging_paths import model_log_directory  # noqa: E402
 from sequifier.model.backbone import TransformerBackbone  # noqa: E402
 from sequifier.model.decoders import build_target_decoding  # noqa: E402
 from sequifier.model.dtypes import cast_floating_to_module_dtype  # noqa: E402
+from sequifier.model.embedding import (  # noqa: E402
+    ONNX_EMBEDDING_LAYER_NAMES_KEY,
+    parse_embedding_layer_name,
+)
 from sequifier.model.ingestion_compiler import compile_feature_ingestion  # noqa: E402
 from sequifier.model.initialization import initialize_model_weights  # noqa: E402
 from sequifier.model.layers import RMSNorm  # noqa: E402
@@ -734,6 +738,31 @@ class TransformerModel(SequifierModel):
             hparams.id_maps, self.class_share_log_columns, True
         )
         self.export_embedding_model = hparams.export_embedding_model
+        self.embedding_layer_names = tuple(hparams.embedding_layer_names)
+        embedding_selectors = tuple(
+            parse_embedding_layer_name(name) for name in self.embedding_layer_names
+        )
+        self._embedding_backbone_layer_indices = tuple(
+            selector.index
+            for selector in embedding_selectors
+            if selector.source == "backbone_layer" and selector.index is not None
+        )
+        self._embedding_capture_final_norm = any(
+            selector.source == "backbone_final_norm" for selector in embedding_selectors
+        )
+        decoder_block_indices: dict[str, list[int]] = {}
+        for selector in embedding_selectors:
+            if (
+                selector.source == "decoder_hidden_block"
+                and selector.branch is not None
+                and selector.index is not None
+            ):
+                decoder_block_indices.setdefault(selector.branch, []).append(
+                    selector.index
+                )
+        self._embedding_decoder_block_indices = {
+            branch: tuple(indices) for branch, indices in decoder_block_indices.items()
+        }
         self.export_generative_model = hparams.export_generative_model
         self.export_onnx = hparams.export_onnx
         self.export_pt = hparams.export_pt
@@ -1024,8 +1053,48 @@ class TransformerModel(SequifierModel):
     def forward_embed(
         self, src: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> Tensor:
-        """Return final-step embeddings."""
-        return self.forward_inner(src, metadata)[-self.prediction_length :, :, :]
+        """Return configured final-step activations as one concatenated embedding."""
+        valid_mask = metadata["attention_valid_mask"].bool()  # type: ignore
+        ingestion_output = self.ingestion(src, metadata)
+        ingestion_output = self.ingestion_adapter(
+            cast_floating_to_module_dtype(ingestion_output, self.ingestion_adapter)
+        )
+        mask = self._build_attention_mask(valid_mask, dtype=ingestion_output.dtype)
+        hidden, backbone_activations = self.backbone.forward_with_activations(
+            ingestion_output.masked_fill(~valid_mask[:, :, None], 0.0),
+            mask,
+            self._embedding_backbone_layer_indices,
+            self._embedding_capture_final_norm,
+        )
+        hidden = hidden.masked_fill(~valid_mask[:, :, None], 0.0)
+
+        activations_by_name: dict[str, Tensor] = {}
+        for layer_index in self._embedding_backbone_layer_indices:
+            activation = backbone_activations[layer_index]
+            activations_by_name[f"backbone.layers.{layer_index}"] = (
+                activation.masked_fill(~valid_mask[:, :, None], 0.0).transpose(0, 1)
+            )
+        if self._embedding_capture_final_norm:
+            activations_by_name["backbone.final_norm"] = hidden.transpose(0, 1)
+
+        if self._embedding_decoder_block_indices:
+            decoder_input = self._decoder_input_windows(hidden.transpose(0, 1))
+            decoder_activations = self.decoder.hidden_block_activations(
+                decoder_input,
+                self._embedding_decoder_block_indices,
+            )
+            decoder_valid_mask = valid_mask[:, self.decoding_support - 1 :]
+            for (branch_name, block_index), activation in decoder_activations.items():
+                name = f"decoder.branches.{branch_name}.hidden_blocks.{block_index}"
+                activations_by_name[name] = activation.masked_fill(
+                    ~decoder_valid_mask.transpose(0, 1)[:, :, None], 0.0
+                )
+
+        selected_activations = [
+            activations_by_name[name][-self.prediction_length :]
+            for name in self.embedding_layer_names
+        ]
+        return torch.cat(selected_activations, dim=-1)
 
     @conditional_beartype
     def forward_train(
@@ -2697,6 +2766,12 @@ class TransformerModel(SequifierModel):
             codec_metadata = onnx_model.metadata_props.add()
             codec_metadata.key = ONNX_CATEGORICAL_TARGET_CODECS_KEY
             codec_metadata.value = json.dumps(self.target_decoder_ids)
+            if isinstance(model_to_export, TransformerEmbeddingModel):
+                embedding_metadata = onnx_model.metadata_props.add()
+                embedding_metadata.key = ONNX_EMBEDDING_LAYER_NAMES_KEY
+                embedding_metadata.value = json.dumps(
+                    model_to_export.transformer_model.embedding_layer_names
+                )
             onnx.save(onnx_model, export_path)
 
         if self.export_pt:

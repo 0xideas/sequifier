@@ -556,11 +556,33 @@ The training and validation tables use tidy rows: `target: __total__` identifies
 | :--- | :--- | :--- | :--- | :--- |
 | `export_generative_model`| `bool` | **Yes** | - | Export the standard model for next-token prediction. |
 | `export_embedding_model` | `bool` | **Yes** | - | Export a model that outputs the vector embedding of the sequence. |
+| `embedding_layer_names` | `list[str]` | No | `[backbone.final_norm]` | Ordered backbone and decoder MLP activation sources concatenated into the exported embedding. |
 | `inference_batch_size` | `int` | **Yes** | - | Batch size hardcoded into the exported ONNX model. |
 | `seed` | `int` | No | `1010` | Root-level random seed for reproducible training. |
 | `export_onnx` | `bool` | No | `true` | Export model as `.onnx` for high-performance inference. |
 | `export_pt` | `bool` | No | `false`| Export a self-contained `.pt` bundle with the full state dict and resolved training configuration. |
 | `export_with_dropout` | `bool` | No | `false`| Export model with dropout enabled (useful for Monte Carlo Dropout inference). |
+
+`embedding_layer_names` accepts these stable names:
+
+* `backbone.layers.<index>` captures the output of a transformer layer.
+* `backbone.final_norm` captures the final normalized backbone output.
+* `decoder.branches.<branch>.hidden_blocks.<index>` captures an MLP decoder
+  hidden block after its activation and optional dropout. A non-composite decoder
+  uses the branch name `default`.
+
+The list must be non-empty and duplicate-free. Activations are restricted to the
+final `prediction_length` positions and concatenated along their feature dimension
+in list order. Decoder activations use the same flattened support windows as
+training, so the first MLP block receives `decoding_support * dim_model` values per
+position. Output projections and logits are not embedding sources.
+
+```yaml
+export_embedding_model: true
+embedding_layer_names:
+  - backbone.layers.2
+  - decoder.branches.default.hidden_blocks.0
+```
 
 -----
 

@@ -44,6 +44,10 @@ from sequifier.helpers import (
     resolve_window_view,
     try_catch_excess_keys,
 )
+from sequifier.model.embedding import (
+    DEFAULT_EMBEDDING_LAYER_NAMES,
+    validate_embedding_layer_names,
+)
 from sequifier.objectives import (
     ALLOWED_OBJECTIVE_NAMES,
     OBJECTIVE_NAME_MESSAGE,
@@ -1275,6 +1279,10 @@ class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
 
     export_generative_model: bool
     export_embedding_model: bool
+    embedding_layer_names: list[StrictStr] = Field(
+        default_factory=lambda: list(DEFAULT_EMBEDDING_LAYER_NAMES),
+        min_length=1,
+    )
     export_onnx: bool = True
     export_pt: bool = False
     export_with_dropout: bool = False
@@ -1324,6 +1332,10 @@ class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
 
     @model_validator(mode="after")
     def validate_authored_relationships(self):
+        validate_embedding_layer_names(
+            self.embedding_layer_names,
+            self.model_spec,
+        )
         if self.metadata_config_path is None and self.preprocessing_data_path is None:
             raise ValueError(
                 "metadata_config_path is required when preprocessing_data_path "

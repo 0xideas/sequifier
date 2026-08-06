@@ -37,6 +37,7 @@ inference_batch_size: 10
 
 export_generative_model: PLEASE FILL # true or false
 export_embedding_model: PLEASE FILL # true or false
+embedding_layer_names: [backbone.final_norm] # optional ordered activation sources to concatenate
 export_onnx: true
 
 model_spec:

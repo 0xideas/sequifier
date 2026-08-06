@@ -48,6 +48,7 @@ from sequifier.helpers import (
     stored_window_layout_from_metadata,
     try_catch_excess_keys,
 )
+from sequifier.model.embedding import DEFAULT_EMBEDDING_LAYER_NAMES
 from sequifier.objectives import (
     ALLOWED_OBJECTIVE_NAMES,
     OBJECTIVE_NAME_MESSAGE,
@@ -1609,6 +1610,10 @@ class HyperparameterSearchConfig(BaseModel):
 
     export_generative_model: bool
     export_embedding_model: bool
+    embedding_layer_names: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_EMBEDDING_LAYER_NAMES),
+        min_length=1,
+    )
     export_onnx: bool = True
     export_pt: bool = False
     export_with_dropout: bool = False
@@ -1745,6 +1750,7 @@ class HyperparameterSearchConfig(BaseModel):
             seed=seed,
             export_embedding_model=self.export_embedding_model,
             export_generative_model=self.export_generative_model,
+            embedding_layer_names=self.embedding_layer_names,
             export_onnx=self.export_onnx,
             export_pt=self.export_pt,
             export_with_dropout=self.export_with_dropout,

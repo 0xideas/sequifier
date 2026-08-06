@@ -111,7 +111,7 @@ start plus this model-window offset.
 
   * **`generative`:** Use this when you want to predict the next value in a sequence (forecasting, classification, next-token prediction).
       * *Output:* A file in `outputs/predictions/` containing the predicted values for specific item positions.
-  * **`embedding`:** Use this when you want to represent the sequence as a fixed-size vector. This uses the output of the Transformer's last layer *before* the decoding head.
+  * **`embedding`:** Use this when you want to represent the sequence as a fixed-size vector. The training config's `embedding_layer_names` selects ordered backbone and decoder-MLP activations, which are concatenated into one vector. It defaults to the final normalized backbone output.
       * *Output:* A file in `outputs/embeddings/` containing vectors (e.g., 128 floats) for each sequence. Useful for clustering, similarity search, or downstream ML tasks.
 
 ### 3\. Sampling vs. Argmax

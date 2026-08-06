@@ -140,6 +140,7 @@ These fields are constant across all search runs.
 | --- | --- | --- | --- | --- |
 | `export_generative_model` | `bool` | **Yes** | - | Export the standard next-token prediction model for every run. |
 | `export_embedding_model` | `bool` | **Yes** | - | Export the vector embedding model for every run. |
+| `embedding_layer_names` | `list[str]` | No | `[backbone.final_norm]` | Fixed ordered activation sources concatenated into every run's embedding output. Each sampled model must contain the named layers. |
 | `inference_batch_size` | `int` | **Yes** | - | Batch size hardcoded into exported ONNX models. |
 | `export_onnx` | `bool` | No | `true` | Export to ONNX format. |
 | `export_pt` | `bool` | No | `false` | Export a self-contained PyTorch bundle (`.pt`). |
