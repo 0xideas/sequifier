@@ -132,7 +132,13 @@ class TransformerBackbone(nn.Module):
 
         return x
 
-    def forward(self, x: Tensor, attention_mask: Tensor | None = None) -> Tensor:
+    def _forward_with_activations(
+        self,
+        x: Tensor,
+        attention_mask: Tensor | None,
+        layer_indices: tuple[int, ...],
+        capture_final_norm: bool,
+    ) -> tuple[Tensor, dict[int | str, Tensor]]:
         if x.ndim != 3:
             raise ValueError(
                 "TransformerBackbone expects [batch, time, dim_model], got "
@@ -144,6 +150,32 @@ class TransformerBackbone(nn.Module):
             )
 
         x = self._add_temporal_position(x)
-        for layer in self.layers:
+        activations: dict[int | str, Tensor] = {}
+        selected_indices = set(layer_indices)
+        for index, layer in enumerate(self.layers):
             x = layer(x, src_mask=attention_mask)
-        return self.final_norm(cast_floating_to_module_dtype(x, self.final_norm))
+            if index in selected_indices:
+                activations[index] = x
+        x = self.final_norm(cast_floating_to_module_dtype(x, self.final_norm))
+        if capture_final_norm:
+            activations["final_norm"] = x
+        return x, activations
+
+    def forward_with_activations(
+        self,
+        x: Tensor,
+        attention_mask: Tensor | None,
+        layer_indices: tuple[int, ...],
+        capture_final_norm: bool,
+    ) -> tuple[Tensor, dict[int | str, Tensor]]:
+        """Return the final state and selected batch-first layer activations."""
+        return self._forward_with_activations(
+            x,
+            attention_mask,
+            layer_indices,
+            capture_final_norm,
+        )
+
+    def forward(self, x: Tensor, attention_mask: Tensor | None = None) -> Tensor:
+        output, _ = self._forward_with_activations(x, attention_mask, (), False)
+        return output

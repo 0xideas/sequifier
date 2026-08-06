@@ -170,9 +170,18 @@ While Sequifier's primary use case is training predictive or generative causal t
 Configuration:
 
 - Training: Set export_embedding_model: true in the training config.
+- Activation sources: Set `embedding_layer_names` to an ordered list such as
+  `[backbone.layers.1, decoder.branches.default.hidden_blocks.0]`.
 - Inference: Set model_type: embedding in the inference config.
 
-Technical Details: The generated embedding has dimensionality `dim_model` and consists of the final hidden state (activations) of the transformer's last layer corresponding to the last token in the sequence. Because the model is trained on a causal objective, this is a "forward-looking" embedding: it is optimized to compress the sequence history into a representation that maximizes information about the future state of the data.
+Technical Details: Selected activations are restricted to the configured final
+`prediction_length` positions and concatenated in configuration order along the
+feature dimension. Backbone selectors contribute `dim_model` values. Decoder MLP
+hidden-block selectors contribute their configured hidden width and receive the
+same flattened `decoding_support * dim_model` windows used during training. The
+default, `embedding_layer_names: [backbone.final_norm]`, preserves the final
+normalized backbone representation. Because a causal model is trained to predict
+future state, its embedding is forward-looking.
 
 ### Distributed Training
 

@@ -170,9 +170,18 @@ While Sequifier's primary use case is training predictive or generative causal t
 Configuration:
 
 - Training: Set export_embedding_model: true in the training config.
+- Activation sources: Set `embedding_layer_names` to an ordered list such as
+  `[backbone.layers.1, decoder.branches.default.hidden_blocks.0]`.
 - Inference: Set model_type: embedding in the inference config.
 
-Technical Details: The generated embedding has dimensionality `dim_model` and consists of the final hidden state (activations) of the transformer's last layer corresponding to the last token in the sequence. Because the model is trained on a causal objective, this is a "forward-looking" embedding: it is optimized to compress the sequence history into a representation that maximizes information about the future state of the data.
+Technical Details: Selected activations are restricted to the configured final
+`prediction_length` positions and concatenated in configuration order along the
+feature dimension. Backbone selectors contribute `dim_model` values. Decoder MLP
+hidden-block selectors contribute their configured hidden width and receive the
+same flattened `decoding_support * dim_model` windows used during training. The
+default, `embedding_layer_names: [backbone.final_norm]`, preserves the final
+normalized backbone representation. Because a causal model is trained to predict
+future state, its embedding is forward-looking.
 
 ### Distributed Training
 
@@ -905,11 +914,33 @@ The training and validation tables use tidy rows: `target: __total__` identifies
 | :--- | :--- | :--- | :--- | :--- |
 | `export_generative_model`| `bool` | **Yes** | - | Export the standard model for next-token prediction. |
 | `export_embedding_model` | `bool` | **Yes** | - | Export a model that outputs the vector embedding of the sequence. |
+| `embedding_layer_names` | `list[str]` | No | `[backbone.final_norm]` | Ordered backbone and decoder MLP activation sources concatenated into the exported embedding. |
 | `inference_batch_size` | `int` | **Yes** | - | Batch size hardcoded into the exported ONNX model. |
 | `seed` | `int` | No | `1010` | Root-level random seed for reproducible training. |
 | `export_onnx` | `bool` | No | `true` | Export model as `.onnx` for high-performance inference. |
 | `export_pt` | `bool` | No | `false`| Export a self-contained `.pt` bundle with the full state dict and resolved training configuration. |
 | `export_with_dropout` | `bool` | No | `false`| Export model with dropout enabled (useful for Monte Carlo Dropout inference). |
+
+`embedding_layer_names` accepts these stable names:
+
+* `backbone.layers.<index>` captures the output of a transformer layer.
+* `backbone.final_norm` captures the final normalized backbone output.
+* `decoder.branches.<branch>.hidden_blocks.<index>` captures an MLP decoder
+  hidden block after its activation and optional dropout. A non-composite decoder
+  uses the branch name `default`.
+
+The list must be non-empty and duplicate-free. Activations are restricted to the
+final `prediction_length` positions and concatenated along their feature dimension
+in list order. Decoder activations use the same flattened support windows as
+training, so the first MLP block receives `decoding_support * dim_model` values per
+position. Output projections and logits are not embedding sources.
+
+```yaml
+export_embedding_model: true
+embedding_layer_names:
+  - backbone.layers.2
+  - decoder.branches.default.hidden_blocks.0
+```
 
 -----
 
@@ -1208,7 +1239,7 @@ start plus this model-window offset.
 
   * **`generative`:** Use this when you want to predict the next value in a sequence (forecasting, classification, next-token prediction).
       * *Output:* A file in `outputs/predictions/` containing the predicted values for specific item positions.
-  * **`embedding`:** Use this when you want to represent the sequence as a fixed-size vector. This uses the output of the Transformer's last layer *before* the decoding head.
+  * **`embedding`:** Use this when you want to represent the sequence as a fixed-size vector. The training config's `embedding_layer_names` selects ordered backbone and decoder-MLP activations, which are concatenated into one vector. It defaults to the final normalized backbone output.
       * *Output:* A file in `outputs/embeddings/` containing vectors (e.g., 128 floats) for each sequence. Useful for clustering, similarity search, or downstream ML tasks.
 
 ### 3\. Sampling vs. Argmax
@@ -1445,6 +1476,7 @@ These fields are constant across all search runs.
 | --- | --- | --- | --- | --- |
 | `export_generative_model` | `bool` | **Yes** | - | Export the standard next-token prediction model for every run. |
 | `export_embedding_model` | `bool` | **Yes** | - | Export the vector embedding model for every run. |
+| `embedding_layer_names` | `list[str]` | No | `[backbone.final_norm]` | Fixed ordered activation sources concatenated into every run's embedding output. Each sampled model must contain the named layers. |
 | `inference_batch_size` | `int` | **Yes** | - | Batch size hardcoded into exported ONNX models. |
 | `export_onnx` | `bool` | No | `true` | Export to ONNX format. |
 | `export_pt` | `bool` | No | `false` | Export a self-contained PyTorch bundle (`.pt`). |

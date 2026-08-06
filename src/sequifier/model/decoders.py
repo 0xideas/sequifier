@@ -40,14 +40,17 @@ class TargetDecoderBranch(nn.Module):
         self.hidden_weight_l2 = hidden_weight_l2
 
         layers: list[nn.Module] = []
+        hidden_block_end_indices: list[int] = []
         layer_input_dim = self.input_dim
         for hidden_dim in self.hidden_dims:
             layers.append(nn.Linear(layer_input_dim, hidden_dim))
             layers.append(self._activation(self.activation_fn))
             if self.dropout > 0.0:
                 layers.append(nn.Dropout(self.dropout))
+            hidden_block_end_indices.append(len(layers) - 1)
             layer_input_dim = hidden_dim
         self.hidden_layers = nn.ModuleList(layers)
+        self.hidden_block_end_indices = tuple(hidden_block_end_indices)
 
         self.output_layers = ModuleDict()
         for target_column in self.target_columns:
@@ -74,13 +77,36 @@ class TargetDecoderBranch(nn.Module):
         raise ValueError(f"Unknown decoder activation_fn: {name}")
 
     def _project_hidden(self, x: Tensor) -> Tensor:
+        hidden, _ = self._project_hidden_with_activations(x, ())
+        return hidden
+
+    def _project_hidden_with_activations(
+        self, x: Tensor, block_indices: tuple[int, ...]
+    ) -> tuple[Tensor, dict[int, Tensor]]:
         hidden = x
-        for layer in self.hidden_layers:
+        activations: dict[int, Tensor] = {}
+        selected_indices = set(block_indices)
+        block_index_by_end = {
+            module_index: block_index
+            for block_index, module_index in enumerate(self.hidden_block_end_indices)
+            if block_index in selected_indices
+        }
+        for module_index, layer in enumerate(self.hidden_layers):
             if isinstance(layer, nn.Linear):
                 hidden = layer(cast_floating_to_module_dtype(hidden, layer))
             else:
                 hidden = layer(hidden)
-        return hidden
+            block_index = block_index_by_end.get(module_index)
+            if block_index is not None:
+                activations[block_index] = hidden
+        return hidden, activations
+
+    def project_hidden_with_activations(
+        self, x: Tensor, block_indices: tuple[int, ...]
+    ) -> dict[int, Tensor]:
+        """Return selected post-activation/dropout MLP block outputs."""
+        _, activations = self._project_hidden_with_activations(x, block_indices)
+        return activations
 
     def decode(self, target_column: str, x: Tensor) -> Tensor:
         hidden = self._project_hidden(x)
@@ -169,6 +195,26 @@ class TargetDecoding(nn.Module):
 
         reference_parameter = next(self.parameters())
         return reference_parameter.new_zeros((), dtype=torch.float32)
+
+    def hidden_block_activations(
+        self,
+        x: Tensor,
+        block_indices_by_branch: dict[str, tuple[int, ...]],
+    ) -> dict[tuple[str, int], Tensor]:
+        """Return selected logical MLP hidden-block activations by branch."""
+        activations: dict[tuple[str, int], Tensor] = {}
+        for branch_name, block_indices in block_indices_by_branch.items():
+            branch = cast(TargetDecoderBranch, self.branches[branch_name])
+            branch_activations = branch.project_hidden_with_activations(
+                x, block_indices
+            )
+            activations.update(
+                {
+                    (branch_name, block_index): activation
+                    for block_index, activation in branch_activations.items()
+                }
+            )
+        return activations
 
     def forward(self, x: Tensor) -> dict[str, Tensor]:
         branch_outputs = {
