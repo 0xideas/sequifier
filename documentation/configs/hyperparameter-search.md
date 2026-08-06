@@ -248,17 +248,19 @@ model_hyperparameter_sampling:
       weight:
         candidates:
           - {method: normal, mean: 0.0, std: 0.02}
-          - {method: xavier_uniform, gain: 1.0}
-      bias: {method: zeros}
+          - xavier_uniform
+      bias: zeros
     attention.qkv:
-      weight: {method: preserve}
+      weight: preserve
 ```
 
 Here Optuna samples the decoder output weight method while the decoder bias and
 attention weights remain fixed. Candidate lists on different groups and
 parameter kinds are sampled independently and contribute their cartesian
 product to grid-search sizing. Each sampled training config contains only the
-selected concrete methods, in the regular `model_spec.initialization` format.
+selected concrete methods, in the regular expanded and canonical
+`model_spec.initialization` format. String shorthand is accepted whenever a
+method's required arguments are satisfied by defaults.
 
 ### 6. Training Hyperparameters (`training_hyperparameter_sampling`)
 Most fields here are lists for sampling, but some are scalar values fixed for all runs.

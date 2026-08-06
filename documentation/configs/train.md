@@ -208,9 +208,13 @@ model_spec:
           method: normal
           mean: 0.0
           std: 0.02
-        bias:
-          method: zeros
+        bias: zeros
 ```
+
+Methods whose required arguments are satisfied by their defaults may be written
+as a string, as with `zeros` above. The expanded `{method: ...}` form remains
+available for every method. Resolved configurations always use the expanded,
+canonical form.
 
 Supported groups are `embedding.input`, `embedding.position`,
 `ingestion.output_projection`, `real_feature_projection`,
@@ -225,7 +229,8 @@ Supported methods are `preserve`, `normal`, `uniform`, `xavier_uniform`,
 `xavier_uniform`; `glorot_uniform` and `glorot_normal` are also accepted.
 Xavier methods accept `gain` and `fan_mode` (`per_tensor` or `joint`). Kaiming
 methods accept `a`, `mode`, and `nonlinearity`. `preserve` leaves the value
-created by the PyTorch module constructor unchanged.
+created by the PyTorch module constructor unchanged. An override that matches no
+parameter in the assembled model produces a warning.
 
 #### Feature Layout And Ingestion Layers
 

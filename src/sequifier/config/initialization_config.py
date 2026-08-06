@@ -3,7 +3,15 @@
 import math
 from typing import Annotated, Any, Literal, TypeAlias, Union
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    RootModel,
+    field_serializer,
+    model_validator,
+)
 
 LayerGroup: TypeAlias = Literal[
     "embedding.input",
@@ -23,6 +31,8 @@ LayerGroup: TypeAlias = Literal[
     "fallback.convolution",
     "free_parameter",
 ]
+ParameterKind: TypeAlias = Literal["weight", "bias"]
+InitializationTarget: TypeAlias = tuple[LayerGroup, ParameterKind]
 
 
 class _InitializationMethod(BaseModel):
@@ -65,11 +75,19 @@ class XavierUniformInitialization(_InitializationMethod):
     gain: float = Field(1.0, ge=0.0)
     fan_mode: Literal["per_tensor", "joint"] = "per_tensor"
 
+    @field_serializer("method")
+    def serialize_method(self, method):
+        return "xavier_uniform"
+
 
 class XavierNormalInitialization(_InitializationMethod):
     method: Literal["xavier_normal", "glorot_normal"]
     gain: float = Field(1.0, ge=0.0)
     fan_mode: Literal["per_tensor", "joint"] = "per_tensor"
+
+    @field_serializer("method")
+    def serialize_method(self, method):
+        return "xavier_normal"
 
 
 class KaimingUniformInitialization(_InitializationMethod):
@@ -107,6 +125,10 @@ class IdentityPlusNormalInitialization(_InitializationMethod):
     std: float = Field(0.02, ge=0.0)
 
 
+def _expand_method_shorthand(value: Any) -> Any:
+    return {"method": value} if isinstance(value, str) else value
+
+
 InitializationMethodConfig: TypeAlias = Annotated[
     Union[
         PreserveInitialization,
@@ -122,6 +144,7 @@ InitializationMethodConfig: TypeAlias = Annotated[
         IdentityPlusNormalInitialization,
     ],
     Field(discriminator="method"),
+    BeforeValidator(_expand_method_shorthand),
 ]
 
 
@@ -147,6 +170,14 @@ class ModelInitializationConfig(RootModel[dict[LayerGroup, LayerGroupInitializat
 
     def override_for(self, group: LayerGroup) -> LayerGroupInitialization | None:
         return self.root.get(group)
+
+    def configured_targets(self) -> set[InitializationTarget]:
+        return {
+            (group, parameter_kind)
+            for group, initialization in self.root.items()
+            for parameter_kind in ("weight", "bias")
+            if getattr(initialization, parameter_kind) is not None
+        }
 
 
 class InitializationMethodCandidates(BaseModel):

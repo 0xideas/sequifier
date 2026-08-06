@@ -448,8 +448,9 @@ def train_worker(
             )
 
             if config.training_spec.layer_autocast:
-                with torch.no_grad(), torch.autocast(
-                    device_type="cuda", dtype=torch.bfloat16
+                with (
+                    torch.no_grad(),
+                    torch.autocast(device_type="cuda", dtype=torch.bfloat16),
                 ):
                     _ = ddp_model(dummy_data, dummy_metadata, False)
             else:
@@ -838,13 +839,35 @@ class TransformerModel(SequifierModel):
             "backbone": hparams.model_spec.backbone.initialization,
             "decoder": hparams.model_spec.decoder.initialization,
         }
+        configured_initialization_targets = set()
+        matched_initialization_targets = set()
         for component_name, initialization in component_initializers.items():
             if initialization.root:
                 self.logger.info(
                     f"Applying {component_name} initialization overrides: "
                     f"{initialization.model_dump(mode='json')}"
                 )
-            initialize_model_weights(getattr(self, component_name), initialization)
+            configured_initialization_targets.update(
+                initialization.configured_targets()
+            )
+            matched_initialization_targets.update(
+                initialize_model_weights(
+                    getattr(self, component_name),
+                    initialization,
+                    warn_unmatched=False,
+                )
+            )
+        unmatched_initialization_targets = (
+            configured_initialization_targets - matched_initialization_targets
+        )
+        if unmatched_initialization_targets:
+            targets = ", ".join(
+                f"{group}.{kind}"
+                for group, kind in sorted(unmatched_initialization_targets)
+            )
+            self.logger.warning(
+                f"Initialization overrides matched no parameters: {targets}"
+            )
 
         self.scheduler_step_on = hparams.training_spec.scheduler_step_on
 
@@ -1878,7 +1901,7 @@ class TransformerModel(SequifierModel):
                             seconds_per_batch=s_per_batch,
                         )
                         self.logger.bind(log_channel="metric").info(
-                            f"Epoch {epoch:3d} | Batch {(batch_count+1):5d}/"
+                            f"Epoch {epoch:3d} | Batch {(batch_count + 1):5d}/"
                             f"{num_batches:5d} | Loss: "
                             f"{format_number(avg_train_loss.detach().cpu().item())} | "
                             f"LR: {format_number(learning_rate)} | "
@@ -2737,10 +2760,11 @@ class TransformerModel(SequifierModel):
                 logging.getLogger("torch.onnx").setLevel(logging.ERROR)
             except (ImportError, AttributeError):
                 torch.onnx.disable_log()  # Fallback for older PyTorch versions
-            with warnings.catch_warnings(), open(
-                os.devnull, "w"
-            ) as fnull, contextlib.redirect_stdout(fnull), contextlib.redirect_stderr(
-                fnull
+            with (
+                warnings.catch_warnings(),
+                open(os.devnull, "w") as fnull,
+                contextlib.redirect_stdout(fnull),
+                contextlib.redirect_stderr(fnull),
             ):  # Ignore ONLY the specific messages we understand and expect
                 warnings.filterwarnings(
                     "ignore",

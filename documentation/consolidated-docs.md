@@ -566,9 +566,13 @@ model_spec:
           method: normal
           mean: 0.0
           std: 0.02
-        bias:
-          method: zeros
+        bias: zeros
 ```
+
+Methods whose required arguments are satisfied by their defaults may be written
+as a string, as with `zeros` above. The expanded `{method: ...}` form remains
+available for every method. Resolved configurations always use the expanded,
+canonical form.
 
 Supported groups are `embedding.input`, `embedding.position`,
 `ingestion.output_projection`, `real_feature_projection`,
@@ -583,7 +587,8 @@ Supported methods are `preserve`, `normal`, `uniform`, `xavier_uniform`,
 `xavier_uniform`; `glorot_uniform` and `glorot_normal` are also accepted.
 Xavier methods accept `gain` and `fan_mode` (`per_tensor` or `joint`). Kaiming
 methods accept `a`, `mode`, and `nonlinearity`. `preserve` leaves the value
-created by the PyTorch module constructor unchanged.
+created by the PyTorch module constructor unchanged. An override that matches no
+parameter in the assembled model produces a warning.
 
 #### Feature Layout And Ingestion Layers
 
@@ -1584,17 +1589,19 @@ model_hyperparameter_sampling:
       weight:
         candidates:
           - {method: normal, mean: 0.0, std: 0.02}
-          - {method: xavier_uniform, gain: 1.0}
-      bias: {method: zeros}
+          - xavier_uniform
+      bias: zeros
     attention.qkv:
-      weight: {method: preserve}
+      weight: preserve
 ```
 
 Here Optuna samples the decoder output weight method while the decoder bias and
 attention weights remain fixed. Candidate lists on different groups and
 parameter kinds are sampled independently and contribute their cartesian
 product to grid-search sizing. Each sampled training config contains only the
-selected concrete methods, in the regular `model_spec.initialization` format.
+selected concrete methods, in the regular expanded and canonical
+`model_spec.initialization` format. String shorthand is accepted whenever a
+method's required arguments are satisfied by defaults.
 
 ### 6. Training Hyperparameters (`training_hyperparameter_sampling`)
 Most fields here are lists for sampling, but some are scalar values fixed for all runs.
