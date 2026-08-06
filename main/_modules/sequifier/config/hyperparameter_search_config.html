@@ -322,6 +322,7 @@
     <span class="n">stored_window_layout_from_metadata</span><span class="p">,</span>
     <span class="n">try_catch_excess_keys</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.embedding</span><span class="w"> </span><span class="kn">import</span> <span class="n">DEFAULT_EMBEDDING_LAYER_NAMES</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.objectives</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">ALLOWED_OBJECTIVE_NAMES</span><span class="p">,</span>
     <span class="n">OBJECTIVE_NAME_MESSAGE</span><span class="p">,</span>
@@ -1883,6 +1884,10 @@
 
     <span class="n">export_generative_model</span><span class="p">:</span> <span class="nb">bool</span>
     <span class="n">export_embedding_model</span><span class="p">:</span> <span class="nb">bool</span>
+    <span class="n">embedding_layer_names</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
+        <span class="n">default_factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">DEFAULT_EMBEDDING_LAYER_NAMES</span><span class="p">),</span>
+        <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+    <span class="p">)</span>
     <span class="n">export_onnx</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">export_pt</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">export_with_dropout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
@@ -2019,6 +2024,7 @@
             <span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">,</span>
             <span class="n">export_embedding_model</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">export_embedding_model</span><span class="p">,</span>
             <span class="n">export_generative_model</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">export_generative_model</span><span class="p">,</span>
+            <span class="n">embedding_layer_names</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_layer_names</span><span class="p">,</span>
             <span class="n">export_onnx</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">export_onnx</span><span class="p">,</span>
             <span class="n">export_pt</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">export_pt</span><span class="p">,</span>
             <span class="n">export_with_dropout</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">export_with_dropout</span><span class="p">,</span>

@@ -372,6 +372,10 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.backbone</span><span class="w"> </span><span class="kn">import</span> <span class="n">TransformerBackbone</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.decoders</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_target_decoding</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.dtypes</span><span class="w"> </span><span class="kn">import</span> <span class="n">cast_floating_to_module_dtype</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.embedding</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
+    <span class="n">ONNX_EMBEDDING_LAYER_NAMES_KEY</span><span class="p">,</span>
+    <span class="n">parse_embedding_layer_name</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.ingestion_compiler</span><span class="w"> </span><span class="kn">import</span> <span class="n">compile_feature_ingestion</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.initialization</span><span class="w"> </span><span class="kn">import</span> <span class="n">initialize_model_weights</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">RMSNorm</span>  <span class="c1"># noqa: E402</span>
@@ -1008,6 +1012,31 @@
             <span class="n">hparams</span><span class="o">.</span><span class="n">id_maps</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">class_share_log_columns</span><span class="p">,</span> <span class="kc">True</span>
         <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">export_embedding_model</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">export_embedding_model</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">embedding_layer_names</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">hparams</span><span class="o">.</span><span class="n">embedding_layer_names</span><span class="p">)</span>
+        <span class="n">embedding_selectors</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
+            <span class="n">parse_embedding_layer_name</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_layer_names</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_embedding_backbone_layer_indices</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
+            <span class="n">selector</span><span class="o">.</span><span class="n">index</span>
+            <span class="k">for</span> <span class="n">selector</span> <span class="ow">in</span> <span class="n">embedding_selectors</span>
+            <span class="k">if</span> <span class="n">selector</span><span class="o">.</span><span class="n">source</span> <span class="o">==</span> <span class="s2">&quot;backbone_layer&quot;</span> <span class="ow">and</span> <span class="n">selector</span><span class="o">.</span><span class="n">index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_embedding_capture_final_norm</span> <span class="o">=</span> <span class="nb">any</span><span class="p">(</span>
+            <span class="n">selector</span><span class="o">.</span><span class="n">source</span> <span class="o">==</span> <span class="s2">&quot;backbone_final_norm&quot;</span> <span class="k">for</span> <span class="n">selector</span> <span class="ow">in</span> <span class="n">embedding_selectors</span>
+        <span class="p">)</span>
+        <span class="n">decoder_block_indices</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">selector</span> <span class="ow">in</span> <span class="n">embedding_selectors</span><span class="p">:</span>
+            <span class="k">if</span> <span class="p">(</span>
+                <span class="n">selector</span><span class="o">.</span><span class="n">source</span> <span class="o">==</span> <span class="s2">&quot;decoder_hidden_block&quot;</span>
+                <span class="ow">and</span> <span class="n">selector</span><span class="o">.</span><span class="n">branch</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                <span class="ow">and</span> <span class="n">selector</span><span class="o">.</span><span class="n">index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="p">):</span>
+                <span class="n">decoder_block_indices</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="n">selector</span><span class="o">.</span><span class="n">branch</span><span class="p">,</span> <span class="p">[])</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                    <span class="n">selector</span><span class="o">.</span><span class="n">index</span>
+                <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_embedding_decoder_block_indices</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="n">branch</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span> <span class="k">for</span> <span class="n">branch</span><span class="p">,</span> <span class="n">indices</span> <span class="ow">in</span> <span class="n">decoder_block_indices</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="p">}</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">export_generative_model</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">export_generative_model</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">export_onnx</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">export_onnx</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">export_pt</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">export_pt</span>
@@ -1298,8 +1327,48 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">forward_embed</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">src</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span> <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return final-step embeddings.&quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">forward_inner</span><span class="p">(</span><span class="n">src</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)[</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="p">:,</span> <span class="p">:,</span> <span class="p">:]</span></div>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Return configured final-step activations as one concatenated embedding.&quot;&quot;&quot;</span>
+        <span class="n">valid_mask</span> <span class="o">=</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;attention_valid_mask&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">bool</span><span class="p">()</span>  <span class="c1"># type: ignore</span>
+        <span class="n">ingestion_output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="p">(</span><span class="n">src</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+        <span class="n">ingestion_output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_adapter</span><span class="p">(</span>
+            <span class="n">cast_floating_to_module_dtype</span><span class="p">(</span><span class="n">ingestion_output</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_adapter</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">mask</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_build_attention_mask</span><span class="p">(</span><span class="n">valid_mask</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ingestion_output</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="n">hidden</span><span class="p">,</span> <span class="n">backbone_activations</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">forward_with_activations</span><span class="p">(</span>
+            <span class="n">ingestion_output</span><span class="o">.</span><span class="n">masked_fill</span><span class="p">(</span><span class="o">~</span><span class="n">valid_mask</span><span class="p">[:,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">],</span> <span class="mf">0.0</span><span class="p">),</span>
+            <span class="n">mask</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_embedding_backbone_layer_indices</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_embedding_capture_final_norm</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">hidden</span> <span class="o">=</span> <span class="n">hidden</span><span class="o">.</span><span class="n">masked_fill</span><span class="p">(</span><span class="o">~</span><span class="n">valid_mask</span><span class="p">[:,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">],</span> <span class="mf">0.0</span><span class="p">)</span>
+
+        <span class="n">activations_by_name</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">layer_index</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_embedding_backbone_layer_indices</span><span class="p">:</span>
+            <span class="n">activation</span> <span class="o">=</span> <span class="n">backbone_activations</span><span class="p">[</span><span class="n">layer_index</span><span class="p">]</span>
+            <span class="n">activations_by_name</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;backbone.layers.</span><span class="si">{</span><span class="n">layer_index</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">activation</span><span class="o">.</span><span class="n">masked_fill</span><span class="p">(</span><span class="o">~</span><span class="n">valid_mask</span><span class="p">[:,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">],</span> <span class="mf">0.0</span><span class="p">)</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_embedding_capture_final_norm</span><span class="p">:</span>
+            <span class="n">activations_by_name</span><span class="p">[</span><span class="s2">&quot;backbone.final_norm&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">hidden</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_embedding_decoder_block_indices</span><span class="p">:</span>
+            <span class="n">decoder_input</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_decoder_input_windows</span><span class="p">(</span><span class="n">hidden</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+            <span class="n">decoder_activations</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">hidden_block_activations</span><span class="p">(</span>
+                <span class="n">decoder_input</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_embedding_decoder_block_indices</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">decoder_valid_mask</span> <span class="o">=</span> <span class="n">valid_mask</span><span class="p">[:,</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoding_support</span> <span class="o">-</span> <span class="mi">1</span> <span class="p">:]</span>
+            <span class="k">for</span> <span class="p">(</span><span class="n">branch_name</span><span class="p">,</span> <span class="n">block_index</span><span class="p">),</span> <span class="n">activation</span> <span class="ow">in</span> <span class="n">decoder_activations</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="n">name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;decoder.branches.</span><span class="si">{</span><span class="n">branch_name</span><span class="si">}</span><span class="s2">.hidden_blocks.</span><span class="si">{</span><span class="n">block_index</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="n">activations_by_name</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">activation</span><span class="o">.</span><span class="n">masked_fill</span><span class="p">(</span>
+                    <span class="o">~</span><span class="n">decoder_valid_mask</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)[:,</span> <span class="p">:,</span> <span class="kc">None</span><span class="p">],</span> <span class="mf">0.0</span>
+                <span class="p">)</span>
+
+        <span class="n">selected_activations</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">activations_by_name</span><span class="p">[</span><span class="n">name</span><span class="p">][</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="p">:]</span>
+            <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_layer_names</span>
+        <span class="p">]</span>
+        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span><span class="n">selected_activations</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="TransformerModel.forward_train"><a class="viewcode-back" href="../../api.html#sequifier.train.TransformerModel.forward_train">[docs]</a>    <span class="nd">@conditional_beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">forward_train</span><span class="p">(</span>
@@ -2971,6 +3040,12 @@
             <span class="n">codec_metadata</span> <span class="o">=</span> <span class="n">onnx_model</span><span class="o">.</span><span class="n">metadata_props</span><span class="o">.</span><span class="n">add</span><span class="p">()</span>
             <span class="n">codec_metadata</span><span class="o">.</span><span class="n">key</span> <span class="o">=</span> <span class="n">ONNX_CATEGORICAL_TARGET_CODECS_KEY</span>
             <span class="n">codec_metadata</span><span class="o">.</span><span class="n">value</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target_decoder_ids</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model_to_export</span><span class="p">,</span> <span class="n">TransformerEmbeddingModel</span><span class="p">):</span>
+                <span class="n">embedding_metadata</span> <span class="o">=</span> <span class="n">onnx_model</span><span class="o">.</span><span class="n">metadata_props</span><span class="o">.</span><span class="n">add</span><span class="p">()</span>
+                <span class="n">embedding_metadata</span><span class="o">.</span><span class="n">key</span> <span class="o">=</span> <span class="n">ONNX_EMBEDDING_LAYER_NAMES_KEY</span>
+                <span class="n">embedding_metadata</span><span class="o">.</span><span class="n">value</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span>
+                    <span class="n">model_to_export</span><span class="o">.</span><span class="n">transformer_model</span><span class="o">.</span><span class="n">embedding_layer_names</span>
+                <span class="p">)</span>
             <span class="n">onnx</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">onnx_model</span><span class="p">,</span> <span class="n">export_path</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">export_pt</span><span class="p">:</span>
