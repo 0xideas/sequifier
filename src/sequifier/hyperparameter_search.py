@@ -41,7 +41,10 @@ def create_sampler(config: Any) -> optuna.samplers.BaseSampler:
         if hasattr(optuna.samplers, "BruteForceSampler"):
             return optuna.samplers.BruteForceSampler(seed=global_seed)
         raise RuntimeError("Grid search requires Optuna >= 3.1 for BruteForceSampler.")
-    return optuna.samplers.TPESampler(seed=global_seed)
+    return optuna.samplers.TPESampler(
+        seed=global_seed,
+        multivariate=True,
+    )
 
 
 def set_pdeathsig():
@@ -52,11 +55,11 @@ def set_pdeathsig():
 
 
 def objective(
-    trial: optuna.Trial, config, run_config: Any = None
+    trial: optuna.Trial, accepted_trials: int, config, run_config: Any = None
 ) -> Union[float, tuple[float, ...]]:
     """Run one Optuna trial through the CLI trainer and validation metrics."""
     if run_config is None:
-        run_config = config.sample_trial(trial, trial.number)
+        run_config = config.sample_trial(trial, accepted_trials)
     run_name = run_config.model_name
 
     config_path = os.path.join(
@@ -289,7 +292,7 @@ def _optimize_distinct_trials(study: optuna.Study, config: Any, n_trials: int) -
     while accepted_trials < n_trials:
         trial = study.ask()
         try:
-            run_config = config.sample_trial(trial, trial.number)
+            run_config = config.sample_trial(trial, accepted_trials)
         except (Exception, KeyboardInterrupt):
             study.tell(trial, state=TrialState.FAIL)
             raise
@@ -316,7 +319,7 @@ def _optimize_distinct_trials(study: optuna.Study, config: Any, n_trials: int) -
 
         consecutive_duplicates = 0
         try:
-            value = objective(trial, config, run_config=run_config)
+            value = objective(trial, accepted_trials, config, run_config=run_config)
         except optuna.TrialPruned:
             study.tell(trial, state=TrialState.PRUNED)
         except (Exception, KeyboardInterrupt):
@@ -377,7 +380,9 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
         )
 
     if config.search_strategy == "grid":
-        study.optimize(lambda trial: objective(trial, config), n_trials=n_trials)
+        study.optimize(
+            lambda trial: objective(trial, trial.number, config), n_trials=n_trials
+        )
     else:
         assert n_trials is not None
         _optimize_distinct_trials(study, config, n_trials)
