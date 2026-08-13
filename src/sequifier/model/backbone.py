@@ -6,6 +6,7 @@ from torch import Tensor, nn
 
 from sequifier.model.dtypes import cast_floating_to_module_dtype
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer
+from sequifier.model.tracing import TraceContext
 
 
 class TransformerBackbone(nn.Module):
@@ -138,6 +139,7 @@ class TransformerBackbone(nn.Module):
         attention_mask: Tensor | None,
         layer_indices: tuple[int, ...],
         capture_final_norm: bool,
+        trace: TraceContext | None = None,
     ) -> tuple[Tensor, dict[int | str, Tensor]]:
         if x.ndim != 3:
             raise ValueError(
@@ -150,13 +152,46 @@ class TransformerBackbone(nn.Module):
             )
 
         x = self._add_temporal_position(x)
+        if trace is not None:
+            x = trace.emit(
+                "backbone.positioned",
+                x,
+                axes=("batch", "time", "channel"),
+                width=x.shape[-1],
+            )
         activations: dict[int | str, Tensor] = {}
         selected_indices = set(layer_indices)
         for index, layer in enumerate(self.layers):
-            x = layer(x, src_mask=attention_mask)
+            if trace is not None:
+                x = trace.emit(
+                    f"backbone.layer.{index}.input",
+                    x,
+                    axes=("batch", "time", "channel"),
+                    width=x.shape[-1],
+                )
+            x = layer(
+                x,
+                src_mask=attention_mask,
+                trace=trace,
+                site_prefix=f"backbone.layer.{index}",
+            )
+            if trace is not None:
+                x = trace.emit(
+                    f"backbone.layer.{index}.output",
+                    x,
+                    axes=("batch", "time", "channel"),
+                    width=x.shape[-1],
+                )
             if index in selected_indices:
                 activations[index] = x
         x = self.final_norm(cast_floating_to_module_dtype(x, self.final_norm))
+        if trace is not None:
+            x = trace.emit(
+                "backbone.final_norm",
+                x,
+                axes=("batch", "time", "channel"),
+                width=x.shape[-1],
+            )
         if capture_final_norm:
             activations["final_norm"] = x
         return x, activations
@@ -167,6 +202,7 @@ class TransformerBackbone(nn.Module):
         attention_mask: Tensor | None,
         layer_indices: tuple[int, ...],
         capture_final_norm: bool,
+        trace: TraceContext | None = None,
     ) -> tuple[Tensor, dict[int | str, Tensor]]:
         """Return the final state and selected batch-first layer activations."""
         return self._forward_with_activations(
@@ -174,8 +210,15 @@ class TransformerBackbone(nn.Module):
             attention_mask,
             layer_indices,
             capture_final_norm,
+            trace,
         )
 
-    def forward(self, x: Tensor, attention_mask: Tensor | None = None) -> Tensor:
-        output, _ = self._forward_with_activations(x, attention_mask, (), False)
+    def forward(
+        self,
+        x: Tensor,
+        attention_mask: Tensor | None = None,
+        *,
+        trace: TraceContext | None = None,
+    ) -> Tensor:
+        output, _ = self._forward_with_activations(x, attention_mask, (), False, trace)
         return output

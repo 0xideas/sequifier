@@ -90,3 +90,12 @@ def validate_embedding_layer_names(
             f"Available names are {allowed_names}."
         )
     return layer_names
+
+
+def embedding_layer_trace_site(name: str) -> str:
+    selector = parse_embedding_layer_name(name)
+    if selector.source == "backbone_final_norm":
+        return "backbone.final_norm"
+    if selector.source == "backbone_layer":
+        return f"backbone.layer.{selector.index}.output"
+    return f"decoder.branch.{selector.branch}.block.{selector.index}"
