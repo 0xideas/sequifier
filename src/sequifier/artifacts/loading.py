@@ -1,5 +1,3 @@
-"""Eager, gradient-capable loading for analysis and interpretability."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -53,8 +51,6 @@ def load_model_for_analysis(
     options: ExecutionOptions = ExecutionOptions(),
     config: TrainModel | str | Path | None = None,
 ) -> LoadedModel:
-    """Load a PT model export or run checkpoint without inference compilation."""
-
     artifact_path = Path(path).expanduser().resolve()
     payload = torch.load(
         artifact_path,

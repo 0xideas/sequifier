@@ -1,5 +1,3 @@
-"""Construction, dispatch, state, and coordination for integrations."""
-
 from __future__ import annotations
 
 import importlib
@@ -70,8 +68,6 @@ def _load_factory(path: str) -> Any:
 
 
 class IntegrationManager:
-    """Manage trusted observers and the single optional training controller."""
-
     def __init__(
         self,
         *,
@@ -162,8 +158,6 @@ class IntegrationManager:
             item.instance.handle(event)
 
     def forward_trace(self, event: BatchPrepared) -> TraceContext | None:
-        """Combine declared per-batch trace/intervention requests."""
-
         requests: list[CaptureRequest] = []
         interventions: list[InterventionBinding] = []
         items = [*self._observers]
@@ -362,8 +356,6 @@ class IntegrationManager:
         return result
 
     def checkpoint_state_dict(self) -> dict[str, dict[str, Any]]:
-        """Collect per-rank state without assuming observer state is identical."""
-
         local_state = self.state_dict()
         if not self.distributed:
             return local_state
@@ -434,6 +426,4 @@ class IntegrationManager:
             if callable(load_state_dict):
                 load_state_dict(state)
         unknown = set(saved).difference(configured_ids)
-        # Missing integrations are intentionally allowed: a resumed run may omit
-        # an old optional recorder while retaining its state in the checkpoint.
         _ = unknown

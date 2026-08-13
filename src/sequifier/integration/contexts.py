@@ -1,5 +1,3 @@
-"""Typed training lifecycle events exposed to trusted integrations."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -27,8 +25,6 @@ class StepIdentity:
 
 @dataclass
 class TrainingAccess:
-    """The deliberately narrow set of mutable training objects integrations see."""
-
     model: nn.Module
     parameter_catalog: ParameterCatalog
     optimizer: Optimizer
@@ -68,16 +64,12 @@ class LossComputed(TrainingEvent):
 
 @dataclass(frozen=True)
 class BackwardCompleted(TrainingEvent):
-    """Backward finished; gradients may be scaled and/or only accumulated."""
-
     gradients_are_scaled: bool = False
     optimizer_step_due: bool = False
 
 
 @dataclass(frozen=True)
 class GradientsUnscaled(TrainingEvent):
-    """The complete accumulation window is available in unscaled gradients."""
-
     reduced_summary: dict[str, float] = field(default_factory=dict)
 
 

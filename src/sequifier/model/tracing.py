@@ -1,5 +1,3 @@
-"""Explicit logical-site tracing and differentiable interventions."""
-
 from __future__ import annotations
 
 import contextlib
@@ -54,8 +52,6 @@ class InterventionBinding:
 
 
 class TraceContext:
-    """A per-forward collector; create a new instance for each execution."""
-
     def __init__(
         self,
         request: CaptureRequest | None = None,
@@ -135,8 +131,6 @@ def active_trace_context() -> TraceContext | None:
 
 @contextlib.contextmanager
 def activate_trace_context(context: TraceContext | None):
-    """Activate a preconstructed trace context for one eager forward."""
-
     if context is None:
         yield None
         return
@@ -156,14 +150,6 @@ def analysis_execution(
     trace: CaptureRequest | None = None,
     interventions: tuple[InterventionBinding, ...] = (),
 ):
-    """Enable eager, graph-preserving execution for higher-order analysis.
-
-    The returned :class:`TraceContext` owns captures. ``create_graph`` and
-    ``retain_graph`` are recorded for the caller; pass the same flags to the
-    eventual autograd operation because PyTorch applies them during backward,
-    not during the forward pass.
-    """
-
     if hasattr(model, "_orig_mod"):
         raise ValueError("analysis_execution requires an eager, uncompiled model.")
     available = {site.name for site in getattr(model, "trace_catalog", ())}
@@ -188,8 +174,6 @@ def analysis_execution(
 
 
 def functional_state(model: Any) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
-    """Return explicit parameter and buffer mappings for ``torch.func`` calls."""
-
     parameters = dict(model.named_parameters(remove_duplicate=True))
     buffers = dict(model.named_buffers(remove_duplicate=True))
     return parameters, buffers
@@ -202,8 +186,6 @@ def functional_forward(
     *args: Any,
     **kwargs: Any,
 ) -> Any:
-    """Execute the eager network with caller-supplied functional state."""
-
     if hasattr(model, "_orig_mod"):
         raise ValueError("functional_forward requires an eager, uncompiled model.")
     return torch.func.functional_call(model, (parameters, buffers), args, kwargs)
@@ -218,8 +200,6 @@ def trace_sites(
     decoder_branches: dict[str, tuple[int, ...]],
     target_branches: dict[str, str],
 ) -> tuple[TraceSite, ...]:
-    """Return the logical trace catalog for one concrete network."""
-
     batch_time_channel = ("batch", "time", "channel")
     sites = [
         TraceSite("ingestion.output", batch_time_channel),

@@ -223,8 +223,6 @@ def _run_training_session(
     integration_specs: tuple[IntegrationSpec, ...],
     integration_instances: tuple[Any, ...],
 ) -> None:
-    """Compose the engine after optimizer/distributed initialization."""
-
     for index, group in enumerate(model.optimizer.param_groups):
         group.setdefault(
             "group_id",
@@ -697,8 +695,6 @@ def run_training(
     integration_instances: tuple[Any, ...] = (),
     semantic_optimizer_grouping: bool = False,
 ) -> None:
-    """Run a resolved config with optional trusted integrations."""
-
     data_path = config.data_path
     if data_path is None:
         raise ValueError("data_path must be provided or resolved from metadata")
@@ -911,11 +907,7 @@ class _OnnxExportWrapper(nn.Module):
 
 
 class TransformerModel(SequifierModel):
-    """Backward-compatible facade over the pure network and run services.
-
-    New integrations receive ``network`` through :class:`TrainingAccess` and
-    should not depend on this facade's legacy inference/export helpers.
-    """
+    """Sequifier transformer plus train/eval/export routines."""
 
     @beartype
     def __init__(
@@ -1086,8 +1078,6 @@ class TransformerModel(SequifierModel):
         for criterion in self.criterion.values():
             criterion.to(self.device)
 
-        # Keep the pure factory product outside module registration so the
-        # established top-level state-dict names remain unchanged.
         object.__setattr__(self, "network", network)
 
     @property

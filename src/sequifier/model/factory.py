@@ -1,5 +1,3 @@
-"""Construction of pure Sequifier transformer networks."""
-
 from __future__ import annotations
 
 import logging
@@ -70,8 +68,6 @@ def build_transformer_network(
     apply_freezing: bool = True,
     logger: Any | None = None,
 ) -> BuiltModel:
-    """Build model computation without optimizer or run-lifecycle state."""
-
     resolved_logger: Any = logger if logger is not None else logging.getLogger(__name__)
     objective = create_objective(config)
     architecture = config.model_spec.backbone.architecture

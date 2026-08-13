@@ -93,8 +93,6 @@ def validate_embedding_layer_names(
 
 
 def embedding_layer_trace_site(name: str) -> str:
-    """Map a compatibility embedding selector to its logical trace site."""
-
     selector = parse_embedding_layer_name(name)
     if selector.source == "backbone_final_norm":
         return "backbone.final_norm"

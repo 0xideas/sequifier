@@ -1,5 +1,3 @@
-"""Stable, semantic access to a model's physical parameters."""
-
 from __future__ import annotations
 
 import hashlib
@@ -34,8 +32,6 @@ class ParameterDescriptor:
 
 
 class ParameterCatalog:
-    """Describe physical parameters while retaining shared-layer aliases."""
-
     def __init__(self, model: nn.Module):
         self.model = model
         grouped = semantic_parameter_groups(model)
@@ -142,8 +138,6 @@ class ParameterCatalog:
 
 
 def optimizer_group_id(descriptor: ParameterDescriptor) -> str:
-    """Return the stable optimizer identity for a parameter descriptor."""
-
     group = descriptor.semantic_group
     if group.startswith("decoder."):
         return group
@@ -162,8 +156,6 @@ def semantic_optimizer_groups(
     parameters: set[int] | None = None,
     options: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build deduplicated optimizer groups with stable ``group_id`` metadata."""
-
     grouped: dict[str, list[nn.Parameter]] = {}
     seen: set[int] = set()
     for descriptor in catalog.descriptors():

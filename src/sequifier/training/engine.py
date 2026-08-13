@@ -1,5 +1,3 @@
-"""Training lifecycle owner and integration synchronization boundary."""
-
 from __future__ import annotations
 
 import time
@@ -35,12 +33,6 @@ from sequifier.training.state import TrainingState
 
 @dataclass
 class TrainingEngine:
-    """Own optimizer-facing state and coordinate the existing training services.
-
-    Evaluation, checkpoint/export, metric writing, and backbone publication remain
-    deliberately separate supporting services on the compatibility facade.
-    """
-
     model: nn.Module
     objective: Any
     criteria: dict[str, nn.Module]
@@ -114,8 +106,6 @@ class TrainingEngine:
         optimizer_step_due: bool,
         gradient_clip_norm: float | None,
     ) -> bool:
-        """Run backward and, when due, the synchronized optimizer lifecycle."""
-
         self.scaler.scale(backward_loss).backward()
         if self.integrations.enabled:
             self.emit(
@@ -199,8 +189,6 @@ class TrainingEngine:
     def run(
         self, train_loader: Any, validation_loader: Any, ddp_model: Any = None
     ) -> None:
-        """Own epoch orchestration while delegating supporting services."""
-
         model: Any = self.model
         setattr(model, "_training_engine", self)
         self.model_ready()

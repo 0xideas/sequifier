@@ -1,5 +1,3 @@
-"""Composition root for one Sequifier training worker."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

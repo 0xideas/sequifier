@@ -1,5 +1,3 @@
-"""Experimental, maintainer-controlled Sequifier integration surface."""
-
 from sequifier.integration.callbacks import (
     IntegrationManager,
     TrainingController,

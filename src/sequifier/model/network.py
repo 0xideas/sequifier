@@ -1,5 +1,3 @@
-"""Pure tensor-computation network and compatibility adapters."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -40,8 +38,6 @@ class TracedModelOutput:
 
 
 class TransformerNetwork(nn.Module):
-    """Sequifier's batch-first network, independent of training orchestration."""
-
     def __init__(
         self,
         *,
@@ -254,8 +250,6 @@ class TransformerNetwork(nn.Module):
 
 
 class LegacyOutputAdapter(nn.Module):
-    """Keep the established sequence-first inference/export output contract."""
-
     def __init__(self, network: TransformerNetwork, *, apply_output_transform: bool):
         super().__init__()
         self.network = network

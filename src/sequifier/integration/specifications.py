@@ -1,5 +1,3 @@
-"""Serializable declarations for maintainer-controlled integrations."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,8 +9,6 @@ StatePolicy = Literal["required", "if_present", "fresh"]
 
 @dataclass(frozen=True)
 class ExecutionRequirements:
-    """Execution properties an integration must declare before a run starts."""
-
     activation_tracing: bool = False
     interventions: bool = False
     higher_order_gradients: bool = False
@@ -21,12 +17,6 @@ class ExecutionRequirements:
 
 @dataclass(frozen=True)
 class IntegrationSpec:
-    """Describe how each training worker constructs a trusted integration.
-
-    ``factory`` is an explicit ``"module:attribute"`` import path.  Sequifier
-    deliberately performs no entry-point discovery or global registration.
-    """
-
     integration_id: str
     factory: str
     config: dict[str, Any] = field(default_factory=dict)

@@ -1,5 +1,3 @@
-"""Validated controller directives for the training engine."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -35,8 +33,6 @@ class TrainingDirective:
 def apply_training_directive(
     optimizer: Optimizer, directive: TrainingDirective
 ) -> None:
-    """Validate and apply declared optimizer-group changes atomically."""
-
     groups = {
         str(group.get("group_id", "all")): group for group in optimizer.param_groups
     }
