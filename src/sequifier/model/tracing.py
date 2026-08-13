@@ -105,17 +105,33 @@ class TraceContext:
             request = self.request
             if request is None:
                 raise RuntimeError("Trace capture requested without a CaptureRequest.")
+            selection: tuple[Any, ...] | None = None
             if request.positions is not None and "time" in axes:
                 time_axis = axes.index("time")
-                selection: list[Any] = [slice(None)] * captured.ndim
-                selection[time_axis] = request.positions
-                captured = captured[tuple(selection)]
-            if request.retain_grad and captured.requires_grad:
-                captured.retain_grad()
+                selection_items: list[Any] = [slice(None)] * captured.ndim
+                selection_items[time_axis] = request.positions
+                selection = tuple(selection_items)
+                captured = captured[selection]
             if request.detach:
                 captured = captured.detach()
             if request.clone:
                 captured = captured.clone()
+            if request.retain_grad and transformed.requires_grad:
+                captured.retain_grad()
+                if captured is not transformed:
+
+                    def retain_derived_gradient(gradient: Tensor) -> Tensor:
+                        captured_gradient = (
+                            gradient if selection is None else gradient[selection]
+                        )
+                        captured_gradient = captured_gradient.clone()
+                        if captured.grad is None:
+                            captured.grad = captured_gradient
+                        else:
+                            captured.grad = captured.grad + captured_gradient
+                        return gradient
+
+                    transformed.register_hook(retain_derived_gradient)
             self.captures[name] = captured
         return transformed
 

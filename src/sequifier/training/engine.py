@@ -53,6 +53,7 @@ class TrainingEngine:
             scaler=self.scaler,
         )
         self.stop_requested = False
+        self._skip_next_scheduler_step = False
 
     @property
     def rank(self) -> int:
@@ -98,6 +99,18 @@ class TrainingEngine:
     def model_ready(self) -> None:
         self.emit(ModelReady(access=self.access))
 
+    def step_scheduler(self) -> bool:
+        if self._skip_next_scheduler_step:
+            self._skip_next_scheduler_step = False
+            return False
+        if (
+            hasattr(self.scheduler, "total_steps")
+            and self.scheduler.last_epoch >= self.scheduler.total_steps
+        ):
+            return False
+        self.scheduler.step()
+        return True
+
     def backward_and_step(
         self,
         *,
@@ -125,11 +138,18 @@ class TrainingEngine:
             self.emit(unscaled)
         directive = self.integrations.directive(unscaled)
         if directive is not None:
-            apply_training_directive(self.optimizer, directive)
+            apply_training_directive(
+                self.optimizer,
+                directive,
+                scheduler=self.scheduler,
+            )
 
         clip_norm = gradient_clip_norm
-        if directive is not None and directive.gradient_clip_norm is not None:
-            clip_norm = directive.gradient_clip_norm
+        if directive is not None:
+            if directive.disable_gradient_clipping:
+                clip_norm = None
+            elif directive.gradient_clip_norm is not None:
+                clip_norm = directive.gradient_clip_norm
         if clip_norm is not None:
             total_norm = nn.utils.clip_grad_norm_(self.model.parameters(), clip_norm)
             if self.integrations.enabled:
@@ -162,6 +182,8 @@ class TrainingEngine:
             )
             if step_applied:
                 self.state.optimizer_step += 1
+                if directive is not None and directive.skip_scheduler_step:
+                    self._skip_next_scheduler_step = True
                 completed_identity = StepIdentity(
                     epoch=identity.epoch,
                     batch=identity.batch,
@@ -290,11 +312,8 @@ class TrainingEngine:
                 self.state.best_validation_loss = best_val_loss
                 self.state.epochs_without_improvement = n_epochs_no_improvement
 
-                if model.scheduler_step_on == "epoch" and (
-                    not hasattr(self.scheduler, "total_steps")
-                    or self.scheduler.last_epoch < self.scheduler.total_steps
-                ):
-                    self.scheduler.step()
+                if model.scheduler_step_on == "epoch":
+                    self.step_scheduler()
                 if epoch % model.save_interval_epochs == 0:
                     model._save(
                         epoch,

@@ -1855,7 +1855,9 @@ class TransformerModel(SequifierModel):
                     )
 
                 if self.scheduler_step_on == "epoch":
-                    if (
+                    if training_engine is not None:
+                        training_engine.step_scheduler()
+                    elif (
                         not hasattr(self.scheduler, "total_steps")
                         or self.scheduler.last_epoch < self.scheduler.total_steps
                     ):
@@ -2234,7 +2236,9 @@ class TransformerModel(SequifierModel):
                 del data, targets, output, loss, backward_loss, backward_components
 
                 if self.scheduler_step_on == "batch" and optimizer_step_performed:
-                    if (
+                    if training_engine is not None:
+                        training_engine.step_scheduler()
+                    elif (
                         not hasattr(self.scheduler, "total_steps")
                         or self.scheduler.last_epoch < self.scheduler.total_steps
                     ):
