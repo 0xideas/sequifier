@@ -78,6 +78,17 @@ from sequifier.helpers import (  # noqa: E402
     get_torch_dtype,
     normalize_path,
 )
+from sequifier.integration import (  # noqa: E402
+    BatchPrepared,
+    CheckpointSaved,
+    CheckpointSaving,
+    ForwardCompleted,
+    IntegrationManager,
+    IntegrationSpec,
+    LossComputed,
+    RunCompleted,
+    ValidationCompleted,
+)
 from sequifier.io.batch import SequifierBatch  # noqa: E402
 from sequifier.io.sequifier_dataset_from_file import (  # noqa: E402
     SequifierDatasetFromFile,
@@ -95,29 +106,27 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (  # noqa: E402
     SequifierDatasetFromFolderPtLazy,
 )
 from sequifier.logging_paths import model_log_directory  # noqa: E402
-from sequifier.model.backbone import TransformerBackbone  # noqa: E402
-from sequifier.model.decoders import build_target_decoding  # noqa: E402
 from sequifier.model.dtypes import cast_floating_to_module_dtype  # noqa: E402
 from sequifier.model.embedding import (  # noqa: E402
     ONNX_EMBEDDING_LAYER_NAMES_KEY,
     parse_embedding_layer_name,
 )
-from sequifier.model.freezing import apply_model_freezing  # noqa: E402
-from sequifier.model.ingestion_compiler import compile_feature_ingestion  # noqa: E402
-from sequifier.model.initialization import initialize_model_weights  # noqa: E402
+from sequifier.model.factory import build_transformer_network  # noqa: E402
 from sequifier.model.layers import RMSNorm  # noqa: E402
 from sequifier.model.model import SequifierModel  # noqa: E402
-from sequifier.objectives import create_objective  # noqa: E402
-from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
-from sequifier.special_tokens import (  # noqa: E402
-    ONNX_CATEGORICAL_TARGET_CODECS_KEY,
-    resolve_categorical_decoder_ids,
+from sequifier.model.parameter_catalog import (  # noqa: E402
+    ParameterCatalog,
+    semantic_optimizer_groups,
 )
+from sequifier.model.tracing import activate_trace_context  # noqa: E402
+from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
+from sequifier.special_tokens import ONNX_CATEGORICAL_TARGET_CODECS_KEY  # noqa: E402
 from sequifier.training.distributed import (  # noqa: E402
     broadcast_initial_state,
     broadcast_publication_result,
     verify_loaded_revision,
 )
+from sequifier.training.engine import TrainingEngine  # noqa: E402
 from sequifier.training.initial_state import (  # noqa: E402
     load_model_initial_state,
     select_initial_state,
@@ -127,6 +136,8 @@ from sequifier.training.lifecycle import (  # noqa: E402
     write_terminal_manifest,
 )
 from sequifier.training.metrics import StructuredMetricWriters  # noqa: E402
+from sequifier.training.session import TrainingSession  # noqa: E402
+from sequifier.training.state import TrainingState  # noqa: E402
 
 
 def cleanup():
@@ -201,6 +212,90 @@ def _canonical_parameter_names(value: Any) -> Any:
     return [_canonical_parameter_name(name) for name in value]
 
 
+def _run_training_session(
+    *,
+    model: Any,
+    config: TrainModel,
+    train_loader: DataLoader,
+    valid_loader: DataLoader,
+    checkpoint: dict[str, Any] | None,
+    ddp_model: nn.Module | None,
+    integration_specs: tuple[IntegrationSpec, ...],
+    integration_instances: tuple[Any, ...],
+) -> None:
+    """Compose the engine after optimizer/distributed initialization."""
+
+    for index, group in enumerate(model.optimizer.param_groups):
+        group.setdefault(
+            "group_id",
+            "all" if len(model.optimizer.param_groups) == 1 else f"group-{index}",
+        )
+    saved_state = checkpoint.get("training_state", {}) if checkpoint else {}
+    if not isinstance(saved_state, dict):
+        saved_state = {}
+    state = TrainingState(
+        epoch=int(saved_state.get("epoch", max(0, model.start_epoch - 1))),
+        batch=int(saved_state.get("batch", model.start_batch)),
+        global_batch_step=int(saved_state.get("global_batch_step", 0)),
+        optimizer_step=int(saved_state.get("optimizer_step", 0)),
+        accumulation_index=int(saved_state.get("accumulation_index", 0)),
+        best_validation_loss=float(
+            saved_state.get("best_validation_loss", model._resume_best_val_loss)
+        ),
+        epochs_without_improvement=int(
+            saved_state.get(
+                "epochs_without_improvement", model._resume_n_epochs_no_improvement
+            )
+        ),
+        run_id=model.run_id,
+        session_id=model.session_id,
+    )
+    integrations = IntegrationManager(
+        specs=integration_specs,
+        instances=integration_instances,
+        rank=int(model.rank or 0),
+        world_size=(
+            dist.get_world_size()
+            if dist.is_available() and dist.is_initialized()
+            else 1
+        ),
+        distributed=config.training_spec.distributed,
+    )
+    integrations.validate_execution(
+        torch_compile=config.training_spec.torch_compile,
+        data_parallelism=config.training_spec.data_parallelism,
+    )
+    engine = TrainingEngine(
+        model=model,
+        objective=model.objective,
+        criteria=model.criterion,
+        optimizer=model.optimizer,
+        scheduler=model.scheduler,
+        scaler=model.scaler,
+        state=state,
+        integrations=integrations,
+    )
+    session = TrainingSession(
+        config=config,
+        model=model,
+        engine=engine,
+        train_loader=train_loader,
+        validation_loader=valid_loader,
+        integrations=integrations,
+    )
+    session.restore_integration_state(checkpoint)
+    session.run(ddp_model=ddp_model)
+
+
+def _optimizer_parameters(model: Any, *, semantic_grouping: bool) -> Any:
+    parameters = tuple(model.parameters_to_optimize())
+    if not semantic_grouping:
+        return parameters
+    return semantic_optimizer_groups(
+        ParameterCatalog(model), parameters={id(parameter) for parameter in parameters}
+    )
+
+
 @beartype
 @loguru_logger.catch(message="Training worker failed", reraise=True)
 def train_worker(
@@ -210,6 +305,9 @@ def train_worker(
     from_folder: bool,
     global_rank: int,
     torch_compile: str,
+    integration_specs: tuple[IntegrationSpec, ...] = (),
+    integration_instances: tuple[Any, ...] = (),
+    semantic_optimizer_grouping: bool = False,
 ):
     """Run one local distributed-training worker."""
     logger = configure_logger(config.project_root, config.model_name, global_rank)
@@ -288,6 +386,7 @@ def train_worker(
     )
 
     model = TransformerModel(config, rank=global_rank, local_rank=local_rank)
+    model._semantic_optimizer_grouping = semantic_optimizer_grouping
     if config.training_spec.distributed:
         run_id_object = [model.run_id if global_rank == 0 else None]
         dist.broadcast_object_list(run_id_object, src=0)
@@ -315,7 +414,9 @@ def train_worker(
 
     # Initialize Optimizer
     if not config.training_spec.distributed:
-        params_to_optimize = model.parameters_to_optimize()
+        params_to_optimize = _optimizer_parameters(
+            model, semantic_grouping=semantic_optimizer_grouping
+        )
         model.initialize_optimizer(params=params_to_optimize)
 
         if checkpoint is not None:
@@ -363,7 +464,16 @@ def train_worker(
             base_model._restore_rng_state()
             base_model._restore_data_loader_generator_states()
 
-        model.train_model(train_loader, valid_loader, ddp_model=None)
+        _run_training_session(
+            model=base_model,
+            config=config,
+            train_loader=train_loader,
+            valid_loader=valid_loader,
+            checkpoint=checkpoint,
+            ddp_model=model if model is not base_model else None,
+            integration_specs=integration_specs,
+            integration_instances=integration_instances,
+        )
     elif config.training_spec.data_parallelism == "FSDP":
         mesh = init_device_mesh(
             "cuda", (world_size,)
@@ -400,7 +510,9 @@ def train_worker(
         fully_shard(model, **fsdp_kwargs)
         dist.barrier()
 
-        params_to_optimize = model.parameters_to_optimize()
+        params_to_optimize = _optimizer_parameters(
+            model, semantic_grouping=semantic_optimizer_grouping
+        )
         model.initialize_optimizer(params=params_to_optimize)
 
         if checkpoint is not None:
@@ -462,10 +574,21 @@ def train_worker(
             base_model._restore_rng_state()
             base_model._restore_data_loader_generator_states()
 
-        model.train_model(train_loader, valid_loader, ddp_model=base_model)
+        _run_training_session(
+            model=base_model,
+            config=config,
+            train_loader=train_loader,
+            valid_loader=valid_loader,
+            checkpoint=checkpoint,
+            ddp_model=base_model,
+            integration_specs=integration_specs,
+            integration_instances=integration_instances,
+        )
         cleanup()
     elif config.training_spec.data_parallelism == "DDP":  # DDP
-        params_to_optimize = model.parameters_to_optimize()
+        params_to_optimize = _optimizer_parameters(
+            model, semantic_grouping=semantic_optimizer_grouping
+        )
         model.initialize_optimizer(params=params_to_optimize)
 
         if checkpoint is not None:
@@ -529,7 +652,16 @@ def train_worker(
         if checkpoint is not None:
             base_model._restore_rng_state()
             base_model._restore_data_loader_generator_states()
-        model.train_model(train_loader, valid_loader, ddp_model=ddp_model)
+        _run_training_session(
+            model=base_model,
+            config=config,
+            train_loader=train_loader,
+            valid_loader=valid_loader,
+            checkpoint=checkpoint,
+            ddp_model=ddp_model,
+            integration_specs=integration_specs,
+            integration_instances=integration_instances,
+        )
         cleanup()
     else:
         raise ValueError("For data_parallelism, only 'FSDP' and 'DDP' are supported")
@@ -542,6 +674,8 @@ def _mp_train_worker_wrapper(
     config: TrainModel,
     from_folder: bool,
     torch_compile: str,
+    integration_specs: tuple[IntegrationSpec, ...] = (),
+    semantic_optimizer_grouping: bool = False,
 ):
     train_worker(
         local_rank,
@@ -550,17 +684,29 @@ def _mp_train_worker_wrapper(
         from_folder,
         global_rank=local_rank,
         torch_compile=torch_compile,
+        integration_specs=integration_specs,
+        semantic_optimizer_grouping=semantic_optimizer_grouping,
     )
 
 
 @beartype
-def train(args: Any, args_config: dict[str, Any]) -> None:
-    """Load train config and launch local or distributed training."""
-    config_path = args.config_path or "configs/train.yaml"
-    config = load_train_config(config_path, args_config, args.skip_metadata)
+def run_training(
+    config: TrainModel,
+    *,
+    integration_specs: tuple[IntegrationSpec, ...] = (),
+    integration_instances: tuple[Any, ...] = (),
+    semantic_optimizer_grouping: bool = False,
+) -> None:
+    """Run a resolved config with optional trusted integrations."""
+
     data_path = config.data_path
     if data_path is None:
         raise ValueError("data_path must be provided or resolved from metadata")
+    if config.training_spec.distributed and integration_instances:
+        raise ValueError(
+            "Distributed runs require IntegrationSpec; direct instances cannot "
+            "be transferred to workers."
+        )
 
     torch.set_float32_matmul_precision(config.training_spec.float32_matmul_precision)
 
@@ -580,6 +726,9 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
                 from_folder,
                 global_rank,
                 config.training_spec.torch_compile,
+                integration_specs,
+                (),
+                semantic_optimizer_grouping,
             )
         else:
             # Single-node multi-GPU fallback using mp.spawn
@@ -591,6 +740,8 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
                         config,
                         from_folder,
                         config.training_spec.torch_compile,
+                        integration_specs,
+                        semantic_optimizer_grouping,
                     ),
                     nprocs=world_size,
                     join=True,
@@ -602,7 +753,25 @@ def train(args: Any, args_config: dict[str, Any]) -> None:
                 else:
                     raise e
     else:
-        train_worker(0, 1, config, from_folder, 0, config.training_spec.torch_compile)
+        train_worker(
+            0,
+            1,
+            config,
+            from_folder,
+            0,
+            config.training_spec.torch_compile,
+            integration_specs,
+            integration_instances,
+            semantic_optimizer_grouping,
+        )
+
+
+@beartype
+def train(args: Any, args_config: dict[str, Any]) -> None:
+    """Load train config and launch local or distributed training."""
+    config_path = args.config_path or "configs/train.yaml"
+    config = load_train_config(config_path, args_config, args.skip_metadata)
+    run_training(config)
 
 
 @beartype
@@ -742,7 +911,11 @@ class _OnnxExportWrapper(nn.Module):
 
 
 class TransformerModel(SequifierModel):
-    """Sequifier transformer plus train/eval/export routines."""
+    """Backward-compatible facade over the pure network and run services.
+
+    New integrations receive ``network`` through :class:`TrainingAccess` and
+    should not depend on this facade's legacy inference/export helpers.
+    """
 
     @beartype
     def __init__(
@@ -783,23 +956,6 @@ class TransformerModel(SequifierModel):
         self.window_view = hparams.window_view
         self.context_length = hparams.window_view.context_length
         self.n_classes = hparams.n_classes
-        self.target_decoder_ids = resolve_categorical_decoder_ids(
-            self.target_columns,
-            self.target_column_types,
-            self.n_classes,
-            getattr(hparams, "categorical_decoder_special_tokens", {}),
-        )
-        self.target_n_classes = {
-            col: len(ids) for col, ids in self.target_decoder_ids.items()
-        }
-        self.target_global_to_decoder = {}
-        for col, ids in self.target_decoder_ids.items():
-            inverse = {
-                global_id: decoder_id for decoder_id, global_id in enumerate(ids)
-            }
-            self.target_global_to_decoder[col] = [
-                inverse.get(global_id, -1) for global_id in range(self.n_classes[col])
-            ]
         self.inference_batch_size = hparams.inference_batch_size
         self.log_interval = hparams.training_spec.log_interval
         self.class_share_log_columns = hparams.training_spec.class_share_log_columns
@@ -838,46 +994,6 @@ class TransformerModel(SequifierModel):
         self.export_with_dropout = hparams.export_with_dropout
         self.early_stopping_epochs = hparams.training_spec.early_stopping_epochs
         self.hparams = hparams
-        self.objective = create_objective(hparams)
-        architecture = self.hparams.model_spec.backbone.architecture
-        self.dim_model = architecture.dim_model
-        backbone = TransformerBackbone(architecture)
-        built_ingestion = compile_feature_ingestion(
-            hparams=hparams,
-            direct_real_dtype_provider=lambda: (
-                backbone.layers[0].ff.get_first_layer_dtype()
-            ),
-            device_max_concat_length=hparams.training_spec.device_max_concat_length,
-        )
-        self.ingestion = built_ingestion.module
-        self.ingestion_adapter = (
-            nn.Identity()
-            if built_ingestion.width == backbone.input_dim
-            else nn.Linear(built_ingestion.width, backbone.input_dim)
-        )
-        self.ingestion_adapter._sequifier_layer_group = (  # type: ignore[attr-defined]
-            "ingestion.output_projection"
-        )
-        self.backbone = backbone
-
-        self.prediction_length = hparams.model_spec.decoder.prediction_length
-        self.decoding_support = hparams.model_spec.decoder.support
-        self.decoded_context_length = self.context_length - self.decoding_support + 1
-
-        self.decoder = build_target_decoding(
-            hparams, target_n_classes=self.target_n_classes
-        )
-        self.softmax: dict[str, nn.Module] = {}
-        for target_column, target_column_type in self.target_column_types.items():
-            if target_column_type == "categorical":
-                self.softmax[target_column] = nn.LogSoftmax(dim=-1)
-            elif target_column_type == "real":
-                continue
-            else:
-                raise ValueError(
-                    f"Target column type {target_column_type} not in ['categorical', 'real']"
-                )
-
         self.device = hparams.device
         self.device_max_concat_length = hparams.training_spec.device_max_concat_length
 
@@ -891,133 +1007,53 @@ class TransformerModel(SequifierModel):
         else:
             self.device = hparams.device
 
+        built_model = build_transformer_network(
+            hparams,
+            device=torch.device(self.device),
+            logger=self.logger,
+        )
+        network = built_model.network
+        self.objective = built_model.objective
+        self.dim_model = network.dim_model
+        self.ingestion = network.ingestion
+        self.ingestion_adapter = network.ingestion_adapter
+        self.backbone = network.backbone
+        self.decoder = network.decoder
+        self.prediction_length = network.prediction_length
+        self.decoding_support = network.decoding_support
+        self.decoded_context_length = self.context_length - self.decoding_support + 1
+        self.target_decoder_ids = built_model.runtime_metadata.target_decoder_ids
+        self.target_n_classes = built_model.runtime_metadata.target_n_classes
+        self.target_global_to_decoder = (
+            built_model.runtime_metadata.target_global_to_decoder
+        )
+        self.softmax: dict[str, nn.Module] = {}
+        for target_column, target_column_type in self.target_column_types.items():
+            if target_column_type == "categorical":
+                self.softmax[target_column] = nn.LogSoftmax(dim=-1)
+            elif target_column_type != "real":
+                raise ValueError(
+                    f"Target column type {target_column_type} not in "
+                    "['categorical', 'real']"
+                )
+
         self.criterion = self._init_criterion(hparams=hparams)
         self.batch_size = hparams.training_spec.batch_size
         self.accumulation_steps = hparams.training_spec.accumulation_steps
 
         self.register_buffer(
             "src_mask",
-            self.objective.build_attention_mask_policy(self.context_length),
+            network.attention_mask_policy.detach().clone(),
             persistent=False,
         )
-
-        component_initializers = {
-            "ingestion": hparams.model_spec.ingestion.initialization,
-            "ingestion_adapter": hparams.model_spec.ingestion.initialization,
-            "backbone": hparams.model_spec.backbone.initialization,
-            "decoder": hparams.model_spec.decoder.initialization,
-        }
-        configured_initialization_targets = set()
-        matched_initialization_targets = set()
-        for component_name, initialization in component_initializers.items():
-            if initialization.root:
-                self.logger.info(
-                    f"Applying {component_name} initialization overrides: "
-                    f"{initialization.model_dump(mode='json')}"
-                )
-            configured_initialization_targets.update(
-                initialization.configured_targets()
-            )
-            matched_initialization_targets.update(
-                initialize_model_weights(
-                    getattr(self, component_name),
-                    initialization,
-                    warn_unmatched=False,
-                )
-            )
-        unmatched_initialization_targets = (
-            configured_initialization_targets - matched_initialization_targets
+        component_freezing_policies = (
+            hparams.model_spec.ingestion,
+            hparams.model_spec.backbone,
+            hparams.model_spec.decoder,
         )
-        if unmatched_initialization_targets:
-            targets = ", ".join(
-                f"{group}.{kind}"
-                for group, kind in sorted(unmatched_initialization_targets)
-            )
-            self.logger.warning(
-                f"Initialization overrides matched no parameters: {targets}"
-            )
-
-        component_freezing_policies = {
-            "ingestion": (
-                hparams.model_spec.ingestion,
-                (self.ingestion, self.ingestion_adapter),
-            ),
-            "backbone": (hparams.model_spec.backbone, (self.backbone,)),
-            "decoder": (hparams.model_spec.decoder, (self.decoder,)),
-        }
         self._freezing_active = any(
-            config.has_freezing_policy
-            for config, _ in component_freezing_policies.values()
+            config.has_freezing_policy for config in component_freezing_policies
         )
-        if self._freezing_active:
-            for component_name, (
-                freezing_config,
-                component_modules,
-            ) in component_freezing_policies.items():
-                if not freezing_config.has_freezing_policy:
-                    continue
-                matched_groups = set()
-                for component_module in component_modules:
-                    result = apply_model_freezing(
-                        component_module,
-                        freezing=freezing_config.freezing,
-                        freezing_except=freezing_config.freezing_except,
-                        warn_unmatched=False,
-                    )
-                    matched_groups.update(result.matched_groups)
-
-                configured_groups = set(
-                    freezing_config.freezing
-                    if freezing_config.freezing is not None
-                    else freezing_config.freezing_except or []
-                )
-                unmatched_groups = configured_groups.difference(matched_groups)
-                if unmatched_groups:
-                    group_names = ", ".join(sorted(unmatched_groups))
-                    if freezing_config.freezing_except is not None:
-                        raise ValueError(
-                            f"{component_name} freezing_except groups matched no "
-                            f"parameters: {group_names}"
-                        )
-                    self.logger.warning(
-                        f"{component_name} freezing groups matched no parameters: "
-                        f"{group_names}"
-                    )
-
-                policy_name = (
-                    "freezing"
-                    if freezing_config.freezing is not None
-                    else "freezing_except"
-                )
-                component_parameters = tuple(
-                    {
-                        id(parameter): parameter
-                        for component_module in component_modules
-                        for parameter in component_module.parameters()
-                    }.values()
-                )
-                frozen_count = sum(
-                    parameter.numel()
-                    for parameter in component_parameters
-                    if not parameter.requires_grad
-                )
-                trainable_count = sum(
-                    parameter.numel()
-                    for parameter in component_parameters
-                    if parameter.requires_grad
-                )
-                self.logger.info(
-                    f"Applied {component_name} {policy_name}: "
-                    f"groups={sorted(configured_groups)}, "
-                    f"matched={sorted(matched_groups)}, "
-                    f"frozen_parameters={frozen_count}, "
-                    f"trainable_parameters={trainable_count}"
-                )
-            if not any(parameter.requires_grad for parameter in self.parameters()):
-                raise ValueError(
-                    "The configured freezing policies leave the model with no "
-                    "trainable parameters."
-                )
 
         self.scheduler_step_on = hparams.training_spec.scheduler_step_on
 
@@ -1049,6 +1085,10 @@ class TransformerModel(SequifierModel):
         self.to(self.device)
         for criterion in self.criterion.values():
             criterion.to(self.device)
+
+        # Keep the pure factory product outside module registration so the
+        # established top-level state-dict names remain unchanged.
+        object.__setattr__(self, "network", network)
 
     @property
     def encoder(self) -> ModuleDict:
@@ -1289,10 +1329,11 @@ class TransformerModel(SequifierModel):
         self, src: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> dict[str, Tensor]:
         """Return raw decoded outputs for all target columns."""
-        output = self.forward_inner(src, metadata)
-        output = self.decoder(self._decoder_input_windows(output))
-
-        return output
+        output = self.network(src, metadata)
+        return {
+            target_column: logits.transpose(0, 1)
+            for target_column, logits in output.logits.items()
+        }
 
     @conditional_beartype
     def _decoder_input_windows(self, output: Tensor) -> Tensor:
@@ -1434,6 +1475,9 @@ class TransformerModel(SequifierModel):
             "scheduler_step_on": self.scheduler_step_on,
             "scheduler": dict(training_spec.scheduler),
             "optimizer": dict(training_spec.optimizer),
+            "semantic_optimizer_grouping": getattr(
+                self, "_semantic_optimizer_grouping", False
+            ),
             "distributed": training_spec.distributed,
             "data_parallelism": training_spec.data_parallelism,
             "world_size": (
@@ -1715,6 +1759,7 @@ class TransformerModel(SequifierModel):
         ddp_model: Optional[nn.Module] = None,
     ) -> None:
         """Run epochs, validation, checkpointing, export, and interruption cleanup."""
+        training_engine: TrainingEngine | None = getattr(self, "_training_engine", None)
         if self.rank == 0 and self.metric_writers is None:
             self.metric_writers = StructuredMetricWriters(
                 self.project_root,
@@ -1784,6 +1829,11 @@ class TransformerModel(SequifierModel):
                     best_model_state,
                 )
 
+                if training_engine is not None and training_engine.stop_requested:
+                    completion_reason = "integration_requested_stop"
+                    last_epoch = epoch
+                    break
+
                 total_loss, total_losses, class_counts = self._evaluate(
                     valid_loader, ddp_model
                 )
@@ -1806,6 +1856,13 @@ class TransformerModel(SequifierModel):
                     n_epochs_no_improvement = 0
                 else:
                     n_epochs_no_improvement += 1
+
+                if training_engine is not None:
+                    training_engine.state.epoch = epoch
+                    training_engine.state.best_validation_loss = best_val_loss
+                    training_engine.state.epochs_without_improvement = (
+                        n_epochs_no_improvement
+                    )
 
                 if self.scheduler_step_on == "epoch":
                     if (
@@ -1926,6 +1983,14 @@ class TransformerModel(SequifierModel):
             )
         self.logger.info("--- Training Complete ---")
 
+        if training_engine is not None:
+            training_engine.emit(
+                RunCompleted(
+                    access=training_engine.access,
+                    completion_reason=completion_reason,
+                )
+            )
+
         if self.hparams.training_spec.distributed:
             dist.barrier()
 
@@ -1958,6 +2023,7 @@ class TransformerModel(SequifierModel):
         model_to_call = ddp_model if ddp_model is not None else self
 
         model_to_call.train()
+        training_engine: TrainingEngine | None = getattr(self, "_training_engine", None)
 
         for batch_offset, batch in enumerate(train_loader):
             if not isinstance(batch, SequifierBatch):
@@ -1990,22 +2056,56 @@ class TransformerModel(SequifierModel):
                 data, targets, metadata = self.objective.prepare_batch(
                     data, targets, metadata
                 )
+                identity = None
+                prepared_event = None
+                trace_context = None
+                if training_engine is not None:
+                    identity = training_engine.identity(
+                        epoch=epoch,
+                        batch=batch_count + 1,
+                        num_batches=num_batches,
+                        accumulation_steps=self.accumulation_steps,
+                    )
+                    training_engine.update_batch_state(identity)
+                    if training_engine.integrations.enabled:
+                        prepared_event = BatchPrepared(
+                            access=training_engine.access,
+                            identity=identity,
+                            inputs=data,
+                            targets=targets,
+                            metadata=metadata,
+                        )
+                        training_engine.emit(prepared_event)
+                        trace_context = training_engine.integrations.forward_trace(
+                            prepared_event
+                        )
 
                 # Only use standard torch.autocast if FSDP MixedPrecision is NOT handling it natively
-                if (
-                    self.hparams.training_spec.layer_autocast
-                    and self.hparams.training_spec.data_parallelism != "FSDP"
-                ):
-                    amp_dtype = get_torch_dtype(
-                        self.hparams.training_spec.layer_type_dtypes.get(
-                            "linear", "bfloat16"
-                        )
-                        if self.hparams.training_spec.layer_type_dtypes
-                        else "bfloat16"
-                    )
-                    with torch.autocast(
-                        device_type=self.device.split(":")[0], dtype=amp_dtype
+                with activate_trace_context(trace_context):
+                    if (
+                        self.hparams.training_spec.layer_autocast
+                        and self.hparams.training_spec.data_parallelism != "FSDP"
                     ):
+                        amp_dtype = get_torch_dtype(
+                            self.hparams.training_spec.layer_type_dtypes.get(
+                                "linear", "bfloat16"
+                            )
+                            if self.hparams.training_spec.layer_type_dtypes
+                            else "bfloat16"
+                        )
+                        with torch.autocast(
+                            device_type=self.device.split(":")[0], dtype=amp_dtype
+                        ):
+                            output = model_to_call(
+                                data, metadata=metadata, return_logits=True
+                            )
+                            (
+                                loss,
+                                backward_components,
+                                local_loss_sums,
+                                local_token_count,
+                            ) = self._calculate_training_loss(output, targets, metadata)
+                    else:
                         output = model_to_call(
                             data, metadata=metadata, return_logits=True
                         )
@@ -2015,14 +2115,21 @@ class TransformerModel(SequifierModel):
                             local_loss_sums,
                             local_token_count,
                         ) = self._calculate_training_loss(output, targets, metadata)
-                else:
-                    output = model_to_call(data, metadata=metadata, return_logits=True)
-                    (
-                        loss,
-                        backward_components,
-                        local_loss_sums,
-                        local_token_count,
-                    ) = self._calculate_training_loss(output, targets, metadata)
+
+                if training_engine is not None and training_engine.integrations.enabled:
+                    training_engine.emit(
+                        ForwardCompleted(
+                            access=training_engine.access,
+                            identity=identity,
+                            outputs={
+                                target: logits.transpose(0, 1)
+                                for target, logits in output.items()
+                            },
+                            captures=(
+                                {} if trace_context is None else trace_context.captures
+                            ),
+                        )
+                    )
 
                 if self.accumulation_steps is None:
                     accumulation_divisor = 1
@@ -2036,7 +2143,34 @@ class TransformerModel(SequifierModel):
                     )
 
                 backward_loss = loss / accumulation_divisor
-                self.scaler.scale(backward_loss).backward()
+                optimizer_step_due = (
+                    self.accumulation_steps is None
+                    or (batch_count + 1) % self.accumulation_steps == 0
+                    or (batch_count + 1) == num_batches
+                )
+                if training_engine is not None and training_engine.integrations.enabled:
+                    training_engine.emit(
+                        LossComputed(
+                            access=training_engine.access,
+                            identity=identity,
+                            loss=loss,
+                            backward_loss=backward_loss,
+                        )
+                    )
+                if training_engine is not None:
+                    if identity is None:
+                        raise RuntimeError(
+                            "Training engine did not create step identity."
+                        )
+                    optimizer_step_performed = training_engine.backward_and_step(
+                        backward_loss=backward_loss,
+                        identity=identity,
+                        optimizer_step_due=optimizer_step_due,
+                        gradient_clip_norm=self.hparams.training_spec.gradient_clip,
+                    )
+                else:
+                    self.scaler.scale(backward_loss).backward()
+                    optimizer_step_performed = False
                 self._accumulate_loss_components(
                     train_loss_sums,
                     train_token_count,
@@ -2044,26 +2178,15 @@ class TransformerModel(SequifierModel):
                     local_token_count,
                 )
 
-                optimizer_step_due = (
-                    self.accumulation_steps is None
-                    or (batch_count + 1) % self.accumulation_steps == 0
-                    or (batch_count + 1) == num_batches
-                )
-                optimizer_step_performed = False
-
-                if optimizer_step_due:
+                if optimizer_step_due and training_engine is None:
                     self.scaler.unscale_(self.optimizer)
-
-                    if self.hparams.training_spec.gradient_clip is not None:
-                        torch.nn.utils.clip_grad_norm_(
-                            self.parameters(),
-                            self.hparams.training_spec.gradient_clip,
-                        )
-
+                    clip_norm = self.hparams.training_spec.gradient_clip
+                    if clip_norm is not None:
+                        torch.nn.utils.clip_grad_norm_(self.parameters(), clip_norm)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
-                    self.optimizer.zero_grad()
                     optimizer_step_performed = True
+                    self.optimizer.zero_grad()
 
                 if optimizer_step_due:
                     if not optimizer_step_performed:
@@ -2225,6 +2348,9 @@ class TransformerModel(SequifierModel):
                         )
                         self.last_batch_save_time = time.time()
                         self.last_batch_save_global_step = current_global_step
+
+                if training_engine is not None and training_engine.stop_requested:
+                    break
 
         if dataset_handles_start_batch:
             set_dataset_start_batch(0)
@@ -3024,6 +3150,24 @@ class TransformerModel(SequifierModel):
         num_batches: Optional[int] = None,
     ) -> None:
         """Save rank-0 checkpoint state."""
+        latest_path = checkpoint_path(self.hparams)
+        output_path = (
+            latest_path if suffix == "latest" else latest_path.with_name(f"{suffix}.pt")
+        )
+        training_engine: TrainingEngine | None = getattr(self, "_training_engine", None)
+        if training_engine is not None:
+            training_engine.emit(
+                CheckpointSaving(
+                    access=training_engine.access,
+                    identity=training_engine.identity(
+                        epoch=max(1, epoch),
+                        batch=max(1, batch + 1),
+                        num_batches=max(1, num_batches or 1),
+                        accumulation_steps=self.accumulation_steps,
+                    ),
+                    path=output_path,
+                )
+            )
         model_to_extract = ddp_model if ddp_model is not None else self
 
         if self.hparams.training_spec.data_parallelism == "FSDP":
@@ -3049,15 +3193,16 @@ class TransformerModel(SequifierModel):
 
         rng_state = self._collect_rng_states_for_checkpoint()
         data_loader_generator_states = self._get_data_loader_generator_states()
+        integration_state = (
+            training_engine.integrations.checkpoint_state_dict()
+            if training_engine is not None
+            else {}
+        )
 
         if self.rank != 0:
             return
 
-        latest_path = checkpoint_path(self.hparams)
         latest_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path = (
-            latest_path if suffix == "latest" else latest_path.with_name(f"{suffix}.pt")
-        )
 
         checkpoint = {
             "checkpoint_metadata": self._checkpoint_compatibility_metadata(num_batches),
@@ -3075,6 +3220,11 @@ class TransformerModel(SequifierModel):
             "best_model_state_dict": best_model_state_dict,
             "backbone_parent_revision_id": self._backbone_parent_revision_id,
             "loss": val_loss,
+            "training_config": self.hparams.model_dump(mode="python"),
+            "training_state": (
+                asdict(training_engine.state) if training_engine is not None else None
+            ),
+            "integration_state": (integration_state),
         }
 
         temp_path = output_path.with_name(f".{output_path.name}.{uuid.uuid4().hex}.tmp")
@@ -3096,6 +3246,19 @@ class TransformerModel(SequifierModel):
                 with contextlib.suppress(OSError):
                     os.remove(latest_temp_path)
         self.logger.info(f"Saved checkpoint to {output_path}")
+        if training_engine is not None:
+            training_engine.emit(
+                CheckpointSaved(
+                    access=training_engine.access,
+                    identity=training_engine.identity(
+                        epoch=max(1, epoch),
+                        batch=max(1, batch + 1),
+                        num_batches=max(1, num_batches or 1),
+                        accumulation_steps=self.accumulation_steps,
+                    ),
+                    path=output_path,
+                )
+            )
 
     @beartype
     def _get_optimizer(self, params: Any, **kwargs):
@@ -3142,6 +3305,25 @@ class TransformerModel(SequifierModel):
         evaluation_kind: str,
     ) -> None:
         """Write validation losses and class shares from rank 0."""
+        training_engine: TrainingEngine | None = getattr(self, "_training_engine", None)
+        if training_engine is not None:
+            identity = training_engine.identity(
+                epoch=max(1, epoch),
+                batch=max(1, batch),
+                num_batches=max(1, batches_total),
+                accumulation_steps=self.accumulation_steps,
+            )
+            training_engine.emit(
+                ValidationCompleted(
+                    access=training_engine.access,
+                    identity=identity,
+                    total_loss=float(total_loss),
+                    target_losses={
+                        name: float(value) for name, value in total_losses.items()
+                    },
+                    evaluation_kind=evaluation_kind,
+                )
+            )
         if self.rank == 0:
             learning_rate = self.optimizer.state_dict()["param_groups"][0]["lr"]
 

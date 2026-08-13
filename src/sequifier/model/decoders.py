@@ -7,6 +7,7 @@ from torch import Tensor, nn
 from torch.nn import ModuleDict
 
 from sequifier.model.dtypes import cast_floating_to_module_dtype
+from sequifier.model.tracing import TraceContext
 
 
 def _validate_module_dict_key(key: str, usage: str) -> None:
@@ -124,14 +125,45 @@ class TargetDecoderBranch(nn.Module):
             if isinstance(layer, nn.Linear):
                 yield layer.weight
 
-    def forward(self, x: Tensor) -> dict[str, Tensor]:
-        hidden = self._project_hidden(x)
+    def forward(
+        self,
+        x: Tensor,
+        *,
+        trace: TraceContext | None = None,
+        branch_name: str = "default",
+    ) -> dict[str, Tensor]:
+        hidden = x
+        block_index_by_end = {
+            module_index: block_index
+            for block_index, module_index in enumerate(self.hidden_block_end_indices)
+        }
+        for module_index, layer in enumerate(self.hidden_layers):
+            if isinstance(layer, nn.Linear):
+                hidden = layer(cast_floating_to_module_dtype(hidden, layer))
+            else:
+                hidden = layer(hidden)
+            block_index = block_index_by_end.get(module_index)
+            if trace is not None and block_index is not None:
+                hidden = trace.emit(
+                    f"decoder.branch.{branch_name}.block.{block_index}",
+                    hidden,
+                    axes=("batch", "time", "channel"),
+                    width=hidden.shape[-1],
+                )
         outputs = {}
         for target_column in self.target_columns:
             output_layer = cast(nn.Linear, self.output_layers[target_column])
-            outputs[target_column] = output_layer(
+            output = output_layer(
                 cast_floating_to_module_dtype(hidden, output_layer)
             ).to(torch.float32)
+            if trace is not None:
+                output = trace.emit(
+                    f"decoder.branch.{branch_name}.logits.{target_column}",
+                    output,
+                    axes=("batch", "time", "channel"),
+                    width=output.shape[-1],
+                )
+            outputs[target_column] = output
         return outputs
 
 
@@ -216,9 +248,13 @@ class TargetDecoding(nn.Module):
             )
         return activations
 
-    def forward(self, x: Tensor) -> dict[str, Tensor]:
+    def forward(
+        self, x: Tensor, *, trace: TraceContext | None = None
+    ) -> dict[str, Tensor]:
         branch_outputs = {
-            branch_name: cast(TargetDecoderBranch, branch)(x)
+            branch_name: cast(TargetDecoderBranch, branch)(
+                x, trace=trace, branch_name=branch_name
+            )
             for branch_name, branch in self.branches.items()
         }
         return {

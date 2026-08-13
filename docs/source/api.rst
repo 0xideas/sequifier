@@ -34,6 +34,33 @@ Non-standard Optimizers
 .. automodule:: sequifier.optimizers.ademamix
    :members:
 
+Experimental Maintainer Integration Surface
+---------------------------------------------
+
+.. automodule:: sequifier.integration
+   :members:
+
+.. automodule:: sequifier.model.factory
+   :members:
+
+.. automodule:: sequifier.model.network
+   :members:
+
+.. automodule:: sequifier.model.parameter_catalog
+   :members:
+
+.. automodule:: sequifier.model.tracing
+   :members:
+
+.. automodule:: sequifier.training.engine
+   :members:
+
+.. automodule:: sequifier.training.session
+   :members:
+
+.. automodule:: sequifier.artifacts.loading
+   :members:
+
 
 Internals
 ------------

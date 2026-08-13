@@ -1,8 +1,11 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from sequifier.model.dtypes import cast_floating_to_module_dtype
+from sequifier.model.tracing import TraceContext
 
 
 class RMSNorm(nn.Module):
@@ -86,15 +89,45 @@ class FeedForward(nn.Module):
         else:
             return self.linear1.weight.dtype
 
-    def forward(self, x):
+    def forward(self, x, *, trace: TraceContext | None = None, site_prefix: str = ""):
         if self.activation_fn == "swiglu":
             w1_out = self.w1(cast_floating_to_module_dtype(x, self.w1))
             w2_out = self.w2(cast_floating_to_module_dtype(x, self.w2))
-            hidden = self.dropout(F.silu(w1_out) * w2_out)
+            if trace is not None:
+                w1_out = trace.emit(
+                    f"{site_prefix}.pre_activation",
+                    w1_out,
+                    axes=("batch", "time", "channel"),
+                    width=w1_out.shape[-1],
+                )
+            activated = F.silu(w1_out) * w2_out
+            if trace is not None:
+                activated = trace.emit(
+                    f"{site_prefix}.activation",
+                    activated,
+                    axes=("batch", "time", "channel"),
+                    width=activated.shape[-1],
+                )
+            hidden = self.dropout(activated)
             return self.w3(cast_floating_to_module_dtype(hidden, self.w3))
         else:
             hidden = self.linear1(cast_floating_to_module_dtype(x, self.linear1))
-            hidden = self.dropout(self.act(hidden))
+            if trace is not None:
+                hidden = trace.emit(
+                    f"{site_prefix}.pre_activation",
+                    hidden,
+                    axes=("batch", "time", "channel"),
+                    width=hidden.shape[-1],
+                )
+            hidden = self.act(hidden)
+            if trace is not None:
+                hidden = trace.emit(
+                    f"{site_prefix}.activation",
+                    hidden,
+                    axes=("batch", "time", "channel"),
+                    width=hidden.shape[-1],
+                )
+            hidden = self.dropout(hidden)
             return self.linear2(cast_floating_to_module_dtype(hidden, self.linear2))
 
 
@@ -137,7 +170,14 @@ class SelfAttention(nn.Module):
             if self.head_dim % 2 != 0:
                 raise ValueError(f"head_dim ({self.head_dim}) must be even for RoPE")
 
-    def forward(self, x, mask=None):
+    def forward(
+        self,
+        x,
+        mask=None,
+        *,
+        trace: TraceContext | None = None,
+        site_prefix: str = "",
+    ):
         # x shape: (batch, seq_len, dim)
         batch_size, seq_len, _ = x.shape
 
@@ -174,17 +214,61 @@ class SelfAttention(nn.Module):
         if mask is not None and mask.is_floating_point() and mask.dtype != xq.dtype:
             mask = mask.to(dtype=xq.dtype)
 
-        # Scaled Dot Product Attention
-        output = F.scaled_dot_product_attention(
-            xq,
-            xk,
-            xv,
-            attn_mask=mask,
-            dropout_p=self.dropout.p if self.training else 0.0,
+        analysis_sites = (
+            "q",
+            "k",
+            "v",
+            "scores",
+            "weights",
+            "update",
         )
+        analysis_requested = trace is not None and any(
+            trace.requires(f"{site_prefix}.{suffix}") for suffix in analysis_sites
+        )
+        if not analysis_requested:
+            output = F.scaled_dot_product_attention(
+                xq,
+                xk,
+                xv,
+                attn_mask=mask,
+                dropout_p=self.dropout.p if self.training else 0.0,
+            )
+        else:
+            assert trace is not None
+            axes = ("batch", "head", "time", "channel")
+            xq = trace.emit(f"{site_prefix}.q", xq, axes=axes, width=self.head_dim)
+            xk = trace.emit(f"{site_prefix}.k", xk, axes=axes, width=self.head_dim)
+            xv = trace.emit(f"{site_prefix}.v", xv, axes=axes, width=self.head_dim)
+            scores = torch.matmul(xq, xk.transpose(-2, -1)) / math.sqrt(self.head_dim)
+            if mask is not None:
+                if mask.dtype == torch.bool:
+                    scores = scores.masked_fill(~mask, torch.finfo(scores.dtype).min)
+                else:
+                    scores = scores + mask
+            scores = trace.emit(
+                f"{site_prefix}.scores",
+                scores,
+                axes=("batch", "head", "time", "key_time"),
+            )
+            weights = torch.softmax(scores, dim=-1)
+            weights = trace.emit(
+                f"{site_prefix}.weights",
+                weights,
+                axes=("batch", "head", "time", "key_time"),
+            )
+            weights = F.dropout(weights, p=self.dropout.p, training=self.training)
+            output = torch.matmul(weights, xv)
 
         output = output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
-        return self.wo(cast_floating_to_module_dtype(output, self.wo))
+        output = self.wo(cast_floating_to_module_dtype(output, self.wo))
+        if trace is not None and trace.requires(f"{site_prefix}.update"):
+            output = trace.emit(
+                f"{site_prefix}.update",
+                output,
+                axes=("batch", "time", "channel"),
+                width=output.shape[-1],
+            )
+        return output
 
 
 class SequifierEncoderLayer(nn.Module):
@@ -232,19 +316,106 @@ class SequifierEncoderLayer(nn.Module):
             residual = residual.to(dtype=update.dtype)
         return residual + update
 
-    def forward(self, src, src_mask=None):
+    def forward(
+        self,
+        src,
+        src_mask=None,
+        *,
+        trace: TraceContext | None = None,
+        site_prefix: str = "",
+    ):
         # Pre-LN vs Post-LN logic
         if self.norm_first:
             normed_src = self.norm1(cast_floating_to_module_dtype(src, self.norm1))
+            if trace is not None:
+                normed_src = trace.emit(
+                    f"{site_prefix}.attention.norm_input",
+                    normed_src,
+                    axes=("batch", "time", "channel"),
+                    width=normed_src.shape[-1],
+                )
+            attention_update = self.dropout(
+                self.attn(
+                    normed_src,
+                    mask=src_mask,
+                    trace=trace,
+                    site_prefix=f"{site_prefix}.attention",
+                )
+            )
             x = self._residual_add(
                 src,
-                self.dropout(self.attn(normed_src, mask=src_mask)),
+                attention_update,
             )
+            if trace is not None:
+                x = trace.emit(
+                    f"{site_prefix}.attention.output",
+                    x,
+                    axes=("batch", "time", "channel"),
+                    width=x.shape[-1],
+                )
             normed_x = self.norm2(cast_floating_to_module_dtype(x, self.norm2))
-            x = self._residual_add(x, self.dropout(self.ff(normed_x)))
+            if trace is not None:
+                normed_x = trace.emit(
+                    f"{site_prefix}.mlp.norm_input",
+                    normed_x,
+                    axes=("batch", "time", "channel"),
+                    width=normed_x.shape[-1],
+                )
+            mlp_update = self.dropout(
+                self.ff(normed_x, trace=trace, site_prefix=f"{site_prefix}.mlp")
+            )
+            if trace is not None:
+                mlp_update = trace.emit(
+                    f"{site_prefix}.mlp.update",
+                    mlp_update,
+                    axes=("batch", "time", "channel"),
+                    width=mlp_update.shape[-1],
+                )
+            x = self._residual_add(x, mlp_update)
         else:
-            x = self._residual_add(src, self.dropout(self.attn(src, mask=src_mask)))
+            attention_input = src
+            if trace is not None:
+                attention_input = trace.emit(
+                    f"{site_prefix}.attention.norm_input",
+                    attention_input,
+                    axes=("batch", "time", "channel"),
+                    width=attention_input.shape[-1],
+                )
+            x = self._residual_add(
+                src,
+                self.dropout(
+                    self.attn(
+                        attention_input,
+                        mask=src_mask,
+                        trace=trace,
+                        site_prefix=f"{site_prefix}.attention",
+                    )
+                ),
+            )
             x = self.norm1(cast_floating_to_module_dtype(x, self.norm1))
-            x = self._residual_add(x, self.dropout(self.ff(x)))
+            if trace is not None:
+                x = trace.emit(
+                    f"{site_prefix}.attention.output",
+                    x,
+                    axes=("batch", "time", "channel"),
+                    width=x.shape[-1],
+                )
+                x = trace.emit(
+                    f"{site_prefix}.mlp.norm_input",
+                    x,
+                    axes=("batch", "time", "channel"),
+                    width=x.shape[-1],
+                )
+            mlp_update = self.dropout(
+                self.ff(x, trace=trace, site_prefix=f"{site_prefix}.mlp")
+            )
+            if trace is not None:
+                mlp_update = trace.emit(
+                    f"{site_prefix}.mlp.update",
+                    mlp_update,
+                    axes=("batch", "time", "channel"),
+                    width=mlp_update.shape[-1],
+                )
+            x = self._residual_add(x, mlp_update)
             x = self.norm2(cast_floating_to_module_dtype(x, self.norm2))
         return x
