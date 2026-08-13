@@ -352,6 +352,17 @@
     <span class="n">get_torch_dtype</span><span class="p">,</span>
     <span class="n">normalize_path</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.integration</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
+    <span class="n">BatchPrepared</span><span class="p">,</span>
+    <span class="n">CheckpointSaved</span><span class="p">,</span>
+    <span class="n">CheckpointSaving</span><span class="p">,</span>
+    <span class="n">ForwardCompleted</span><span class="p">,</span>
+    <span class="n">IntegrationManager</span><span class="p">,</span>
+    <span class="n">IntegrationSpec</span><span class="p">,</span>
+    <span class="n">LossComputed</span><span class="p">,</span>
+    <span class="n">RunCompleted</span><span class="p">,</span>
+    <span class="n">ValidationCompleted</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.batch</span><span class="w"> </span><span class="kn">import</span> <span class="n">SequifierBatch</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.sequifier_dataset_from_file</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
     <span class="n">SequifierDatasetFromFile</span><span class="p">,</span>
@@ -369,29 +380,27 @@
     <span class="n">SequifierDatasetFromFolderPtLazy</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.logging_paths</span><span class="w"> </span><span class="kn">import</span> <span class="n">model_log_directory</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.backbone</span><span class="w"> </span><span class="kn">import</span> <span class="n">TransformerBackbone</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.decoders</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_target_decoding</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.dtypes</span><span class="w"> </span><span class="kn">import</span> <span class="n">cast_floating_to_module_dtype</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.embedding</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
     <span class="n">ONNX_EMBEDDING_LAYER_NAMES_KEY</span><span class="p">,</span>
     <span class="n">parse_embedding_layer_name</span><span class="p">,</span>
 <span class="p">)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.freezing</span><span class="w"> </span><span class="kn">import</span> <span class="n">apply_model_freezing</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.ingestion_compiler</span><span class="w"> </span><span class="kn">import</span> <span class="n">compile_feature_ingestion</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.initialization</span><span class="w"> </span><span class="kn">import</span> <span class="n">initialize_model_weights</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.factory</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_transformer_network</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">RMSNorm</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.model</span><span class="w"> </span><span class="kn">import</span> <span class="n">SequifierModel</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.objectives</span><span class="w"> </span><span class="kn">import</span> <span class="n">create_objective</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.optimizers.optimizers</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_optimizer_class</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
-    <span class="n">ONNX_CATEGORICAL_TARGET_CODECS_KEY</span><span class="p">,</span>
-    <span class="n">resolve_categorical_decoder_ids</span><span class="p">,</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.parameter_catalog</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
+    <span class="n">ParameterCatalog</span><span class="p">,</span>
+    <span class="n">semantic_optimizer_groups</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.tracing</span><span class="w"> </span><span class="kn">import</span> <span class="n">activate_trace_context</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.optimizers.optimizers</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_optimizer_class</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">ONNX_CATEGORICAL_TARGET_CODECS_KEY</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.training.distributed</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
     <span class="n">broadcast_initial_state</span><span class="p">,</span>
     <span class="n">broadcast_publication_result</span><span class="p">,</span>
     <span class="n">verify_loaded_revision</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.training.engine</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainingEngine</span>  <span class="c1"># noqa: E402</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.training.initial_state</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
     <span class="n">load_model_initial_state</span><span class="p">,</span>
     <span class="n">select_initial_state</span><span class="p">,</span>
@@ -401,6 +410,8 @@
     <span class="n">write_terminal_manifest</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.training.metrics</span><span class="w"> </span><span class="kn">import</span> <span class="n">StructuredMetricWriters</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.training.session</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainingSession</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.training.state</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainingState</span>  <span class="c1"># noqa: E402</span>
 
 
 <div class="viewcode-block" id="cleanup"><a class="viewcode-back" href="../../api.html#sequifier.train.cleanup">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">cleanup</span><span class="p">():</span>
@@ -475,6 +486,88 @@
     <span class="k">return</span> <span class="p">[</span><span class="n">_canonical_parameter_name</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">value</span><span class="p">]</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">_run_training_session</span><span class="p">(</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">model</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">,</span>
+    <span class="n">train_loader</span><span class="p">:</span> <span class="n">DataLoader</span><span class="p">,</span>
+    <span class="n">valid_loader</span><span class="p">:</span> <span class="n">DataLoader</span><span class="p">,</span>
+    <span class="n">checkpoint</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">ddp_model</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">integration_specs</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">IntegrationSpec</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span>
+    <span class="n">integration_instances</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">group</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">param_groups</span><span class="p">):</span>
+        <span class="n">group</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span>
+            <span class="s2">&quot;group_id&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;all&quot;</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">param_groups</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">&quot;group-</span><span class="si">{</span><span class="n">index</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="n">saved_state</span> <span class="o">=</span> <span class="n">checkpoint</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;training_state&quot;</span><span class="p">,</span> <span class="p">{})</span> <span class="k">if</span> <span class="n">checkpoint</span> <span class="k">else</span> <span class="p">{}</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">saved_state</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+        <span class="n">saved_state</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">state</span> <span class="o">=</span> <span class="n">TrainingState</span><span class="p">(</span>
+        <span class="n">epoch</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">saved_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;epoch&quot;</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">model</span><span class="o">.</span><span class="n">start_epoch</span> <span class="o">-</span> <span class="mi">1</span><span class="p">))),</span>
+        <span class="n">batch</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">saved_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;batch&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">.</span><span class="n">start_batch</span><span class="p">)),</span>
+        <span class="n">global_batch_step</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">saved_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;global_batch_step&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)),</span>
+        <span class="n">optimizer_step</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">saved_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;optimizer_step&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)),</span>
+        <span class="n">accumulation_index</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">saved_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;accumulation_index&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)),</span>
+        <span class="n">best_validation_loss</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span>
+            <span class="n">saved_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;best_validation_loss&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">.</span><span class="n">_resume_best_val_loss</span><span class="p">)</span>
+        <span class="p">),</span>
+        <span class="n">epochs_without_improvement</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span>
+            <span class="n">saved_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+                <span class="s2">&quot;epochs_without_improvement&quot;</span><span class="p">,</span> <span class="n">model</span><span class="o">.</span><span class="n">_resume_n_epochs_no_improvement</span>
+            <span class="p">)</span>
+        <span class="p">),</span>
+        <span class="n">run_id</span><span class="o">=</span><span class="n">model</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span>
+        <span class="n">session_id</span><span class="o">=</span><span class="n">model</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">integrations</span> <span class="o">=</span> <span class="n">IntegrationManager</span><span class="p">(</span>
+        <span class="n">specs</span><span class="o">=</span><span class="n">integration_specs</span><span class="p">,</span>
+        <span class="n">instances</span><span class="o">=</span><span class="n">integration_instances</span><span class="p">,</span>
+        <span class="n">rank</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">rank</span> <span class="ow">or</span> <span class="mi">0</span><span class="p">),</span>
+        <span class="n">world_size</span><span class="o">=</span><span class="p">(</span>
+            <span class="n">dist</span><span class="o">.</span><span class="n">get_world_size</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_available</span><span class="p">()</span> <span class="ow">and</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span>
+            <span class="k">else</span> <span class="mi">1</span>
+        <span class="p">),</span>
+        <span class="n">distributed</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">integrations</span><span class="o">.</span><span class="n">validate_execution</span><span class="p">(</span>
+        <span class="n">torch_compile</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">torch_compile</span><span class="p">,</span>
+        <span class="n">data_parallelism</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">data_parallelism</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">engine</span> <span class="o">=</span> <span class="n">TrainingEngine</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+        <span class="n">objective</span><span class="o">=</span><span class="n">model</span><span class="o">.</span><span class="n">objective</span><span class="p">,</span>
+        <span class="n">criteria</span><span class="o">=</span><span class="n">model</span><span class="o">.</span><span class="n">criterion</span><span class="p">,</span>
+        <span class="n">optimizer</span><span class="o">=</span><span class="n">model</span><span class="o">.</span><span class="n">optimizer</span><span class="p">,</span>
+        <span class="n">scheduler</span><span class="o">=</span><span class="n">model</span><span class="o">.</span><span class="n">scheduler</span><span class="p">,</span>
+        <span class="n">scaler</span><span class="o">=</span><span class="n">model</span><span class="o">.</span><span class="n">scaler</span><span class="p">,</span>
+        <span class="n">state</span><span class="o">=</span><span class="n">state</span><span class="p">,</span>
+        <span class="n">integrations</span><span class="o">=</span><span class="n">integrations</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">session</span> <span class="o">=</span> <span class="n">TrainingSession</span><span class="p">(</span>
+        <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">,</span>
+        <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+        <span class="n">engine</span><span class="o">=</span><span class="n">engine</span><span class="p">,</span>
+        <span class="n">train_loader</span><span class="o">=</span><span class="n">train_loader</span><span class="p">,</span>
+        <span class="n">validation_loader</span><span class="o">=</span><span class="n">valid_loader</span><span class="p">,</span>
+        <span class="n">integrations</span><span class="o">=</span><span class="n">integrations</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">session</span><span class="o">.</span><span class="n">restore_integration_state</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">)</span>
+    <span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">ddp_model</span><span class="o">=</span><span class="n">ddp_model</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_optimizer_parameters</span><span class="p">(</span><span class="n">model</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">semantic_grouping</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+    <span class="n">parameters</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">parameters_to_optimize</span><span class="p">())</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">semantic_grouping</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">parameters</span>
+    <span class="k">return</span> <span class="n">semantic_optimizer_groups</span><span class="p">(</span>
+        <span class="n">ParameterCatalog</span><span class="p">(</span><span class="n">model</span><span class="p">),</span> <span class="n">parameters</span><span class="o">=</span><span class="p">{</span><span class="nb">id</span><span class="p">(</span><span class="n">parameter</span><span class="p">)</span> <span class="k">for</span> <span class="n">parameter</span> <span class="ow">in</span> <span class="n">parameters</span><span class="p">}</span>
+    <span class="p">)</span>
+
+
 <div class="viewcode-block" id="train_worker"><a class="viewcode-back" href="../../api.html#sequifier.train.train_worker">[docs]</a><span class="nd">@beartype</span>
 <span class="nd">@loguru_logger</span><span class="o">.</span><span class="n">catch</span><span class="p">(</span><span class="n">message</span><span class="o">=</span><span class="s2">&quot;Training worker failed&quot;</span><span class="p">,</span> <span class="n">reraise</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">train_worker</span><span class="p">(</span>
@@ -484,6 +577,9 @@
     <span class="n">from_folder</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
     <span class="n">global_rank</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">torch_compile</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">integration_specs</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">IntegrationSpec</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
+    <span class="n">integration_instances</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
+    <span class="n">semantic_optimizer_grouping</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Run one local distributed-training worker.&quot;&quot;&quot;</span>
     <span class="n">logger</span> <span class="o">=</span> <span class="n">configure_logger</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">model_name</span><span class="p">,</span> <span class="n">global_rank</span><span class="p">)</span>
@@ -562,6 +658,7 @@
     <span class="p">)</span>
 
     <span class="n">model</span> <span class="o">=</span> <span class="n">TransformerModel</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">rank</span><span class="o">=</span><span class="n">global_rank</span><span class="p">,</span> <span class="n">local_rank</span><span class="o">=</span><span class="n">local_rank</span><span class="p">)</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">_semantic_optimizer_grouping</span> <span class="o">=</span> <span class="n">semantic_optimizer_grouping</span>
     <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
         <span class="n">run_id_object</span> <span class="o">=</span> <span class="p">[</span><span class="n">model</span><span class="o">.</span><span class="n">run_id</span> <span class="k">if</span> <span class="n">global_rank</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="kc">None</span><span class="p">]</span>
         <span class="n">dist</span><span class="o">.</span><span class="n">broadcast_object_list</span><span class="p">(</span><span class="n">run_id_object</span><span class="p">,</span> <span class="n">src</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
@@ -589,7 +686,9 @@
 
     <span class="c1"># Initialize Optimizer</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
-        <span class="n">params_to_optimize</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">parameters_to_optimize</span><span class="p">()</span>
+        <span class="n">params_to_optimize</span> <span class="o">=</span> <span class="n">_optimizer_parameters</span><span class="p">(</span>
+            <span class="n">model</span><span class="p">,</span> <span class="n">semantic_grouping</span><span class="o">=</span><span class="n">semantic_optimizer_grouping</span>
+        <span class="p">)</span>
         <span class="n">model</span><span class="o">.</span><span class="n">initialize_optimizer</span><span class="p">(</span><span class="n">params</span><span class="o">=</span><span class="n">params_to_optimize</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="n">checkpoint</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
@@ -637,7 +736,16 @@
             <span class="n">base_model</span><span class="o">.</span><span class="n">_restore_rng_state</span><span class="p">()</span>
             <span class="n">base_model</span><span class="o">.</span><span class="n">_restore_data_loader_generator_states</span><span class="p">()</span>
 
-        <span class="n">model</span><span class="o">.</span><span class="n">train_model</span><span class="p">(</span><span class="n">train_loader</span><span class="p">,</span> <span class="n">valid_loader</span><span class="p">,</span> <span class="n">ddp_model</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="n">_run_training_session</span><span class="p">(</span>
+            <span class="n">model</span><span class="o">=</span><span class="n">base_model</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">,</span>
+            <span class="n">train_loader</span><span class="o">=</span><span class="n">train_loader</span><span class="p">,</span>
+            <span class="n">valid_loader</span><span class="o">=</span><span class="n">valid_loader</span><span class="p">,</span>
+            <span class="n">checkpoint</span><span class="o">=</span><span class="n">checkpoint</span><span class="p">,</span>
+            <span class="n">ddp_model</span><span class="o">=</span><span class="n">model</span> <span class="k">if</span> <span class="n">model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">base_model</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">integration_specs</span><span class="o">=</span><span class="n">integration_specs</span><span class="p">,</span>
+            <span class="n">integration_instances</span><span class="o">=</span><span class="n">integration_instances</span><span class="p">,</span>
+        <span class="p">)</span>
     <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">==</span> <span class="s2">&quot;FSDP&quot;</span><span class="p">:</span>
         <span class="n">mesh</span> <span class="o">=</span> <span class="n">init_device_mesh</span><span class="p">(</span>
             <span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="p">(</span><span class="n">world_size</span><span class="p">,)</span>
@@ -674,7 +782,9 @@
         <span class="n">fully_shard</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="o">**</span><span class="n">fsdp_kwargs</span><span class="p">)</span>
         <span class="n">dist</span><span class="o">.</span><span class="n">barrier</span><span class="p">()</span>
 
-        <span class="n">params_to_optimize</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">parameters_to_optimize</span><span class="p">()</span>
+        <span class="n">params_to_optimize</span> <span class="o">=</span> <span class="n">_optimizer_parameters</span><span class="p">(</span>
+            <span class="n">model</span><span class="p">,</span> <span class="n">semantic_grouping</span><span class="o">=</span><span class="n">semantic_optimizer_grouping</span>
+        <span class="p">)</span>
         <span class="n">model</span><span class="o">.</span><span class="n">initialize_optimizer</span><span class="p">(</span><span class="n">params</span><span class="o">=</span><span class="n">params_to_optimize</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="n">checkpoint</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
@@ -736,10 +846,21 @@
             <span class="n">base_model</span><span class="o">.</span><span class="n">_restore_rng_state</span><span class="p">()</span>
             <span class="n">base_model</span><span class="o">.</span><span class="n">_restore_data_loader_generator_states</span><span class="p">()</span>
 
-        <span class="n">model</span><span class="o">.</span><span class="n">train_model</span><span class="p">(</span><span class="n">train_loader</span><span class="p">,</span> <span class="n">valid_loader</span><span class="p">,</span> <span class="n">ddp_model</span><span class="o">=</span><span class="n">base_model</span><span class="p">)</span>
+        <span class="n">_run_training_session</span><span class="p">(</span>
+            <span class="n">model</span><span class="o">=</span><span class="n">base_model</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">,</span>
+            <span class="n">train_loader</span><span class="o">=</span><span class="n">train_loader</span><span class="p">,</span>
+            <span class="n">valid_loader</span><span class="o">=</span><span class="n">valid_loader</span><span class="p">,</span>
+            <span class="n">checkpoint</span><span class="o">=</span><span class="n">checkpoint</span><span class="p">,</span>
+            <span class="n">ddp_model</span><span class="o">=</span><span class="n">base_model</span><span class="p">,</span>
+            <span class="n">integration_specs</span><span class="o">=</span><span class="n">integration_specs</span><span class="p">,</span>
+            <span class="n">integration_instances</span><span class="o">=</span><span class="n">integration_instances</span><span class="p">,</span>
+        <span class="p">)</span>
         <span class="n">cleanup</span><span class="p">()</span>
     <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">==</span> <span class="s2">&quot;DDP&quot;</span><span class="p">:</span>  <span class="c1"># DDP</span>
-        <span class="n">params_to_optimize</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">parameters_to_optimize</span><span class="p">()</span>
+        <span class="n">params_to_optimize</span> <span class="o">=</span> <span class="n">_optimizer_parameters</span><span class="p">(</span>
+            <span class="n">model</span><span class="p">,</span> <span class="n">semantic_grouping</span><span class="o">=</span><span class="n">semantic_optimizer_grouping</span>
+        <span class="p">)</span>
         <span class="n">model</span><span class="o">.</span><span class="n">initialize_optimizer</span><span class="p">(</span><span class="n">params</span><span class="o">=</span><span class="n">params_to_optimize</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="n">checkpoint</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
@@ -803,7 +924,16 @@
         <span class="k">if</span> <span class="n">checkpoint</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">base_model</span><span class="o">.</span><span class="n">_restore_rng_state</span><span class="p">()</span>
             <span class="n">base_model</span><span class="o">.</span><span class="n">_restore_data_loader_generator_states</span><span class="p">()</span>
-        <span class="n">model</span><span class="o">.</span><span class="n">train_model</span><span class="p">(</span><span class="n">train_loader</span><span class="p">,</span> <span class="n">valid_loader</span><span class="p">,</span> <span class="n">ddp_model</span><span class="o">=</span><span class="n">ddp_model</span><span class="p">)</span>
+        <span class="n">_run_training_session</span><span class="p">(</span>
+            <span class="n">model</span><span class="o">=</span><span class="n">base_model</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">,</span>
+            <span class="n">train_loader</span><span class="o">=</span><span class="n">train_loader</span><span class="p">,</span>
+            <span class="n">valid_loader</span><span class="o">=</span><span class="n">valid_loader</span><span class="p">,</span>
+            <span class="n">checkpoint</span><span class="o">=</span><span class="n">checkpoint</span><span class="p">,</span>
+            <span class="n">ddp_model</span><span class="o">=</span><span class="n">ddp_model</span><span class="p">,</span>
+            <span class="n">integration_specs</span><span class="o">=</span><span class="n">integration_specs</span><span class="p">,</span>
+            <span class="n">integration_instances</span><span class="o">=</span><span class="n">integration_instances</span><span class="p">,</span>
+        <span class="p">)</span>
         <span class="n">cleanup</span><span class="p">()</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;For data_parallelism, only &#39;FSDP&#39; and &#39;DDP&#39; are supported&quot;</span><span class="p">)</span></div>
@@ -816,6 +946,8 @@
     <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">,</span>
     <span class="n">from_folder</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
     <span class="n">torch_compile</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">integration_specs</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">IntegrationSpec</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
+    <span class="n">semantic_optimizer_grouping</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">):</span>
     <span class="n">train_worker</span><span class="p">(</span>
         <span class="n">local_rank</span><span class="p">,</span>
@@ -824,17 +956,27 @@
         <span class="n">from_folder</span><span class="p">,</span>
         <span class="n">global_rank</span><span class="o">=</span><span class="n">local_rank</span><span class="p">,</span>
         <span class="n">torch_compile</span><span class="o">=</span><span class="n">torch_compile</span><span class="p">,</span>
+        <span class="n">integration_specs</span><span class="o">=</span><span class="n">integration_specs</span><span class="p">,</span>
+        <span class="n">semantic_optimizer_grouping</span><span class="o">=</span><span class="n">semantic_optimizer_grouping</span><span class="p">,</span>
     <span class="p">)</span>
 
 
-<div class="viewcode-block" id="train"><a class="viewcode-back" href="../../api.html#sequifier.train.train">[docs]</a><span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">train</span><span class="p">(</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">args_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load train config and launch local or distributed training.&quot;&quot;&quot;</span>
-    <span class="n">config_path</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">config_path</span> <span class="ow">or</span> <span class="s2">&quot;configs/train.yaml&quot;</span>
-    <span class="n">config</span> <span class="o">=</span> <span class="n">load_train_config</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">args_config</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">skip_metadata</span><span class="p">)</span>
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">run_training</span><span class="p">(</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">integration_specs</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">IntegrationSpec</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
+    <span class="n">integration_instances</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
+    <span class="n">semantic_optimizer_grouping</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">data_path</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">data_path</span>
     <span class="k">if</span> <span class="n">data_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;data_path must be provided or resolved from metadata&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span> <span class="ow">and</span> <span class="n">integration_instances</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">&quot;Distributed runs require IntegrationSpec; direct instances cannot &quot;</span>
+            <span class="s2">&quot;be transferred to workers.&quot;</span>
+        <span class="p">)</span>
 
     <span class="n">torch</span><span class="o">.</span><span class="n">set_float32_matmul_precision</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">float32_matmul_precision</span><span class="p">)</span>
 
@@ -854,6 +996,9 @@
                 <span class="n">from_folder</span><span class="p">,</span>
                 <span class="n">global_rank</span><span class="p">,</span>
                 <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">torch_compile</span><span class="p">,</span>
+                <span class="n">integration_specs</span><span class="p">,</span>
+                <span class="p">(),</span>
+                <span class="n">semantic_optimizer_grouping</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="c1"># Single-node multi-GPU fallback using mp.spawn</span>
@@ -865,6 +1010,8 @@
                         <span class="n">config</span><span class="p">,</span>
                         <span class="n">from_folder</span><span class="p">,</span>
                         <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">torch_compile</span><span class="p">,</span>
+                        <span class="n">integration_specs</span><span class="p">,</span>
+                        <span class="n">semantic_optimizer_grouping</span><span class="p">,</span>
                     <span class="p">),</span>
                     <span class="n">nprocs</span><span class="o">=</span><span class="n">world_size</span><span class="p">,</span>
                     <span class="n">join</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
@@ -876,7 +1023,25 @@
                 <span class="k">else</span><span class="p">:</span>
                     <span class="k">raise</span> <span class="n">e</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="n">train_worker</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">from_folder</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">torch_compile</span><span class="p">)</span></div>
+        <span class="n">train_worker</span><span class="p">(</span>
+            <span class="mi">0</span><span class="p">,</span>
+            <span class="mi">1</span><span class="p">,</span>
+            <span class="n">config</span><span class="p">,</span>
+            <span class="n">from_folder</span><span class="p">,</span>
+            <span class="mi">0</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">torch_compile</span><span class="p">,</span>
+            <span class="n">integration_specs</span><span class="p">,</span>
+            <span class="n">integration_instances</span><span class="p">,</span>
+            <span class="n">semantic_optimizer_grouping</span><span class="p">,</span>
+        <span class="p">)</span>
+
+
+<div class="viewcode-block" id="train"><a class="viewcode-back" href="../../api.html#sequifier.train.train">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">train</span><span class="p">(</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">args_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load train config and launch local or distributed training.&quot;&quot;&quot;</span>
+    <span class="n">config_path</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">config_path</span> <span class="ow">or</span> <span class="s2">&quot;configs/train.yaml&quot;</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="n">load_train_config</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">args_config</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">skip_metadata</span><span class="p">)</span>
+    <span class="n">run_training</span><span class="p">(</span><span class="n">config</span><span class="p">)</span></div>
 
 
 <span class="nd">@beartype</span>
@@ -1057,23 +1222,6 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">window_view</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">n_classes</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">target_decoder_ids</span> <span class="o">=</span> <span class="n">resolve_categorical_decoder_ids</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">,</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">,</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="p">,</span>
-            <span class="nb">getattr</span><span class="p">(</span><span class="n">hparams</span><span class="p">,</span> <span class="s2">&quot;categorical_decoder_special_tokens&quot;</span><span class="p">,</span> <span class="p">{}),</span>
-        <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">target_n_classes</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="n">col</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">ids</span><span class="p">)</span> <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">ids</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_decoder_ids</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-        <span class="p">}</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">target_global_to_decoder</span> <span class="o">=</span> <span class="p">{}</span>
-        <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">ids</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_decoder_ids</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="n">inverse</span> <span class="o">=</span> <span class="p">{</span>
-                <span class="n">global_id</span><span class="p">:</span> <span class="n">decoder_id</span> <span class="k">for</span> <span class="n">decoder_id</span><span class="p">,</span> <span class="n">global_id</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">ids</span><span class="p">)</span>
-            <span class="p">}</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">target_global_to_decoder</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span>
-                <span class="n">inverse</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">global_id</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="k">for</span> <span class="n">global_id</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">col</span><span class="p">])</span>
-            <span class="p">]</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">inference_batch_size</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">inference_batch_size</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">log_interval</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">log_interval</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">class_share_log_columns</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">class_share_log_columns</span>
@@ -1112,46 +1260,6 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">export_with_dropout</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">export_with_dropout</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">early_stopping_epochs</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">early_stopping_epochs</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span> <span class="o">=</span> <span class="n">hparams</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">objective</span> <span class="o">=</span> <span class="n">create_objective</span><span class="p">(</span><span class="n">hparams</span><span class="p">)</span>
-        <span class="n">architecture</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">architecture</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span> <span class="o">=</span> <span class="n">architecture</span><span class="o">.</span><span class="n">dim_model</span>
-        <span class="n">backbone</span> <span class="o">=</span> <span class="n">TransformerBackbone</span><span class="p">(</span><span class="n">architecture</span><span class="p">)</span>
-        <span class="n">built_ingestion</span> <span class="o">=</span> <span class="n">compile_feature_ingestion</span><span class="p">(</span>
-            <span class="n">hparams</span><span class="o">=</span><span class="n">hparams</span><span class="p">,</span>
-            <span class="n">direct_real_dtype_provider</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="p">(</span>
-                <span class="n">backbone</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">ff</span><span class="o">.</span><span class="n">get_first_layer_dtype</span><span class="p">()</span>
-            <span class="p">),</span>
-            <span class="n">device_max_concat_length</span><span class="o">=</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">device_max_concat_length</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span> <span class="o">=</span> <span class="n">built_ingestion</span><span class="o">.</span><span class="n">module</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_adapter</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">nn</span><span class="o">.</span><span class="n">Identity</span><span class="p">()</span>
-            <span class="k">if</span> <span class="n">built_ingestion</span><span class="o">.</span><span class="n">width</span> <span class="o">==</span> <span class="n">backbone</span><span class="o">.</span><span class="n">input_dim</span>
-            <span class="k">else</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">built_ingestion</span><span class="o">.</span><span class="n">width</span><span class="p">,</span> <span class="n">backbone</span><span class="o">.</span><span class="n">input_dim</span><span class="p">)</span>
-        <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_adapter</span><span class="o">.</span><span class="n">_sequifier_layer_group</span> <span class="o">=</span> <span class="p">(</span>  <span class="c1"># type: ignore[attr-defined]</span>
-            <span class="s2">&quot;ingestion.output_projection&quot;</span>
-        <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">backbone</span> <span class="o">=</span> <span class="n">backbone</span>
-
-        <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">prediction_length</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">decoding_support</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">support</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">decoded_context_length</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoding_support</span> <span class="o">+</span> <span class="mi">1</span>
-
-        <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span> <span class="o">=</span> <span class="n">build_target_decoding</span><span class="p">(</span>
-            <span class="n">hparams</span><span class="p">,</span> <span class="n">target_n_classes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">target_n_classes</span>
-        <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">softmax</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
-        <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">target_column_type</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="k">if</span> <span class="n">target_column_type</span> <span class="o">==</span> <span class="s2">&quot;categorical&quot;</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">softmax</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">LogSoftmax</span><span class="p">(</span><span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
-            <span class="k">elif</span> <span class="n">target_column_type</span> <span class="o">==</span> <span class="s2">&quot;real&quot;</span><span class="p">:</span>
-                <span class="k">continue</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;Target column type </span><span class="si">{</span><span class="n">target_column_type</span><span class="si">}</span><span class="s2"> not in [&#39;categorical&#39;, &#39;real&#39;]&quot;</span>
-                <span class="p">)</span>
-
         <span class="bp">self</span><span class="o">.</span><span class="n">device</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">device</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">device_max_concat_length</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">device_max_concat_length</span>
 
@@ -1165,133 +1273,53 @@
         <span class="k">else</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">device</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">device</span>
 
+        <span class="n">built_model</span> <span class="o">=</span> <span class="n">build_transformer_network</span><span class="p">(</span>
+            <span class="n">hparams</span><span class="p">,</span>
+            <span class="n">device</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">),</span>
+            <span class="n">logger</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">network</span> <span class="o">=</span> <span class="n">built_model</span><span class="o">.</span><span class="n">network</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">objective</span> <span class="o">=</span> <span class="n">built_model</span><span class="o">.</span><span class="n">objective</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span> <span class="o">=</span> <span class="n">network</span><span class="o">.</span><span class="n">dim_model</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span> <span class="o">=</span> <span class="n">network</span><span class="o">.</span><span class="n">ingestion</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_adapter</span> <span class="o">=</span> <span class="n">network</span><span class="o">.</span><span class="n">ingestion_adapter</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">backbone</span> <span class="o">=</span> <span class="n">network</span><span class="o">.</span><span class="n">backbone</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span> <span class="o">=</span> <span class="n">network</span><span class="o">.</span><span class="n">decoder</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">=</span> <span class="n">network</span><span class="o">.</span><span class="n">prediction_length</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">decoding_support</span> <span class="o">=</span> <span class="n">network</span><span class="o">.</span><span class="n">decoding_support</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">decoded_context_length</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoding_support</span> <span class="o">+</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_decoder_ids</span> <span class="o">=</span> <span class="n">built_model</span><span class="o">.</span><span class="n">runtime_metadata</span><span class="o">.</span><span class="n">target_decoder_ids</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_n_classes</span> <span class="o">=</span> <span class="n">built_model</span><span class="o">.</span><span class="n">runtime_metadata</span><span class="o">.</span><span class="n">target_n_classes</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_global_to_decoder</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">built_model</span><span class="o">.</span><span class="n">runtime_metadata</span><span class="o">.</span><span class="n">target_global_to_decoder</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">softmax</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">target_column_type</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">target_column_type</span> <span class="o">==</span> <span class="s2">&quot;categorical&quot;</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">softmax</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">LogSoftmax</span><span class="p">(</span><span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">target_column_type</span> <span class="o">!=</span> <span class="s2">&quot;real&quot;</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">&quot;Target column type </span><span class="si">{</span><span class="n">target_column_type</span><span class="si">}</span><span class="s2"> not in &quot;</span>
+                    <span class="s2">&quot;[&#39;categorical&#39;, &#39;real&#39;]&quot;</span>
+                <span class="p">)</span>
+
         <span class="bp">self</span><span class="o">.</span><span class="n">criterion</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_init_criterion</span><span class="p">(</span><span class="n">hparams</span><span class="o">=</span><span class="n">hparams</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">batch_size</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">accumulation_steps</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">register_buffer</span><span class="p">(</span>
             <span class="s2">&quot;src_mask&quot;</span><span class="p">,</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">objective</span><span class="o">.</span><span class="n">build_attention_mask_policy</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">),</span>
+            <span class="n">network</span><span class="o">.</span><span class="n">attention_mask_policy</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">clone</span><span class="p">(),</span>
             <span class="n">persistent</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
         <span class="p">)</span>
-
-        <span class="n">component_initializers</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="s2">&quot;ingestion&quot;</span><span class="p">:</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">initialization</span><span class="p">,</span>
-            <span class="s2">&quot;ingestion_adapter&quot;</span><span class="p">:</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">initialization</span><span class="p">,</span>
-            <span class="s2">&quot;backbone&quot;</span><span class="p">:</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">initialization</span><span class="p">,</span>
-            <span class="s2">&quot;decoder&quot;</span><span class="p">:</span> <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">initialization</span><span class="p">,</span>
-        <span class="p">}</span>
-        <span class="n">configured_initialization_targets</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
-        <span class="n">matched_initialization_targets</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
-        <span class="k">for</span> <span class="n">component_name</span><span class="p">,</span> <span class="n">initialization</span> <span class="ow">in</span> <span class="n">component_initializers</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="k">if</span> <span class="n">initialization</span><span class="o">.</span><span class="n">root</span><span class="p">:</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;Applying </span><span class="si">{</span><span class="n">component_name</span><span class="si">}</span><span class="s2"> initialization overrides: &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">initialization</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s1">&#39;json&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
-                <span class="p">)</span>
-            <span class="n">configured_initialization_targets</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
-                <span class="n">initialization</span><span class="o">.</span><span class="n">configured_targets</span><span class="p">()</span>
-            <span class="p">)</span>
-            <span class="n">matched_initialization_targets</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
-                <span class="n">initialize_model_weights</span><span class="p">(</span>
-                    <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">component_name</span><span class="p">),</span>
-                    <span class="n">initialization</span><span class="p">,</span>
-                    <span class="n">warn_unmatched</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                <span class="p">)</span>
-            <span class="p">)</span>
-        <span class="n">unmatched_initialization_targets</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">configured_initialization_targets</span> <span class="o">-</span> <span class="n">matched_initialization_targets</span>
+        <span class="n">component_freezing_policies</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">ingestion</span><span class="p">,</span>
+            <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">backbone</span><span class="p">,</span>
+            <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="p">,</span>
         <span class="p">)</span>
-        <span class="k">if</span> <span class="n">unmatched_initialization_targets</span><span class="p">:</span>
-            <span class="n">targets</span> <span class="o">=</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">group</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">kind</span><span class="si">}</span><span class="s2">&quot;</span>
-                <span class="k">for</span> <span class="n">group</span><span class="p">,</span> <span class="n">kind</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">unmatched_initialization_targets</span><span class="p">)</span>
-            <span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Initialization overrides matched no parameters: </span><span class="si">{</span><span class="n">targets</span><span class="si">}</span><span class="s2">&quot;</span>
-            <span class="p">)</span>
-
-        <span class="n">component_freezing_policies</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="s2">&quot;ingestion&quot;</span><span class="p">:</span> <span class="p">(</span>
-                <span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">ingestion</span><span class="p">,</span>
-                <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ingestion_adapter</span><span class="p">),</span>
-            <span class="p">),</span>
-            <span class="s2">&quot;backbone&quot;</span><span class="p">:</span> <span class="p">(</span><span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">backbone</span><span class="p">,</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">backbone</span><span class="p">,)),</span>
-            <span class="s2">&quot;decoder&quot;</span><span class="p">:</span> <span class="p">(</span><span class="n">hparams</span><span class="o">.</span><span class="n">model_spec</span><span class="o">.</span><span class="n">decoder</span><span class="p">,</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="p">,)),</span>
-        <span class="p">}</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_freezing_active</span> <span class="o">=</span> <span class="nb">any</span><span class="p">(</span>
-            <span class="n">config</span><span class="o">.</span><span class="n">has_freezing_policy</span>
-            <span class="k">for</span> <span class="n">config</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">component_freezing_policies</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">has_freezing_policy</span> <span class="k">for</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">component_freezing_policies</span>
         <span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_freezing_active</span><span class="p">:</span>
-            <span class="k">for</span> <span class="n">component_name</span><span class="p">,</span> <span class="p">(</span>
-                <span class="n">freezing_config</span><span class="p">,</span>
-                <span class="n">component_modules</span><span class="p">,</span>
-            <span class="p">)</span> <span class="ow">in</span> <span class="n">component_freezing_policies</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-                <span class="k">if</span> <span class="ow">not</span> <span class="n">freezing_config</span><span class="o">.</span><span class="n">has_freezing_policy</span><span class="p">:</span>
-                    <span class="k">continue</span>
-                <span class="n">matched_groups</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
-                <span class="k">for</span> <span class="n">component_module</span> <span class="ow">in</span> <span class="n">component_modules</span><span class="p">:</span>
-                    <span class="n">result</span> <span class="o">=</span> <span class="n">apply_model_freezing</span><span class="p">(</span>
-                        <span class="n">component_module</span><span class="p">,</span>
-                        <span class="n">freezing</span><span class="o">=</span><span class="n">freezing_config</span><span class="o">.</span><span class="n">freezing</span><span class="p">,</span>
-                        <span class="n">freezing_except</span><span class="o">=</span><span class="n">freezing_config</span><span class="o">.</span><span class="n">freezing_except</span><span class="p">,</span>
-                        <span class="n">warn_unmatched</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                    <span class="p">)</span>
-                    <span class="n">matched_groups</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">matched_groups</span><span class="p">)</span>
-
-                <span class="n">configured_groups</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span>
-                    <span class="n">freezing_config</span><span class="o">.</span><span class="n">freezing</span>
-                    <span class="k">if</span> <span class="n">freezing_config</span><span class="o">.</span><span class="n">freezing</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-                    <span class="k">else</span> <span class="n">freezing_config</span><span class="o">.</span><span class="n">freezing_except</span> <span class="ow">or</span> <span class="p">[]</span>
-                <span class="p">)</span>
-                <span class="n">unmatched_groups</span> <span class="o">=</span> <span class="n">configured_groups</span><span class="o">.</span><span class="n">difference</span><span class="p">(</span><span class="n">matched_groups</span><span class="p">)</span>
-                <span class="k">if</span> <span class="n">unmatched_groups</span><span class="p">:</span>
-                    <span class="n">group_names</span> <span class="o">=</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">unmatched_groups</span><span class="p">))</span>
-                    <span class="k">if</span> <span class="n">freezing_config</span><span class="o">.</span><span class="n">freezing_except</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-                        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">component_name</span><span class="si">}</span><span class="s2"> freezing_except groups matched no &quot;</span>
-                            <span class="sa">f</span><span class="s2">&quot;parameters: </span><span class="si">{</span><span class="n">group_names</span><span class="si">}</span><span class="s2">&quot;</span>
-                        <span class="p">)</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
-                        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">component_name</span><span class="si">}</span><span class="s2"> freezing groups matched no parameters: &quot;</span>
-                        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">group_names</span><span class="si">}</span><span class="s2">&quot;</span>
-                    <span class="p">)</span>
-
-                <span class="n">policy_name</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="s2">&quot;freezing&quot;</span>
-                    <span class="k">if</span> <span class="n">freezing_config</span><span class="o">.</span><span class="n">freezing</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-                    <span class="k">else</span> <span class="s2">&quot;freezing_except&quot;</span>
-                <span class="p">)</span>
-                <span class="n">component_parameters</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
-                    <span class="p">{</span>
-                        <span class="nb">id</span><span class="p">(</span><span class="n">parameter</span><span class="p">):</span> <span class="n">parameter</span>
-                        <span class="k">for</span> <span class="n">component_module</span> <span class="ow">in</span> <span class="n">component_modules</span>
-                        <span class="k">for</span> <span class="n">parameter</span> <span class="ow">in</span> <span class="n">component_module</span><span class="o">.</span><span class="n">parameters</span><span class="p">()</span>
-                    <span class="p">}</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
-                <span class="p">)</span>
-                <span class="n">frozen_count</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span>
-                    <span class="n">parameter</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span>
-                    <span class="k">for</span> <span class="n">parameter</span> <span class="ow">in</span> <span class="n">component_parameters</span>
-                    <span class="k">if</span> <span class="ow">not</span> <span class="n">parameter</span><span class="o">.</span><span class="n">requires_grad</span>
-                <span class="p">)</span>
-                <span class="n">trainable_count</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span>
-                    <span class="n">parameter</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span>
-                    <span class="k">for</span> <span class="n">parameter</span> <span class="ow">in</span> <span class="n">component_parameters</span>
-                    <span class="k">if</span> <span class="n">parameter</span><span class="o">.</span><span class="n">requires_grad</span>
-                <span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;Applied </span><span class="si">{</span><span class="n">component_name</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">policy_name</span><span class="si">}</span><span class="s2">: &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;groups=</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">configured_groups</span><span class="p">)</span><span class="si">}</span><span class="s2">, &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;matched=</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">matched_groups</span><span class="p">)</span><span class="si">}</span><span class="s2">, &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;frozen_parameters=</span><span class="si">{</span><span class="n">frozen_count</span><span class="si">}</span><span class="s2">, &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;trainable_parameters=</span><span class="si">{</span><span class="n">trainable_count</span><span class="si">}</span><span class="s2">&quot;</span>
-                <span class="p">)</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="nb">any</span><span class="p">(</span><span class="n">parameter</span><span class="o">.</span><span class="n">requires_grad</span> <span class="k">for</span> <span class="n">parameter</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">parameters</span><span class="p">()):</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;The configured freezing policies leave the model with no &quot;</span>
-                    <span class="s2">&quot;trainable parameters.&quot;</span>
-                <span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">=</span> <span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">scheduler_step_on</span>
 
@@ -1322,7 +1350,9 @@
 
         <span class="bp">self</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">criterion</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">criterion</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
-            <span class="n">criterion</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">)</span></div>
+            <span class="n">criterion</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+
+        <span class="nb">object</span><span class="o">.</span><span class="fm">__setattr__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;network&quot;</span><span class="p">,</span> <span class="n">network</span><span class="p">)</span></div>
 
     <span class="nd">@property</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">encoder</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ModuleDict</span><span class="p">:</span>
@@ -1563,10 +1593,11 @@
         <span class="bp">self</span><span class="p">,</span> <span class="n">src</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span> <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Return raw decoded outputs for all target columns.&quot;&quot;&quot;</span>
-        <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">forward_inner</span><span class="p">(</span><span class="n">src</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
-        <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_decoder_input_windows</span><span class="p">(</span><span class="n">output</span><span class="p">))</span>
-
-        <span class="k">return</span> <span class="n">output</span></div>
+        <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">network</span><span class="p">(</span><span class="n">src</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="n">target_column</span><span class="p">:</span> <span class="n">logits</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">logits</span> <span class="ow">in</span> <span class="n">output</span><span class="o">.</span><span class="n">logits</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="p">}</span></div>
 
     <span class="nd">@conditional_beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_decoder_input_windows</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">output</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
@@ -1708,6 +1739,9 @@
             <span class="s2">&quot;scheduler_step_on&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_on</span><span class="p">,</span>
             <span class="s2">&quot;scheduler&quot;</span><span class="p">:</span> <span class="nb">dict</span><span class="p">(</span><span class="n">training_spec</span><span class="o">.</span><span class="n">scheduler</span><span class="p">),</span>
             <span class="s2">&quot;optimizer&quot;</span><span class="p">:</span> <span class="nb">dict</span><span class="p">(</span><span class="n">training_spec</span><span class="o">.</span><span class="n">optimizer</span><span class="p">),</span>
+            <span class="s2">&quot;semantic_optimizer_grouping&quot;</span><span class="p">:</span> <span class="nb">getattr</span><span class="p">(</span>
+                <span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;_semantic_optimizer_grouping&quot;</span><span class="p">,</span> <span class="kc">False</span>
+            <span class="p">),</span>
             <span class="s2">&quot;distributed&quot;</span><span class="p">:</span> <span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">,</span>
             <span class="s2">&quot;data_parallelism&quot;</span><span class="p">:</span> <span class="n">training_spec</span><span class="o">.</span><span class="n">data_parallelism</span><span class="p">,</span>
             <span class="s2">&quot;world_size&quot;</span><span class="p">:</span> <span class="p">(</span>
@@ -1989,6 +2023,7 @@
         <span class="n">ddp_model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Run epochs, validation, checkpointing, export, and interruption cleanup.&quot;&quot;&quot;</span>
+        <span class="n">training_engine</span><span class="p">:</span> <span class="n">TrainingEngine</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;_training_engine&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">metric_writers</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">metric_writers</span> <span class="o">=</span> <span class="n">StructuredMetricWriters</span><span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
@@ -2058,6 +2093,11 @@
                     <span class="n">best_model_state</span><span class="p">,</span>
                 <span class="p">)</span>
 
+                <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">training_engine</span><span class="o">.</span><span class="n">stop_requested</span><span class="p">:</span>
+                    <span class="n">completion_reason</span> <span class="o">=</span> <span class="s2">&quot;integration_requested_stop&quot;</span>
+                    <span class="n">last_epoch</span> <span class="o">=</span> <span class="n">epoch</span>
+                    <span class="k">break</span>
+
                 <span class="n">total_loss</span><span class="p">,</span> <span class="n">total_losses</span><span class="p">,</span> <span class="n">class_counts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_evaluate</span><span class="p">(</span>
                     <span class="n">valid_loader</span><span class="p">,</span> <span class="n">ddp_model</span>
                 <span class="p">)</span>
@@ -2081,8 +2121,17 @@
                 <span class="k">else</span><span class="p">:</span>
                     <span class="n">n_epochs_no_improvement</span> <span class="o">+=</span> <span class="mi">1</span>
 
+                <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">training_engine</span><span class="o">.</span><span class="n">state</span><span class="o">.</span><span class="n">epoch</span> <span class="o">=</span> <span class="n">epoch</span>
+                    <span class="n">training_engine</span><span class="o">.</span><span class="n">state</span><span class="o">.</span><span class="n">best_validation_loss</span> <span class="o">=</span> <span class="n">best_val_loss</span>
+                    <span class="n">training_engine</span><span class="o">.</span><span class="n">state</span><span class="o">.</span><span class="n">epochs_without_improvement</span> <span class="o">=</span> <span class="p">(</span>
+                        <span class="n">n_epochs_no_improvement</span>
+                    <span class="p">)</span>
+
                 <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">==</span> <span class="s2">&quot;epoch&quot;</span><span class="p">:</span>
-                    <span class="k">if</span> <span class="p">(</span>
+                    <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="n">training_engine</span><span class="o">.</span><span class="n">step_scheduler</span><span class="p">()</span>
+                    <span class="k">elif</span> <span class="p">(</span>
                         <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="p">,</span> <span class="s2">&quot;total_steps&quot;</span><span class="p">)</span>
                         <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">last_epoch</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">total_steps</span>
                     <span class="p">):</span>
@@ -2200,6 +2249,14 @@
             <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;--- Training Complete ---&quot;</span><span class="p">)</span>
 
+        <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">training_engine</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span>
+                <span class="n">RunCompleted</span><span class="p">(</span>
+                    <span class="n">access</span><span class="o">=</span><span class="n">training_engine</span><span class="o">.</span><span class="n">access</span><span class="p">,</span>
+                    <span class="n">completion_reason</span><span class="o">=</span><span class="n">completion_reason</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">distributed</span><span class="p">:</span>
             <span class="n">dist</span><span class="o">.</span><span class="n">barrier</span><span class="p">()</span></div>
 
@@ -2232,6 +2289,7 @@
         <span class="n">model_to_call</span> <span class="o">=</span> <span class="n">ddp_model</span> <span class="k">if</span> <span class="n">ddp_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="bp">self</span>
 
         <span class="n">model_to_call</span><span class="o">.</span><span class="n">train</span><span class="p">()</span>
+        <span class="n">training_engine</span><span class="p">:</span> <span class="n">TrainingEngine</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;_training_engine&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
 
         <span class="k">for</span> <span class="n">batch_offset</span><span class="p">,</span> <span class="n">batch</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">train_loader</span><span class="p">):</span>
             <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">batch</span><span class="p">,</span> <span class="n">SequifierBatch</span><span class="p">):</span>
@@ -2264,22 +2322,56 @@
                 <span class="n">data</span><span class="p">,</span> <span class="n">targets</span><span class="p">,</span> <span class="n">metadata</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">objective</span><span class="o">.</span><span class="n">prepare_batch</span><span class="p">(</span>
                     <span class="n">data</span><span class="p">,</span> <span class="n">targets</span><span class="p">,</span> <span class="n">metadata</span>
                 <span class="p">)</span>
+                <span class="n">identity</span> <span class="o">=</span> <span class="kc">None</span>
+                <span class="n">prepared_event</span> <span class="o">=</span> <span class="kc">None</span>
+                <span class="n">trace_context</span> <span class="o">=</span> <span class="kc">None</span>
+                <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">identity</span> <span class="o">=</span> <span class="n">training_engine</span><span class="o">.</span><span class="n">identity</span><span class="p">(</span>
+                        <span class="n">epoch</span><span class="o">=</span><span class="n">epoch</span><span class="p">,</span>
+                        <span class="n">batch</span><span class="o">=</span><span class="n">batch_count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
+                        <span class="n">num_batches</span><span class="o">=</span><span class="n">num_batches</span><span class="p">,</span>
+                        <span class="n">accumulation_steps</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span><span class="p">,</span>
+                    <span class="p">)</span>
+                    <span class="n">training_engine</span><span class="o">.</span><span class="n">update_batch_state</span><span class="p">(</span><span class="n">identity</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">training_engine</span><span class="o">.</span><span class="n">integrations</span><span class="o">.</span><span class="n">enabled</span><span class="p">:</span>
+                        <span class="n">prepared_event</span> <span class="o">=</span> <span class="n">BatchPrepared</span><span class="p">(</span>
+                            <span class="n">access</span><span class="o">=</span><span class="n">training_engine</span><span class="o">.</span><span class="n">access</span><span class="p">,</span>
+                            <span class="n">identity</span><span class="o">=</span><span class="n">identity</span><span class="p">,</span>
+                            <span class="n">inputs</span><span class="o">=</span><span class="n">data</span><span class="p">,</span>
+                            <span class="n">targets</span><span class="o">=</span><span class="n">targets</span><span class="p">,</span>
+                            <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span>
+                        <span class="p">)</span>
+                        <span class="n">training_engine</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span><span class="n">prepared_event</span><span class="p">)</span>
+                        <span class="n">trace_context</span> <span class="o">=</span> <span class="n">training_engine</span><span class="o">.</span><span class="n">integrations</span><span class="o">.</span><span class="n">forward_trace</span><span class="p">(</span>
+                            <span class="n">prepared_event</span>
+                        <span class="p">)</span>
 
                 <span class="c1"># Only use standard torch.autocast if FSDP MixedPrecision is NOT handling it natively</span>
-                <span class="k">if</span> <span class="p">(</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_autocast</span>
-                    <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">!=</span> <span class="s2">&quot;FSDP&quot;</span>
-                <span class="p">):</span>
-                    <span class="n">amp_dtype</span> <span class="o">=</span> <span class="n">get_torch_dtype</span><span class="p">(</span>
-                        <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
-                            <span class="s2">&quot;linear&quot;</span><span class="p">,</span> <span class="s2">&quot;bfloat16&quot;</span>
-                        <span class="p">)</span>
-                        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span>
-                        <span class="k">else</span> <span class="s2">&quot;bfloat16&quot;</span>
-                    <span class="p">)</span>
-                    <span class="k">with</span> <span class="n">torch</span><span class="o">.</span><span class="n">autocast</span><span class="p">(</span>
-                        <span class="n">device_type</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;:&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">amp_dtype</span>
+                <span class="k">with</span> <span class="n">activate_trace_context</span><span class="p">(</span><span class="n">trace_context</span><span class="p">):</span>
+                    <span class="k">if</span> <span class="p">(</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_autocast</span>
+                        <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">!=</span> <span class="s2">&quot;FSDP&quot;</span>
                     <span class="p">):</span>
+                        <span class="n">amp_dtype</span> <span class="o">=</span> <span class="n">get_torch_dtype</span><span class="p">(</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+                                <span class="s2">&quot;linear&quot;</span><span class="p">,</span> <span class="s2">&quot;bfloat16&quot;</span>
+                            <span class="p">)</span>
+                            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">layer_type_dtypes</span>
+                            <span class="k">else</span> <span class="s2">&quot;bfloat16&quot;</span>
+                        <span class="p">)</span>
+                        <span class="k">with</span> <span class="n">torch</span><span class="o">.</span><span class="n">autocast</span><span class="p">(</span>
+                            <span class="n">device_type</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;:&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">amp_dtype</span>
+                        <span class="p">):</span>
+                            <span class="n">output</span> <span class="o">=</span> <span class="n">model_to_call</span><span class="p">(</span>
+                                <span class="n">data</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span> <span class="n">return_logits</span><span class="o">=</span><span class="kc">True</span>
+                            <span class="p">)</span>
+                            <span class="p">(</span>
+                                <span class="n">loss</span><span class="p">,</span>
+                                <span class="n">backward_components</span><span class="p">,</span>
+                                <span class="n">local_loss_sums</span><span class="p">,</span>
+                                <span class="n">local_token_count</span><span class="p">,</span>
+                            <span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_training_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">targets</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+                    <span class="k">else</span><span class="p">:</span>
                         <span class="n">output</span> <span class="o">=</span> <span class="n">model_to_call</span><span class="p">(</span>
                             <span class="n">data</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span> <span class="n">return_logits</span><span class="o">=</span><span class="kc">True</span>
                         <span class="p">)</span>
@@ -2289,14 +2381,21 @@
                             <span class="n">local_loss_sums</span><span class="p">,</span>
                             <span class="n">local_token_count</span><span class="p">,</span>
                         <span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_training_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">targets</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
-                <span class="k">else</span><span class="p">:</span>
-                    <span class="n">output</span> <span class="o">=</span> <span class="n">model_to_call</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span> <span class="n">return_logits</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-                    <span class="p">(</span>
-                        <span class="n">loss</span><span class="p">,</span>
-                        <span class="n">backward_components</span><span class="p">,</span>
-                        <span class="n">local_loss_sums</span><span class="p">,</span>
-                        <span class="n">local_token_count</span><span class="p">,</span>
-                    <span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_training_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">targets</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+
+                <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">training_engine</span><span class="o">.</span><span class="n">integrations</span><span class="o">.</span><span class="n">enabled</span><span class="p">:</span>
+                    <span class="n">training_engine</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span>
+                        <span class="n">ForwardCompleted</span><span class="p">(</span>
+                            <span class="n">access</span><span class="o">=</span><span class="n">training_engine</span><span class="o">.</span><span class="n">access</span><span class="p">,</span>
+                            <span class="n">identity</span><span class="o">=</span><span class="n">identity</span><span class="p">,</span>
+                            <span class="n">outputs</span><span class="o">=</span><span class="p">{</span>
+                                <span class="n">target</span><span class="p">:</span> <span class="n">logits</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+                                <span class="k">for</span> <span class="n">target</span><span class="p">,</span> <span class="n">logits</span> <span class="ow">in</span> <span class="n">output</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                            <span class="p">},</span>
+                            <span class="n">captures</span><span class="o">=</span><span class="p">(</span>
+                                <span class="p">{}</span> <span class="k">if</span> <span class="n">trace_context</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">trace_context</span><span class="o">.</span><span class="n">captures</span>
+                            <span class="p">),</span>
+                        <span class="p">)</span>
+                    <span class="p">)</span>
 
                 <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
                     <span class="n">accumulation_divisor</span> <span class="o">=</span> <span class="mi">1</span>
@@ -2310,7 +2409,34 @@
                     <span class="p">)</span>
 
                 <span class="n">backward_loss</span> <span class="o">=</span> <span class="n">loss</span> <span class="o">/</span> <span class="n">accumulation_divisor</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">scale</span><span class="p">(</span><span class="n">backward_loss</span><span class="p">)</span><span class="o">.</span><span class="n">backward</span><span class="p">()</span>
+                <span class="n">optimizer_step_due</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span> <span class="ow">is</span> <span class="kc">None</span>
+                    <span class="ow">or</span> <span class="p">(</span><span class="n">batch_count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span> <span class="o">==</span> <span class="mi">0</span>
+                    <span class="ow">or</span> <span class="p">(</span><span class="n">batch_count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="n">num_batches</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">training_engine</span><span class="o">.</span><span class="n">integrations</span><span class="o">.</span><span class="n">enabled</span><span class="p">:</span>
+                    <span class="n">training_engine</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span>
+                        <span class="n">LossComputed</span><span class="p">(</span>
+                            <span class="n">access</span><span class="o">=</span><span class="n">training_engine</span><span class="o">.</span><span class="n">access</span><span class="p">,</span>
+                            <span class="n">identity</span><span class="o">=</span><span class="n">identity</span><span class="p">,</span>
+                            <span class="n">loss</span><span class="o">=</span><span class="n">loss</span><span class="p">,</span>
+                            <span class="n">backward_loss</span><span class="o">=</span><span class="n">backward_loss</span><span class="p">,</span>
+                        <span class="p">)</span>
+                    <span class="p">)</span>
+                <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">identity</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
+                            <span class="s2">&quot;Training engine did not create step identity.&quot;</span>
+                        <span class="p">)</span>
+                    <span class="n">optimizer_step_performed</span> <span class="o">=</span> <span class="n">training_engine</span><span class="o">.</span><span class="n">backward_and_step</span><span class="p">(</span>
+                        <span class="n">backward_loss</span><span class="o">=</span><span class="n">backward_loss</span><span class="p">,</span>
+                        <span class="n">identity</span><span class="o">=</span><span class="n">identity</span><span class="p">,</span>
+                        <span class="n">optimizer_step_due</span><span class="o">=</span><span class="n">optimizer_step_due</span><span class="p">,</span>
+                        <span class="n">gradient_clip_norm</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">gradient_clip</span><span class="p">,</span>
+                    <span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">scale</span><span class="p">(</span><span class="n">backward_loss</span><span class="p">)</span><span class="o">.</span><span class="n">backward</span><span class="p">()</span>
+                    <span class="n">optimizer_step_performed</span> <span class="o">=</span> <span class="kc">False</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_accumulate_loss_components</span><span class="p">(</span>
                     <span class="n">train_loss_sums</span><span class="p">,</span>
                     <span class="n">train_token_count</span><span class="p">,</span>
@@ -2318,26 +2444,15 @@
                     <span class="n">local_token_count</span><span class="p">,</span>
                 <span class="p">)</span>
 
-                <span class="n">optimizer_step_due</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span> <span class="ow">is</span> <span class="kc">None</span>
-                    <span class="ow">or</span> <span class="p">(</span><span class="n">batch_count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span> <span class="o">==</span> <span class="mi">0</span>
-                    <span class="ow">or</span> <span class="p">(</span><span class="n">batch_count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="n">num_batches</span>
-                <span class="p">)</span>
-                <span class="n">optimizer_step_performed</span> <span class="o">=</span> <span class="kc">False</span>
-
-                <span class="k">if</span> <span class="n">optimizer_step_due</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">optimizer_step_due</span> <span class="ow">and</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">unscale_</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">)</span>
-
-                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">gradient_clip</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-                        <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">clip_grad_norm_</span><span class="p">(</span>
-                            <span class="bp">self</span><span class="o">.</span><span class="n">parameters</span><span class="p">(),</span>
-                            <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">gradient_clip</span><span class="p">,</span>
-                        <span class="p">)</span>
-
+                    <span class="n">clip_norm</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">gradient_clip</span>
+                    <span class="k">if</span> <span class="n">clip_norm</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">clip_grad_norm_</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">parameters</span><span class="p">(),</span> <span class="n">clip_norm</span><span class="p">)</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">)</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">update</span><span class="p">()</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">zero_grad</span><span class="p">()</span>
                     <span class="n">optimizer_step_performed</span> <span class="o">=</span> <span class="kc">True</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">zero_grad</span><span class="p">()</span>
 
                 <span class="k">if</span> <span class="n">optimizer_step_due</span><span class="p">:</span>
                     <span class="k">if</span> <span class="ow">not</span> <span class="n">optimizer_step_performed</span><span class="p">:</span>
@@ -2395,7 +2510,9 @@
                 <span class="k">del</span> <span class="n">data</span><span class="p">,</span> <span class="n">targets</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">loss</span><span class="p">,</span> <span class="n">backward_loss</span><span class="p">,</span> <span class="n">backward_components</span>
 
                 <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">==</span> <span class="s2">&quot;batch&quot;</span> <span class="ow">and</span> <span class="n">optimizer_step_performed</span><span class="p">:</span>
-                    <span class="k">if</span> <span class="p">(</span>
+                    <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="n">training_engine</span><span class="o">.</span><span class="n">step_scheduler</span><span class="p">()</span>
+                    <span class="k">elif</span> <span class="p">(</span>
                         <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="p">,</span> <span class="s2">&quot;total_steps&quot;</span><span class="p">)</span>
                         <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">last_epoch</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">total_steps</span>
                     <span class="p">):</span>
@@ -2499,6 +2616,9 @@
                         <span class="p">)</span>
                         <span class="bp">self</span><span class="o">.</span><span class="n">last_batch_save_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
                         <span class="bp">self</span><span class="o">.</span><span class="n">last_batch_save_global_step</span> <span class="o">=</span> <span class="n">current_global_step</span>
+
+                <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">training_engine</span><span class="o">.</span><span class="n">stop_requested</span><span class="p">:</span>
+                    <span class="k">break</span>
 
         <span class="k">if</span> <span class="n">dataset_handles_start_batch</span><span class="p">:</span>
             <span class="n">set_dataset_start_batch</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
@@ -3298,6 +3418,24 @@
         <span class="n">num_batches</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Save rank-0 checkpoint state.&quot;&quot;&quot;</span>
+        <span class="n">latest_path</span> <span class="o">=</span> <span class="n">checkpoint_path</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="p">)</span>
+        <span class="n">output_path</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">latest_path</span> <span class="k">if</span> <span class="n">suffix</span> <span class="o">==</span> <span class="s2">&quot;latest&quot;</span> <span class="k">else</span> <span class="n">latest_path</span><span class="o">.</span><span class="n">with_name</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">.pt&quot;</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">training_engine</span><span class="p">:</span> <span class="n">TrainingEngine</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;_training_engine&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">training_engine</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span>
+                <span class="n">CheckpointSaving</span><span class="p">(</span>
+                    <span class="n">access</span><span class="o">=</span><span class="n">training_engine</span><span class="o">.</span><span class="n">access</span><span class="p">,</span>
+                    <span class="n">identity</span><span class="o">=</span><span class="n">training_engine</span><span class="o">.</span><span class="n">identity</span><span class="p">(</span>
+                        <span class="n">epoch</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">epoch</span><span class="p">),</span>
+                        <span class="n">batch</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">batch</span> <span class="o">+</span> <span class="mi">1</span><span class="p">),</span>
+                        <span class="n">num_batches</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">num_batches</span> <span class="ow">or</span> <span class="mi">1</span><span class="p">),</span>
+                        <span class="n">accumulation_steps</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span><span class="p">,</span>
+                    <span class="p">),</span>
+                    <span class="n">path</span><span class="o">=</span><span class="n">output_path</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
         <span class="n">model_to_extract</span> <span class="o">=</span> <span class="n">ddp_model</span> <span class="k">if</span> <span class="n">ddp_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="bp">self</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">==</span> <span class="s2">&quot;FSDP&quot;</span><span class="p">:</span>
@@ -3323,15 +3461,16 @@
 
         <span class="n">rng_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_collect_rng_states_for_checkpoint</span><span class="p">()</span>
         <span class="n">data_loader_generator_states</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_data_loader_generator_states</span><span class="p">()</span>
+        <span class="n">integration_state</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">training_engine</span><span class="o">.</span><span class="n">integrations</span><span class="o">.</span><span class="n">checkpoint_state_dict</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="p">{}</span>
+        <span class="p">)</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
             <span class="k">return</span>
 
-        <span class="n">latest_path</span> <span class="o">=</span> <span class="n">checkpoint_path</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="p">)</span>
         <span class="n">latest_path</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-        <span class="n">output_path</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">latest_path</span> <span class="k">if</span> <span class="n">suffix</span> <span class="o">==</span> <span class="s2">&quot;latest&quot;</span> <span class="k">else</span> <span class="n">latest_path</span><span class="o">.</span><span class="n">with_name</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">.pt&quot;</span><span class="p">)</span>
-        <span class="p">)</span>
 
         <span class="n">checkpoint</span> <span class="o">=</span> <span class="p">{</span>
             <span class="s2">&quot;checkpoint_metadata&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_checkpoint_compatibility_metadata</span><span class="p">(</span><span class="n">num_batches</span><span class="p">),</span>
@@ -3349,6 +3488,11 @@
             <span class="s2">&quot;best_model_state_dict&quot;</span><span class="p">:</span> <span class="n">best_model_state_dict</span><span class="p">,</span>
             <span class="s2">&quot;backbone_parent_revision_id&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_backbone_parent_revision_id</span><span class="p">,</span>
             <span class="s2">&quot;loss&quot;</span><span class="p">:</span> <span class="n">val_loss</span><span class="p">,</span>
+            <span class="s2">&quot;training_config&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">hparams</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">),</span>
+            <span class="s2">&quot;training_state&quot;</span><span class="p">:</span> <span class="p">(</span>
+                <span class="n">asdict</span><span class="p">(</span><span class="n">training_engine</span><span class="o">.</span><span class="n">state</span><span class="p">)</span> <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span>
+            <span class="p">),</span>
+            <span class="s2">&quot;integration_state&quot;</span><span class="p">:</span> <span class="p">(</span><span class="n">integration_state</span><span class="p">),</span>
         <span class="p">}</span>
 
         <span class="n">temp_path</span> <span class="o">=</span> <span class="n">output_path</span><span class="o">.</span><span class="n">with_name</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;.</span><span class="si">{</span><span class="n">output_path</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">uuid</span><span class="o">.</span><span class="n">uuid4</span><span class="p">()</span><span class="o">.</span><span class="n">hex</span><span class="si">}</span><span class="s2">.tmp&quot;</span><span class="p">)</span>
@@ -3370,6 +3514,19 @@
                 <span class="k">with</span> <span class="n">contextlib</span><span class="o">.</span><span class="n">suppress</span><span class="p">(</span><span class="ne">OSError</span><span class="p">):</span>
                     <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">latest_temp_path</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Saved checkpoint to </span><span class="si">{</span><span class="n">output_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">training_engine</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span>
+                <span class="n">CheckpointSaved</span><span class="p">(</span>
+                    <span class="n">access</span><span class="o">=</span><span class="n">training_engine</span><span class="o">.</span><span class="n">access</span><span class="p">,</span>
+                    <span class="n">identity</span><span class="o">=</span><span class="n">training_engine</span><span class="o">.</span><span class="n">identity</span><span class="p">(</span>
+                        <span class="n">epoch</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">epoch</span><span class="p">),</span>
+                        <span class="n">batch</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">batch</span> <span class="o">+</span> <span class="mi">1</span><span class="p">),</span>
+                        <span class="n">num_batches</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">num_batches</span> <span class="ow">or</span> <span class="mi">1</span><span class="p">),</span>
+                        <span class="n">accumulation_steps</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span><span class="p">,</span>
+                    <span class="p">),</span>
+                    <span class="n">path</span><span class="o">=</span><span class="n">output_path</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_get_optimizer</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
@@ -3416,6 +3573,25 @@
         <span class="n">evaluation_kind</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;Write validation losses and class shares from rank 0.&quot;&quot;&quot;</span>
+        <span class="n">training_engine</span><span class="p">:</span> <span class="n">TrainingEngine</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;_training_engine&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">training_engine</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">identity</span> <span class="o">=</span> <span class="n">training_engine</span><span class="o">.</span><span class="n">identity</span><span class="p">(</span>
+                <span class="n">epoch</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">epoch</span><span class="p">),</span>
+                <span class="n">batch</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">batch</span><span class="p">),</span>
+                <span class="n">num_batches</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">batches_total</span><span class="p">),</span>
+                <span class="n">accumulation_steps</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">accumulation_steps</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">training_engine</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span>
+                <span class="n">ValidationCompleted</span><span class="p">(</span>
+                    <span class="n">access</span><span class="o">=</span><span class="n">training_engine</span><span class="o">.</span><span class="n">access</span><span class="p">,</span>
+                    <span class="n">identity</span><span class="o">=</span><span class="n">identity</span><span class="p">,</span>
+                    <span class="n">total_loss</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">total_loss</span><span class="p">),</span>
+                    <span class="n">target_losses</span><span class="o">=</span><span class="p">{</span>
+                        <span class="n">name</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">total_losses</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                    <span class="p">},</span>
+                    <span class="n">evaluation_kind</span><span class="o">=</span><span class="n">evaluation_kind</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
             <span class="n">learning_rate</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">state_dict</span><span class="p">()[</span><span class="s2">&quot;param_groups&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;lr&quot;</span><span class="p">]</span>
 
