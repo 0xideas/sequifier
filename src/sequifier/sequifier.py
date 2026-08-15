@@ -118,7 +118,10 @@ def setup_parser() -> ArgumentParser:
     parser_visualize_training.add_argument(
         "models",
         type=str,
-        help="Model name, comma-separated names, or path to txt file containing model names",
+        help=(
+            "Model name, hyperparameter search name, comma-separated names, "
+            "or path to txt file containing model names"
+        ),
     )
     parser_visualize_training.add_argument(
         "--log-scale",

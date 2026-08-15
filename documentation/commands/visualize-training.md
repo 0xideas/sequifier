@@ -11,6 +11,9 @@ sequifier visualize-training my-model-name
 # Visualize multiple models side-by-side
 sequifier visualize-training model-A,model-B,model-C
 
+# Visualize every run from a hyperparameter search
+sequifier visualize-training my-hyperparameter-search
+
 # Visualize models listed in a text file
 sequifier visualize-training path/to/models.txt --log-scale
 
@@ -22,7 +25,7 @@ Unlike other commands that rely on a YAML config, `visualize-training` is config
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `models` | `str` | **Required** | A single model name, a comma-separated list of model names, or the path to a `.txt` file containing model names (one per line). |
+| `models` | `str` | **Required** | A model name, hyperparameter-search name, comma-separated list of model names, or path to a `.txt` file containing model names (one per line). A search name includes all models named `[SEARCH]-run-[NUMBER]`. |
 | `--log-scale` | `flag` | `False` | Use a logarithmic scale on the y-axis for the loss curves. |
 | `--bucket-training-batches` | `int` | `null` | Smooths the training loss curve by averaging the loss over a specified number of batches. **Must be a multiple of the logged batch interval** used during training. |
 | `--project-root` | `str` | `.` | The root directory of your Sequifier project. |
@@ -35,5 +38,8 @@ The interactive HTML reports are saved in the `outputs/visualization/` directory
 
 * **Single Model:** `outputs/visualization/[MODEL_NAME]-training-visualization.html` (Includes global losses and normalized variable validation losses if applicable).
 * **Multiple Models:** `outputs/visualization/multi-model-training-visualization.html` (Side-by-side comparison of validation and training losses across all specified models).
+* **Hyperparameter Search:** `outputs/visualization/[SEARCH_NAME].html` (Includes all valid runs and lists skipped invalid runs and their reasons).
+
+If every run in a hyperparameter search is invalid, Sequifier still creates the report with an empty plot and the invalid-run list.
 
 When comparing multiple models, their initial baseline validation loss must match unless `SKIP_BASELINE_CHECK` or `SEQUIFIER_SKIP_BASELINE_CHECK` is set.
