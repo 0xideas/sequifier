@@ -101,7 +101,7 @@ The configuration is defined in a YAML file. To define the search space, fields 
 | `hp_search_name` | `str` | **Yes** | - | A prefix for the generated runs and the Optuna database (e.g., `my-search`). |
 | `model_config_write_path` | `str` | **Yes** | - | Directory to save the generated config files for each run (e.g., `configs/hp_search/`). |
 | `search_strategy` | `str` | No | `bayesian` | `bayesian` (TPE sampler), `sample` (Random Search), or `grid` (Brute Force Grid Search). |
-| `n_samples` | `int` | *Conditional* | - | Number of distinct runs to execute. Required unless `search_strategy: grid`. |
+| `n_samples` | `int` | *Conditional* | - | Target total number of trained runs in the persisted study. Required unless `search_strategy: grid`. |
 | `seed` | `list[int]` | No | `null` | Training seeds to search. Random and Bayesian search sample from the list; grid search iterates through every value. When `null`, every run uses seed `101`. |
 | `target_offset` | `int` | No | `1` | Fixed target offset for forward-looking objectives. In the partial format it inherits the authored training value unless explicitly overridden; it is not sampled. |
 | `prune_trials` | `bool` | No | `true` | Enables cooperative early stopping of unpromising trials via Optuna. *Beta notice: Pruning with distributed training is currently experimental.* |
@@ -112,14 +112,19 @@ The configuration is defined in a YAML file. To define the search space, fields 
 | `validation_data_path` | `str` | No | Metadata split 1 | Path to validation data. |
 | `read_format` | `str` | No | `parquet` | Format of preprocessed training data (`parquet`, `csv`, or `pt`). |
 
-For `bayesian` and `sample` searches, `n_samples` counts novel runs. If Optuna
-proposes the exact parameters of a completed or pruned trial in the same study,
-Sequifier records the proposal as a failed duplicate and immediately asks for
-another one without writing a run config or starting training. Because Optuna
-assigns the trial number before the duplicate can be identified, generated run
-numbers may contain gaps. After 1,000 consecutive duplicate proposals,
-Sequifier reports that the search space may be exhausted instead of retrying
-indefinitely.
+`n_samples` is a target total across invocations of the same persisted study,
+like `epochs` when resuming training. Sequifier only launches enough new runs to
+reach that total and exits without training when the study already contains the
+requested number of completed or pruned runs.
+
+For `bayesian` and `sample` searches, if Optuna proposes the exact parameters of
+a completed or pruned trial in the same study, Sequifier records the proposal as
+a failed duplicate and immediately asks for another one without writing a run
+config or starting training. Duplicate proposals do not count toward
+`n_samples`, and generated training run numbers remain contiguous even though
+Optuna's internal trial numbers include the rejected proposals. After 1,000
+consecutive duplicate proposals, Sequifier reports that the search space may be
+exhausted instead of retrying indefinitely.
 
 ### 2. Custom Evaluation & Multi-Objective Search
 
