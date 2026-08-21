@@ -307,7 +307,7 @@
 
 
 <div class="viewcode-block" id="DistributedGroupedRandomSampler"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">DistributedGroupedRandomSampler</span><span class="p">(</span><span class="n">Sampler</span><span class="p">[</span><span class="nb">int</span><span class="p">]):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    A distributed sampler that groups samples by file to improve cache efficiency.</span>
 
 <span class="sd">    This sampler partitions the set of data FILES across the distributed processes,</span>
@@ -317,7 +317,7 @@
 <span class="sd">    This ensures that each process sees a unique subset of the data per epoch</span>
 <span class="sd">    while maximizing sequential reads from the same file, which is ideal for</span>
 <span class="sd">    lazy-loading datasets.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
 <div class="viewcode-block" id="DistributedGroupedRandomSampler.__init__"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__init__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -327,9 +327,9 @@
         <span class="n">logger</span><span class="p">:</span> <span class="n">Logger</span><span class="p">,</span>
         <span class="n">shuffle</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
         <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
-        <span class="n">sampling_strategy</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;exact&quot;</span><span class="p">,</span>
+        <span class="n">sampling_strategy</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"exact"</span><span class="p">,</span>
     <span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Args:</span>
 <span class="sd">            data_source: The dataset to sample from. Must have a `batch_files_info`</span>
 <span class="sd">                         attribute.</span>
@@ -338,7 +338,7 @@
 <span class="sd">            shuffle: If True, shuffles the order of files and samples within files.</span>
 <span class="sd">            seed: Random seed used to create the permutation.</span>
 <span class="sd">            sampling_strategy: str = How to distribute data between GPUs</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">data_source</span> <span class="o">=</span> <span class="n">data_source</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">num_replicas</span> <span class="o">=</span> <span class="n">num_replicas</span>
@@ -353,7 +353,7 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">index_groups</span> <span class="o">=</span> <span class="p">[]</span>
         <span class="n">start_index</span> <span class="o">=</span> <span class="mi">0</span>
         <span class="k">for</span> <span class="n">file_info</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_source</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">:</span>
-            <span class="n">num_samples_in_file</span> <span class="o">=</span> <span class="n">file_info</span><span class="p">[</span><span class="s2">&quot;samples&quot;</span><span class="p">]</span>
+            <span class="n">num_samples_in_file</span> <span class="o">=</span> <span class="n">file_info</span><span class="p">[</span><span class="s2">"samples"</span><span class="p">]</span>
             <span class="n">indices</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">start_index</span><span class="p">,</span> <span class="n">start_index</span> <span class="o">+</span> <span class="n">num_samples_in_file</span><span class="p">))</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">index_groups</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span>
             <span class="n">start_index</span> <span class="o">+=</span> <span class="n">num_samples_in_file</span>
@@ -365,27 +365,27 @@
         <span class="p">]</span>
 
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">files_for_this_rank</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;oversampling&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">"oversampling"</span><span class="p">:</span>
                 <span class="n">random_viable_rank</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_files</span><span class="p">)</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">files_for_this_rank</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_files</span><span class="p">))[</span>
                     <span class="n">random_viable_rank</span> <span class="p">::</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_replicas</span>
                 <span class="p">]</span>
             <span class="k">else</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;No file found for GPU rank </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">rank</span><span class="si">}</span><span class="s2">. Total number of files found: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">num_files</span><span class="si">}</span><span class="s2">. Please adapt your data or use &#39;oversampling&#39;&quot;</span>
+                    <span class="sa">f</span><span class="s2">"No file found for GPU rank </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">rank</span><span class="si">}</span><span class="s2">. Total number of files found: </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">num_files</span><span class="si">}</span><span class="s2">. Please adapt your data or use 'oversampling'"</span>
                 <span class="p">)</span>
 
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;exact&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">"exact"</span><span class="p">:</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_files</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_replicas</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;Number of input files (</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">num_files</span><span class="si">}</span><span class="s2">) must be divisible by &quot;</span>
-                    <span class="sa">f</span><span class="s2">&quot;world_size (</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">num_replicas</span><span class="si">}</span><span class="s2">) when using &#39;exact&#39; sampling strategy.&quot;</span>
+                    <span class="sa">f</span><span class="s2">"Number of input files (</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">num_files</span><span class="si">}</span><span class="s2">) must be divisible by "</span>
+                    <span class="sa">f</span><span class="s2">"world_size (</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">num_replicas</span><span class="si">}</span><span class="s2">) when using 'exact' sampling strategy."</span>
                 <span class="p">)</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">num_samples</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span>
                 <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">index_groups</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">files_for_this_rank</span>
             <span class="p">)</span>
 
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;oversampling&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">"oversampling"</span><span class="p">:</span>
             <span class="n">max_samples</span> <span class="o">=</span> <span class="mi">0</span>
             <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_replicas</span><span class="p">):</span>
                 <span class="n">files_for_r</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_files</span><span class="p">))[</span><span class="n">r</span> <span class="p">::</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_replicas</span><span class="p">]</span>
@@ -393,8 +393,8 @@
                 <span class="n">max_samples</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">max_samples</span><span class="p">,</span> <span class="n">samples_for_r</span><span class="p">)</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">num_samples</span> <span class="o">=</span> <span class="n">max_samples</span>
 
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;undersampling&quot;</span><span class="p">:</span>
-            <span class="n">min_samples</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">"undersampling"</span><span class="p">:</span>
+            <span class="n">min_samples</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"inf"</span><span class="p">)</span>
             <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_replicas</span><span class="p">):</span>
                 <span class="n">files_for_r</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_files</span><span class="p">))[</span><span class="n">r</span> <span class="p">::</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_replicas</span><span class="p">]</span>
                 <span class="n">samples_for_r</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">index_groups</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">files_for_r</span><span class="p">)</span>
@@ -402,9 +402,9 @@
             <span class="bp">self</span><span class="o">.</span><span class="n">num_samples</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">min_samples</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="DistributedGroupedRandomSampler.__iter__"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__iter__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__iter__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Returns an iterator over indices for the current rank.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="c1"># 1. Initialize generator with deterministic seed for this epoch</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span><span class="p">:</span>
             <span class="n">generator</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">()</span>
@@ -424,7 +424,7 @@
         <span class="n">final_indices</span> <span class="o">=</span> <span class="n">get_final_indices</span><span class="p">(</span>
             <span class="n">files_for_this_rank</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">index_groups</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span><span class="p">,</span> <span class="n">generator</span>
         <span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;oversampling&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">"oversampling"</span><span class="p">:</span>
             <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="n">final_indices</span><span class="p">)</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_samples</span><span class="p">:</span>
                 <span class="n">additional_file_for_this_rank</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span>
                     <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_files</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,),</span> <span class="n">generator</span><span class="o">=</span><span class="n">generator</span><span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
@@ -438,24 +438,24 @@
                 <span class="n">required_additional_indices</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_samples</span> <span class="o">-</span> <span class="nb">len</span><span class="p">(</span><span class="n">final_indices</span><span class="p">)</span>
                 <span class="n">final_indices</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">additional_indices</span><span class="p">[:</span><span class="n">required_additional_indices</span><span class="p">])</span>
                 <span class="n">files_for_this_rank</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">additional_file_for_this_rank</span><span class="p">)</span>
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;undersampling&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">"undersampling"</span><span class="p">:</span>
             <span class="n">final_indices</span> <span class="o">=</span> <span class="n">final_indices</span><span class="p">[:</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_samples</span><span class="p">]</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Files for rank </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">rank</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">files_for_this_rank</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Files for rank </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">rank</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">files_for_this_rank</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
         <span class="k">return</span> <span class="nb">iter</span><span class="p">(</span><span class="n">final_indices</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="DistributedGroupedRandomSampler.__len__"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__len__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Returns the number of samples for the current rank, not the total.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_samples</span></div>
 
 <div class="viewcode-block" id="DistributedGroupedRandomSampler.set_epoch"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.set_epoch">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">epoch</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Sets the epoch for this sampler. This is used to create a different</span>
 <span class="sd">        shuffling order for each epoch.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span> <span class="o">=</span> <span class="n">epoch</span></div></div>
 </pre></div>
         </article>

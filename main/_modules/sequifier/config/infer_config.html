@@ -316,13 +316,13 @@
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">load_inferer_config</span><span class="p">(</span>
     <span class="n">config_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">args_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">skip_metadata</span><span class="p">:</span> <span class="nb">bool</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;ResolvedInferenceConfig&quot;</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compose and validate inference YAML, then resolve dataset metadata.&quot;&quot;&quot;</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"ResolvedInferenceConfig"</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Compose and validate inference YAML, then resolve dataset metadata."""</span>
 
     <span class="n">config_values</span> <span class="o">=</span> <span class="n">load_composed_yaml_config</span><span class="p">(</span><span class="n">config_path</span><span class="p">)</span>
 
     <span class="n">cli_values</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="n">key</span><span class="p">:</span> <span class="n">value</span> <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">args_config</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">key</span> <span class="o">!=</span> <span class="s2">&quot;skip_metadata&quot;</span>
+        <span class="n">key</span><span class="p">:</span> <span class="n">value</span> <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">args_config</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">key</span> <span class="o">!=</span> <span class="s2">"skip_metadata"</span>
     <span class="p">}</span>
     <span class="n">authored_values</span> <span class="o">=</span> <span class="n">merge_config_fragments</span><span class="p">((</span><span class="n">config_values</span><span class="p">,</span> <span class="n">cli_values</span><span class="p">))</span>
     <span class="n">authored_values</span><span class="p">,</span> <span class="n">extracted_metadata_values</span> <span class="o">=</span> <span class="n">extract_inline_metadata</span><span class="p">(</span>
@@ -335,15 +335,15 @@
     <span class="k">if</span> <span class="n">skip_metadata</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">inline_metadata_values</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;skip_metadata requires inline storage_layout and column values &quot;</span>
-                <span class="s2">&quot;so the inference config can still be resolved.&quot;</span>
+                <span class="s2">"skip_metadata requires inline storage_layout and column values "</span>
+                <span class="s2">"so the inference config can still be resolved."</span>
             <span class="p">)</span>
         <span class="n">metadata</span> <span class="o">=</span> <span class="n">DatasetMetadata</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span><span class="n">inline_metadata_values</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">metadata_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Inference config &#39;</span><span class="si">{</span><span class="n">config_path</span><span class="si">}</span><span class="s2">&#39; must define metadata_config_path &quot;</span>
-                <span class="s2">&quot;or preprocessing_data_path when metadata loading is enabled.&quot;</span>
+                <span class="sa">f</span><span class="s2">"Inference config '</span><span class="si">{</span><span class="n">config_path</span><span class="si">}</span><span class="s2">' must define metadata_config_path "</span>
+                <span class="s2">"or preprocessing_data_path when metadata loading is enabled."</span>
             <span class="p">)</span>
         <span class="n">metadata</span> <span class="o">=</span> <span class="n">load_dataset_metadata</span><span class="p">(</span>
             <span class="n">normalize_path</span><span class="p">(</span><span class="n">metadata_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span>
@@ -352,7 +352,7 @@
     <span class="k">return</span> <span class="n">resolve_inference_config</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_effective_metadata_config_path</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="s2">&quot;InferenceConfig&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_effective_metadata_config_path</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="s2">"InferenceConfig"</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
     <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">metadata_config_path</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">config</span><span class="o">.</span><span class="n">metadata_config_path</span>
     <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">preprocessing_data_path</span><span class="p">:</span>
@@ -363,15 +363,15 @@
 
 
 <div class="viewcode-block" id="resolve_inference_config"><a class="viewcode-back" href="../../../api.html#sequifier.config.infer_config.resolve_inference_config">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">resolve_inference_config</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="s2">&quot;InferenceConfig&quot;</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">DatasetMetadata</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;ResolvedInferenceConfig&quot;</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return an inference config with all metadata-derived values populated.&quot;&quot;&quot;</span>
+    <span class="n">config</span><span class="p">:</span> <span class="s2">"InferenceConfig"</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">DatasetMetadata</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"ResolvedInferenceConfig"</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Return an inference config with all metadata-derived values populated."""</span>
 
     <span class="n">storage_layout</span> <span class="o">=</span> <span class="n">metadata</span><span class="o">.</span><span class="n">storage_layout</span>
     <span class="k">if</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">version</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;Inference requires metadata stored_window_layout_version=2, &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;got </span><span class="si">{</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">version</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="s2">"Inference requires metadata stored_window_layout_version=2, "</span>
+            <span class="sa">f</span><span class="s2">"got </span><span class="si">{</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">version</span><span class="si">}</span><span class="s2">."</span>
         <span class="p">)</span>
     <span class="n">column_data_types</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">column_data_types</span> <span class="ow">or</span> <span class="n">metadata</span><span class="o">.</span><span class="n">column_data_types</span>
     <span class="n">input_columns</span> <span class="o">=</span> <span class="p">(</span>
@@ -382,15 +382,15 @@
     <span class="n">categorical_columns</span> <span class="o">=</span> <span class="p">[</span>
         <span class="n">column</span>
         <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">type_name</span> <span class="ow">in</span> <span class="n">column_data_types</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-        <span class="k">if</span> <span class="s2">&quot;int&quot;</span> <span class="ow">in</span> <span class="n">type_name</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">and</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">input_columns</span>
+        <span class="k">if</span> <span class="s2">"int"</span> <span class="ow">in</span> <span class="n">type_name</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">and</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">input_columns</span>
     <span class="p">]</span>
     <span class="n">real_columns</span> <span class="o">=</span> <span class="p">[</span>
         <span class="n">column</span>
         <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">type_name</span> <span class="ow">in</span> <span class="n">column_data_types</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-        <span class="k">if</span> <span class="s2">&quot;float&quot;</span> <span class="ow">in</span> <span class="n">type_name</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">and</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">input_columns</span>
+        <span class="k">if</span> <span class="s2">"float"</span> <span class="ow">in</span> <span class="n">type_name</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">and</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">input_columns</span>
     <span class="p">]</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">categorical_columns</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">real_columns</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;No columns found in resolved inference config&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"No columns found in resolved inference config"</span><span class="p">)</span>
 
     <span class="n">target_column_types</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">target_column_types</span> <span class="ow">or</span> <span class="n">derive_target_column_types</span><span class="p">(</span>
         <span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">,</span> <span class="n">column_data_types</span>
@@ -406,39 +406,39 @@
 
     <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">data_path</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">metadata</span><span class="o">.</span><span class="n">split_paths</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">&quot;Resolved inference config needs data_path when metadata does not &quot;</span>
-            <span class="s2">&quot;provide split_paths.&quot;</span>
+            <span class="s2">"Resolved inference config needs data_path when metadata does not "</span>
+            <span class="s2">"provide split_paths."</span>
         <span class="p">)</span>
     <span class="n">data_path</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">config</span><span class="o">.</span><span class="n">data_path</span> <span class="ow">or</span> <span class="n">metadata</span><span class="o">.</span><span class="n">split_paths</span><span class="p">[</span><span class="nb">min</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">metadata</span><span class="o">.</span><span class="n">split_paths</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)]</span>
     <span class="p">)</span>
-    <span class="n">values</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;python&quot;</span><span class="p">)</span>
+    <span class="n">values</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"python"</span><span class="p">)</span>
     <span class="n">values</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
         <span class="p">{</span>
-            <span class="s2">&quot;metadata_config_path&quot;</span><span class="p">:</span> <span class="n">_effective_metadata_config_path</span><span class="p">(</span><span class="n">config</span><span class="p">),</span>
-            <span class="s2">&quot;data_path&quot;</span><span class="p">:</span> <span class="n">normalize_path</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">),</span>
-            <span class="s2">&quot;input_columns&quot;</span><span class="p">:</span> <span class="n">input_columns</span><span class="p">,</span>
-            <span class="s2">&quot;column_data_types&quot;</span><span class="p">:</span> <span class="n">column_data_types</span><span class="p">,</span>
-            <span class="s2">&quot;categorical_columns&quot;</span><span class="p">:</span> <span class="n">categorical_columns</span><span class="p">,</span>
-            <span class="s2">&quot;real_columns&quot;</span><span class="p">:</span> <span class="n">real_columns</span><span class="p">,</span>
-            <span class="s2">&quot;target_column_types&quot;</span><span class="p">:</span> <span class="n">target_column_types</span><span class="p">,</span>
-            <span class="s2">&quot;storage_layout&quot;</span><span class="p">:</span> <span class="n">storage_layout</span><span class="p">,</span>
-            <span class="s2">&quot;window_view&quot;</span><span class="p">:</span> <span class="n">window_view</span><span class="p">,</span>
-            <span class="s2">&quot;dataset_metadata&quot;</span><span class="p">:</span> <span class="n">metadata</span><span class="p">,</span>
+            <span class="s2">"metadata_config_path"</span><span class="p">:</span> <span class="n">_effective_metadata_config_path</span><span class="p">(</span><span class="n">config</span><span class="p">),</span>
+            <span class="s2">"data_path"</span><span class="p">:</span> <span class="n">normalize_path</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">),</span>
+            <span class="s2">"input_columns"</span><span class="p">:</span> <span class="n">input_columns</span><span class="p">,</span>
+            <span class="s2">"column_data_types"</span><span class="p">:</span> <span class="n">column_data_types</span><span class="p">,</span>
+            <span class="s2">"categorical_columns"</span><span class="p">:</span> <span class="n">categorical_columns</span><span class="p">,</span>
+            <span class="s2">"real_columns"</span><span class="p">:</span> <span class="n">real_columns</span><span class="p">,</span>
+            <span class="s2">"target_column_types"</span><span class="p">:</span> <span class="n">target_column_types</span><span class="p">,</span>
+            <span class="s2">"storage_layout"</span><span class="p">:</span> <span class="n">storage_layout</span><span class="p">,</span>
+            <span class="s2">"window_view"</span><span class="p">:</span> <span class="n">window_view</span><span class="p">,</span>
+            <span class="s2">"dataset_metadata"</span><span class="p">:</span> <span class="n">metadata</span><span class="p">,</span>
         <span class="p">}</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">ResolvedInferenceConfig</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span><span class="n">values</span><span class="p">)</span></div>
 
 
-<span class="n">_PathT</span> <span class="o">=</span> <span class="n">TypeVar</span><span class="p">(</span><span class="s2">&quot;_PathT&quot;</span><span class="p">)</span>
-<span class="n">_InputColumnsT</span> <span class="o">=</span> <span class="n">TypeVar</span><span class="p">(</span><span class="s2">&quot;_InputColumnsT&quot;</span><span class="p">)</span>
-<span class="n">_ColumnTypesT</span> <span class="o">=</span> <span class="n">TypeVar</span><span class="p">(</span><span class="s2">&quot;_ColumnTypesT&quot;</span><span class="p">)</span>
+<span class="n">_PathT</span> <span class="o">=</span> <span class="n">TypeVar</span><span class="p">(</span><span class="s2">"_PathT"</span><span class="p">)</span>
+<span class="n">_InputColumnsT</span> <span class="o">=</span> <span class="n">TypeVar</span><span class="p">(</span><span class="s2">"_InputColumnsT"</span><span class="p">)</span>
+<span class="n">_ColumnTypesT</span> <span class="o">=</span> <span class="n">TypeVar</span><span class="p">(</span><span class="s2">"_ColumnTypesT"</span><span class="p">)</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">_InferenceConfigBase</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">,</span> <span class="n">Generic</span><span class="p">[</span><span class="n">_PathT</span><span class="p">,</span> <span class="n">_InputColumnsT</span><span class="p">,</span> <span class="n">_ColumnTypesT</span><span class="p">]):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Shared fields and validation for authored and resolved inference config.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Shared fields and validation for authored and resolved inference config."""</span>
 
-    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">arbitrary_types_allowed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">extra</span><span class="o">=</span><span class="s2">&quot;forbid&quot;</span><span class="p">)</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">arbitrary_types_allowed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">extra</span><span class="o">=</span><span class="s2">"forbid"</span><span class="p">)</span>
 
     <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">preprocessing_data_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
@@ -448,8 +448,8 @@
     <span class="n">training_objective</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">data_path</span><span class="p">:</span> <span class="n">_PathT</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
     <span class="n">training_config_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="s2">&quot;parquet&quot;</span><span class="p">)</span>
-    <span class="n">write_format</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="s2">&quot;csv&quot;</span><span class="p">)</span>
+    <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="s2">"parquet"</span><span class="p">)</span>
+    <span class="n">write_format</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="s2">"csv"</span><span class="p">)</span>
 
     <span class="n">input_columns</span><span class="p">:</span> <span class="n">_InputColumnsT</span>
     <span class="n">target_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
@@ -472,35 +472,35 @@
     <span class="n">autoregression</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
     <span class="n">autoregression_total_steps</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;input_columns&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"input_columns"</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">"before"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">normalize_single_input_column</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
             <span class="k">return</span> <span class="p">[</span><span class="n">value</span><span class="p">]</span>
         <span class="k">return</span> <span class="n">value</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"training_objective"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_authored_training_objective</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">value</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">ALLOWED_OBJECTIVE_NAMES</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Only </span><span class="si">{</span><span class="n">OBJECTIVE_NAME_MESSAGE</span><span class="si">}</span><span class="s2"> are allowed, found </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="sa">f</span><span class="s2">"Only </span><span class="si">{</span><span class="n">OBJECTIVE_NAME_MESSAGE</span><span class="si">}</span><span class="s2"> are allowed, found </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">"</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">value</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;model_type&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"model_type"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_authored_model_type</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">value</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">&quot;embedding&quot;</span><span class="p">,</span> <span class="s2">&quot;generative&quot;</span><span class="p">}:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;model_type must be either embedding or generative&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">value</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"embedding"</span><span class="p">,</span> <span class="s2">"generative"</span><span class="p">}:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"model_type must be either embedding or generative"</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">value</span>
 
-    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_authored_paths</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata_config_path</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">preprocessing_data_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;metadata_config_path is required when preprocessing_data_path &quot;</span>
-                <span class="s2">&quot;is not provided&quot;</span>
+                <span class="s2">"metadata_config_path is required when preprocessing_data_path "</span>
+                <span class="s2">"is not provided"</span>
             <span class="p">)</span>
         <span class="n">ModelWindowView</span><span class="p">(</span>
             <span class="n">context_length</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span>
@@ -515,11 +515,11 @@
 <div class="viewcode-block" id="InferenceConfig"><a class="viewcode-back" href="../../../api.html#sequifier.config.infer_config.InferenceConfig">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">InferenceConfig</span><span class="p">(</span>
     <span class="n">_InferenceConfigBase</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]],</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]]</span>
 <span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;User-authored configuration for one inference run.&quot;&quot;&quot;</span></div>
+<span class="w">    </span><span class="sd">"""User-authored configuration for one inference run."""</span></div>
 
 
 <div class="viewcode-block" id="ResolvedInferenceConfig"><a class="viewcode-back" href="../../../api.html#sequifier.config.infer_config.ResolvedInferenceConfig">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">ResolvedInferenceConfig</span><span class="p">(</span><span class="n">_InferenceConfigBase</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Internal inference config after dataset metadata has been resolved.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Internal inference config after dataset metadata has been resolved."""</span>
 
     <span class="n">metadata_config_path</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span>
@@ -532,59 +532,59 @@
     <span class="n">window_view</span><span class="p">:</span> <span class="n">ModelWindowView</span>
     <span class="n">dataset_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DatasetMetadata</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">exclude</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
-    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;before&quot;</span><span class="p">)</span>
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"before"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">derive_optional_config_values</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">values</span><span class="p">):</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
             <span class="k">return</span> <span class="n">values</span>
         <span class="n">values</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
-        <span class="n">window_view</span> <span class="o">=</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;window_view&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="s2">&quot;context_length&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">values</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
-            <span class="n">values</span><span class="p">[</span><span class="s2">&quot;context_length&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;context_length&quot;</span><span class="p">)</span>
-        <span class="k">elif</span> <span class="s2">&quot;context_length&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">values</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span>
+        <span class="n">window_view</span> <span class="o">=</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"window_view"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="s2">"context_length"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">values</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="n">values</span><span class="p">[</span><span class="s2">"context_length"</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"context_length"</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="s2">"context_length"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">values</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span>
             <span class="n">window_view</span><span class="p">,</span> <span class="n">ModelWindowView</span>
         <span class="p">):</span>
-            <span class="n">values</span><span class="p">[</span><span class="s2">&quot;context_length&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span>
-        <span class="k">if</span> <span class="s2">&quot;target_offset&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">values</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
-            <span class="n">values</span><span class="p">[</span><span class="s2">&quot;target_offset&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;target_offset&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
-        <span class="k">elif</span> <span class="s2">&quot;target_offset&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">values</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="n">ModelWindowView</span><span class="p">):</span>
-            <span class="n">values</span><span class="p">[</span><span class="s2">&quot;target_offset&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">target_offset</span>
-        <span class="n">preprocessing_data_path</span> <span class="o">=</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;preprocessing_data_path&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;metadata_config_path&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">preprocessing_data_path</span><span class="p">:</span>
-            <span class="n">values</span><span class="p">[</span><span class="s2">&quot;metadata_config_path&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">values</span><span class="p">[</span><span class="s2">"context_length"</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span>
+        <span class="k">if</span> <span class="s2">"target_offset"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">values</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="n">values</span><span class="p">[</span><span class="s2">"target_offset"</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"target_offset"</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="s2">"target_offset"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">values</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="n">ModelWindowView</span><span class="p">):</span>
+            <span class="n">values</span><span class="p">[</span><span class="s2">"target_offset"</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">target_offset</span>
+        <span class="n">preprocessing_data_path</span> <span class="o">=</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"preprocessing_data_path"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"metadata_config_path"</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">preprocessing_data_path</span><span class="p">:</span>
+            <span class="n">values</span><span class="p">[</span><span class="s2">"metadata_config_path"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="n">metadata_config_path_from_preprocessing_data_path</span><span class="p">(</span>
                     <span class="n">preprocessing_data_path</span>
                 <span class="p">)</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="p">(</span>
-            <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;target_column_types&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;column_data_types&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"target_column_types"</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"column_data_types"</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="p">):</span>
-            <span class="n">values</span><span class="p">[</span><span class="s2">&quot;target_column_types&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">derive_target_column_types</span><span class="p">(</span>
-                <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;target_columns&quot;</span><span class="p">,</span> <span class="p">[]),</span>
-                <span class="n">values</span><span class="p">[</span><span class="s2">&quot;column_data_types&quot;</span><span class="p">],</span>
+            <span class="n">values</span><span class="p">[</span><span class="s2">"target_column_types"</span><span class="p">]</span> <span class="o">=</span> <span class="n">derive_target_column_types</span><span class="p">(</span>
+                <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"target_columns"</span><span class="p">,</span> <span class="p">[]),</span>
+                <span class="n">values</span><span class="p">[</span><span class="s2">"column_data_types"</span><span class="p">],</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">values</span>
 
-    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_required_paths</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata_config_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;metadata_config_path is required when preprocessing_data_path &quot;</span>
-                <span class="s2">&quot;is not provided&quot;</span>
+                <span class="s2">"metadata_config_path is required when preprocessing_data_path "</span>
+                <span class="s2">"is not provided"</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;data_path must be provided or resolved from preprocessing metadata&quot;</span>
+                <span class="s2">"data_path must be provided or resolved from preprocessing metadata"</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="bp">self</span>
 
-    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">normalize_prediction_length</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">objective</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;window_view objective must match training_objective &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">objective</span><span class="si">}</span><span class="s2"> != </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span><span class="si">}</span><span class="s2">).&quot;</span>
+                <span class="s2">"window_view objective must match training_objective "</span>
+                <span class="sa">f</span><span class="s2">"(</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">objective</span><span class="si">}</span><span class="s2"> != </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span><span class="si">}</span><span class="s2">)."</span>
             <span class="p">)</span>
         <span class="n">objective_class</span> <span class="o">=</span> <span class="n">get_objective_class</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span><span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -594,186 +594,186 @@
         <span class="n">objective_class</span><span class="o">.</span><span class="n">validate_prediction_length</span><span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span>
-            <span class="n">usage</span><span class="o">=</span><span class="s2">&quot;inference&quot;</span><span class="p">,</span>
+            <span class="n">usage</span><span class="o">=</span><span class="s2">"inference"</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="n">objective_class</span><span class="o">.</span><span class="n">forward_looking</span><span class="p">:</span>
             <span class="n">resolve_window_view</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="p">)</span>
         <span class="k">return</span> <span class="bp">self</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"training_objective"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_training_objective</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">ALLOWED_OBJECTIVE_NAMES</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Only </span><span class="si">{</span><span class="n">OBJECTIVE_NAME_MESSAGE</span><span class="si">}</span><span class="s2"> are allowed, found </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Only </span><span class="si">{</span><span class="n">OBJECTIVE_NAME_MESSAGE</span><span class="si">}</span><span class="s2"> are allowed, found </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;model_type&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"model_type"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_model_type</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span>
-            <span class="s2">&quot;embedding&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;generative&quot;</span><span class="p">,</span>
+            <span class="s2">"embedding"</span><span class="p">,</span>
+            <span class="s2">"generative"</span><span class="p">,</span>
         <span class="p">]:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;model_type must be one of &#39;embedding&#39; and &#39;generative, </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2"> isn&#39;t&quot;</span>
+                <span class="sa">f</span><span class="s2">"model_type must be one of 'embedding' and 'generative, </span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2"> isn't"</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;output_probabilities&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"output_probabilities"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_output_probabilities</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;model_type&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;embedding&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model_type"</span><span class="p">)</span> <span class="o">==</span> <span class="s2">"embedding"</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;For embedding models, &#39;output_probabilities&#39; must be set to false&quot;</span>
+                <span class="s2">"For embedding models, 'output_probabilities' must be set to false"</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">&quot;after&quot;</span><span class="p">)</span>
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_training_config_path</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">model_paths</span> <span class="o">=</span> <span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">model_path</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model_path</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span> <span class="k">else</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">model_path</span><span class="p">]</span>
         <span class="p">)</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="nb">any</span><span class="p">(</span><span class="n">path</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;.pt&quot;</span><span class="p">)</span> <span class="k">for</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">model_paths</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">any</span><span class="p">(</span><span class="n">path</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">".pt"</span><span class="p">)</span> <span class="k">for</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">model_paths</span><span class="p">):</span>
             <span class="k">return</span> <span class="bp">self</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_config_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">training_config_path</span>
         <span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">training_config_path</span><span class="si">}</span><span class="s2"> does not exist&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">training_config_path</span><span class="si">}</span><span class="s2"> does not exist"</span><span class="p">)</span>
         <span class="k">return</span> <span class="bp">self</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;autoregression_total_steps&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"autoregression_total_steps"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_autoregression_total_steps</span><span class="p">(</span>
         <span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;autoregression&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"autoregression"</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;If autoregression==True, &#39;autoregression_total_steps&#39; needs to be set to an integer value.&quot;</span>
+                <span class="s2">"If autoregression==True, 'autoregression_total_steps' needs to be set to an integer value."</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">v</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;autoregression_total_steps must by &gt;= 1.&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"autoregression_total_steps must by &gt;= 1."</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">v</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;autoregression&quot;</span><span class="p">):</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"autoregression"</span><span class="p">):</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;&#39;autoregression_total_steps&#39; can only be larger than 1 if &#39;autoregression&#39; is true: </span><span class="si">{</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;autoregression&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+                    <span class="sa">f</span><span class="s2">"'autoregression_total_steps' can only be larger than 1 if 'autoregression' is true: </span><span class="si">{</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'autoregression'</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span>
                 <span class="p">)</span>
 
             <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span>
-                <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;input_columns&quot;</span><span class="p">)))</span>
-                <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;target_columns&quot;</span><span class="p">)))</span>
+                <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"input_columns"</span><span class="p">)))</span>
+                <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"target_columns"</span><span class="p">)))</span>
             <span class="p">):</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;&#39;autoregression_total_steps&#39; can only be larger than 1 if &#39;input_columns&#39; and &#39;target_columns&#39; are identical&quot;</span>
+                    <span class="s2">"'autoregression_total_steps' can only be larger than 1 if 'input_columns' and 'target_columns' are identical"</span>
                 <span class="p">)</span>
 
         <span class="k">return</span> <span class="n">v</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;autoregression&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"autoregression"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_autoregression</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span><span class="p">):</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;model_type&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;embedding&quot;</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Autoregression is not possible for embedding models&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model_type"</span><span class="p">)</span> <span class="o">==</span> <span class="s2">"embedding"</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Autoregression is not possible for embedding models"</span><span class="p">)</span>
         <span class="k">if</span> <span class="p">(</span>
             <span class="n">v</span>
-            <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;prediction_length&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;prediction_length&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span>
+            <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"prediction_length"</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"prediction_length"</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;Autoregressive inference is not possible for models with prediction_length &gt; 1&quot;</span>
+                <span class="s2">"Autoregressive inference is not possible for models with prediction_length &gt; 1"</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span>
-            <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;input_columns&quot;</span><span class="p">)))</span>
-            <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;target_columns&quot;</span><span class="p">)))</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"input_columns"</span><span class="p">)))</span>
+            <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"target_columns"</span><span class="p">)))</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;Autoregressive inference with non-identical &#39;input_columns&#39; and &#39;target_columns&#39; is possible but should not be performed&quot;</span>
+                <span class="s2">"Autoregressive inference with non-identical 'input_columns' and 'target_columns' is possible but should not be performed"</span>
             <span class="p">)</span>
 
         <span class="k">if</span> <span class="p">(</span>
             <span class="n">v</span>
-            <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"training_objective"</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
             <span class="ow">and</span> <span class="ow">not</span> <span class="n">get_objective_class</span><span class="p">(</span>
-                <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;training_objective&quot;</span><span class="p">)</span>
+                <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"training_objective"</span><span class="p">)</span>
             <span class="p">)</span><span class="o">.</span><span class="n">forward_looking</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;Autoregressive inference is not possible with BERT-style models.&quot;</span>
+                <span class="s2">"Autoregressive inference is not possible with BERT-style models."</span>
             <span class="p">)</span>
 
         <span class="k">return</span> <span class="n">v</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;data_path&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"data_path"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_data_path</span><span class="p">(</span>
         <span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">v</span>
-        <span class="n">v2</span> <span class="o">=</span> <span class="n">normalize_path</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;project_root&quot;</span><span class="p">))</span>
+        <span class="n">v2</span> <span class="o">=</span> <span class="n">normalize_path</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"project_root"</span><span class="p">))</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">v2</span><span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">v2</span><span class="si">}</span><span class="s2"> does not exist&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">v2</span><span class="si">}</span><span class="s2"> does not exist"</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;read_format&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"read_format"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_read_format</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;csv&quot;</span><span class="p">,</span> <span class="s2">&quot;parquet&quot;</span><span class="p">,</span> <span class="s2">&quot;pt&quot;</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"csv"</span><span class="p">,</span> <span class="s2">"parquet"</span><span class="p">,</span> <span class="s2">"pt"</span><span class="p">]:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;Currently only &#39;csv&#39;, &#39;parquet&#39; and &#39;pt&#39; are supported for &quot;</span>
-                <span class="s2">&quot;inference input&quot;</span>
+                <span class="s2">"Currently only 'csv', 'parquet' and 'pt' are supported for "</span>
+                <span class="s2">"inference input"</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;write_format&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"write_format"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_write_format</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;csv&quot;</span><span class="p">,</span> <span class="s2">&quot;parquet&quot;</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"csv"</span><span class="p">,</span> <span class="s2">"parquet"</span><span class="p">]:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;Currently only &#39;csv&#39; and &#39;parquet&#39; are supported for &quot;</span>
-                <span class="s2">&quot;inference output&quot;</span>
+                <span class="s2">"Currently only 'csv' and 'parquet' are supported for "</span>
+                <span class="s2">"inference output"</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;target_column_types&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"target_column_types"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_target_column_types</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="nb">all</span><span class="p">(</span><span class="n">vv</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;categorical&quot;</span><span class="p">,</span> <span class="s2">&quot;real&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">vv</span> <span class="ow">in</span> <span class="n">v</span><span class="o">.</span><span class="n">values</span><span class="p">()):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">all</span><span class="p">(</span><span class="n">vv</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"categorical"</span><span class="p">,</span> <span class="s2">"real"</span><span class="p">]</span> <span class="k">for</span> <span class="n">vv</span> <span class="ow">in</span> <span class="n">v</span><span class="o">.</span><span class="n">values</span><span class="p">()):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;Target column types must be either &#39;categorical&#39; or &#39;real&#39;&quot;</span>
+                <span class="s2">"Target column types must be either 'categorical' or 'real'"</span>
             <span class="p">)</span>
-        <span class="k">if</span> <span class="nb">list</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span> <span class="o">!=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;target_columns&quot;</span><span class="p">,</span> <span class="p">[]):</span>
+        <span class="k">if</span> <span class="nb">list</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span> <span class="o">!=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"target_columns"</span><span class="p">,</span> <span class="p">[]):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;target_columns and target_column_types must contain the same keys in the same order&quot;</span>
+                <span class="s2">"target_columns and target_column_types must contain the same keys in the same order"</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;column_data_types&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"column_data_types"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_column_types</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
         <span class="n">normalized</span> <span class="o">=</span> <span class="p">{</span>
             <span class="n">column</span><span class="p">:</span> <span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span> <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">dtype</span> <span class="ow">in</span> <span class="n">v</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
         <span class="p">}</span>
-        <span class="n">input_columns</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;input_columns&quot;</span><span class="p">,</span> <span class="p">[])</span>
+        <span class="n">input_columns</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"input_columns"</span><span class="p">,</span> <span class="p">[])</span>
         <span class="n">missing_input_columns</span> <span class="o">=</span> <span class="p">[</span>
             <span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">input_columns</span> <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">normalized</span>
         <span class="p">]</span>
         <span class="k">if</span> <span class="n">missing_input_columns</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;column_data_types must include every input column. &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;Missing: </span><span class="si">{</span><span class="n">missing_input_columns</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="s2">"column_data_types must include every input column. "</span>
+                <span class="sa">f</span><span class="s2">"Missing: </span><span class="si">{</span><span class="n">missing_input_columns</span><span class="si">}</span><span class="s2">"</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">normalized</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;map_to_id&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"map_to_id"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_map_to_id</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">any</span><span class="p">(</span>
-            <span class="n">vv</span> <span class="o">==</span> <span class="s2">&quot;categorical&quot;</span>
-            <span class="k">for</span> <span class="n">vv</span> <span class="ow">in</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;target_column_types&quot;</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+            <span class="n">vv</span> <span class="o">==</span> <span class="s2">"categorical"</span>
+            <span class="k">for</span> <span class="n">vv</span> <span class="ow">in</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"target_column_types"</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;map_to_id can only be True if at least one target variable is categorical&quot;</span>
+                <span class="s2">"map_to_id can only be True if at least one target variable is categorical"</span>
             <span class="p">)</span>
         <span class="k">return</span> <span class="n">v</span>
 
@@ -784,7 +784,7 @@
             <span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">column_ordered</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span>
         <span class="p">]</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">columns_ordered_filtered</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">columns_ordered_filtered</span><span class="si">}</span><span class="s2"> != </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">columns_ordered_filtered</span><span class="si">}</span><span class="s2"> != </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span></div>
 
 
 <span class="c1"># Compatibility name retained for runtime code and external integrations.</span>

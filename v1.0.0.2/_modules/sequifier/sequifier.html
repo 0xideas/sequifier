@@ -286,7 +286,7 @@
 
 <div class="viewcode-block" id="build_args_config"><a class="viewcode-back" href="../../api.html#sequifier.sequifier.build_args_config">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">build_args_config</span><span class="p">(</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Build configuration dictionary from command-line arguments.</span>
 
 <span class="sd">    Args:</span>
@@ -294,58 +294,58 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Dictionary containing configuration options.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="n">args_config</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">k</span><span class="p">:</span> <span class="n">v</span>
         <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">vars</span><span class="p">(</span><span class="n">args</span><span class="p">)</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">k</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;randomize&quot;</span><span class="p">,</span> <span class="s2">&quot;command&quot;</span><span class="p">,</span> <span class="s2">&quot;config_path&quot;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">k</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"randomize"</span><span class="p">,</span> <span class="s2">"command"</span><span class="p">,</span> <span class="s2">"config_path"</span><span class="p">]</span>
     <span class="p">}</span>
-    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">!=</span> <span class="s2">&quot;make&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">!=</span> <span class="s2">"make"</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">randomize</span><span class="p">:</span>
             <span class="n">seed</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="mf">1e9</span><span class="p">)))</span>
-            <span class="n">args_config</span><span class="p">[</span><span class="s2">&quot;seed&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">seed</span>
-        <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;train&quot;</span><span class="p">,</span> <span class="s2">&quot;infer&quot;</span><span class="p">]</span> <span class="ow">and</span> <span class="n">args</span><span class="o">.</span><span class="n">seed</span><span class="p">:</span>
-            <span class="n">args_config</span><span class="p">[</span><span class="s2">&quot;seed&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">seed</span>
+            <span class="n">args_config</span><span class="p">[</span><span class="s2">"seed"</span><span class="p">]</span> <span class="o">=</span> <span class="n">seed</span>
+        <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"train"</span><span class="p">,</span> <span class="s2">"infer"</span><span class="p">]</span> <span class="ow">and</span> <span class="n">args</span><span class="o">.</span><span class="n">seed</span><span class="p">:</span>
+            <span class="n">args_config</span><span class="p">[</span><span class="s2">"seed"</span><span class="p">]</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">seed</span>
 
-    <span class="k">if</span> <span class="s2">&quot;selected_columns&quot;</span> <span class="ow">in</span> <span class="n">args_config</span><span class="p">:</span>
+    <span class="k">if</span> <span class="s2">"selected_columns"</span> <span class="ow">in</span> <span class="n">args_config</span><span class="p">:</span>
         <span class="k">if</span> <span class="p">(</span>
-            <span class="nb">len</span><span class="p">(</span><span class="n">args_config</span><span class="p">[</span><span class="s2">&quot;selected_columns&quot;</span><span class="p">])</span> <span class="o">==</span> <span class="mi">1</span>
-            <span class="ow">and</span> <span class="n">args_config</span><span class="p">[</span><span class="s2">&quot;selected_columns&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;None&quot;</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">args_config</span><span class="p">[</span><span class="s2">"selected_columns"</span><span class="p">])</span> <span class="o">==</span> <span class="mi">1</span>
+            <span class="ow">and</span> <span class="n">args_config</span><span class="p">[</span><span class="s2">"selected_columns"</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"None"</span>
         <span class="p">):</span>
-            <span class="n">args_config</span><span class="p">[</span><span class="s2">&quot;selected_columns&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="n">args_config</span><span class="p">[</span><span class="s2">"selected_columns"</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
 
-    <span class="k">if</span> <span class="s2">&quot;input_columns&quot;</span> <span class="ow">in</span> <span class="n">args_config</span><span class="p">:</span>
+    <span class="k">if</span> <span class="s2">"input_columns"</span> <span class="ow">in</span> <span class="n">args_config</span><span class="p">:</span>
         <span class="k">if</span> <span class="p">(</span>
-            <span class="nb">len</span><span class="p">(</span><span class="n">args_config</span><span class="p">[</span><span class="s2">&quot;input_columns&quot;</span><span class="p">])</span> <span class="o">==</span> <span class="mi">1</span>
-            <span class="ow">and</span> <span class="n">args_config</span><span class="p">[</span><span class="s2">&quot;input_columns&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;None&quot;</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">args_config</span><span class="p">[</span><span class="s2">"input_columns"</span><span class="p">])</span> <span class="o">==</span> <span class="mi">1</span>
+            <span class="ow">and</span> <span class="n">args_config</span><span class="p">[</span><span class="s2">"input_columns"</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"None"</span>
         <span class="p">):</span>
-            <span class="n">args_config</span><span class="p">[</span><span class="s2">&quot;input_columns&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="n">args_config</span><span class="p">[</span><span class="s2">"input_columns"</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
 
     <span class="k">return</span> <span class="n">args_config</span></div>
 
 
 <div class="viewcode-block" id="setup_parser"><a class="viewcode-back" href="../../api.html#sequifier.sequifier.setup_parser">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">setup_parser</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">ArgumentParser</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Set up the argument parser for the command-line interface.</span>
 
 <span class="sd">    Returns:</span>
 <span class="sd">        Configured ArgumentParser object.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">parser</span> <span class="o">=</span> <span class="n">ArgumentParser</span><span class="p">()</span>
-    <span class="n">subparsers</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">add_subparsers</span><span class="p">(</span><span class="n">dest</span><span class="o">=</span><span class="s2">&quot;command&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Available commands&quot;</span><span class="p">)</span>
+    <span class="n">subparsers</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">add_subparsers</span><span class="p">(</span><span class="n">dest</span><span class="o">=</span><span class="s2">"command"</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">"Available commands"</span><span class="p">)</span>
 
-    <span class="n">parser_make</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span><span class="s2">&quot;make&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Set up sequifier project&quot;</span><span class="p">)</span>
-    <span class="n">parser_make</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;project_name&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">)</span>
+    <span class="n">parser_make</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span><span class="s2">"make"</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">"Set up sequifier project"</span><span class="p">)</span>
+    <span class="n">parser_make</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"project_name"</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">)</span>
     <span class="n">parser_preprocess</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span>
-        <span class="s2">&quot;preprocess&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Run the preprocessing step&quot;</span>
+        <span class="s2">"preprocess"</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">"Run the preprocessing step"</span>
     <span class="p">)</span>
-    <span class="n">parser_train</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span><span class="s2">&quot;train&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Run the training step&quot;</span><span class="p">)</span>
-    <span class="n">parser_infer</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span><span class="s2">&quot;infer&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Run the inference step&quot;</span><span class="p">)</span>
+    <span class="n">parser_train</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span><span class="s2">"train"</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">"Run the training step"</span><span class="p">)</span>
+    <span class="n">parser_infer</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span><span class="s2">"infer"</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">"Run the inference step"</span><span class="p">)</span>
 
     <span class="n">parser_hyperparameter_search</span> <span class="o">=</span> <span class="n">subparsers</span><span class="o">.</span><span class="n">add_parser</span><span class="p">(</span>
-        <span class="s2">&quot;hyperparameter-search&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Run hyperparamter search&quot;</span>
+        <span class="s2">"hyperparameter-search"</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">"Run hyperparamter search"</span>
     <span class="p">)</span>
 
     <span class="k">for</span> <span class="n">subparser</span> <span class="ow">in</span> <span class="p">[</span>
@@ -355,65 +355,65 @@
         <span class="n">parser_hyperparameter_search</span><span class="p">,</span>
     <span class="p">]:</span>
         <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-            <span class="s2">&quot;--config-path&quot;</span><span class="p">,</span>
+            <span class="s2">"--config-path"</span><span class="p">,</span>
             <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span>
-            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;File path to config for current processing step&quot;</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">"File path to config for current processing step"</span><span class="p">,</span>
         <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">subparser</span> <span class="o">!=</span> <span class="n">parser_hyperparameter_search</span><span class="p">:</span>
-            <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-r&quot;</span><span class="p">,</span> <span class="s2">&quot;--randomize&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">)</span>
-            <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-dp&quot;</span><span class="p">,</span> <span class="s2">&quot;--data-path&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">)</span>
+            <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"-r"</span><span class="p">,</span> <span class="s2">"--randomize"</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">)</span>
+            <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"-dp"</span><span class="p">,</span> <span class="s2">"--data-path"</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">)</span>
 
     <span class="k">for</span> <span class="n">subparser</span> <span class="ow">in</span> <span class="p">[</span><span class="n">parser_train</span><span class="p">,</span> <span class="n">parser_infer</span><span class="p">,</span> <span class="n">parser_hyperparameter_search</span><span class="p">]:</span>
         <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-            <span class="s2">&quot;-ic&quot;</span><span class="p">,</span>
-            <span class="s2">&quot;--input-columns&quot;</span><span class="p">,</span>
+            <span class="s2">"-ic"</span><span class="p">,</span>
+            <span class="s2">"--input-columns"</span><span class="p">,</span>
             <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span>
-            <span class="n">nargs</span><span class="o">=</span><span class="s2">&quot;+&quot;</span><span class="p">,</span>
-            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Space-separated list of input columns (e.g. --input-columns col1 col2)&quot;</span><span class="p">,</span>
+            <span class="n">nargs</span><span class="o">=</span><span class="s2">"+"</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">"Space-separated list of input columns (e.g. --input-columns col1 col2)"</span><span class="p">,</span>
         <span class="p">)</span>
-        <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-mc&quot;</span><span class="p">,</span> <span class="s2">&quot;--metadata-config-path&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">)</span>
-        <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-sm&quot;</span><span class="p">,</span> <span class="s2">&quot;--skip-metadata&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">)</span>
+        <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"-mc"</span><span class="p">,</span> <span class="s2">"--metadata-config-path"</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">)</span>
+        <span class="n">subparser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"-sm"</span><span class="p">,</span> <span class="s2">"--skip-metadata"</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s2">"store_true"</span><span class="p">)</span>
 
     <span class="n">parser_preprocess</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-        <span class="s2">&quot;-sc&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;--selected-columns&quot;</span><span class="p">,</span>
+        <span class="s2">"-sc"</span><span class="p">,</span>
+        <span class="s2">"--selected-columns"</span><span class="p">,</span>
         <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span>
-        <span class="n">nargs</span><span class="o">=</span><span class="s2">&quot;+&quot;</span><span class="p">,</span>
-        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Space-separated list of selected columns&quot;</span><span class="p">,</span>
+        <span class="n">nargs</span><span class="o">=</span><span class="s2">"+"</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">"Space-separated list of selected columns"</span><span class="p">,</span>
     <span class="p">)</span>
-    <span class="n">parser_train</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-mn&quot;</span><span class="p">,</span> <span class="s2">&quot;--model-name&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">)</span>
-    <span class="n">parser_train</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-s&quot;</span><span class="p">,</span> <span class="s2">&quot;--seed&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+    <span class="n">parser_train</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"-mn"</span><span class="p">,</span> <span class="s2">"--model-name"</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">)</span>
+    <span class="n">parser_train</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"-s"</span><span class="p">,</span> <span class="s2">"--seed"</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
 
-    <span class="n">parser_infer</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-mp&quot;</span><span class="p">,</span> <span class="s2">&quot;--model-path&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">)</span>
-    <span class="n">parser_infer</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-s&quot;</span><span class="p">,</span> <span class="s2">&quot;--seed&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+    <span class="n">parser_infer</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"-mp"</span><span class="p">,</span> <span class="s2">"--model-path"</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">)</span>
+    <span class="n">parser_infer</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"-s"</span><span class="p">,</span> <span class="s2">"--seed"</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="n">parser</span></div>
 
 
 <div class="viewcode-block" id="main"><a class="viewcode-back" href="../../api.html#sequifier.sequifier.main">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Main function to run the Sequifier CLI.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">parser</span> <span class="o">=</span> <span class="n">setup_parser</span><span class="p">()</span>
     <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span>
 
-    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">!=</span> <span class="s2">&quot;hyperparameter-search&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">!=</span> <span class="s2">"hyperparameter-search"</span><span class="p">:</span>
         <span class="n">args_config</span> <span class="o">=</span> <span class="n">build_args_config</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
 
-        <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">==</span> <span class="s2">&quot;make&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">==</span> <span class="s2">"make"</span><span class="p">:</span>
             <span class="n">make</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
-        <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">==</span> <span class="s2">&quot;preprocess&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">==</span> <span class="s2">"preprocess"</span><span class="p">:</span>
             <span class="n">preprocess</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">args_config</span><span class="p">)</span>
-        <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">==</span> <span class="s2">&quot;train&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">==</span> <span class="s2">"train"</span><span class="p">:</span>
             <span class="n">train</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">args_config</span><span class="p">)</span>
-        <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">==</span> <span class="s2">&quot;infer&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">==</span> <span class="s2">"infer"</span><span class="p">:</span>
             <span class="n">infer</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">args_config</span><span class="p">)</span>
-    <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">==</span> <span class="s2">&quot;hyperparameter-search&quot;</span><span class="p">:</span>
+    <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">command</span> <span class="o">==</span> <span class="s2">"hyperparameter-search"</span><span class="p">:</span>
         <span class="n">hyperparameter_search</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">config_path</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">skip_metadata</span><span class="p">)</span></div>
 
 
-<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
     <span class="n">main</span><span class="p">()</span>
 </pre></div>
         </article>

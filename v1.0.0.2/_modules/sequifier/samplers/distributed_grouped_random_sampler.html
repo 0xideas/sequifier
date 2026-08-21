@@ -283,7 +283,7 @@
 
 
 <div class="viewcode-block" id="DistributedGroupedRandomSampler"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">DistributedGroupedRandomSampler</span><span class="p">(</span><span class="n">Sampler</span><span class="p">[</span><span class="nb">int</span><span class="p">]):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    A distributed sampler that groups samples by file to improve cache efficiency.</span>
 
 <span class="sd">    This sampler partitions the set of data FILES across the distributed processes,</span>
@@ -293,7 +293,7 @@
 <span class="sd">    This ensures that each process sees a unique subset of the data per epoch</span>
 <span class="sd">    while maximizing sequential reads from the same file, which is ideal for</span>
 <span class="sd">    lazy-loading datasets.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
 <div class="viewcode-block" id="DistributedGroupedRandomSampler.__init__"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__init__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -303,7 +303,7 @@
         <span class="n">shuffle</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
         <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
     <span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Args:</span>
 <span class="sd">            data_source: The dataset to sample from. Must have a `batch_files_info`</span>
 <span class="sd">                         attribute.</span>
@@ -311,7 +311,7 @@
 <span class="sd">            rank: Rank of the current process.</span>
 <span class="sd">            shuffle: If True, shuffles the order of files and samples within files.</span>
 <span class="sd">            seed: Random seed used to create the permutation.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">data_source</span> <span class="o">=</span> <span class="n">data_source</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">num_replicas</span> <span class="o">=</span> <span class="n">num_replicas</span>
@@ -324,7 +324,7 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">index_groups</span> <span class="o">=</span> <span class="p">[]</span>
         <span class="n">start_index</span> <span class="o">=</span> <span class="mi">0</span>
         <span class="k">for</span> <span class="n">file_info</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_source</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">:</span>
-            <span class="n">num_samples_in_file</span> <span class="o">=</span> <span class="n">file_info</span><span class="p">[</span><span class="s2">&quot;samples&quot;</span><span class="p">]</span>
+            <span class="n">num_samples_in_file</span> <span class="o">=</span> <span class="n">file_info</span><span class="p">[</span><span class="s2">"samples"</span><span class="p">]</span>
             <span class="n">indices</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">start_index</span><span class="p">,</span> <span class="n">start_index</span> <span class="o">+</span> <span class="n">num_samples_in_file</span><span class="p">))</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">index_groups</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span>
             <span class="n">start_index</span> <span class="o">+=</span> <span class="n">num_samples_in_file</span>
@@ -340,9 +340,9 @@
         <span class="p">)</span></div>
 
 <div class="viewcode-block" id="DistributedGroupedRandomSampler.__iter__"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__iter__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__iter__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Returns an iterator over indices for the current rank.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="c1"># 1. Initialize generator with deterministic seed for this epoch</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span><span class="p">:</span>
             <span class="n">generator</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">()</span>
@@ -371,16 +371,16 @@
         <span class="k">return</span> <span class="nb">iter</span><span class="p">(</span><span class="n">final_indices</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="DistributedGroupedRandomSampler.__len__"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__len__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Returns the number of samples for the current rank, not the total.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_samples</span></div>
 
 <div class="viewcode-block" id="DistributedGroupedRandomSampler.set_epoch"><a class="viewcode-back" href="../../../api.html#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.set_epoch">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">epoch</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""</span>
 <span class="sd">        Sets the epoch for this sampler. This is used to create a different</span>
 <span class="sd">        shuffling order for each epoch.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span> <span class="o">=</span> <span class="n">epoch</span></div></div>
 </pre></div>
         </article>

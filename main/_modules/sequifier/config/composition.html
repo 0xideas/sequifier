@@ -272,7 +272,7 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.config.composition</h1><div class="highlight"><pre>
-<span></span><span class="sd">&quot;&quot;&quot;Composition helpers for user-authored configuration fragments.&quot;&quot;&quot;</span>
+<span></span><span class="sd">"""Composition helpers for user-authored configuration fragments."""</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
@@ -285,19 +285,19 @@
 
 <span class="n">ConfigPath</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
 
-<span class="n">ADDITIONAL_CONFIG_PATHS_KEY</span> <span class="o">=</span> <span class="s2">&quot;additional_config_paths&quot;</span>
+<span class="n">ADDITIONAL_CONFIG_PATHS_KEY</span> <span class="o">=</span> <span class="s2">"additional_config_paths"</span>
 
 
 <span class="c1"># These values are complete, typed components.  Replacing them as a unit keeps</span>
 <span class="c1"># fields from one discriminator variant from leaking into another variant.</span>
 <span class="n">DEFAULT_ATOMIC_PATHS</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">]</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">(</span>
     <span class="p">{</span>
-        <span class="p">(</span><span class="s2">&quot;model_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;ingestion&quot;</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">&quot;model_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;backbone&quot;</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">&quot;model_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;decoder&quot;</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">&quot;training_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;optimizer&quot;</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">&quot;training_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;scheduler&quot;</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">&quot;training_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;bert_spec&quot;</span><span class="p">,</span> <span class="s2">&quot;span_masking&quot;</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"model_spec"</span><span class="p">,</span> <span class="s2">"ingestion"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"model_spec"</span><span class="p">,</span> <span class="s2">"backbone"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"model_spec"</span><span class="p">,</span> <span class="s2">"decoder"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"training_spec"</span><span class="p">,</span> <span class="s2">"optimizer"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"training_spec"</span><span class="p">,</span> <span class="s2">"scheduler"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"training_spec"</span><span class="p">,</span> <span class="s2">"bert_spec"</span><span class="p">,</span> <span class="s2">"span_masking"</span><span class="p">),</span>
     <span class="p">}</span>
 <span class="p">)</span>
 
@@ -308,12 +308,12 @@
     <span class="o">*</span><span class="p">,</span>
     <span class="n">atomic_paths</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">]</span> <span class="o">=</span> <span class="n">DEFAULT_ATOMIC_PATHS</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return a deep merge of two authored mappings.</span>
+<span class="w">    </span><span class="sd">"""Return a deep merge of two authored mappings.</span>
 
 <span class="sd">    Dictionaries merge recursively.  Lists and scalar values are replaced,</span>
 <span class="sd">    and an explicit ``None`` clears the inherited value.  Neither input is</span>
 <span class="sd">    mutated.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">return</span> <span class="n">_deep_merge_dicts</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="n">override</span><span class="p">,</span> <span class="p">(),</span> <span class="n">atomic_paths</span><span class="p">)</span></div>
 
@@ -323,12 +323,12 @@
     <span class="o">*</span><span class="p">,</span>
     <span class="n">atomic_paths</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">]</span> <span class="o">=</span> <span class="n">DEFAULT_ATOMIC_PATHS</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Merge authored fragments in order, with later fragments taking priority.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Merge authored fragments in order, with later fragments taking priority."""</span>
 
     <span class="n">merged</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="k">for</span> <span class="n">fragment</span> <span class="ow">in</span> <span class="n">fragments</span><span class="p">:</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">fragment</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">&quot;Configuration fragments must be mappings&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">"Configuration fragments must be mappings"</span><span class="p">)</span>
         <span class="n">merged</span> <span class="o">=</span> <span class="n">_deep_merge_dicts</span><span class="p">(</span><span class="n">merged</span><span class="p">,</span> <span class="n">fragment</span><span class="p">,</span> <span class="p">(),</span> <span class="n">atomic_paths</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">merged</span></div>
 
@@ -338,13 +338,13 @@
     <span class="o">*</span><span class="p">,</span>
     <span class="n">atomic_paths</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">]</span> <span class="o">=</span> <span class="n">DEFAULT_ATOMIC_PATHS</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load one YAML config and its direct, complementary fragments.</span>
+<span class="w">    </span><span class="sd">"""Load one YAML config and its direct, complementary fragments.</span>
 
-<span class="sd">    Relative fragment paths are resolved against the entry config&#39;s</span>
+<span class="sd">    Relative fragment paths are resolved against the entry config's</span>
 <span class="sd">    ``project_root``.  Fragments cannot include further fragments.  Duplicate</span>
 <span class="sd">    authored fields are rejected before the resulting mapping reaches the</span>
 <span class="sd">    command-specific Pydantic model.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="n">entry_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">config_path</span><span class="p">)</span>
     <span class="n">entry_values</span> <span class="o">=</span> <span class="n">_load_yaml_mapping</span><span class="p">(</span><span class="n">entry_path</span><span class="p">)</span>
@@ -357,11 +357,11 @@
     <span class="k">if</span> <span class="ow">not</span> <span class="n">additional_paths</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">entry_values</span>
 
-    <span class="n">project_root</span> <span class="o">=</span> <span class="n">entry_values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;project_root&quot;</span><span class="p">)</span>
+    <span class="n">project_root</span> <span class="o">=</span> <span class="n">entry_values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"project_root"</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">project_root</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">project_root</span><span class="o">.</span><span class="n">strip</span><span class="p">():</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;Config &#39;</span><span class="si">{</span><span class="n">entry_path</span><span class="si">}</span><span class="s2">&#39; must define a non-empty string project_root &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;when </span><span class="si">{</span><span class="n">ADDITIONAL_CONFIG_PATHS_KEY</span><span class="si">}</span><span class="s2"> is configured.&quot;</span>
+            <span class="sa">f</span><span class="s2">"Config '</span><span class="si">{</span><span class="n">entry_path</span><span class="si">}</span><span class="s2">' must define a non-empty string project_root "</span>
+            <span class="sa">f</span><span class="s2">"when </span><span class="si">{</span><span class="n">ADDITIONAL_CONFIG_PATHS_KEY</span><span class="si">}</span><span class="s2"> is configured."</span>
         <span class="p">)</span>
 
     <span class="n">fragments</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]]</span> <span class="o">=</span> <span class="p">[]</span>
@@ -374,17 +374,17 @@
         <span class="n">canonical_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">realpath</span><span class="p">(</span><span class="n">resolved_path</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">canonical_path</span> <span class="ow">in</span> <span class="n">seen_paths</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Config &#39;</span><span class="si">{</span><span class="n">entry_path</span><span class="si">}</span><span class="s2">&#39; references the same configuration file &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;more than once: &#39;</span><span class="si">{</span><span class="n">resolved_path</span><span class="si">}</span><span class="s2">&#39;.&quot;</span>
+                <span class="sa">f</span><span class="s2">"Config '</span><span class="si">{</span><span class="n">entry_path</span><span class="si">}</span><span class="s2">' references the same configuration file "</span>
+                <span class="sa">f</span><span class="s2">"more than once: '</span><span class="si">{</span><span class="n">resolved_path</span><span class="si">}</span><span class="s2">'."</span>
             <span class="p">)</span>
         <span class="n">seen_paths</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">canonical_path</span><span class="p">)</span>
 
         <span class="n">fragment_values</span> <span class="o">=</span> <span class="n">_load_yaml_mapping</span><span class="p">(</span><span class="n">resolved_path</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">ADDITIONAL_CONFIG_PATHS_KEY</span> <span class="ow">in</span> <span class="n">fragment_values</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Config fragment &#39;</span><span class="si">{</span><span class="n">resolved_path</span><span class="si">}</span><span class="s2">&#39; cannot define &quot;</span>
-                <span class="sa">f</span><span class="s2">&quot;&#39;</span><span class="si">{</span><span class="n">ADDITIONAL_CONFIG_PATHS_KEY</span><span class="si">}</span><span class="s2">&#39;; recursive composition is not &quot;</span>
-                <span class="s2">&quot;supported.&quot;</span>
+                <span class="sa">f</span><span class="s2">"Config fragment '</span><span class="si">{</span><span class="n">resolved_path</span><span class="si">}</span><span class="s2">' cannot define "</span>
+                <span class="sa">f</span><span class="s2">"'</span><span class="si">{</span><span class="n">ADDITIONAL_CONFIG_PATHS_KEY</span><span class="si">}</span><span class="s2">'; recursive composition is not "</span>
+                <span class="s2">"supported."</span>
             <span class="p">)</span>
         <span class="n">fragments</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">resolved_path</span><span class="p">,</span> <span class="n">fragment_values</span><span class="p">))</span>
 
@@ -400,13 +400,13 @@
     <span class="o">*</span><span class="p">,</span>
     <span class="n">atomic_paths</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">]</span> <span class="o">=</span> <span class="n">DEFAULT_ATOMIC_PATHS</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Merge sourced fragments while rejecting duplicate authored fields.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Merge sourced fragments while rejecting duplicate authored fields."""</span>
 
     <span class="n">merged</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="n">field_sources</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="k">for</span> <span class="n">source</span><span class="p">,</span> <span class="n">fragment</span> <span class="ow">in</span> <span class="n">fragments</span><span class="p">:</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">fragment</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">&quot;Configuration fragments must be mappings&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">"Configuration fragments must be mappings"</span><span class="p">)</span>
         <span class="n">_merge_complementary_dicts</span><span class="p">(</span>
             <span class="n">merged</span><span class="p">,</span>
             <span class="n">fragment</span><span class="p">,</span>
@@ -420,15 +420,15 @@
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_load_yaml_mapping</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
     <span class="k">try</span><span class="p">:</span>
-        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
             <span class="n">values</span> <span class="o">=</span> <span class="n">yaml</span><span class="o">.</span><span class="n">safe_load</span><span class="p">(</span><span class="n">file</span><span class="p">)</span>
     <span class="k">except</span> <span class="ne">OSError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unable to read config &#39;</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">&#39;: </span><span class="si">{</span><span class="n">error</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">error</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unable to read config '</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">': </span><span class="si">{</span><span class="n">error</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">error</span>
     <span class="k">except</span> <span class="n">yaml</span><span class="o">.</span><span class="n">YAMLError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unable to parse config &#39;</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">&#39;: </span><span class="si">{</span><span class="n">error</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">error</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unable to parse config '</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">': </span><span class="si">{</span><span class="n">error</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">error</span>
 
     <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Config &#39;</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">&#39; must contain a YAML mapping.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Config '</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">' must contain a YAML mapping."</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">values</span>
 
 
@@ -444,14 +444,14 @@
         <span class="n">paths</span> <span class="o">=</span> <span class="n">value</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;Config &#39;</span><span class="si">{</span><span class="n">config_path</span><span class="si">}</span><span class="s2">&#39; field &#39;</span><span class="si">{</span><span class="n">ADDITIONAL_CONFIG_PATHS_KEY</span><span class="si">}</span><span class="s2">&#39; must &quot;</span>
-            <span class="s2">&quot;be a non-empty string, a list of non-empty strings, or null.&quot;</span>
+            <span class="sa">f</span><span class="s2">"Config '</span><span class="si">{</span><span class="n">config_path</span><span class="si">}</span><span class="s2">' field '</span><span class="si">{</span><span class="n">ADDITIONAL_CONFIG_PATHS_KEY</span><span class="si">}</span><span class="s2">' must "</span>
+            <span class="s2">"be a non-empty string, a list of non-empty strings, or null."</span>
         <span class="p">)</span>
 
     <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">path</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span> <span class="k">for</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">paths</span><span class="p">):</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;Config &#39;</span><span class="si">{</span><span class="n">config_path</span><span class="si">}</span><span class="s2">&#39; field &#39;</span><span class="si">{</span><span class="n">ADDITIONAL_CONFIG_PATHS_KEY</span><span class="si">}</span><span class="s2">&#39; must &quot;</span>
-            <span class="s2">&quot;be a non-empty string, a list of non-empty strings, or null.&quot;</span>
+            <span class="sa">f</span><span class="s2">"Config '</span><span class="si">{</span><span class="n">config_path</span><span class="si">}</span><span class="s2">' field '</span><span class="si">{</span><span class="n">ADDITIONAL_CONFIG_PATHS_KEY</span><span class="si">}</span><span class="s2">' must "</span>
+            <span class="s2">"be a non-empty string, a list of non-empty strings, or null."</span>
         <span class="p">)</span>
     <span class="k">return</span> <span class="n">paths</span>
 
@@ -502,10 +502,10 @@
             <span class="k">continue</span>
 
         <span class="n">first_source</span> <span class="o">=</span> <span class="n">_field_source_for_path</span><span class="p">(</span><span class="n">field_sources</span><span class="p">,</span> <span class="n">child_path</span><span class="p">)</span>
-        <span class="n">dotted_path</span> <span class="o">=</span> <span class="s2">&quot;.&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">child_path</span><span class="p">)</span>
+        <span class="n">dotted_path</span> <span class="o">=</span> <span class="s2">"."</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">child_path</span><span class="p">)</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;Duplicate configuration field &#39;</span><span class="si">{</span><span class="n">dotted_path</span><span class="si">}</span><span class="s2">&#39;: first defined in &quot;</span>
-            <span class="sa">f</span><span class="s2">&quot;&#39;</span><span class="si">{</span><span class="n">first_source</span><span class="si">}</span><span class="s2">&#39;, also defined in &#39;</span><span class="si">{</span><span class="n">source</span><span class="si">}</span><span class="s2">&#39;.&quot;</span>
+            <span class="sa">f</span><span class="s2">"Duplicate configuration field '</span><span class="si">{</span><span class="n">dotted_path</span><span class="si">}</span><span class="s2">': first defined in "</span>
+            <span class="sa">f</span><span class="s2">"'</span><span class="si">{</span><span class="n">first_source</span><span class="si">}</span><span class="s2">', also defined in '</span><span class="si">{</span><span class="n">source</span><span class="si">}</span><span class="s2">'."</span>
         <span class="p">)</span>
 
 
@@ -538,7 +538,7 @@
     <span class="k">for</span> <span class="n">field_path</span><span class="p">,</span> <span class="n">source</span> <span class="ow">in</span> <span class="n">field_sources</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
         <span class="k">if</span> <span class="n">field_path</span><span class="p">[:</span> <span class="nb">len</span><span class="p">(</span><span class="n">path</span><span class="p">)]</span> <span class="o">==</span> <span class="n">path</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">source</span>
-    <span class="k">return</span> <span class="s2">&quot;unknown source&quot;</span>
+    <span class="k">return</span> <span class="s2">"unknown source"</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_deep_merge_dicts</span><span class="p">(</span>
@@ -572,7 +572,7 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_changes_discriminator</span><span class="p">(</span>
     <span class="n">base</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">override</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-    <span class="k">for</span> <span class="n">discriminator</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;type&quot;</span><span class="p">,</span> <span class="s2">&quot;name&quot;</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">discriminator</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"type"</span><span class="p">,</span> <span class="s2">"name"</span><span class="p">):</span>
         <span class="k">if</span> <span class="p">(</span>
             <span class="n">discriminator</span> <span class="ow">in</span> <span class="n">base</span>
             <span class="ow">and</span> <span class="n">discriminator</span> <span class="ow">in</span> <span class="n">override</span>

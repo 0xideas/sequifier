@@ -283,14 +283,14 @@
 
 
 <div class="viewcode-block" id="SequifierDatasetFromFile"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">SequifierDatasetFromFile</span><span class="p">(</span><span class="n">IterableDataset</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    An iterable-style dataset that pre-loads all data into CPU RAM and yields</span>
 <span class="sd">    pre-collated batches.</span>
 
-<span class="sd">    This is the idiomatic PyTorch solution for implementing custom &#39;en block&#39;</span>
+<span class="sd">    This is the idiomatic PyTorch solution for implementing custom 'en block'</span>
 <span class="sd">    batching. The __iter__ method handles shuffling and batch slicing, ensuring</span>
 <span class="sd">    maximum performance.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">,</span> <span class="n">shuffle</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
@@ -303,7 +303,7 @@
         <span class="n">all_columns</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">)))</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;[INFO] Loading training dataset into memory from &#39;</span><span class="si">{</span><span class="n">data_path</span><span class="si">}</span><span class="s2">&#39;...&quot;</span>
+            <span class="sa">f</span><span class="s2">"[INFO] Loading training dataset into memory from '</span><span class="si">{</span><span class="n">data_path</span><span class="si">}</span><span class="s2">'..."</span>
         <span class="p">)</span>
         <span class="n">data_df</span> <span class="o">=</span> <span class="n">read_data</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span><span class="p">)</span>
 
@@ -327,24 +327,24 @@
             <span class="n">key</span><span class="p">:</span> <span class="n">all_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">input_columns</span>
         <span class="p">}</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="n">key</span><span class="p">:</span> <span class="n">all_tensors</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">key</span><span class="si">}</span><span class="s2">_target&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">target_columns</span>
+            <span class="n">key</span><span class="p">:</span> <span class="n">all_tensors</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">key</span><span class="si">}</span><span class="s2">_target"</span><span class="p">]</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">target_columns</span>
         <span class="p">}</span>
         <span class="k">del</span> <span class="n">all_tensors</span>
 
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"cuda"</span><span class="p">):</span>
             <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequence_tensors</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">sequence_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequence_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span><span class="o">.</span><span class="n">pin_memory</span><span class="p">()</span>
             <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_tensors</span><span class="p">[</span><span class="n">key</span><span class="p">]</span><span class="o">.</span><span class="n">pin_memory</span><span class="p">()</span>
 
-        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] Dataset loaded with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2"> samples.&quot;</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"[INFO] Dataset loaded with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2"> samples."</span><span class="p">)</span>
 
 <div class="viewcode-block" id="SequifierDatasetFromFile.set_epoch"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.set_epoch">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">epoch</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Allows the training loop to set the epoch for deterministic shuffling.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Allows the training loop to set the epoch for deterministic shuffling."""</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span> <span class="o">=</span> <span class="n">epoch</span></div>
 
 <div class="viewcode-block" id="SequifierDatasetFromFile.__len__"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__len__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Returns the total number of samples in the dataset.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Returns the total number of samples in the dataset."""</span>
         <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span></div>
 
 <div class="viewcode-block" id="SequifierDatasetFromFile.__iter__"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__iter__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="fm">__iter__</span><span class="p">(</span>
@@ -352,7 +352,7 @@
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span>
         <span class="n">Tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
     <span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Yields batches of data.</span>
+<span class="w">        </span><span class="sd">"""Yields batches of data.</span>
 
 <span class="sd">        Handles shuffling (if enabled) and slicing data based on distributed</span>
 <span class="sd">        rank and worker ID.</span>
@@ -365,7 +365,7 @@
 <span class="sd">                - None: Placeholder for sequence_id (not used in this dataset type).</span>
 <span class="sd">                - None: Placeholder for subsequence_id (not used in this dataset type).</span>
 <span class="sd">                - None: Placeholder for start_position (not used in this dataset type).</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="n">worker_info</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get_worker_info</span><span class="p">()</span>
         <span class="n">world_size</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_world_size</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">1</span>
         <span class="n">rank</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_rank</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">0</span>

@@ -282,10 +282,10 @@
 
 
 <div class="viewcode-block" id="AdEMAMix"><a class="viewcode-back" href="../../../api.html#sequifier.optimizers.ademamix.AdEMAMix">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">AdEMAMix</span><span class="p">(</span><span class="n">Optimizer</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Implements the AdEMAMix optimizer.</span>
+<span class="w">    </span><span class="sd">"""Implements the AdEMAMix optimizer.</span>
 
-<span class="sd">    This optimizer is based on the paper &quot;AdEMAMix: A Novel Adaptive Optimizer for</span>
-<span class="sd">    Deep Learning&quot;. It combines the advantages of Adam and EMA, and introduces a</span>
+<span class="sd">    This optimizer is based on the paper "AdEMAMix: A Novel Adaptive Optimizer for</span>
+<span class="sd">    Deep Learning". It combines the advantages of Adam and EMA, and introduces a</span>
 <span class="sd">    mixing term to further improve performance.</span>
 
 <span class="sd">    Args:</span>
@@ -301,7 +301,7 @@
 <span class="sd">        alpha (float, optional): Mixing coefficient (default: 5.0).</span>
 <span class="sd">        T_alpha_beta3 (int, optional): Time period for alpha and beta3 scheduling</span>
 <span class="sd">            (default: None).</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
@@ -314,15 +314,15 @@
         <span class="n">T_alpha_beta3</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;=</span> <span class="n">lr</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid learning rate: </span><span class="si">{</span><span class="n">lr</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Invalid learning rate: </span><span class="si">{</span><span class="n">lr</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;=</span> <span class="n">eps</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid epsilon value: </span><span class="si">{</span><span class="n">eps</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">betas</span><span class="p">)</span> <span class="o">==</span> <span class="mi">3</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;Invalid beta parameters: </span><span class="si">{</span><span class="n">betas</span><span class="si">}</span><span class="s2">, expected 3&quot;</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Invalid epsilon value: </span><span class="si">{</span><span class="n">eps</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">betas</span><span class="p">)</span> <span class="o">==</span> <span class="mi">3</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"Invalid beta parameters: </span><span class="si">{</span><span class="n">betas</span><span class="si">}</span><span class="s2">, expected 3"</span>
         <span class="k">assert</span> <span class="nb">all</span><span class="p">(</span>
             <span class="mf">0.0</span> <span class="o">&lt;=</span> <span class="n">beta</span> <span class="o">&lt;</span> <span class="mf">1.0</span> <span class="k">for</span> <span class="n">beta</span> <span class="ow">in</span> <span class="n">betas</span>
-        <span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;Invalid beta parameters: </span><span class="si">{</span><span class="n">betas</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="p">),</span> <span class="sa">f</span><span class="s2">"Invalid beta parameters: </span><span class="si">{</span><span class="n">betas</span><span class="si">}</span><span class="s2">"</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;=</span> <span class="n">weight_decay</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid weight_decay value: </span><span class="si">{</span><span class="n">weight_decay</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Invalid weight_decay value: </span><span class="si">{</span><span class="n">weight_decay</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
         <span class="n">defaults</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span>
             <span class="n">lr</span><span class="o">=</span><span class="n">lr</span><span class="p">,</span>
@@ -335,16 +335,16 @@
         <span class="nb">super</span><span class="p">(</span><span class="n">AdEMAMix</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">defaults</span><span class="p">)</span>
 
 <div class="viewcode-block" id="AdEMAMix.__setstate__"><a class="viewcode-back" href="../../../api.html#sequifier.optimizers.ademamix.AdEMAMix.__setstate__">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">__setstate__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Set the state of the optimizer.</span>
+<span class="w">        </span><span class="sd">"""Set the state of the optimizer.</span>
 
 <span class="sd">        Args:</span>
 <span class="sd">            state (dict): The state of the optimizer.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="nb">super</span><span class="p">(</span><span class="n">AdEMAMix</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__setstate__</span><span class="p">(</span><span class="n">state</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="AdEMAMix.step"><a class="viewcode-back" href="../../../api.html#sequifier.optimizers.ademamix.AdEMAMix.step">[docs]</a>    <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">step</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">closure</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform a single optimization step.</span>
+<span class="w">        </span><span class="sd">"""Perform a single optimization step.</span>
 
 <span class="sd">        Args:</span>
 <span class="sd">            closure (callable, optional): A closure that reevaluates the model</span>
@@ -352,7 +352,7 @@
 
 <span class="sd">        Returns:</span>
 <span class="sd">            The loss, if the closure is provided. Otherwise, returns None.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="n">loss</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">if</span> <span class="n">closure</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">with</span> <span class="n">torch</span><span class="o">.</span><span class="n">enable_grad</span><span class="p">():</span>
@@ -366,39 +366,39 @@
             <span class="n">exp_avg_slow</span> <span class="o">=</span> <span class="p">[]</span>
             <span class="n">state_steps</span> <span class="o">=</span> <span class="p">[]</span>
 
-            <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">group</span><span class="p">[</span><span class="s2">&quot;params&quot;</span><span class="p">]:</span>
+            <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">group</span><span class="p">[</span><span class="s2">"params"</span><span class="p">]:</span>
                 <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">grad</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                     <span class="n">params_with_grad</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
                     <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">grad</span><span class="o">.</span><span class="n">is_sparse</span><span class="p">:</span>
-                        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;AdEMAMix does not support sparse gradients&quot;</span><span class="p">)</span>
+                        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">"AdEMAMix does not support sparse gradients"</span><span class="p">)</span>
                     <span class="n">grads</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">grad</span><span class="p">)</span>
 
                     <span class="n">state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">state</span><span class="p">[</span><span class="n">p</span><span class="p">]</span>
                     <span class="c1"># Lazy state initialization</span>
                     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">state</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-                        <span class="n">state</span><span class="p">[</span><span class="s2">&quot;step&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+                        <span class="n">state</span><span class="p">[</span><span class="s2">"step"</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
                         <span class="c1"># Exponential moving average of gradient values</span>
-                        <span class="n">state</span><span class="p">[</span><span class="s2">&quot;exp_avg&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span>
+                        <span class="n">state</span><span class="p">[</span><span class="s2">"exp_avg"</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span>
                             <span class="n">p</span><span class="p">,</span> <span class="n">memory_format</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">preserve_format</span>
                         <span class="p">)</span>
                         <span class="c1"># Exponential moving average of squared gradient values</span>
-                        <span class="n">state</span><span class="p">[</span><span class="s2">&quot;exp_avg_sq&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span>
+                        <span class="n">state</span><span class="p">[</span><span class="s2">"exp_avg_sq"</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span>
                             <span class="n">p</span><span class="p">,</span> <span class="n">memory_format</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">preserve_format</span>
                         <span class="p">)</span>
                         <span class="c1"># Slow exponential moving average</span>
-                        <span class="n">state</span><span class="p">[</span><span class="s2">&quot;exp_avg_slow&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span>
+                        <span class="n">state</span><span class="p">[</span><span class="s2">"exp_avg_slow"</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span>
                             <span class="n">p</span><span class="p">,</span> <span class="n">memory_format</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">preserve_format</span>
                         <span class="p">)</span>
 
-                    <span class="n">exp_avgs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="s2">&quot;exp_avg&quot;</span><span class="p">])</span>
-                    <span class="n">exp_avg_sqs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="s2">&quot;exp_avg_sq&quot;</span><span class="p">])</span>
-                    <span class="n">exp_avg_slow</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="s2">&quot;exp_avg_slow&quot;</span><span class="p">])</span>
-                    <span class="n">state</span><span class="p">[</span><span class="s2">&quot;step&quot;</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
-                    <span class="n">state_steps</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="s2">&quot;step&quot;</span><span class="p">])</span>
+                    <span class="n">exp_avgs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="s2">"exp_avg"</span><span class="p">])</span>
+                    <span class="n">exp_avg_sqs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="s2">"exp_avg_sq"</span><span class="p">])</span>
+                    <span class="n">exp_avg_slow</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="s2">"exp_avg_slow"</span><span class="p">])</span>
+                    <span class="n">state</span><span class="p">[</span><span class="s2">"step"</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+                    <span class="n">state_steps</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="s2">"step"</span><span class="p">])</span>
 
-            <span class="n">beta1</span><span class="p">,</span> <span class="n">beta2</span><span class="p">,</span> <span class="n">beta3</span> <span class="o">=</span> <span class="n">group</span><span class="p">[</span><span class="s2">&quot;betas&quot;</span><span class="p">]</span>
-            <span class="n">alpha</span> <span class="o">=</span> <span class="n">group</span><span class="p">[</span><span class="s2">&quot;alpha&quot;</span><span class="p">]</span>
-            <span class="n">T_alpha_beta3</span> <span class="o">=</span> <span class="n">group</span><span class="p">[</span><span class="s2">&quot;T_alpha_beta3&quot;</span><span class="p">]</span>
+            <span class="n">beta1</span><span class="p">,</span> <span class="n">beta2</span><span class="p">,</span> <span class="n">beta3</span> <span class="o">=</span> <span class="n">group</span><span class="p">[</span><span class="s2">"betas"</span><span class="p">]</span>
+            <span class="n">alpha</span> <span class="o">=</span> <span class="n">group</span><span class="p">[</span><span class="s2">"alpha"</span><span class="p">]</span>
+            <span class="n">T_alpha_beta3</span> <span class="o">=</span> <span class="n">group</span><span class="p">[</span><span class="s2">"T_alpha_beta3"</span><span class="p">]</span>
 
             <span class="bp">self</span><span class="o">.</span><span class="n">_update_adamemix</span><span class="p">(</span>
                 <span class="n">params_with_grad</span><span class="p">,</span>
@@ -412,9 +412,9 @@
                 <span class="n">beta3</span><span class="o">=</span><span class="n">beta3</span><span class="p">,</span>
                 <span class="n">alpha</span><span class="o">=</span><span class="n">alpha</span><span class="p">,</span>
                 <span class="n">T_alpha_beta3</span><span class="o">=</span><span class="n">T_alpha_beta3</span><span class="p">,</span>
-                <span class="n">lr</span><span class="o">=</span><span class="n">group</span><span class="p">[</span><span class="s2">&quot;lr&quot;</span><span class="p">],</span>
-                <span class="n">weight_decay</span><span class="o">=</span><span class="n">group</span><span class="p">[</span><span class="s2">&quot;weight_decay&quot;</span><span class="p">],</span>
-                <span class="n">eps</span><span class="o">=</span><span class="n">group</span><span class="p">[</span><span class="s2">&quot;eps&quot;</span><span class="p">],</span>
+                <span class="n">lr</span><span class="o">=</span><span class="n">group</span><span class="p">[</span><span class="s2">"lr"</span><span class="p">],</span>
+                <span class="n">weight_decay</span><span class="o">=</span><span class="n">group</span><span class="p">[</span><span class="s2">"weight_decay"</span><span class="p">],</span>
+                <span class="n">eps</span><span class="o">=</span><span class="n">group</span><span class="p">[</span><span class="s2">"eps"</span><span class="p">],</span>
             <span class="p">)</span>
 
         <span class="k">return</span> <span class="n">loss</span></div>
@@ -436,7 +436,7 @@
         <span class="n">weight_decay</span><span class="p">,</span>
         <span class="n">eps</span><span class="p">,</span>
     <span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Perform the AdEMAMix update for a single parameter group.</span>
+<span class="w">        </span><span class="sd">"""Perform the AdEMAMix update for a single parameter group.</span>
 
 <span class="sd">        Args:</span>
 <span class="sd">            params (list[torch.Tensor]): List of parameters to update.</span>
@@ -456,7 +456,7 @@
 <span class="sd">            lr (float): Learning rate.</span>
 <span class="sd">            weight_decay (float): Weight decay.</span>
 <span class="sd">            eps (float): Epsilon term for numerical stability.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">param</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
             <span class="n">grad</span> <span class="o">=</span> <span class="n">grads</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
             <span class="n">exp_avg</span> <span class="o">=</span> <span class="n">exp_avgs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>

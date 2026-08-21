@@ -300,7 +300,7 @@
 
 
 <div class="viewcode-block" id="SequifierDatasetFromFile"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">SequifierDatasetFromFile</span><span class="p">(</span><span class="n">IterableDataset</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Eager single-file dataset yielding pre-collated batches.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Eager single-file dataset yielding pre-collated batches."""</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">,</span> <span class="n">shuffle</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
@@ -312,7 +312,7 @@
 
         <span class="n">all_columns</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">)))</span>
 
-        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Loading training dataset into memory from &#39;</span><span class="si">{</span><span class="n">data_path</span><span class="si">}</span><span class="s2">&#39;...&quot;</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Loading training dataset into memory from '</span><span class="si">{</span><span class="n">data_path</span><span class="si">}</span><span class="s2">'..."</span><span class="p">)</span>
         <span class="n">data_df</span> <span class="o">=</span> <span class="n">read_data</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span><span class="p">)</span>
 
         <span class="n">column_data_types</span> <span class="o">=</span> <span class="p">{</span>
@@ -334,24 +334,24 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">sample_index</span> <span class="o">=</span> <span class="n">sampling_plan</span><span class="o">.</span><span class="n">build_index</span><span class="p">(</span><span class="n">left_pad_lengths</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sample_index</span><span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;No usable model windows were found in the dataset.&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"No usable model windows were found in the dataset."</span><span class="p">)</span>
 
         <span class="k">del</span> <span class="n">data_df</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span> <span class="o">=</span> <span class="n">all_tensors</span>
 
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"cuda"</span><span class="p">):</span>
             <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span><span class="p">[</span><span class="n">key</span><span class="p">]</span><span class="o">.</span><span class="n">pin_memory</span><span class="p">()</span>
 
-        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Dataset loaded with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2"> samples.&quot;</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Dataset loaded with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="si">}</span><span class="s2"> samples."</span><span class="p">)</span>
 
 <div class="viewcode-block" id="SequifierDatasetFromFile.set_epoch"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.set_epoch">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">epoch</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Set the shuffle epoch.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Set the shuffle epoch."""</span>
         <span class="n">write_shared_int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_epoch_state</span><span class="p">,</span> <span class="n">epoch</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="SequifierDatasetFromFile.set_start_batch"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.set_start_batch">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_start_batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">start_batch</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Set the first global batch to yield on the next iteration.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Set the first global batch to yield on the next iteration."""</span>
         <span class="n">write_shared_int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_start_batch_state</span><span class="p">,</span> <span class="n">start_batch</span><span class="p">)</span></div>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>

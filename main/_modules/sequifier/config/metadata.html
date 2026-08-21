@@ -272,7 +272,7 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.config.metadata</h1><div class="highlight"><pre>
-<span></span><span class="sd">&quot;&quot;&quot;Typed preprocessing metadata used during config resolution.&quot;&quot;&quot;</span>
+<span></span><span class="sd">"""Typed preprocessing metadata used during config resolution."""</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
@@ -286,28 +286,28 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="p">,</span> <span class="n">validate_special_token_ids</span>
 
 <span class="n">RESOLVED_ONLY_CONFIG_KEYS</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;categorical_columns&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;real_columns&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;id_maps&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;special_token_ids&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;storage_layout&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;window_view&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;n_classes&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;stored_context_width&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;max_target_offset&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;stored_window_layout_version&quot;</span><span class="p">,</span>
+    <span class="s2">"categorical_columns"</span><span class="p">,</span>
+    <span class="s2">"real_columns"</span><span class="p">,</span>
+    <span class="s2">"id_maps"</span><span class="p">,</span>
+    <span class="s2">"special_token_ids"</span><span class="p">,</span>
+    <span class="s2">"storage_layout"</span><span class="p">,</span>
+    <span class="s2">"window_view"</span><span class="p">,</span>
+    <span class="s2">"n_classes"</span><span class="p">,</span>
+    <span class="s2">"stored_context_width"</span><span class="p">,</span>
+    <span class="s2">"max_target_offset"</span><span class="p">,</span>
+    <span class="s2">"stored_window_layout_version"</span><span class="p">,</span>
 <span class="p">}</span>
 
 
 <div class="viewcode-block" id="DatasetMetadata"><a class="viewcode-back" href="../../../api.html#sequifier.config.metadata.DatasetMetadata">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">DatasetMetadata</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;The stable subset of preprocessing metadata consumed by other commands.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""The stable subset of preprocessing metadata consumed by other commands."""</span>
 
-    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">&quot;allow&quot;</span><span class="p">,</span> <span class="n">populate_by_name</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">"allow"</span><span class="p">,</span> <span class="n">populate_by_name</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
     <span class="n">split_paths</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
     <span class="n">column_data_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">,</span>
-        <span class="n">validation_alias</span><span class="o">=</span><span class="n">AliasChoices</span><span class="p">(</span><span class="s2">&quot;column_data_types&quot;</span><span class="p">,</span> <span class="s2">&quot;column_types&quot;</span><span class="p">),</span>
+        <span class="n">validation_alias</span><span class="o">=</span><span class="n">AliasChoices</span><span class="p">(</span><span class="s2">"column_data_types"</span><span class="p">,</span> <span class="s2">"column_types"</span><span class="p">),</span>
     <span class="p">)</span>
     <span class="n">n_classes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
     <span class="n">id_maps</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
@@ -322,10 +322,10 @@
     <span class="n">max_target_offset</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">stored_window_layout_version</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span>
 
-    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">&quot;special_token_ids&quot;</span><span class="p">)</span>
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"special_token_ids"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_token_ids</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
-        <span class="k">return</span> <span class="n">validate_special_token_ids</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">&quot;dataset metadata&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">validate_special_token_ids</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">"dataset metadata"</span><span class="p">)</span>
 
     <span class="nd">@property</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">storage_layout</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StoredWindowLayout</span><span class="p">:</span>
@@ -337,83 +337,83 @@
 
 
 <div class="viewcode-block" id="load_dataset_metadata"><a class="viewcode-back" href="../../../api.html#sequifier.config.metadata.load_dataset_metadata">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">load_dataset_metadata</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DatasetMetadata</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load and validate one preprocessing metadata JSON file.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Load and validate one preprocessing metadata JSON file."""</span>
 
-    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
         <span class="n">values</span><span class="p">:</span> <span class="n">Any</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">file</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Metadata config &#39;</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">&#39; must contain a JSON object.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Metadata config '</span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2">' must contain a JSON object."</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">DatasetMetadata</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span><span class="n">values</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="extract_inline_metadata"><a class="viewcode-back" href="../../../api.html#sequifier.config.metadata.extract_inline_metadata">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">extract_inline_metadata</span><span class="p">(</span>
     <span class="n">values</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Split the historical ``skip_metadata`` representation into two mappings.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Split the historical ``skip_metadata`` representation into two mappings."""</span>
 
     <span class="n">authored</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
-    <span class="n">window_view</span> <span class="o">=</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;window_view&quot;</span><span class="p">)</span>
-    <span class="k">if</span> <span class="s2">&quot;context_length&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">authored</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
-        <span class="n">authored</span><span class="p">[</span><span class="s2">&quot;context_length&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;context_length&quot;</span><span class="p">)</span>
-    <span class="k">elif</span> <span class="s2">&quot;context_length&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">authored</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="n">ModelWindowView</span><span class="p">):</span>
-        <span class="n">authored</span><span class="p">[</span><span class="s2">&quot;context_length&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span>
-    <span class="k">if</span> <span class="s2">&quot;target_offset&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">authored</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
-        <span class="n">authored</span><span class="p">[</span><span class="s2">&quot;target_offset&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;target_offset&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
-    <span class="k">elif</span> <span class="s2">&quot;target_offset&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">authored</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="n">ModelWindowView</span><span class="p">):</span>
-        <span class="n">authored</span><span class="p">[</span><span class="s2">&quot;target_offset&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">target_offset</span>
+    <span class="n">window_view</span> <span class="o">=</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"window_view"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">"context_length"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">authored</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+        <span class="n">authored</span><span class="p">[</span><span class="s2">"context_length"</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"context_length"</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="s2">"context_length"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">authored</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="n">ModelWindowView</span><span class="p">):</span>
+        <span class="n">authored</span><span class="p">[</span><span class="s2">"context_length"</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span>
+    <span class="k">if</span> <span class="s2">"target_offset"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">authored</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+        <span class="n">authored</span><span class="p">[</span><span class="s2">"target_offset"</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"target_offset"</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="s2">"target_offset"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">authored</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">window_view</span><span class="p">,</span> <span class="n">ModelWindowView</span><span class="p">):</span>
+        <span class="n">authored</span><span class="p">[</span><span class="s2">"target_offset"</span><span class="p">]</span> <span class="o">=</span> <span class="n">window_view</span><span class="o">.</span><span class="n">target_offset</span>
 
     <span class="n">metadata_values</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">&quot;split_paths&quot;</span><span class="p">:</span> <span class="p">[</span>
+        <span class="s2">"split_paths"</span><span class="p">:</span> <span class="p">[</span>
             <span class="n">path</span>
             <span class="k">for</span> <span class="n">path</span> <span class="ow">in</span> <span class="p">(</span>
-                <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;data_path&quot;</span><span class="p">),</span>
-                <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;validation_data_path&quot;</span><span class="p">),</span>
+                <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"data_path"</span><span class="p">),</span>
+                <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"validation_data_path"</span><span class="p">),</span>
             <span class="p">)</span>
             <span class="k">if</span> <span class="n">path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="p">],</span>
-        <span class="s2">&quot;column_data_types&quot;</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;column_data_types&quot;</span><span class="p">,</span> <span class="p">{}),</span>
-        <span class="s2">&quot;n_classes&quot;</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;n_classes&quot;</span><span class="p">,</span> <span class="p">{}),</span>
-        <span class="s2">&quot;id_maps&quot;</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;id_maps&quot;</span><span class="p">,</span> <span class="p">{}),</span>
-        <span class="s2">&quot;special_token_ids&quot;</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
-            <span class="s2">&quot;special_token_ids&quot;</span><span class="p">,</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">ids_by_label</span>
+        <span class="s2">"column_data_types"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"column_data_types"</span><span class="p">,</span> <span class="p">{}),</span>
+        <span class="s2">"n_classes"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"n_classes"</span><span class="p">,</span> <span class="p">{}),</span>
+        <span class="s2">"id_maps"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"id_maps"</span><span class="p">,</span> <span class="p">{}),</span>
+        <span class="s2">"special_token_ids"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+            <span class="s2">"special_token_ids"</span><span class="p">,</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">ids_by_label</span>
         <span class="p">),</span>
-        <span class="s2">&quot;selected_columns_statistics&quot;</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;selected_columns_statistics&quot;</span><span class="p">,</span> <span class="p">{}),</span>
-        <span class="s2">&quot;normalize_real_columns&quot;</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;normalize_real_columns&quot;</span><span class="p">,</span> <span class="kc">True</span><span class="p">),</span>
+        <span class="s2">"selected_columns_statistics"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"selected_columns_statistics"</span><span class="p">,</span> <span class="p">{}),</span>
+        <span class="s2">"normalize_real_columns"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"normalize_real_columns"</span><span class="p">,</span> <span class="kc">True</span><span class="p">),</span>
     <span class="p">}</span>
 
-    <span class="n">storage_layout</span> <span class="o">=</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;storage_layout&quot;</span><span class="p">)</span>
+    <span class="n">storage_layout</span> <span class="o">=</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"storage_layout"</span><span class="p">)</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">storage_layout</span><span class="p">,</span> <span class="n">StoredWindowLayout</span><span class="p">):</span>
         <span class="n">metadata_values</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
             <span class="p">{</span>
-                <span class="s2">&quot;stored_context_width&quot;</span><span class="p">:</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span>
-                <span class="s2">&quot;max_target_offset&quot;</span><span class="p">:</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">max_target_offset</span><span class="p">,</span>
-                <span class="s2">&quot;stored_window_layout_version&quot;</span><span class="p">:</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">version</span><span class="p">,</span>
+                <span class="s2">"stored_context_width"</span><span class="p">:</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span>
+                <span class="s2">"max_target_offset"</span><span class="p">:</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">max_target_offset</span><span class="p">,</span>
+                <span class="s2">"stored_window_layout_version"</span><span class="p">:</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">version</span><span class="p">,</span>
             <span class="p">}</span>
         <span class="p">)</span>
     <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">storage_layout</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
         <span class="n">metadata_values</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
             <span class="p">{</span>
-                <span class="s2">&quot;stored_context_width&quot;</span><span class="p">:</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;stored_context_width&quot;</span><span class="p">),</span>
-                <span class="s2">&quot;max_target_offset&quot;</span><span class="p">:</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;max_target_offset&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
-                <span class="s2">&quot;stored_window_layout_version&quot;</span><span class="p">:</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;version&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+                <span class="s2">"stored_context_width"</span><span class="p">:</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"stored_context_width"</span><span class="p">),</span>
+                <span class="s2">"max_target_offset"</span><span class="p">:</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"max_target_offset"</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+                <span class="s2">"stored_window_layout_version"</span><span class="p">:</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"version"</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
             <span class="p">}</span>
         <span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">metadata_values</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
             <span class="p">{</span>
-                <span class="s2">&quot;stored_context_width&quot;</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;stored_context_width&quot;</span><span class="p">),</span>
-                <span class="s2">&quot;max_target_offset&quot;</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;max_target_offset&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
-                <span class="s2">&quot;stored_window_layout_version&quot;</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
-                    <span class="s2">&quot;stored_window_layout_version&quot;</span><span class="p">,</span> <span class="mi">2</span>
+                <span class="s2">"stored_context_width"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"stored_context_width"</span><span class="p">),</span>
+                <span class="s2">"max_target_offset"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"max_target_offset"</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+                <span class="s2">"stored_window_layout_version"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+                    <span class="s2">"stored_window_layout_version"</span><span class="p">,</span> <span class="mi">2</span>
                 <span class="p">),</span>
             <span class="p">}</span>
         <span class="p">)</span>
 
     <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">RESOLVED_ONLY_CONFIG_KEYS</span><span class="p">:</span>
         <span class="n">authored</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;selected_columns_statistics&quot;</span><span class="p">,</span> <span class="s2">&quot;normalize_real_columns&quot;</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"selected_columns_statistics"</span><span class="p">,</span> <span class="s2">"normalize_real_columns"</span><span class="p">):</span>
         <span class="n">authored</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">metadata_values</span><span class="p">[</span><span class="s2">&quot;stored_context_width&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">metadata_values</span><span class="p">[</span><span class="s2">"stored_context_width"</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">authored</span><span class="p">,</span> <span class="kc">None</span>
     <span class="k">return</span> <span class="n">authored</span><span class="p">,</span> <span class="n">metadata_values</span></div>
 </pre></div>

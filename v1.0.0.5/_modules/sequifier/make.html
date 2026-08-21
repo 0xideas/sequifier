@@ -273,7 +273,7 @@
           <h1>Source code for sequifier.make</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 
-<span class="n">preprocess_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_root: .</span>
+<span class="n">preprocess_config_string</span> <span class="o">=</span> <span class="s2">"""project_root: .</span>
 <span class="s2">data_path: PLEASE FILL</span>
 <span class="s2">read_format: csv</span>
 <span class="s2">write_format: parquet</span>
@@ -289,16 +289,16 @@
 <span class="s2">- 1</span>
 <span class="s2">- 1</span>
 <span class="s2">max_rows: null</span>
-<span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">"""</span>
 
-<span class="n">train_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_root: .</span>
+<span class="n">train_config_string</span> <span class="o">=</span> <span class="s2">"""project_root: .</span>
 <span class="s2">model_name: PLEASE FILL</span>
 <span class="s2">read_format: parquet</span>
 <span class="s2">metadata_config_path: PLEASE FILL</span>
 
 <span class="s2">input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
 <span class="s2">target_columns: [EXAMPLE_TARGET_COLUMN_NAME]</span>
-<span class="s2">target_column_types: # &#39;criterion&#39; in training_spec must also be adapted</span>
+<span class="s2">target_column_types: # 'criterion' in training_spec must also be adapted</span>
 <span class="s2">  EXAMPLE_TARGET_COLUMN_NAME: real</span>
 
 <span class="s2">seq_length: 48</span>
@@ -336,9 +336,9 @@
 <span class="s2">    T_max: 111</span>
 <span class="s2">    eta_min: 0.00001</span>
 <span class="s2">  continue_training: true</span>
-<span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">"""</span>
 
-<span class="n">infer_config_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;project_root: .</span>
+<span class="n">infer_config_string</span> <span class="o">=</span> <span class="s2">"""project_root: .</span>
 <span class="s2">metadata_config_path: PLEASE FILL</span>
 <span class="s2">model_type: PLEASE_FILL # generative or embedding</span>
 <span class="s2">model_path: PLEASE FILL</span>
@@ -356,39 +356,39 @@
 <span class="s2">inference_batch_size: 10</span>
 
 <span class="s2">autoregression: true</span>
-<span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">"""</span>
 
-<span class="n">gitignore_string</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;models/</span>
+<span class="n">gitignore_string</span> <span class="o">=</span> <span class="s2">"""models/</span>
 <span class="s2">logs/</span>
 <span class="s2">checkpoints/</span>
 <span class="s2">outputs/</span>
 <span class="s2">data/</span>
-<span class="s2">.DS_Store&quot;&quot;&quot;</span>
+<span class="s2">.DS_Store"""</span>
 
 
 <div class="viewcode-block" id="make"><a class="viewcode-back" href="../../api.html#sequifier.make.make">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">make</span><span class="p">(</span><span class="n">args</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Creates a new sequifier project.</span>
+<span class="w">    </span><span class="sd">"""Creates a new sequifier project.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        args: The command-line arguments.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">project_name</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">project_name</span>
 
     <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">project_name</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">project_name</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;project_name &#39;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">&#39; is not admissible&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"project_name '</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">' is not admissible"</span><span class="p">)</span>
 
-    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs&quot;</span><span class="p">)</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs"</span><span class="p">)</span>
 
-    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/.gitignore&quot;</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/.gitignore"</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
         <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">gitignore_string</span><span class="p">)</span>
 
-    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs/preprocess.yaml&quot;</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs/preprocess.yaml"</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
         <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">preprocess_config_string</span><span class="p">)</span>
 
-    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs/train.yaml&quot;</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs/train.yaml"</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
         <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">train_config_string</span><span class="p">)</span>
 
-    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs/infer.yaml&quot;</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">project_name</span><span class="si">}</span><span class="s2">/configs/infer.yaml"</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
         <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">infer_config_string</span><span class="p">)</span></div>
 </pre></div>
         </article>

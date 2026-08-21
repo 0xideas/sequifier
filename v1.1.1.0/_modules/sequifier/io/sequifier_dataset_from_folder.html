@@ -286,13 +286,13 @@
 
 
 <div class="viewcode-block" id="SequifierDatasetFromFolder"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">SequifierDatasetFromFolder</span><span class="p">(</span><span class="n">IterableDataset</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    An efficient PyTorch IterableDataset that pre-loads all data into RAM.</span>
 
 <span class="sd">    This strategy pays a one-time I/O cost at initialization, after which</span>
 <span class="sd">    all data access during training is extremely fast. It yields full,</span>
 <span class="sd">    pre-collated batches natively.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">TrainModel</span><span class="p">,</span> <span class="n">shuffle</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
@@ -303,20 +303,20 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span> <span class="o">=</span> <span class="mi">0</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">sampling_strategy</span>
 
-        <span class="n">metadata_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">,</span> <span class="s2">&quot;metadata.json&quot;</span><span class="p">)</span>
+        <span class="n">metadata_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">,</span> <span class="s2">"metadata.json"</span><span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">metadata_path</span><span class="p">):</span>
             <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;metadata.json not found in &#39;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="si">}</span><span class="s2">&#39;. &quot;</span>
-                <span class="s2">&quot;Ensure data is pre-processed with write_format: pt.&quot;</span>
+                <span class="sa">f</span><span class="s2">"metadata.json not found in '</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="si">}</span><span class="s2">'. "</span>
+                <span class="s2">"Ensure data is pre-processed with write_format: pt."</span>
             <span class="p">)</span>
 
-        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">metadata_path</span><span class="p">,</span> <span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">metadata_path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
             <span class="n">metadata</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">=</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;total_samples&quot;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">=</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">"total_samples"</span><span class="p">]</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;[INFO] Loading training dataset into memory from &#39;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="si">}</span><span class="s2">&#39;...&quot;</span>
+            <span class="sa">f</span><span class="s2">"[INFO] Loading training dataset into memory from '</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="si">}</span><span class="s2">'..."</span>
         <span class="p">)</span>
 
         <span class="n">all_sequences</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{</span>
@@ -327,10 +327,10 @@
         <span class="p">}</span>
 
         <span class="c1"># Load all data files into RAM</span>
-        <span class="k">for</span> <span class="n">file_info</span> <span class="ow">in</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;batch_files&quot;</span><span class="p">]:</span>
-            <span class="n">file_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">,</span> <span class="n">file_info</span><span class="p">[</span><span class="s2">&quot;path&quot;</span><span class="p">])</span>
+        <span class="k">for</span> <span class="n">file_info</span> <span class="ow">in</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">"batch_files"</span><span class="p">]:</span>
+            <span class="n">file_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">,</span> <span class="n">file_info</span><span class="p">[</span><span class="s2">"path"</span><span class="p">])</span>
             <span class="p">(</span><span class="n">sequences_batch</span><span class="p">,</span> <span class="n">targets_batch</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">)</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
-                <span class="n">file_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span>
+                <span class="n">file_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="s2">"cpu"</span><span class="p">,</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span>
             <span class="p">)</span>
 
             <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">all_sequences</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
@@ -349,7 +349,7 @@
             <span class="n">col</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span><span class="n">tensors</span><span class="p">)</span> <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">tensors</span> <span class="ow">in</span> <span class="n">all_targets</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">tensors</span>
         <span class="p">}</span>
 
-        <span class="c1"># Share memory so DataLoader workers don&#39;t copy the data</span>
+        <span class="c1"># Share memory so DataLoader workers don't copy the data</span>
         <span class="k">for</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">sequences</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
             <span class="n">tensor</span><span class="o">.</span><span class="n">share_memory_</span><span class="p">()</span>
         <span class="k">for</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">targets</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
@@ -359,7 +359,7 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">total_batches</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_calculate_total_batches</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span><span class="p">)</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;[INFO] Dataset loaded into RAM with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span><span class="si">}</span><span class="s2"> samples and </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">total_batches</span><span class="si">}</span><span class="s2"> batches.&quot;</span>
+            <span class="sa">f</span><span class="s2">"[INFO] Dataset loaded into RAM with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span><span class="si">}</span><span class="s2"> samples and </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">total_batches</span><span class="si">}</span><span class="s2"> batches."</span>
         <span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_calculate_total_batches</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
@@ -375,11 +375,11 @@
         <span class="k">return</span> <span class="n">total_batches</span>
 
 <div class="viewcode-block" id="SequifierDatasetFromFolder.set_epoch"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder.set_epoch">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">epoch</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Allows the training loop to set the epoch for deterministic shuffling.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Allows the training loop to set the epoch for deterministic shuffling."""</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">epoch</span> <span class="o">=</span> <span class="n">epoch</span></div>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">_get_target_samples</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Calculates exact sample count per rank to ensure FSDP syncs properly.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Calculates exact sample count per rank to ensure FSDP syncs properly."""</span>
         <span class="n">world_size</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_world_size</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">1</span>
         <span class="n">rank</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_rank</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">0</span>
 
@@ -387,11 +387,11 @@
             <span class="nb">len</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="p">,</span> <span class="n">world_size</span><span class="p">))</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">world_size</span><span class="p">)</span>
         <span class="p">]</span>
 
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;exact&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">"exact"</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">samples_per_rank</span><span class="p">[</span><span class="n">rank</span><span class="p">]</span>
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;oversampling&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">"oversampling"</span><span class="p">:</span>
             <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="n">samples_per_rank</span><span class="p">)</span>
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;undersampling&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">"undersampling"</span><span class="p">:</span>
             <span class="k">return</span> <span class="nb">min</span><span class="p">(</span><span class="n">samples_per_rank</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">samples_per_rank</span><span class="p">[</span><span class="n">rank</span><span class="p">]</span>
 
@@ -421,13 +421,13 @@
         <span class="n">indices_for_rank</span> <span class="o">=</span> <span class="n">indices</span><span class="p">[</span><span class="n">rank</span><span class="p">::</span><span class="n">world_size</span><span class="p">]</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
 
         <span class="c1"># 3. Handle FSDP oversampling/undersampling sync requirements</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;oversampling&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">"oversampling"</span><span class="p">:</span>
             <span class="c1"># Loop the indices to pad out the shorter ranks</span>
             <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices_for_rank</span><span class="p">)</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span><span class="p">:</span>
                 <span class="n">indices_for_rank</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
                     <span class="n">indices_for_rank</span><span class="p">[:</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span> <span class="o">-</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices_for_rank</span><span class="p">)]</span>
                 <span class="p">)</span>
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">&quot;undersampling&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_strategy</span> <span class="o">==</span> <span class="s2">"undersampling"</span><span class="p">:</span>
             <span class="n">indices_for_rank</span> <span class="o">=</span> <span class="n">indices_for_rank</span><span class="p">[:</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span><span class="p">]</span>
 
         <span class="c1"># 4. Distribute among CPU workers for this GPU</span>

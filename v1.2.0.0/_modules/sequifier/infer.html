@@ -304,7 +304,7 @@
 
 <div class="viewcode-block" id="infer"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">infer</span><span class="p">(</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">args_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Runs the main inference pipeline.</span>
+<span class="w">    </span><span class="sd">"""Runs the main inference pipeline.</span>
 
 <span class="sd">    This function orchestrates the inference process. It loads the main</span>
 <span class="sd">    inference configuration, retrieves necessary metadata like ID maps and</span>
@@ -318,27 +318,27 @@
 <span class="sd">        args_config: A dictionary of configuration overrides, often</span>
 <span class="sd">            passed from the command line, that will be merged into the</span>
 <span class="sd">            loaded configuration file.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;--- Starting Inference ---&quot;</span><span class="p">)</span>
+<span class="sd">    """</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"--- Starting Inference ---"</span><span class="p">)</span>
     <span class="n">config_path</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="n">args</span><span class="o">.</span><span class="n">config_path</span> <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">config_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="s2">&quot;configs/infer.yaml&quot;</span>
+        <span class="n">args</span><span class="o">.</span><span class="n">config_path</span> <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">config_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="s2">"configs/infer.yaml"</span>
     <span class="p">)</span>
 
-    <span class="n">skip_metadata</span> <span class="o">=</span> <span class="n">args_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;skip_metadata&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+    <span class="n">skip_metadata</span> <span class="o">=</span> <span class="n">args_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"skip_metadata"</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
     <span class="n">config</span> <span class="o">=</span> <span class="n">load_inferer_config</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">args_config</span><span class="p">,</span> <span class="n">skip_metadata</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">map_to_id</span> <span class="ow">or</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">real_columns</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">metadata_config_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">&quot;If you want to map to id, you need to provide a file path to a json that contains: {{&#39;id_maps&#39;:{...}}} to metadata_config_path&quot;</span>
-                <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">If you have real columns in the data, you need to provide a json that contains: {{&#39;selected_columns_statistics&#39;:{COL_NAME:{&#39;std&#39;:..., &#39;mean&#39;:...}}}}&quot;</span>
+                <span class="s2">"If you want to map to id, you need to provide a file path to a json that contains: {{'id_maps':{...}}} to metadata_config_path"</span>
+                <span class="s2">"</span><span class="se">\n</span><span class="s2">If you have real columns in the data, you need to provide a json that contains: {{'selected_columns_statistics':{COL_NAME:{'std':..., 'mean':...}}}}"</span>
             <span class="p">)</span>
         <span class="k">with</span> <span class="nb">open</span><span class="p">(</span>
-            <span class="n">normalize_path</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">metadata_config_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">),</span> <span class="s2">&quot;r&quot;</span>
+            <span class="n">normalize_path</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">metadata_config_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">),</span> <span class="s2">"r"</span>
         <span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
             <span class="n">metadata_config</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">())</span>
-            <span class="n">id_maps</span> <span class="o">=</span> <span class="n">metadata_config</span><span class="p">[</span><span class="s2">&quot;id_maps&quot;</span><span class="p">]</span>
-            <span class="n">selected_columns_statistics</span> <span class="o">=</span> <span class="n">metadata_config</span><span class="p">[</span><span class="s2">&quot;selected_columns_statistics&quot;</span><span class="p">]</span>
+            <span class="n">id_maps</span> <span class="o">=</span> <span class="n">metadata_config</span><span class="p">[</span><span class="s2">"id_maps"</span><span class="p">]</span>
+            <span class="n">selected_columns_statistics</span> <span class="o">=</span> <span class="n">metadata_config</span><span class="p">[</span><span class="s2">"selected_columns_statistics"</span><span class="p">]</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">id_maps</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="n">selected_columns_statistics</span> <span class="o">=</span> <span class="p">{}</span>
@@ -352,7 +352,7 @@
 
 <div class="viewcode-block" id="load_pt_dataset"><a class="viewcode-back" href="../../api.html#sequifier.infer.load_pt_dataset">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">load_pt_dataset</span><span class="p">(</span><span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">start_pct</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">end_pct</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Any</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Lazily loads and yields data from .pt files in a directory.</span>
+<span class="w">    </span><span class="sd">"""Lazily loads and yields data from .pt files in a directory.</span>
 
 <span class="sd">    This function scans a directory for `.pt` files, sorts them, and then</span>
 <span class="sd">    yields the contents of a specific slice of those files defined by a</span>
@@ -369,9 +369,9 @@
 <span class="sd">    Yields:</span>
 <span class="sd">        Iterator: An iterator where each item is the data loaded from a</span>
 <span class="sd">        single `.pt` file (e.g., using `torch.load`).</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="c1"># Get all .pt files in the directory (not nested)</span>
-    <span class="n">pt_files</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">data_path</span><span class="p">)</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">&quot;*.pt&quot;</span><span class="p">))</span>
+    <span class="n">pt_files</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">data_path</span><span class="p">)</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">"*.pt"</span><span class="p">))</span>
 
     <span class="c1"># Calculate slice indices</span>
     <span class="n">total</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">pt_files</span><span class="p">)</span>
@@ -387,7 +387,7 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">load_parquet_folder_dataset</span><span class="p">(</span>
     <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">start_pct</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">end_pct</span><span class="p">:</span> <span class="nb">float</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Any</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Lazily loads and yields data from long-format .parquet chunk files in a directory.</span>
+<span class="w">    </span><span class="sd">"""Lazily loads and yields data from long-format .parquet chunk files in a directory.</span>
 
 <span class="sd">    This function scans a directory for `.parquet` files, sorts them, and then</span>
 <span class="sd">    yields the contents of a specific slice of those files defined by a</span>
@@ -404,8 +404,8 @@
 <span class="sd">    Yields:</span>
 <span class="sd">        Iterator: An iterator where each item is a Polars DataFrame loaded from a</span>
 <span class="sd">        single `.parquet` file.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">parquet_files</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">data_path</span><span class="p">)</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">&quot;*.parquet&quot;</span><span class="p">))</span>
+<span class="sd">    """</span>
+    <span class="n">parquet_files</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">data_path</span><span class="p">)</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">"*.parquet"</span><span class="p">))</span>
 
     <span class="n">total</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">parquet_files</span><span class="p">)</span>
     <span class="n">start_idx</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">total</span> <span class="o">*</span> <span class="n">start_pct</span> <span class="o">/</span> <span class="mi">100</span><span class="p">)</span>
@@ -423,7 +423,7 @@
     <span class="n">selected_columns_statistics</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]],</span>
     <span class="n">percentage_limits</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]],</span>
 <span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Core worker function that performs inference.</span>
+<span class="w">    </span><span class="sd">"""Core worker function that performs inference.</span>
 
 <span class="sd">    This function handles the main workflow:</span>
 <span class="sd">    1. Loads the dataset based on `config.read_format` (parquet, csv, or pt).</span>
@@ -441,12 +441,12 @@
 <span class="sd">            `Inferer` for potential model loading overrides.</span>
 <span class="sd">        id_maps: A nested dictionary mapping categorical column names to</span>
 <span class="sd">            their value-to-index maps. `None` if `map_to_id` is False.</span>
-<span class="sd">        selected_columns_statistics: A nested dictionary containing &#39;mean&#39;</span>
-<span class="sd">            and &#39;std&#39; for real-valued columns used for normalization.</span>
+<span class="sd">        selected_columns_statistics: A nested dictionary containing 'mean'</span>
+<span class="sd">            and 'std' for real-valued columns used for normalization.</span>
 <span class="sd">        percentage_limits: A tuple (start_pct, end_pct) used only when</span>
-<span class="sd">            `config.read_format == &quot;pt&quot;` to slice the dataset.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] Reading data from &#39;</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="si">}</span><span class="s2">&#39;...&quot;</span><span class="p">)</span>
+<span class="sd">            `config.read_format == "pt"` to slice the dataset.</span>
+<span class="sd">    """</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"[INFO] Reading data from '</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="si">}</span><span class="s2">'..."</span><span class="p">)</span>
 
     <span class="n">is_folder_input</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span>
         <span class="n">normalize_path</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span>
@@ -455,9 +455,9 @@
     <span class="n">dataset</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
         <span class="c1"># Standalone Single-File Path Execution</span>
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">"parquet"</span><span class="p">:</span>
             <span class="n">dataset</span> <span class="o">=</span> <span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">)]</span>
-        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;csv&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">"csv"</span><span class="p">:</span>
             <span class="n">dataset</span> <span class="o">=</span> <span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">)]</span>
 
     <span class="n">model_paths</span> <span class="o">=</span> <span class="p">(</span>
@@ -469,21 +469,21 @@
         <span class="k">if</span> <span class="n">is_folder_input</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">percentage_limits</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">&quot;percentage_limits must be provided for folder-based read formats&quot;</span>
+                    <span class="s2">"percentage_limits must be provided for folder-based read formats"</span>
                 <span class="p">)</span>
             <span class="n">start_pct</span><span class="p">,</span> <span class="n">end_pct</span> <span class="o">=</span> <span class="n">percentage_limits</span>
 
             <span class="c1"># Direct folders to their respective lazy loaders based on file format</span>
-            <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">"pt"</span><span class="p">:</span>
                 <span class="n">dataset</span> <span class="o">=</span> <span class="n">load_pt_dataset</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">,</span> <span class="n">start_pct</span><span class="p">,</span> <span class="n">end_pct</span><span class="p">)</span>
-            <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span><span class="p">:</span>
+            <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">"parquet"</span><span class="p">:</span>
                 <span class="n">dataset</span> <span class="o">=</span> <span class="n">load_parquet_folder_dataset</span><span class="p">(</span>
                     <span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">,</span> <span class="n">start_pct</span><span class="p">,</span> <span class="n">end_pct</span>
                 <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">dataset</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span>
-                <span class="sa">f</span><span class="s2">&quot;Unsupported input type or read format: </span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">read_format</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="sa">f</span><span class="s2">"Unsupported input type or read format: </span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">read_format</span><span class="si">}</span><span class="s2">"</span>
             <span class="p">)</span>
 
         <span class="n">inferer</span> <span class="o">=</span> <span class="n">Inferer</span><span class="p">(</span>
@@ -513,27 +513,27 @@
         <span class="p">}</span>
 
         <span class="n">model_id</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">model_path</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;.</span><span class="si">{</span><span class="n">inferer</span><span class="o">.</span><span class="n">inference_model_type</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span>
+            <span class="sa">f</span><span class="s2">".</span><span class="si">{</span><span class="n">inferer</span><span class="o">.</span><span class="n">inference_model_type</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span> <span class="s2">""</span>
         <span class="p">)</span>
 
-        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] Inferring for </span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">model_type</span> <span class="o">==</span> <span class="s2">&quot;generative&quot;</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"[INFO] Inferring for </span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">model_type</span> <span class="o">==</span> <span class="s2">"generative"</span><span class="p">:</span>
             <span class="n">infer_generative</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">model_id</span><span class="p">,</span> <span class="n">dataset</span><span class="p">,</span> <span class="n">column_types</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">model_type</span> <span class="o">==</span> <span class="s2">&quot;embedding&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">model_type</span> <span class="o">==</span> <span class="s2">"embedding"</span><span class="p">:</span>
             <span class="n">infer_embedding</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">model_id</span><span class="p">,</span> <span class="n">dataset</span><span class="p">,</span> <span class="n">column_types</span><span class="p">)</span>
 
-    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;--- Inference Complete ---&quot;</span><span class="p">)</span></div>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"--- Inference Complete ---"</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="infer_embedding"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer_embedding">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">infer_embedding</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="s2">&quot;InfererModel&quot;</span><span class="p">,</span>
-    <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="s2">"InfererModel"</span><span class="p">,</span>
+    <span class="n">inferer</span><span class="p">:</span> <span class="s2">"Inferer"</span><span class="p">,</span>
     <span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">dataset</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Any</span><span class="p">],</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Any</span><span class="p">]],</span>
     <span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Performs inference with an embedding model and saves the results.</span>
+<span class="w">    </span><span class="sd">"""Performs inference with an embedding model and saves the results.</span>
 
 <span class="sd">    This function iterates through the provided dataset (which can be a list</span>
 <span class="sd">    of DataFrames or an iterator of tensors). For each data chunk, it</span>
@@ -552,7 +552,7 @@
 <span class="sd">            an iterator of loaded PyTorch data (for .pt files).</span>
 <span class="sd">        column_types: A dictionary mapping column names to their</span>
 <span class="sd">            `torch.dtype`.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">for</span> <span class="n">data_id</span><span class="p">,</span> <span class="n">data</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">dataset</span><span class="p">):</span>
         <span class="n">prediction_length</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span>
 
@@ -561,44 +561,44 @@
             <span class="n">normalize_path</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span>
         <span class="p">)</span>
 
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;parquet&quot;</span><span class="p">,</span> <span class="s2">&quot;csv&quot;</span><span class="p">]</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"parquet"</span><span class="p">,</span> <span class="s2">"csv"</span><span class="p">]</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="n">data</span> <span class="o">=</span> <span class="n">subset_to_input_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
 
             <span class="c1"># Determine the number of input features</span>
-            <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
+            <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"inputCol"</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
 
             <span class="c1"># Create a mask to select only one row per sequence</span>
             <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
 
             <span class="n">embeddings</span> <span class="o">=</span> <span class="n">get_embeddings</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">)</span>
 
-            <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
-            <span class="n">subsequence_ids_for_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
+            <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
+            <span class="n">subsequence_ids_for_preds</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"subsequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
             <span class="n">item_positions_for_preds_base</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
             <span class="p">)</span>
-        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span> <span class="ow">and</span> <span class="n">is_folder_input</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">"parquet"</span> <span class="ow">and</span> <span class="n">is_folder_input</span><span class="p">:</span>
             <span class="c1"># Folder-based Parquet chunk logic</span>
             <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="n">data</span> <span class="o">=</span> <span class="n">subset_to_input_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
 
-            <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
+            <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"inputCol"</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
             <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
 
             <span class="n">embeddings</span> <span class="o">=</span> <span class="n">get_embeddings</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">)</span>
 
             <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
             <span class="p">)</span>
             <span class="n">subsequence_ids_for_preds</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"subsequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
             <span class="p">)</span>
             <span class="n">item_positions_for_preds_base</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
             <span class="p">)</span>
 
-        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">"pt"</span><span class="p">:</span>
             <span class="p">(</span>
                 <span class="n">sequences_dict</span><span class="p">,</span>
                 <span class="n">sequence_ids_tensor</span><span class="p">,</span>
@@ -612,7 +612,7 @@
             <span class="n">item_positions_for_preds_base</span> <span class="o">=</span> <span class="n">start_positions_tensor</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
 
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">&quot;impossible&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">"impossible"</span><span class="p">)</span>
 
         <span class="c1"># Step 2: Calculate absolute positions and repeat IDs</span>
         <span class="c1"># (e.g., for seq_len=50, inf_size=5, offsets are [45, 46, 47, 48, 49])</span>
@@ -641,9 +641,9 @@
         <span class="c1"># Step 3: Build the final DataFrame</span>
         <span class="n">embeddings_df</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
             <span class="p">{</span>
-                <span class="s2">&quot;sequenceId&quot;</span><span class="p">:</span> <span class="n">sequence_ids_repeated</span><span class="p">,</span>
-                <span class="s2">&quot;subsequenceId&quot;</span><span class="p">:</span> <span class="n">subsequence_ids_repeated</span><span class="p">,</span>  <span class="c1"># &lt;-- ADDED THIS COLUMN</span>
-                <span class="s2">&quot;itemPosition&quot;</span><span class="p">:</span> <span class="n">final_positions</span><span class="p">,</span>
+                <span class="s2">"sequenceId"</span><span class="p">:</span> <span class="n">sequence_ids_repeated</span><span class="p">,</span>
+                <span class="s2">"subsequenceId"</span><span class="p">:</span> <span class="n">subsequence_ids_repeated</span><span class="p">,</span>  <span class="c1"># &lt;-- ADDED THIS COLUMN</span>
+                <span class="s2">"itemPosition"</span><span class="p">:</span> <span class="n">final_positions</span><span class="p">,</span>
                 <span class="o">**</span><span class="nb">dict</span><span class="p">(</span>
                     <span class="nb">zip</span><span class="p">(</span>
                         <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">embeddings</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])],</span>
@@ -655,28 +655,28 @@
 
         <span class="c1"># Step 4: Save the output</span>
         <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span>
-            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;outputs&quot;</span><span class="p">,</span> <span class="s2">&quot;embeddings&quot;</span><span class="p">),</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"embeddings"</span><span class="p">),</span>
             <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
         <span class="p">)</span>
 
         <span class="k">if</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
-            <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-embeddings.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-embeddings.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="n">dirname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-embeddings&quot;</span>
+            <span class="n">dirname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-embeddings"</span>
             <span class="n">file_name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
                 <span class="n">dirname</span><span class="p">,</span>
-                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">data_id</span><span class="si">}</span><span class="s2">-embeddings.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">data_id</span><span class="si">}</span><span class="s2">-embeddings.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
             <span class="p">)</span>
 
             <span class="n">dir_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;outputs&quot;</span><span class="p">,</span> <span class="s2">&quot;embeddings&quot;</span><span class="p">,</span> <span class="n">dirname</span>
+                <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"embeddings"</span><span class="p">,</span> <span class="n">dirname</span>
             <span class="p">)</span>
             <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">dir_path</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
         <span class="n">embeddings_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-            <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;outputs&quot;</span><span class="p">,</span> <span class="s2">&quot;embeddings&quot;</span><span class="p">,</span> <span class="n">file_name</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"embeddings"</span><span class="p">,</span> <span class="n">file_name</span>
         <span class="p">)</span>
-        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] Writing predictions to &#39;</span><span class="si">{</span><span class="n">embeddings_path</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"[INFO] Writing predictions to '</span><span class="si">{</span><span class="n">embeddings_path</span><span class="si">}</span><span class="s2">'"</span><span class="p">)</span>
         <span class="n">write_data</span><span class="p">(</span>
             <span class="n">embeddings_df</span><span class="p">,</span>
             <span class="n">embeddings_path</span><span class="p">,</span>
@@ -685,13 +685,13 @@
 
 
 <div class="viewcode-block" id="infer_generative"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer_generative">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">infer_generative</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="s2">&quot;InfererModel&quot;</span><span class="p">,</span>
-    <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="s2">"InfererModel"</span><span class="p">,</span>
+    <span class="n">inferer</span><span class="p">:</span> <span class="s2">"Inferer"</span><span class="p">,</span>
     <span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">dataset</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Any</span><span class="p">],</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Any</span><span class="p">]],</span>
     <span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
 <span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Executes the generative inference pipeline and exports results to disk.</span>
+<span class="w">    </span><span class="sd">"""Executes the generative inference pipeline and exports results to disk.</span>
 
 <span class="sd">    This function processes the input dataset in chunks to accommodate large data</span>
 <span class="sd">    volumes. It handles various input formats (standalone CSV/Parquet, folder-based</span>
@@ -713,17 +713,17 @@
 <span class="sd">            either Polars DataFrames or PyTorch tensor dictionaries.</span>
 <span class="sd">        column_types: A dictionary mapping input column names to their expected</span>
 <span class="sd">            `torch.dtype`.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">for</span> <span class="n">data_id</span><span class="p">,</span> <span class="n">data</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">dataset</span><span class="p">):</span>
         <span class="c1"># Step 1: Adapt Data Subsetting (now works on Polars DF)</span>
         <span class="n">is_folder_input</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span>
             <span class="n">normalize_path</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span>
         <span class="p">)</span>
 
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;parquet&quot;</span><span class="p">,</span> <span class="s2">&quot;csv&quot;</span><span class="p">]</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"parquet"</span><span class="p">,</span> <span class="s2">"csv"</span><span class="p">]</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="n">data</span> <span class="o">=</span> <span class="n">subset_to_input_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
-            <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
+            <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"inputCol"</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
             <span class="k">if</span> <span class="ow">not</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression</span><span class="p">:</span>
                 <span class="c1"># For the non-autoregressive case, apply inference size logic</span>
                 <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds_from_df</span><span class="p">(</span>
@@ -733,9 +733,9 @@
                 <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
 
                 <span class="c1"># Get base IDs and positions (shape: batch_size)</span>
-                <span class="n">sequence_ids_for_preds_base</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
+                <span class="n">sequence_ids_for_preds_base</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span>
                 <span class="n">item_positions_for_preds_base</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
                     <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
                 <span class="p">)</span>
 
@@ -758,7 +758,7 @@
             <span class="k">else</span><span class="p">:</span>
                 <span class="k">if</span> <span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
                     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                        <span class="sa">f</span><span class="s2">&quot;prediction_length must be 1 for autoregression, got </span><span class="si">{</span><span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">&quot;</span>
+                        <span class="sa">f</span><span class="s2">"prediction_length must be 1 for autoregression, got </span><span class="si">{</span><span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">"</span>
                     <span class="p">)</span>
                 <span class="c1"># Unpack the new third return value</span>
                 <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span><span class="p">,</span> <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="p">(</span>
@@ -766,11 +766,11 @@
                         <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
                     <span class="p">)</span>
                 <span class="p">)</span>
-        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;parquet&quot;</span> <span class="ow">and</span> <span class="n">is_folder_input</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">"parquet"</span> <span class="ow">and</span> <span class="n">is_folder_input</span><span class="p">:</span>
             <span class="c1"># Folder-based Parquet chunk logic</span>
             <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="n">data</span> <span class="o">=</span> <span class="n">subset_to_input_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
-            <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;inputCol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
+            <span class="n">n_input_cols</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"inputCol"</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
 
             <span class="n">total_steps</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="mi">1</span>
@@ -784,10 +784,10 @@
                 <span class="p">)</span>
                 <span class="n">mask</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">height</span><span class="p">,</span> <span class="n">eager</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="o">%</span> <span class="n">n_input_cols</span> <span class="o">==</span> <span class="mi">0</span>
                 <span class="n">sequence_ids_for_preds_base</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
                 <span class="p">)</span>
                 <span class="n">item_positions_for_preds_base</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+                    <span class="n">data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">mask</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
                     <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
                 <span class="p">)</span>
 
@@ -806,7 +806,7 @@
             <span class="k">else</span><span class="p">:</span>
                 <span class="k">if</span> <span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
                     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                        <span class="sa">f</span><span class="s2">&quot;prediction_length must be 1 for autoregression, got </span><span class="si">{</span><span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">&quot;</span>
+                        <span class="sa">f</span><span class="s2">"prediction_length must be 1 for autoregression, got </span><span class="si">{</span><span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">"</span>
                     <span class="p">)</span>
 
                 <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span><span class="p">,</span> <span class="n">sequence_ids_for_preds</span><span class="p">,</span> <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="p">(</span>
@@ -814,7 +814,7 @@
                         <span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span>
                     <span class="p">)</span>
                 <span class="p">)</span>
-        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">"pt"</span><span class="p">:</span>
             <span class="n">sequences_dict</span><span class="p">,</span> <span class="n">sequence_ids_tensor</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">start_positions_tensor</span> <span class="o">=</span> <span class="n">data</span>
             <span class="n">total_steps</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="mi">1</span>
@@ -867,7 +867,7 @@
                     <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
                 <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">&quot;impossible&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">"impossible"</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="n">inferer</span><span class="o">.</span><span class="n">map_to_id</span><span class="p">:</span>
             <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">predictions</span> <span class="ow">in</span> <span class="n">preds</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
@@ -877,44 +877,44 @@
                     <span class="p">)</span>
 
         <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">predictions</span> <span class="ow">in</span> <span class="n">preds</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="k">if</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;real&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"real"</span><span class="p">:</span>
                 <span class="n">preds</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">invert_normalization</span><span class="p">(</span>
                     <span class="n">predictions</span><span class="p">,</span> <span class="n">target_column</span>
                 <span class="p">)</span>
 
         <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span>
-            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;outputs&quot;</span><span class="p">,</span> <span class="s2">&quot;predictions&quot;</span><span class="p">),</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"predictions"</span><span class="p">),</span>
             <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
         <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">output_probabilities</span><span class="p">:</span>
             <span class="k">assert</span> <span class="n">probs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
             <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span>
-                <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;outputs&quot;</span><span class="p">,</span> <span class="s2">&quot;probabilities&quot;</span><span class="p">),</span>
+                <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"probabilities"</span><span class="p">),</span>
                 <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
             <span class="p">)</span>
 
             <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_columns</span><span class="p">:</span>
                 <span class="k">if</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
-                    <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">target_column</span><span class="si">}</span><span class="s2">-probabilities.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span>
+                    <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">target_column</span><span class="si">}</span><span class="s2">-probabilities.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span>
                 <span class="k">else</span><span class="p">:</span>
-                    <span class="n">dirname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">target_column</span><span class="si">}</span><span class="s2">-probabilities&quot;</span>
+                    <span class="n">dirname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">target_column</span><span class="si">}</span><span class="s2">-probabilities"</span>
                     <span class="n">file_name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
                         <span class="n">dirname</span><span class="p">,</span>
-                        <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">data_id</span><span class="si">}</span><span class="s2">-probabilities.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+                        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">data_id</span><span class="si">}</span><span class="s2">-probabilities.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
                     <span class="p">)</span>
 
                     <span class="n">dir_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;outputs&quot;</span><span class="p">,</span> <span class="s2">&quot;probabilities&quot;</span><span class="p">,</span> <span class="n">dirname</span>
+                        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"probabilities"</span><span class="p">,</span> <span class="n">dirname</span>
                     <span class="p">)</span>
                     <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">dir_path</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
-                <span class="k">if</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;categorical&quot;</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"categorical"</span><span class="p">:</span>
                     <span class="n">probabilities_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;outputs&quot;</span><span class="p">,</span> <span class="s2">&quot;probabilities&quot;</span><span class="p">,</span> <span class="n">file_name</span>
+                        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"probabilities"</span><span class="p">,</span> <span class="n">file_name</span>
                     <span class="p">)</span>
                     <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
-                        <span class="sa">f</span><span class="s2">&quot;[INFO] Writing probabilities to &#39;</span><span class="si">{</span><span class="n">probabilities_path</span><span class="si">}</span><span class="s2">&#39;&quot;</span>
+                        <span class="sa">f</span><span class="s2">"[INFO] Writing probabilities to '</span><span class="si">{</span><span class="n">probabilities_path</span><span class="si">}</span><span class="s2">'"</span>
                     <span class="p">)</span>
                     <span class="c1"># Step 5: Finalize Output and I/O (write_data now handles Polars DF)</span>
                     <span class="n">write_data</span><span class="p">(</span>
@@ -933,8 +933,8 @@
 
         <span class="n">predictions</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
             <span class="p">{</span>
-                <span class="s2">&quot;sequenceId&quot;</span><span class="p">:</span> <span class="n">sequence_ids_for_preds</span><span class="p">,</span>
-                <span class="s2">&quot;itemPosition&quot;</span><span class="p">:</span> <span class="n">item_positions_for_preds</span><span class="p">,</span>
+                <span class="s2">"sequenceId"</span><span class="p">:</span> <span class="n">sequence_ids_for_preds</span><span class="p">,</span>
+                <span class="s2">"itemPosition"</span><span class="p">:</span> <span class="n">item_positions_for_preds</span><span class="p">,</span>
                 <span class="o">**</span><span class="p">{</span>
                     <span class="n">target_column</span><span class="p">:</span> <span class="n">preds</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
                     <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_columns</span>
@@ -943,21 +943,21 @@
         <span class="p">)</span>
 
         <span class="k">if</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
-            <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-predictions.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-predictions.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="n">dirname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-predictions&quot;</span>
+            <span class="n">dirname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-predictions"</span>
             <span class="n">file_name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                <span class="n">dirname</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">data_id</span><span class="si">}</span><span class="s2">-predictions.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">&quot;</span>
+                <span class="n">dirname</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">data_id</span><span class="si">}</span><span class="s2">-predictions.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span>
             <span class="p">)</span>
             <span class="n">dir_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;outputs&quot;</span><span class="p">,</span> <span class="s2">&quot;predictions&quot;</span><span class="p">,</span> <span class="n">dirname</span>
+                <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"predictions"</span><span class="p">,</span> <span class="n">dirname</span>
             <span class="p">)</span>
             <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">dir_path</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
         <span class="n">predictions_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-            <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">&quot;outputs&quot;</span><span class="p">,</span> <span class="s2">&quot;predictions&quot;</span><span class="p">,</span> <span class="n">file_name</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"predictions"</span><span class="p">,</span> <span class="n">file_name</span>
         <span class="p">)</span>
-        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[INFO] Writing predictions to &#39;</span><span class="si">{</span><span class="n">predictions_path</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"[INFO] Writing predictions to '</span><span class="si">{</span><span class="n">predictions_path</span><span class="si">}</span><span class="s2">'"</span><span class="p">)</span>
         <span class="n">write_data</span><span class="p">(</span>
             <span class="n">predictions</span><span class="p">,</span>
             <span class="n">predictions_path</span><span class="p">,</span>
@@ -968,10 +968,10 @@
 <div class="viewcode-block" id="get_embeddings_pt"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_embeddings_pt">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_embeddings_pt</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
-    <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
+    <span class="n">inferer</span><span class="p">:</span> <span class="s2">"Inferer"</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generates embeddings from a batch of PyTorch tensor data.</span>
+<span class="w">    </span><span class="sd">"""Generates embeddings from a batch of PyTorch tensor data.</span>
 
 <span class="sd">    This function serves as a wrapper for `Inferer.infer_embedding` when</span>
 <span class="sd">    the input data is already in PyTorch tensor format (from loading `.pt`</span>
@@ -988,7 +988,7 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        A NumPy array containing the computed embeddings for the batch.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">X</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">key</span><span class="p">:</span> <span class="n">val</span><span class="p">[:,</span> <span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
         <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
@@ -1001,11 +1001,11 @@
 <div class="viewcode-block" id="get_probs_preds_from_dict"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_from_dict">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds_from_dict</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
-    <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
+    <span class="n">inferer</span><span class="p">:</span> <span class="s2">"Inferer"</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
     <span class="n">total_steps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]],</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generates predictions from PyTorch tensor data, supporting autoregression.</span>
+<span class="w">    </span><span class="sd">"""Generates predictions from PyTorch tensor data, supporting autoregression.</span>
 
 <span class="sd">    This function performs generative inference on a batch of PyTorch tensor</span>
 <span class="sd">    data loaded from `.pt` files (which contain sequences, targets,</span>
@@ -1036,7 +1036,7 @@
 <span class="sd">              or `None` if `config.output_probabilities` is False.</span>
 <span class="sd">            - `preds`: A dictionary mapping target columns to NumPy arrays</span>
 <span class="sd">              of final predictions, ordered by sample index then step.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
 
     <span class="n">target_cols</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_columns</span>
 
@@ -1096,11 +1096,11 @@
 <div class="viewcode-block" id="get_embeddings"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_embeddings">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_embeddings</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
-    <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
+    <span class="n">inferer</span><span class="p">:</span> <span class="s2">"Inferer"</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generates embeddings from a Polars DataFrame.</span>
+<span class="w">    </span><span class="sd">"""Generates embeddings from a Polars DataFrame.</span>
 
 <span class="sd">    This function converts a Polars DataFrame into the NumPy array dictionary</span>
 <span class="sd">    format expected by the `Inferer`. It uses `numpy_to_pytorch` for the</span>
@@ -1115,7 +1115,7 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        A NumPy array containing the computed embeddings for the batch.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">all_columns</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">)))</span>
     <span class="n">X</span> <span class="o">=</span> <span class="n">numpy_to_pytorch</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">,</span> <span class="n">all_columns</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span><span class="p">)</span>
     <span class="n">X</span> <span class="o">=</span> <span class="p">{</span><span class="n">col</span><span class="p">:</span> <span class="n">X_col</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span> <span class="k">for</span> <span class="n">col</span><span class="p">,</span> <span class="n">X_col</span> <span class="ow">in</span> <span class="n">X</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
@@ -1129,14 +1129,14 @@
 <div class="viewcode-block" id="get_probs_preds_from_df"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_from_df">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds_from_df</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
-    <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
+    <span class="n">inferer</span><span class="p">:</span> <span class="s2">"Inferer"</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]],</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generates predictions from a Polars DataFrame (non-autoregressive).</span>
+<span class="w">    </span><span class="sd">"""Generates predictions from a Polars DataFrame (non-autoregressive).</span>
 
 <span class="sd">    This function converts a Polars DataFrame into the NumPy array dictionary</span>
-<span class="sd">    format expected by the `Inferer`. It&#39;s used for standard,</span>
+<span class="sd">    format expected by the `Inferer`. It's used for standard,</span>
 <span class="sd">    non-autoregressive generative inference.</span>
 <span class="sd">    It calls `inferer.infer_generative` once and returns the</span>
 <span class="sd">    probabilities (if requested) and predictions.</span>
@@ -1154,7 +1154,7 @@
 <span class="sd">              is False.</span>
 <span class="sd">            - `preds`: A dictionary mapping target columns to NumPy arrays</span>
 <span class="sd">              of final predictions.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">all_columns</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">)))</span>
 
     <span class="n">X</span> <span class="o">=</span> <span class="n">numpy_to_pytorch</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">column_types</span><span class="p">,</span> <span class="n">all_columns</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">seq_length</span><span class="p">)</span>
@@ -1173,9 +1173,9 @@
 
 <div class="viewcode-block" id="fill_number"><a class="viewcode-back" href="../../api.html#sequifier.infer.fill_number">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">fill_number</span><span class="p">(</span><span class="n">number</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">],</span> <span class="n">max_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Pads a number with leading zeros to a specified string length.</span>
+<span class="w">    </span><span class="sd">"""Pads a number with leading zeros to a specified string length.</span>
 
-<span class="sd">    Used for creating sortable string keys (e.g., &quot;001-001&quot;, &quot;001-002&quot;).</span>
+<span class="sd">    Used for creating sortable string keys (e.g., "001-001", "001-002").</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        number: The integer or float to format.</span>
@@ -1183,14 +1183,14 @@
 
 <span class="sd">    Returns:</span>
 <span class="sd">        A string representation of the number, padded with leading zeros.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">number_str</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">number</span><span class="p">)</span>
-    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">&#39;0&#39;</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="n">max_length</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="n">number_str</span><span class="p">))</span><span class="si">}{</span><span class="n">number_str</span><span class="si">}</span><span class="s2">&quot;</span></div>
+    <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="s1">'0'</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="n">max_length</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="n">number_str</span><span class="p">))</span><span class="si">}{</span><span class="n">number_str</span><span class="si">}</span><span class="s2">"</span></div>
 
 
 <div class="viewcode-block" id="verify_variable_order"><a class="viewcode-back" href="../../api.html#sequifier.infer.verify_variable_order">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">verify_variable_order</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Verifies that the DataFrame is correctly sorted for autoregression.</span>
+<span class="w">    </span><span class="sd">"""Verifies that the DataFrame is correctly sorted for autoregression.</span>
 
 <span class="sd">    Checks two conditions:</span>
 <span class="sd">    1. `sequenceId` is globally sorted in ascending order.</span>
@@ -1203,42 +1203,42 @@
 <span class="sd">    Raises:</span>
 <span class="sd">        AssertionError: If `sequenceId` is not globally sorted or if</span>
 <span class="sd">            `subsequenceId` is not sorted within `sequenceId` groups.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="c1"># Check if the entire &#39;sequenceId&#39; column is sorted. This is a global property.</span>
+<span class="sd">    """</span>
+    <span class="c1"># Check if the entire 'sequenceId' column is sorted. This is a global property.</span>
     <span class="n">is_globally_sorted</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">select</span><span class="p">(</span>
-        <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">diff</span><span class="p">()</span><span class="o">.</span><span class="n">fill_null</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+        <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">diff</span><span class="p">()</span><span class="o">.</span><span class="n">fill_null</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
     <span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">is_globally_sorted</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;sequenceId must be in ascending order for autoregression&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"sequenceId must be in ascending order for autoregression"</span><span class="p">)</span>
 
-    <span class="c1"># Check if &#39;subsequenceId&#39; is sorted within each &#39;sequenceId&#39; group.</span>
+    <span class="c1"># Check if 'subsequenceId' is sorted within each 'sequenceId' group.</span>
     <span class="c1"># This results in a boolean Series, on which we can call .all() directly.</span>
     <span class="n">is_group_sorted</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">data</span><span class="o">.</span><span class="n">select</span><span class="p">(</span>
-            <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;subsequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">diff</span><span class="p">()</span><span class="o">.</span><span class="n">fill_null</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"subsequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">diff</span><span class="p">()</span><span class="o">.</span><span class="n">fill_null</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span>
             <span class="o">.</span><span class="n">all</span><span class="p">()</span>
-            <span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span>
-            <span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;is_sorted&quot;</span><span class="p">)</span>
+            <span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span>
+            <span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">"is_sorted"</span><span class="p">)</span>
         <span class="p">)</span>
-        <span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;is_sorted&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"is_sorted"</span><span class="p">)</span>
         <span class="o">.</span><span class="n">all</span><span class="p">()</span>
     <span class="p">)</span>
 
     <span class="k">if</span> <span class="ow">not</span> <span class="n">is_group_sorted</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;subsequenceId must be sorted within sequenceId groups&quot;</span><span class="p">)</span></div>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"subsequenceId must be sorted within sequenceId groups"</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="get_probs_preds_autoregression"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_autoregression">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds_autoregression</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
-    <span class="n">inferer</span><span class="p">:</span> <span class="s2">&quot;Inferer&quot;</span><span class="p">,</span>
+    <span class="n">inferer</span><span class="p">:</span> <span class="s2">"Inferer"</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">column_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
     <span class="n">seq_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span>
     <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]],</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
 <span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generates autoregressive predictions and aligns them with sequence IDs and positions.</span>
+<span class="w">    </span><span class="sd">"""Generates autoregressive predictions and aligns them with sequence IDs and positions.</span>
 
 <span class="sd">    Extracts the initial sequence context from the sorted input DataFrame, maps it</span>
 <span class="sd">    to PyTorch tensors, and executes step-by-step autoregressive inference.</span>
@@ -1256,20 +1256,20 @@
 <span class="sd">            - preds: Dict of final prediction arrays per target column.</span>
 <span class="sd">            - sequence_ids_for_preds: 1D array of sequence IDs matching the output shape.</span>
 <span class="sd">            - item_positions_for_preds: 1D array of absolute item positions for each step.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">verify_variable_order</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
 
-    <span class="n">distinct_cols</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;inputCol&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()))</span>
-    <span class="n">head_data_df</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="n">maintain_order</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="n">distinct_cols</span><span class="p">)</span>
+    <span class="n">distinct_cols</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">"inputCol"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()))</span>
+    <span class="n">head_data_df</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">,</span> <span class="n">maintain_order</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="n">distinct_cols</span><span class="p">)</span>
 
     <span class="n">aligned_sequence_ids</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="n">head_data_df</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">maintain_order</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+        <span class="n">head_data_df</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">maintain_order</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
     <span class="p">)</span>
 
     <span class="n">aligned_start_positions</span> <span class="o">=</span> <span class="p">(</span>
-        <span class="n">head_data_df</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;sequenceId&quot;</span><span class="p">,</span> <span class="n">maintain_order</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-        <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
-        <span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">&quot;startItemPosition&quot;</span><span class="p">)</span>
+        <span class="n">head_data_df</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">,</span> <span class="n">maintain_order</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
+        <span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">)</span>
         <span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
         <span class="o">+</span> <span class="n">seq_length</span>
     <span class="p">)</span>
@@ -1303,7 +1303,7 @@
 
 
 <div class="viewcode-block" id="Inferer"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">Inferer</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;A class for performing inference with a trained sequifier model.</span>
+<span class="w">    </span><span class="sd">"""A class for performing inference with a trained sequifier model.</span>
 
 <span class="sd">    This class encapsulates the model (either ONNX session or PyTorch model),</span>
 <span class="sd">    normalization statistics, ID mappings, and all configuration needed</span>
@@ -1312,17 +1312,17 @@
 <span class="sd">    (like inverting normalization).</span>
 
 <span class="sd">    Attributes:</span>
-<span class="sd">        model_type: &#39;generative&#39; or &#39;embedding&#39;.</span>
+<span class="sd">        model_type: 'generative' or 'embedding'.</span>
 <span class="sd">        map_to_id: Whether to map integer predictions back to original IDs.</span>
-<span class="sd">        selected_columns_statistics: Dict of &#39;mean&#39; and &#39;std&#39; for real columns.</span>
+<span class="sd">        selected_columns_statistics: Dict of 'mean' and 'std' for real columns.</span>
 <span class="sd">        index_map: The inverse of `id_maps`, for mapping indices back to values.</span>
-<span class="sd">        device: The device (&#39;cuda&#39; or &#39;cpu&#39;) for inference.</span>
+<span class="sd">        device: The device ('cuda' or 'cpu') for inference.</span>
 <span class="sd">        target_columns: List of columns the model predicts.</span>
-<span class="sd">        target_column_types: Dict mapping target columns to &#39;categorical&#39; or &#39;real&#39;.</span>
-<span class="sd">        inference_model_type: &#39;onnx&#39; or &#39;pt&#39;.</span>
+<span class="sd">        target_column_types: Dict mapping target columns to 'categorical' or 'real'.</span>
+<span class="sd">        inference_model_type: 'onnx' or 'pt'.</span>
 <span class="sd">        ort_session: `onnxruntime.InferenceSession` if using ONNX.</span>
-<span class="sd">        inference_model: The loaded PyTorch model if using &#39;pt&#39;.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">        inference_model: The loaded PyTorch model if using 'pt'.</span>
+<span class="sd">    """</span>
 
 <div class="viewcode-block" id="Inferer.__init__"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.__init__">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
@@ -1346,7 +1346,7 @@
         <span class="n">args_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
         <span class="n">training_config_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Initializes the Inferer.</span>
+<span class="w">        </span><span class="sd">"""Initializes the Inferer.</span>
 
 <span class="sd">        Args:</span>
 <span class="sd">            model_type: The type of model to use for inference.</span>
@@ -1366,12 +1366,12 @@
 <span class="sd">            device: The device to use for inference.</span>
 <span class="sd">            args_config: The command-line arguments.</span>
 <span class="sd">            training_config_path: The path to the training configuration file.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">model_type</span> <span class="o">=</span> <span class="n">model_type</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">map_to_id</span> <span class="o">=</span> <span class="n">map_to_id</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">selected_columns_statistics</span> <span class="o">=</span> <span class="n">selected_columns_statistics</span>
         <span class="n">target_columns_index_map</span> <span class="o">=</span> <span class="p">[</span>
-            <span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">target_columns</span> <span class="k">if</span> <span class="n">target_column_types</span><span class="p">[</span><span class="n">c</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;categorical&quot;</span>
+            <span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">target_columns</span> <span class="k">if</span> <span class="n">target_column_types</span><span class="p">[</span><span class="n">c</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"categorical"</span>
         <span class="p">]</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">index_map</span> <span class="o">=</span> <span class="n">construct_index_maps</span><span class="p">(</span>
             <span class="n">id_maps</span><span class="p">,</span> <span class="n">target_columns_index_map</span><span class="p">,</span> <span class="n">map_to_id</span>
@@ -1388,20 +1388,20 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">=</span> <span class="n">prediction_length</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">inference_batch_size</span> <span class="o">=</span> <span class="n">inference_batch_size</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">=</span> <span class="n">model_path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">=</span> <span class="n">model_path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"."</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">args_config</span> <span class="o">=</span> <span class="n">args_config</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">training_config_path</span> <span class="o">=</span> <span class="n">training_config_path</span>
 
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">&quot;onnx&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">"onnx"</span><span class="p">:</span>
             <span class="n">execution_providers</span> <span class="o">=</span> <span class="p">[</span>
-                <span class="s2">&quot;CUDAExecutionProvider&quot;</span> <span class="k">if</span> <span class="n">device</span> <span class="o">==</span> <span class="s2">&quot;cuda&quot;</span> <span class="k">else</span> <span class="s2">&quot;CPUExecutionProvider&quot;</span>
+                <span class="s2">"CUDAExecutionProvider"</span> <span class="k">if</span> <span class="n">device</span> <span class="o">==</span> <span class="s2">"cuda"</span> <span class="k">else</span> <span class="s2">"CPUExecutionProvider"</span>
             <span class="p">]</span>
             <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">infer_with_dropout</span><span class="p">:</span>
-                <span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;disabled_optimizers&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;EliminateDropout&quot;</span><span class="p">]</span>
+                <span class="n">kwargs</span><span class="p">[</span><span class="s2">"disabled_optimizers"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"EliminateDropout"</span><span class="p">]</span>
 
                 <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
-                    <span class="s2">&quot;For inference with onnx, &#39;infer_with_dropout==True&#39; is only effective if &#39;export_with_dropout==True&#39; in training&quot;</span>
+                    <span class="s2">"For inference with onnx, 'infer_with_dropout==True' is only effective if 'export_with_dropout==True' in training"</span>
                 <span class="p">)</span>
 
             <span class="bp">self</span><span class="o">.</span><span class="n">ort_session</span> <span class="o">=</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">InferenceSession</span><span class="p">(</span>
@@ -1409,7 +1409,7 @@
                 <span class="n">providers</span><span class="o">=</span><span class="n">execution_providers</span><span class="p">,</span>
                 <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
             <span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">"pt"</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">inference_model</span> <span class="o">=</span> <span class="n">load_inference_model</span><span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">model_type</span><span class="p">,</span>
                 <span class="n">normalize_path</span><span class="p">(</span><span class="n">model_path</span><span class="p">,</span> <span class="n">project_root</span><span class="p">),</span>
@@ -1423,9 +1423,9 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">invert_normalization</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">values</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">target_column</span><span class="p">:</span> <span class="nb">str</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Inverts Z-score normalization for a given target column.</span>
+<span class="w">        </span><span class="sd">"""Inverts Z-score normalization for a given target column.</span>
 
-<span class="sd">        Uses the &#39;mean&#39; and &#39;std&#39; stored in `self.selected_columns_statistics`</span>
+<span class="sd">        Uses the 'mean' and 'std' stored in `self.selected_columns_statistics`</span>
 <span class="sd">        to transform normalized values back to their original scale.</span>
 
 <span class="sd">        Args:</span>
@@ -1435,9 +1435,9 @@
 
 <span class="sd">        Returns:</span>
 <span class="sd">            A NumPy array of values in their original scale.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="n">std</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">selected_columns_statistics</span><span class="p">[</span><span class="n">target_column</span><span class="p">][</span><span class="s2">&quot;std&quot;</span><span class="p">]</span>
-        <span class="n">mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">selected_columns_statistics</span><span class="p">[</span><span class="n">target_column</span><span class="p">][</span><span class="s2">&quot;mean&quot;</span><span class="p">]</span>
+<span class="sd">        """</span>
+        <span class="n">std</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">selected_columns_statistics</span><span class="p">[</span><span class="n">target_column</span><span class="p">][</span><span class="s2">"std"</span><span class="p">]</span>
+        <span class="n">mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">selected_columns_statistics</span><span class="p">[</span><span class="n">target_column</span><span class="p">][</span><span class="s2">"mean"</span><span class="p">]</span>
         <span class="k">return</span> <span class="p">(</span><span class="n">values</span> <span class="o">*</span> <span class="p">(</span><span class="n">std</span> <span class="o">-</span> <span class="mf">1e-9</span><span class="p">))</span> <span class="o">+</span> <span class="n">mean</span></div>
 
 <div class="viewcode-block" id="Inferer.infer_embedding"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.infer_embedding">[docs]</a>    <span class="nd">@beartype</span>
@@ -1445,7 +1445,7 @@
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">x</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Performs inference with an embedding model.</span>
+<span class="w">        </span><span class="sd">"""Performs inference with an embedding model.</span>
 
 <span class="sd">        This is a high-level wrapper that calls</span>
 <span class="sd">        `adjust_and_infer_embedding` to handle batching and model-specific</span>
@@ -1457,7 +1457,7 @@
 
 <span class="sd">        Returns:</span>
 <span class="sd">            A 2D NumPy array of the resulting embeddings.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="k">assert</span> <span class="n">x</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="n">size</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="nb">list</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">keys</span><span class="p">())[</span><span class="mi">0</span><span class="p">]]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
         <span class="n">embedding</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">adjust_and_infer_embedding</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">size</span><span class="p">)</span>
@@ -1471,7 +1471,7 @@
         <span class="n">probs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">return_probs</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Performs generative inference, returning probabilities or predictions.</span>
+<span class="w">        </span><span class="sd">"""Performs generative inference, returning probabilities or predictions.</span>
 
 <span class="sd">        This function orchestrates the generative inference process.</span>
 <span class="sd">        1. If `probs` are not provided, it calls `adjust_and_infer_generative`</span>
@@ -1500,7 +1500,7 @@
 <span class="sd">        Returns:</span>
 <span class="sd">            A dictionary mapping target column names to NumPy arrays. The</span>
 <span class="sd">            content of the arrays depends on `return_probs`.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="k">if</span> <span class="n">probs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="p">(</span>
             <span class="n">x</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span><span class="o">.</span><span class="n">difference</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">probs</span><span class="o">.</span><span class="n">keys</span><span class="p">())))</span> <span class="o">&gt;</span> <span class="mi">0</span>
         <span class="p">):</span>  <span class="c1"># type: ignore</span>
@@ -1512,7 +1512,7 @@
             <span class="p">):</span>  <span class="c1"># type: ignore</span>
                 <span class="k">assert</span> <span class="n">x</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
                 <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">&quot;Not all keys in x are in probs - </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span><span class="w"> </span><span class="si">= }</span><span class="s2"> != </span><span class="si">{</span><span class="n">probs</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span><span class="w"> </span><span class="si">= }</span><span class="s2">. Full inference is executed.&quot;</span>
+                    <span class="sa">f</span><span class="s2">"Not all keys in x are in probs - </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span><span class="w"> </span><span class="si">= }</span><span class="s2"> != </span><span class="si">{</span><span class="n">probs</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span><span class="w"> </span><span class="si">= }</span><span class="s2">. Full inference is executed."</span>
                 <span class="p">)</span>
 
             <span class="n">outs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">adjust_and_infer_generative</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">size</span><span class="p">)</span>
@@ -1520,26 +1520,26 @@
             <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">target_outs</span> <span class="ow">in</span> <span class="n">outs</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
                 <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="n">target_outs</span> <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">inf</span><span class="p">):</span>
                     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                        <span class="sa">f</span><span class="s2">&quot;Inference resulted in infinite values: </span><span class="si">{</span><span class="n">target_outs</span><span class="si">}</span><span class="s2">&quot;</span>
+                        <span class="sa">f</span><span class="s2">"Inference resulted in infinite values: </span><span class="si">{</span><span class="n">target_outs</span><span class="si">}</span><span class="s2">"</span>
                     <span class="p">)</span>
 
             <span class="k">if</span> <span class="n">return_probs</span><span class="p">:</span>
                 <span class="n">preds</span> <span class="o">=</span> <span class="p">{</span>
                     <span class="n">target_column</span><span class="p">:</span> <span class="n">outputs</span>
                     <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">outputs</span> <span class="ow">in</span> <span class="n">outs</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">!=</span> <span class="s2">&quot;categorical&quot;</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">!=</span> <span class="s2">"categorical"</span>
                 <span class="p">}</span>
                 <span class="n">logits</span> <span class="o">=</span> <span class="p">{</span>
                     <span class="n">target_column</span><span class="p">:</span> <span class="n">outputs</span>
                     <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">outputs</span> <span class="ow">in</span> <span class="n">outs</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;categorical&quot;</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"categorical"</span>
                 <span class="p">}</span>
                 <span class="k">return</span> <span class="p">{</span><span class="o">**</span><span class="n">preds</span><span class="p">,</span> <span class="o">**</span><span class="n">normalize</span><span class="p">(</span><span class="n">logits</span><span class="p">)}</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">outs</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">probs</span><span class="p">)</span>
 
         <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">:</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;categorical&quot;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"categorical"</span><span class="p">:</span>
                 <span class="k">if</span> <span class="p">(</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">sample_from_distribution_columns</span> <span class="ow">is</span> <span class="kc">None</span>
                     <span class="ow">or</span> <span class="n">target_column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">sample_from_distribution_columns</span>
@@ -1554,7 +1554,7 @@
 
 <div class="viewcode-block" id="Inferer.adjust_and_infer_embedding"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.adjust_and_infer_embedding">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">adjust_and_infer_embedding</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="n">size</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Handles batching and backend-specific calls for embedding inference.</span>
+<span class="w">        </span><span class="sd">"""Handles batching and backend-specific calls for embedding inference.</span>
 
 <span class="sd">        This function prepares the input data `x` into batches using</span>
 <span class="sd">        `prepare_inference_batches` and then calls the correct inference</span>
@@ -1567,15 +1567,15 @@
 
 <span class="sd">        Returns:</span>
 <span class="sd">            A NumPy array of embeddings, concatenated from all batches.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">&quot;onnx&quot;</span><span class="p">:</span>
+<span class="sd">        """</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">"onnx"</span><span class="p">:</span>
             <span class="k">assert</span> <span class="n">x</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
             <span class="n">x_adjusted</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">prepare_inference_batches</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">pad_to_batch_size</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
             <span class="n">inference_batch_embeddings</span> <span class="o">=</span> <span class="p">[</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">infer_pure</span><span class="p">(</span><span class="n">x_sub</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">x_sub</span> <span class="ow">in</span> <span class="n">x_adjusted</span>
             <span class="p">]</span>
             <span class="n">embeddings</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">inference_batch_embeddings</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)[:</span><span class="n">size</span><span class="p">]</span>
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">"pt"</span><span class="p">:</span>
             <span class="n">x_adjusted</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">prepare_inference_batches</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">pad_to_batch_size</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
             <span class="n">embeddings</span> <span class="o">=</span> <span class="n">infer_with_embedding_model</span><span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">inference_model</span><span class="p">,</span>
@@ -1585,12 +1585,12 @@
                 <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">,</span>
             <span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">assert</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">&quot;not possible&quot;</span>
+            <span class="k">assert</span> <span class="kc">False</span><span class="p">,</span> <span class="s2">"not possible"</span>
         <span class="k">return</span> <span class="n">embeddings</span></div>
 
 <div class="viewcode-block" id="Inferer.adjust_and_infer_generative"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.adjust_and_infer_generative">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">adjust_and_infer_generative</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="n">size</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Handles batching and backend-specific calls for generative inference.</span>
+<span class="w">        </span><span class="sd">"""Handles batching and backend-specific calls for generative inference.</span>
 
 <span class="sd">        This function prepares the input data `x` into batches using</span>
 <span class="sd">        `prepare_inference_batches` and then calls the correct inference</span>
@@ -1605,8 +1605,8 @@
 <span class="sd">        Returns:</span>
 <span class="sd">            A dictionary mapping target column names to NumPy arrays of raw</span>
 <span class="sd">            model outputs (logits or real values).</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">&quot;onnx&quot;</span><span class="p">:</span>
+<span class="sd">        """</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">"onnx"</span><span class="p">:</span>
             <span class="k">assert</span> <span class="n">x</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
             <span class="n">x_adjusted</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">prepare_inference_batches</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">pad_to_batch_size</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
             <span class="n">out_subs</span> <span class="o">=</span> <span class="p">[</span>
@@ -1619,7 +1619,7 @@
                 <span class="p">)[:</span> <span class="n">size</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span> <span class="p">:]</span>
                 <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span>
             <span class="p">}</span>
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">&quot;pt&quot;</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model_type</span> <span class="o">==</span> <span class="s2">"pt"</span><span class="p">:</span>
             <span class="k">assert</span> <span class="n">x</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
             <span class="n">x_adjusted</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">prepare_inference_batches</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">pad_to_batch_size</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
             <span class="n">outs</span> <span class="o">=</span> <span class="n">infer_with_generative_model</span><span class="p">(</span>
@@ -1639,7 +1639,7 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">prepare_inference_batches</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">],</span> <span class="n">pad_to_batch_size</span><span class="p">:</span> <span class="nb">bool</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Splits input data into batches for inference.</span>
+<span class="w">        </span><span class="sd">"""Splits input data into batches for inference.</span>
 
 <span class="sd">        This function takes a large dictionary of feature arrays and splits</span>
 <span class="sd">        them into a list of smaller dictionaries (batches) of size</span>
@@ -1655,7 +1655,7 @@
 <span class="sd">        Returns:</span>
 <span class="sd">            A list of dictionaries, where each dictionary is a single batch</span>
 <span class="sd">            ready for inference.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="n">size</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="nb">list</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">keys</span><span class="p">())[</span><span class="mi">0</span><span class="p">]]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
         <span class="k">if</span> <span class="n">size</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_batch_size</span><span class="p">:</span>
             <span class="k">return</span> <span class="p">[</span><span class="n">x</span><span class="p">]</span>
@@ -1682,10 +1682,10 @@
 
 <div class="viewcode-block" id="Inferer.infer_pure"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.infer_pure">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">infer_pure</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Performs a single inference pass using the ONNX session.</span>
+<span class="w">        </span><span class="sd">"""Performs a single inference pass using the ONNX session.</span>
 
 <span class="sd">        This function assumes `x` is already a single, correctly-sized</span>
-<span class="sd">        batch. It formats the input dictionary to match the ONNX model&#39;s</span>
+<span class="sd">        batch. It formats the input dictionary to match the ONNX model's</span>
 <span class="sd">        input names and executes `self.ort_session.run()`.</span>
 
 <span class="sd">        Args:</span>
@@ -1695,7 +1695,7 @@
 <span class="sd">        Returns:</span>
 <span class="sd">            A list of NumPy arrays, representing the raw outputs from the</span>
 <span class="sd">            ONNX model.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="n">ort_inputs</span> <span class="o">=</span> <span class="p">{</span>
             <span class="n">session_input</span><span class="o">.</span><span class="n">name</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">expand_to_batch_size</span><span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="n">col</span><span class="p">])</span>
             <span class="k">for</span> <span class="n">session_input</span><span class="p">,</span> <span class="n">col</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span>
@@ -1711,9 +1711,9 @@
 
 <div class="viewcode-block" id="Inferer.expand_to_batch_size"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.expand_to_batch_size">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">expand_to_batch_size</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Pads a NumPy array to match `self.inference_batch_size`.</span>
+<span class="w">        </span><span class="sd">"""Pads a NumPy array to match `self.inference_batch_size`.</span>
 
-<span class="sd">        Repeats samples from `x` until the array&#39;s first dimension</span>
+<span class="sd">        Repeats samples from `x` until the array's first dimension</span>
 <span class="sd">        is equal to `self.inference_batch_size`.</span>
 
 <span class="sd">        Args:</span>
@@ -1722,7 +1722,7 @@
 <span class="sd">        Returns:</span>
 <span class="sd">            A new NumPy array of size `self.inference_batch_size` in the</span>
 <span class="sd">            first dimension.</span>
-<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        """</span>
         <span class="n">repetitions</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_batch_size</span> <span class="o">//</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
         <span class="n">filler</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_batch_size</span> <span class="o">%</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
         <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(([</span><span class="n">x</span><span class="p">]</span> <span class="o">*</span> <span class="n">repetitions</span><span class="p">)</span> <span class="o">+</span> <span class="p">[</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="n">filler</span><span class="p">,</span> <span class="p">:]],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span></div></div>
@@ -1730,7 +1730,7 @@
 
 <div class="viewcode-block" id="normalize"><a class="viewcode-back" href="../../api.html#sequifier.infer.normalize">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">normalize</span><span class="p">(</span><span class="n">outs</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Applies the softmax function to a dictionary of logits.</span>
+<span class="w">    </span><span class="sd">"""Applies the softmax function to a dictionary of logits.</span>
 
 <span class="sd">    Converts raw model logits for categorical columns into probabilities</span>
 <span class="sd">    that sum to 1.</span>
@@ -1742,7 +1742,7 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        A dictionary mapping the same target column names to NumPy arrays</span>
 <span class="sd">        of probabilities.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">normalizer</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">target_column</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span>
             <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">target_values</span><span class="p">),</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">target_values</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
@@ -1758,7 +1758,7 @@
 
 <div class="viewcode-block" id="sample_with_cumsum"><a class="viewcode-back" href="../../api.html#sequifier.infer.sample_with_cumsum">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">sample_with_cumsum</span><span class="p">(</span><span class="n">probs</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">is_log_probs</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Samples from a probability distribution using the inverse CDF method.</span>
+<span class="w">    </span><span class="sd">"""Samples from a probability distribution using the inverse CDF method.</span>
 
 <span class="sd">    Takes an array of logits, computes the cumulative probability</span>
 <span class="sd">    distribution, draws a random number `r` from [0, 1), and returns</span>
@@ -1772,7 +1772,7 @@
 <span class="sd">    Returns:</span>
 <span class="sd">        A 1D NumPy array of shape (batch_size,) containing the sampled</span>
 <span class="sd">        class indices.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="k">if</span> <span class="n">is_log_probs</span><span class="p">:</span>
         <span class="n">cumulative_probs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">probs</span><span class="p">),</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
