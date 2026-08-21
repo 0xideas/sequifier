@@ -1,5 +1,6 @@
 import argparse
 import csv
+import html
 import os
 import re
 from dataclasses import dataclass, field
@@ -119,6 +120,28 @@ def parse_args_to_models(args: argparse.Namespace) -> list[str]:
 
 
 @beartype
+def resolve_models(args: argparse.Namespace) -> tuple[list[str], Optional[str]]:
+    """Resolve a model argument, expanding a hyperparameter-search name."""
+    models = parse_args_to_models(args)
+    if len(models) != 1:
+        return models, None
+
+    name = models[0]
+    logs_dir = os.path.join(args.project_root, "logs")
+    if os.path.isdir(os.path.join(logs_dir, name)) or not os.path.isdir(logs_dir):
+        return models, None
+
+    pattern = re.compile(rf"^{re.escape(name)}-run-(\d+)$")
+    runs = [
+        (int(match.group(1)), entry)
+        for entry in os.listdir(logs_dir)
+        if (match := pattern.fullmatch(entry))
+        and os.path.isdir(os.path.join(logs_dir, entry))
+    ]
+    return ([run for _, run in sorted(runs)] or models), (name if runs else None)
+
+
+@beartype
 def get_metrics_filepaths(args: argparse.Namespace, model: str) -> tuple[str, str]:
     """Return the rank-0 training and validation metric paths for a model."""
     prefix = rank_log_prefix(args.project_root, model, 0)
@@ -195,9 +218,31 @@ def format_plot_data(
     }
 
 
+def _add_invalid_runs(fig: go.Figure, invalid_runs: dict[str, str]) -> None:
+    """Add skipped run details below a report."""
+    invalid_text = "<br>".join(
+        html.escape(f"{model}: {reason}") for model, reason in invalid_runs.items()
+    )
+    fig.add_annotation(
+        text=f"<b>Invalid training runs:</b><br>{invalid_text or 'None'}",
+        xref="paper",
+        yref="paper",
+        x=0,
+        y=-0.2,
+        yanchor="top",
+        showarrow=False,
+        align="left",
+    )
+    fig.update_layout(margin_b=max(120, 60 + 18 * len(invalid_runs)))
+
+
 @beartype
 def _generate_single_model_plot(
-    model: str, data: dict[str, Any], yaxis_type: str, out_path: str
+    model: str,
+    data: dict[str, Any],
+    yaxis_type: str,
+    out_path: str,
+    invalid_runs: Optional[dict[str, str]] = None,
 ) -> None:
     """Write a single-model training report."""
     has_var_losses = bool(data.get("var_losses"))
@@ -283,13 +328,19 @@ def _generate_single_model_plot(
         )
 
     fig.update_layout(title_text=f"Training Visualization: {model}")
+    if invalid_runs is not None:
+        _add_invalid_runs(fig, invalid_runs)
     fig.write_html(out_path, include_plotlyjs="cdn")
     logger.info(f"Visualization HTML generated and saved successfully to {out_path}")
 
 
 @beartype
 def _generate_multi_model_plot(
-    models: list[str], all_data: dict[str, Any], yaxis_type: str, out_path: str
+    models: list[str],
+    all_data: dict[str, Any],
+    yaxis_type: str,
+    out_path: str,
+    invalid_runs: dict[str, str],
 ) -> None:
     """Write a multi-model training report."""
     fig = make_subplots(
@@ -368,13 +419,18 @@ def _generate_multi_model_plot(
     fig.update_yaxes(title_text="Loss", type=yaxis_type, row=1, col=2)
 
     fig.update_layout(title_text="Multi-Model Training Visualization")
+    _add_invalid_runs(fig, invalid_runs)
     fig.write_html(out_path, include_plotlyjs="cdn")
     logger.info(f"Visualization HTML generated and saved successfully to {out_path}")
 
 
 @beartype
 def generate_html_report(
-    all_data: dict[str, Any], models: list[str], args: argparse.Namespace
+    all_data: dict[str, Any],
+    models: list[str],
+    args: argparse.Namespace,
+    report_name: Optional[str] = None,
+    invalid_runs: Optional[dict[str, str]] = None,
 ) -> None:
     """Write the model-count-appropriate HTML report."""
     output_dir = os.path.join(args.project_root, "outputs", "visualization")
@@ -382,39 +438,64 @@ def generate_html_report(
 
     yaxis_type = "log" if getattr(args, "log_scale", False) else "linear"
 
-    if len(models) == 1:
+    if len(models) == 1 and report_name is None:
         model = models[0]
         out_path = os.path.join(output_dir, f"{model}-training-visualization.html")
         _generate_single_model_plot(model, all_data[model], yaxis_type, out_path)
+    elif len(models) == 1:
+        model = models[0]
+        out_path = os.path.join(output_dir, f"{report_name}.html")
+        _generate_single_model_plot(
+            model, all_data[model], yaxis_type, out_path, invalid_runs or {}
+        )
     else:
-        out_path = os.path.join(output_dir, "multi-model-training-visualization.html")
-        _generate_multi_model_plot(models, all_data, yaxis_type, out_path)
+        filename = (
+            f"{report_name}.html"
+            if report_name
+            else "multi-model-training-visualization.html"
+        )
+        out_path = os.path.join(output_dir, filename)
+        _generate_multi_model_plot(
+            models, all_data, yaxis_type, out_path, invalid_runs or {}
+        )
 
 
 @beartype
 def visualize_training(args: argparse.Namespace) -> None:
     """Read structured metrics and write training visualization HTML."""
-    models = parse_args_to_models(args)
+    models, report_name = resolve_models(args)
     if not models:
         raise ValueError("No models provided to visualize.")
 
     bucket_batches = getattr(args, "bucket_training_batches", None)
-    all_data = {}
+    all_data: dict[str, Any] = {}
+    invalid_runs: dict[str, str] = {}
 
     for model in models:
         # Route visualization events to the current model's operational logs.
         configure_logger(args.project_root, model, rank=0)
 
         logger.info(f"Parsing structured metrics for model: {model}")
-        training_file, validation_file = get_metrics_filepaths(args, model)
+        try:
+            training_file, validation_file = get_metrics_filepaths(args, model)
+            metrics = StructuredMetricsParser(model).parse_files(
+                training_file, validation_file
+            )
+            all_data[model] = format_plot_data(metrics, bucket_batches, model)
+        except (DataContinuityError, FileNotFoundError) as error:
+            invalid_runs[model] = str(error).removeprefix(f"[{model}]: ")
+            logger.warning(f"Skipping invalid training run '{model}': {error}")
 
-        parser = StructuredMetricsParser(model)
-        metrics = parser.parse_files(training_file, validation_file)
-
-        formatted_data = format_plot_data(metrics, bucket_batches, model)
-        all_data[model] = formatted_data
+    if not all_data:
+        details = "; ".join(
+            f"{model}: {reason}" for model, reason in invalid_runs.items()
+        )
+        if report_name is None:
+            raise DataContinuityError(f"No valid training runs found. {details}")
+        logger.warning("No valid training runs found; generating an empty report.")
 
     # Note: For multi-model setups, the logger context at this stage
     # will belong to the *last* model processed in the loop.
     logger.info("Generating HTML visualizations...")
-    generate_html_report(all_data, models, args)
+    valid_models = list(all_data)
+    generate_html_report(all_data, valid_models, args, report_name, invalid_runs)

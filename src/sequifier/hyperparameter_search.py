@@ -283,11 +283,30 @@ def _trained_parameter_signatures(study: optuna.Study) -> dict[str, int]:
     return signatures
 
 
+def _trained_trial_count(study: optuna.Study) -> int:
+    """Count completed and pruned trials that consumed a training run."""
+    return len(
+        study.get_trials(
+            deepcopy=False,
+            states=(TrialState.COMPLETE, TrialState.PRUNED),
+        )
+    )
+
+
 def _optimize_distinct_trials(study: optuna.Study, config: Any, n_trials: int) -> None:
-    """Run ``n_trials`` novel sampled configurations through the objective."""
+    """Train novel configurations until the study contains ``n_trials`` runs."""
     trained_signatures = _trained_parameter_signatures(study)
-    accepted_trials = 0
+    accepted_trials = _trained_trial_count(study)
     consecutive_duplicates = 0
+
+    if accepted_trials >= n_trials:
+        logger.info(
+            "Hyperparameter study already contains {} trained trials; "
+            "requested total is {}.",
+            accepted_trials,
+            n_trials,
+        )
+        return
 
     while accepted_trials < n_trials:
         trial = study.ask()
@@ -380,9 +399,23 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
         )
 
     if config.search_strategy == "grid":
-        study.optimize(
-            lambda trial: objective(trial, trial.number, config), n_trials=n_trials
+        accepted_trials = _trained_trial_count(study)
+        remaining_trials = (
+            None if n_trials is None else max(0, n_trials - accepted_trials)
         )
+
+        def grid_objective(trial: optuna.Trial):
+            nonlocal accepted_trials
+            try:
+                value = objective(trial, accepted_trials, config)
+            except optuna.TrialPruned:
+                accepted_trials += 1
+                raise
+            accepted_trials += 1
+            return value
+
+        if remaining_trials is None or remaining_trials > 0:
+            study.optimize(grid_objective, n_trials=remaining_trials)
     else:
         assert n_trials is not None
         _optimize_distinct_trials(study, config, n_trials)
