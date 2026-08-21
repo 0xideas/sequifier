@@ -7,7 +7,11 @@ from typing import Any
 import torch
 from torch import nn
 
-from sequifier.config.train_config import TrainModel, load_train_config
+from sequifier.artifacts.model_config import resolved_config_from_model_config
+from sequifier.config.composable_train_config import (
+    ResolvedSequifierConfig as TrainModel,
+)
+from sequifier.config.composable_train_config import load_train_config
 from sequifier.model.factory import build_transformer_network
 from sequifier.model.parameter_catalog import ParameterCatalog
 
@@ -24,21 +28,32 @@ class ExecutionOptions:
 @dataclass
 class LoadedModel:
     network: nn.Module
-    config: TrainModel
+    config: Any
     parameter_catalog: ParameterCatalog
     artifact_metadata: dict[str, Any]
 
 
 def _resolve_config(
-    payload: dict[str, Any], config: TrainModel | str | Path | None
-) -> TrainModel:
+    payload: dict[str, Any],
+    config: TrainModel | str | Path | None,
+    *,
+    device: str,
+    interface_name: str | None,
+) -> tuple[Any, str | None]:
+    model_config = payload.get("model_config")
+    if model_config is not None:
+        return resolved_config_from_model_config(
+            model_config,
+            device=device,
+            interface_name=interface_name,
+        )
     embedded = payload.get("training_config")
     if embedded is not None:
-        return TrainModel.model_validate(embedded)
+        return TrainModel.model_validate(embedded), interface_name
     if isinstance(config, TrainModel):
-        return config.model_copy(deep=True)
+        return config.model_copy(deep=True), interface_name
     if config is not None:
-        return load_train_config(str(config), {}, skip_metadata=False)
+        return load_train_config(str(config), {}, skip_metadata=False), interface_name
     raise ValueError(
         "The artifact has no embedded resolved training_config; provide config= "
         "when loading a legacy run checkpoint."
@@ -50,6 +65,7 @@ def load_model_for_analysis(
     *,
     options: ExecutionOptions = ExecutionOptions(),
     config: TrainModel | str | Path | None = None,
+    interface_name: str | None = None,
 ) -> LoadedModel:
     artifact_path = Path(path).expanduser().resolve()
     payload = torch.load(
@@ -60,7 +76,12 @@ def load_model_for_analysis(
     if not isinstance(payload, dict) or "model_state_dict" not in payload:
         raise ValueError(f"Unsupported Sequifier artifact: {artifact_path}.")
 
-    resolved_config = _resolve_config(payload, config)
+    resolved_config, selected_interface = _resolve_config(
+        payload,
+        config,
+        device=options.device,
+        interface_name=interface_name,
+    )
     resolved_config.device = options.device
     resolved_config.training_spec.torch_compile = "none"
     built = build_transformer_network(
@@ -97,6 +118,7 @@ def load_model_for_analysis(
         not in {"model_state_dict", "optimizer_state_dict", "best_model_state_dict"}
     }
     metadata["path"] = str(artifact_path)
+    metadata["selected_interface"] = selected_interface
     return LoadedModel(
         network=network,
         config=resolved_config,

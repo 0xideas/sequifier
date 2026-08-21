@@ -14,7 +14,7 @@ from loguru import logger
 from plotly.subplots import make_subplots
 
 from sequifier.helpers import configure_logger
-from sequifier.logging_paths import rank_log_prefix
+from sequifier.logging_paths import dataset_artifact_prefix
 from sequifier.training.metrics import TOTAL_TARGET
 
 
@@ -89,6 +89,14 @@ class StructuredMetricsParser:
             )
         if not metrics.baseline_losses:
             raise DataContinuityError(f"[{self.model}]: No baseline loss data found.")
+        missing_baselines = sorted(
+            set(metrics.val_losses).difference(metrics.baseline_losses)
+        )
+        if missing_baselines:
+            raise DataContinuityError(
+                f"[{self.model}]: Missing baseline loss data for validation "
+                f"positions {missing_baselines!r}."
+            )
         return metrics
 
     @staticmethod
@@ -143,8 +151,8 @@ def resolve_models(args: argparse.Namespace) -> tuple[list[str], Optional[str]]:
 
 @beartype
 def get_metrics_filepaths(args: argparse.Namespace, model: str) -> tuple[str, str]:
-    """Return the rank-0 training and validation metric paths for a model."""
-    prefix = rank_log_prefix(args.project_root, model, 0)
+    """Return canonical single-dataset metric paths for a model."""
+    prefix = dataset_artifact_prefix(args.project_root, model)
     training_file = f"{prefix}-training.csv"
     validation_file = f"{prefix}-validation.csv"
     missing = [

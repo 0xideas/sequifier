@@ -26,7 +26,10 @@ from pydantic import (
     model_validator,
 )
 
-from sequifier.config.train_config import SequifierConfig, load_train_config_with_source
+from sequifier.config.train_config import LegacySequifierConfig as SequifierConfig
+from sequifier.config.train_config import (
+    legacy_load_train_config_with_source as load_train_config_with_source,
+)
 from sequifier.helpers import normalize_path, stored_window_layout_from_metadata
 from sequifier.objectives import (
     BERTObjective,
@@ -677,7 +680,7 @@ def _source_model_sampling_values(source_model_spec: dict[str, Any]) -> dict[str
     if not source_model_spec:
         return {}
     try:
-        from sequifier.config.train_config import ModelSpecModel
+        from sequifier.config.train_config import LegacyModelSpecModel as ModelSpecModel
 
         return _model_sampling_values(ModelSpecModel.model_validate(source_model_spec))
     except ValidationError:

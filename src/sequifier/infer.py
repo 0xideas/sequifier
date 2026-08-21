@@ -13,8 +13,10 @@ from beartype import beartype
 from beartype.typing import Iterator
 from loguru import logger
 
+from sequifier.config.composable_train_config import (
+    ResolvedSequifierConfig as TrainModel,
+)
 from sequifier.config.infer_config import InfererModel, load_inferer_config
-from sequifier.config.train_config import TrainModel, load_train_config
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configure_determinism,
@@ -34,7 +36,6 @@ from sequifier.objectives import get_objective_class
 from sequifier.special_tokens import (
     ONNX_CATEGORICAL_TARGET_CODECS_KEY,
     SPECIAL_TOKEN_IDS,
-    resolve_categorical_decoder_ids,
 )
 from sequifier.train import (
     infer_with_embedding_model,
@@ -455,39 +456,42 @@ def infer_worker(
     )
     for model_path in model_paths:
         target_decoder_ids = None
+        route_args = dict(args_config)
+        for key in ("dataset", "part", "model_interface"):
+            value = getattr(config, key, None)
+            if value is not None:
+                route_args[key] = value
         if model_path.lower().endswith(".pt"):
             model_state = torch.load(
                 normalize_path(model_path, config.project_root),
                 map_location="cpu",
                 weights_only=False,
             )
-            embedded_config = model_state.get("training_config")
-            if embedded_config is not None:
-                training_config = TrainModel.model_validate(embedded_config)
-            elif config.training_config_path is not None:
-                training_config = load_train_config(
-                    config.training_config_path,
-                    {
-                        key: value
-                        for key, value in args_config.items()
-                        if key not in ["model_path", "data_path"]
-                    },
-                    args_config.get("skip_metadata", False),
+            embedded_model_config = model_state.get("model_config")
+            if embedded_model_config is not None:
+                interface_name = route_args.get("model_interface")
+                if (
+                    interface_name is None
+                    and len(embedded_model_config.get("interfaces", {})) == 1
+                ):
+                    interface_name = next(iter(embedded_model_config["interfaces"]))
+                if interface_name is not None:
+                    interface = embedded_model_config["interfaces"].get(interface_name)
+                    if interface is None:
+                        raise ValueError(
+                            f"Unknown PT model interface {interface_name!r}"
+                        )
+                    target_decoder_ids = interface.get("target_decoder_ids", {})
+            elif model_state.get("training_config") is not None:
+                training_config = TrainModel.model_validate(
+                    model_state["training_config"]
                 )
+                target_decoder_ids = training_config.target_decoder_ids
             else:
                 raise ValueError(
-                    "PyTorch model has no embedded training config and "
-                    "training_config_path was not provided."
+                    "PyTorch artifact has neither model_config nor a resolved "
+                    "training_config."
                 )
-            target_column_types = training_config.target_column_types
-            if target_column_types is None:
-                raise ValueError("target_column_types must be provided or derived")
-            target_decoder_ids = resolve_categorical_decoder_ids(
-                training_config.target_columns,
-                target_column_types,
-                training_config.n_classes,
-                training_config.categorical_decoder_special_tokens,
-            )
 
         if is_folder_input:
             if percentage_limits is None:
@@ -535,7 +539,7 @@ def infer_worker(
             prediction_length,
             config.inference_batch_size,
             config.device,
-            args_config=args_config,
+            args_config=route_args,
             training_config_path=config.training_config_path,
             training_objective=config.training_objective,
             normalize_real_columns=normalize_real_columns,
@@ -1395,6 +1399,12 @@ class Inferer:
                 self.device,
                 self.infer_with_dropout,
             )
+            route_model = getattr(
+                self.inference_model,
+                "transformer_model",
+                self.inference_model,
+            )
+            self.target_decoder_ids = dict(route_model.target_decoder_ids)
 
     @beartype
     def invert_normalization(

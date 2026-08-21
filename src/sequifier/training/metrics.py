@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from sequifier.logging_paths import rank_log_prefix
+from sequifier.logging_paths import dataset_artifact_prefix
 
 METRICS_SCHEMA_VERSION = 1
 TOTAL_TARGET = "__total__"
@@ -20,6 +20,8 @@ COMMON_FIELDS = [
     "session_id",
     "timestamp_utc",
     "model",
+    "dataset",
+    "part",
     "rank",
     "epoch",
     "batch",
@@ -121,21 +123,33 @@ class StructuredMetricWriters:
         rank: int,
         *,
         class_share_columns: Iterable[str] = (),
+        dataset_name: str | None = None,
+        dataset_count: int = 1,
+        validation_enabled: bool = True,
     ) -> None:
-        prefix = rank_log_prefix(project_root, model_name, rank)
+        prefix = dataset_artifact_prefix(
+            project_root,
+            model_name,
+            dataset_name=dataset_name,
+            dataset_count=dataset_count,
+        )
         self.model_name = model_name
+        self.dataset_name = dataset_name
         self.rank = rank
         self.class_share_columns = tuple(class_share_columns)
         self.training_path = Path(f"{prefix}-training.csv")
         self.validation_path = Path(f"{prefix}-validation.csv")
         self.class_share_path = Path(f"{prefix}-validation-class-shares.csv")
-        self._training = _CsvAppender(self.training_path, TRAINING_FIELDS)
-        self._validation = _CsvAppender(self.validation_path, VALIDATION_FIELDS)
-        self._class_shares = (
-            _CsvAppender(self.class_share_path, CLASS_SHARE_FIELDS)
-            if self.class_share_columns
+        self._training: _CsvAppender | None = _CsvAppender(
+            self.training_path, TRAINING_FIELDS
+        )
+        self._validation: _CsvAppender | None = (
+            _CsvAppender(self.validation_path, VALIDATION_FIELDS)
+            if validation_enabled
             else None
         )
+        self.validation_enabled = validation_enabled
+        self._class_shares: _CsvAppender | None = None
 
     def _common(
         self,
@@ -147,6 +161,8 @@ class StructuredMetricWriters:
         batch: int,
         batches_total: int,
         global_step: int,
+        dataset: str | None = None,
+        part: str | None = None,
     ) -> dict[str, Any]:
         return {
             "schema_version": METRICS_SCHEMA_VERSION,
@@ -154,6 +170,8 @@ class StructuredMetricWriters:
             "session_id": session_id,
             "timestamp_utc": timestamp,
             "model": self.model_name,
+            "dataset": dataset or self.dataset_name or "",
+            "part": part or "",
             "rank": self.rank,
             "epoch": epoch,
             "batch": batch,
@@ -175,6 +193,8 @@ class StructuredMetricWriters:
         target_losses: Mapping[str, Any],
         learning_rate: float,
         seconds_per_batch: float,
+        dataset: str | None = None,
+        part: str | None = None,
     ) -> None:
         timestamp = _timestamp_utc()
         common = self._common(
@@ -185,6 +205,8 @@ class StructuredMetricWriters:
             batch=batch,
             batches_total=batches_total,
             global_step=global_step,
+            dataset=dataset,
+            part=part,
         )
         measurements = [(TOTAL_TARGET, total_loss), *target_losses.items()]
         rows = [
@@ -199,6 +221,8 @@ class StructuredMetricWriters:
             }
             for target, value in measurements
         ]
+        if self._training is None:
+            self._training = _CsvAppender(self.training_path, TRAINING_FIELDS)
         self._training.append(rows, durable=False)
 
     def write_validation(
@@ -218,6 +242,8 @@ class StructuredMetricWriters:
         class_distributions: Mapping[str, Iterable[Mapping[str, Any]]],
         learning_rate: float,
         elapsed_seconds: float,
+        dataset: str | None = None,
+        part: str | None = None,
     ) -> str:
         timestamp = _timestamp_utc()
         evaluation_id = uuid.uuid4().hex
@@ -229,6 +255,8 @@ class StructuredMetricWriters:
             batch=batch,
             batches_total=batches_total,
             global_step=global_step,
+            dataset=dataset,
+            part=part,
         )
         validation_context = {
             **common,
@@ -246,6 +274,10 @@ class StructuredMetricWriters:
                 for target, value in baseline_target_losses.items()
             ),
         ]
+        if not self.validation_enabled:
+            raise ValueError("Validation metrics are disabled for this dataset")
+        if self._validation is None:
+            self._validation = _CsvAppender(self.validation_path, VALIDATION_FIELDS)
         self._validation.append(
             [
                 {
@@ -294,11 +326,13 @@ class StructuredMetricWriters:
                         "status": "ok",
                     }
                 )
-        if class_rows and self._class_shares is None:
+        if class_rows and not self.class_share_columns:
             raise ValueError(
                 "Class-share rows were provided without configured class-share "
                 "columns."
             )
+        if class_rows and self._class_shares is None:
+            self._class_shares = _CsvAppender(self.class_share_path, CLASS_SHARE_FIELDS)
         if self._class_shares is not None:
             self._class_shares.append(class_rows, durable=True)
         return evaluation_id

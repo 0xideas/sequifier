@@ -79,8 +79,8 @@ def objective(
 
     log_dir = model_log_directory(config.project_root, run_name)
     log_dir.mkdir(parents=True, exist_ok=True)
-    validation_path = str(log_dir / f"sequifier-{run_name}-rank0-validation.csv")
-    prune_path = str(log_dir / f"sequifier-{run_name}.prune")
+    validation_path = str(log_dir / f"{run_name}-validation.csv")
+    prune_path = str(log_dir / f"{run_name}.prune")
     consumed_evaluation_ids: set[str] = set()
     if os.path.exists(validation_path):
         with open(validation_path, "r", encoding="utf-8", newline="") as file:
@@ -193,9 +193,10 @@ def objective(
         raise RuntimeError(f"Training failed with exit code {exit_code}")
 
     model_type = "onnx" if run_config.export_onnx else "pt"
-    model_path, last_epoch = get_best_model_path(
+    model_path, _last_epoch = get_best_model_path(
         config.project_root, run_name, model_type
     )
+    evaluation_id = os.path.splitext(os.path.basename(model_path))[0]
 
     if config.evaluation_inference_config:
         subprocess.run(
@@ -210,7 +211,7 @@ def objective(
 
     if config.evaluation_script and config.evaluation_metrics:
         eval_script_path = config.evaluation_script
-        cmd = [sys.executable, eval_script_path, f"{run_name}-best-{last_epoch}"]
+        cmd = [sys.executable, eval_script_path, evaluation_id]
 
         eval_process = subprocess.run(
             cmd, capture_output=True, text=True, cwd=config.project_root
@@ -225,7 +226,7 @@ def objective(
             config.project_root,
             "outputs",
             "evaluations",
-            f"{run_name}-best-{last_epoch}.json",
+            f"{evaluation_id}.json",
         )
         if not os.path.exists(eval_json_path):
             raise FileNotFoundError(

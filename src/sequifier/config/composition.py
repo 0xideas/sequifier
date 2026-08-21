@@ -24,8 +24,21 @@ DEFAULT_ATOMIC_PATHS: frozenset[ConfigPath] = frozenset(
         ("training_spec", "optimizer"),
         ("training_spec", "scheduler"),
         ("training_spec", "bert_spec", "span_masking"),
+        ("global_training_spec", "optimizer"),
+        ("global_training_spec", "scheduler"),
+        ("global_training_spec", "bert_spec", "span_masking"),
     }
 )
+
+
+def _is_atomic(path: ConfigPath, atomic_paths: frozenset[ConfigPath]) -> bool:
+    if path in atomic_paths:
+        return True
+    return (
+        len(path) == 4
+        and path[:2] == ("model_spec", "interfaces")
+        and path[-1] in {"ingestion", "decoder"}
+    )
 
 
 def deep_merge_config(
@@ -211,7 +224,7 @@ def _merge_complementary_dicts(
 
         current_value = merged[key]
         if (
-            child_path not in atomic_paths
+            not _is_atomic(child_path, atomic_paths)
             and isinstance(current_value, Mapping)
             and current_value
             and isinstance(incoming_value, Mapping)
@@ -242,7 +255,7 @@ def _record_field_sources(
     field_sources: dict[ConfigPath, str],
     atomic_paths: frozenset[ConfigPath],
 ) -> None:
-    if path in atomic_paths or not isinstance(value, Mapping) or not value:
+    if _is_atomic(path, atomic_paths) or not isinstance(value, Mapping) or not value:
         field_sources[path] = source
         return
     for key, child_value in value.items():
@@ -279,7 +292,7 @@ def _deep_merge_dicts(
         base_value = merged.get(key)
 
         if (
-            child_path not in atomic_paths
+            not _is_atomic(child_path, atomic_paths)
             and isinstance(base_value, Mapping)
             and isinstance(override_value, Mapping)
             and not _changes_discriminator(base_value, override_value)

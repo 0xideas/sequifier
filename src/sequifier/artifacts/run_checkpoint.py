@@ -15,7 +15,7 @@ def checkpoint_path(training_config: Any) -> Path:
             / "checkpoints"
             / "runs"
             / training_config.model_name
-            / "latest.pt"
+            / f"{training_config.model_name}-latest.pt"
         )
     return path.resolve()
 

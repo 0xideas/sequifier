@@ -1,5 +1,6 @@
 from typing import Any
 
+import torch
 import torch.distributed as dist
 
 
@@ -38,3 +39,25 @@ def verify_loaded_revision(parent_revision_id: str | None) -> None:
         raise RuntimeError(
             f"Ranks loaded different backbone revisions: {loaded_revisions}"
         )
+
+
+def broadcast_source_selection(
+    selected_on_rank_zero: tuple[int, int, int, int, int] | None,
+) -> tuple[int, int, int, int, int]:
+    """Broadcast one compact training source transition from rank zero."""
+
+    backend = dist.get_backend()
+    device = (
+        torch.device("cuda", torch.cuda.current_device())
+        if backend == "nccl"
+        else torch.device("cpu")
+    )
+    if dist.get_rank() == 0:
+        if selected_on_rank_zero is None:
+            raise ValueError("Rank zero must provide a source selection")
+        record = torch.tensor(selected_on_rank_zero, dtype=torch.int64, device=device)
+    else:
+        record = torch.empty(5, dtype=torch.int64, device=device)
+    dist.broadcast(record, src=0)
+    values = tuple(int(value) for value in record.cpu().tolist())
+    return values  # type: ignore[return-value]

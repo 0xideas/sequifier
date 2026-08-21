@@ -1829,3 +1829,194 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
 # resolved training model directly.  New authored config code should use
 # ``SequifierConfig`` and resolve it explicitly.
 TrainModel = ResolvedSequifierConfig
+
+# Hyperparameter search deliberately remains on the historical schema until it
+# receives dedicated composable-dataset support.  Training and all public
+# configuration imports below use the canonical schema.
+LegacyTrainingSpecModel = TrainingSpecModel
+LegacyModelSpecModel = ModelSpecModel
+LegacySequifierConfig = SequifierConfig
+LegacyResolvedSequifierConfig = ResolvedSequifierConfig
+LegacyTrainModel = TrainModel
+LegacyLoadedTrainConfig = LoadedTrainConfig
+
+
+def legacy_resolve_sequifier_config(
+    config: LegacySequifierConfig, metadata: DatasetMetadata
+) -> LegacyResolvedSequifierConfig:
+    """Resolve the isolated concrete model used only by HPS trials."""
+
+    storage_layout = metadata.storage_layout
+    if storage_layout.version != 2:
+        raise ValueError(
+            "Training requires metadata stored_window_layout_version=2, "
+            f"got {storage_layout.version}."
+        )
+    column_data_types = config.column_data_types or metadata.column_data_types
+    input_columns = (
+        list(column_data_types)
+        if config.input_columns is None
+        else config.input_columns
+    )
+    categorical_columns = [
+        column
+        for column, type_name in column_data_types.items()
+        if "int" in type_name.lower() and column in input_columns
+    ]
+    real_columns = [
+        column
+        for column, type_name in column_data_types.items()
+        if "float" in type_name.lower() and column in input_columns
+    ]
+    if not categorical_columns and not real_columns:
+        raise ValueError("No columns found in resolved HPS training config")
+    target_column_types = config.target_column_types or derive_target_column_types(
+        config.target_columns, column_data_types
+    )
+    target_offset = target_offset_for_objective(
+        config.training_objective, config.target_offset
+    )
+    window_view = ModelWindowView(
+        context_length=config.context_length,
+        objective=config.training_objective,
+        target_offset=target_offset,
+    )
+    resolve_window_view(storage_layout, window_view)
+    if not metadata.split_paths and (
+        config.data_path is None or config.validation_data_path is None
+    ):
+        raise ValueError(
+            "Resolved HPS config needs data_path and validation_data_path when "
+            "metadata does not provide split_paths."
+        )
+    data_path = config.data_path or metadata.split_paths[0]
+    validation_data_path = (
+        config.validation_data_path
+        or metadata.split_paths[min(1, len(metadata.split_paths) - 1)]
+    )
+    metadata_path = config.metadata_config_path
+    if metadata_path is None and config.preprocessing_data_path is not None:
+        metadata_path = metadata_config_path_from_preprocessing_data_path(
+            config.preprocessing_data_path
+        )
+    resolved_values = config.model_dump(mode="python")
+    resolved_values.update(
+        {
+            "metadata_config_path": metadata_path,
+            "data_path": normalize_path(data_path, config.project_root),
+            "validation_data_path": normalize_path(
+                validation_data_path, config.project_root
+            ),
+            "input_columns": input_columns,
+            "column_data_types": column_data_types,
+            "categorical_columns": categorical_columns,
+            "real_columns": real_columns,
+            "target_column_types": target_column_types,
+            "id_maps": metadata.id_maps,
+            "special_token_ids": metadata.special_token_ids,
+            "storage_layout": storage_layout,
+            "window_view": window_view,
+            "n_classes": metadata.n_classes,
+        }
+    )
+    _validate_class_share_log_columns(resolved_values)
+    return LegacyResolvedSequifierConfig.model_validate(resolved_values)
+
+
+def legacy_load_train_config_with_source(
+    config_path: str, args_config: dict[str, Any], skip_metadata: bool
+) -> LegacyLoadedTrainConfig:
+    """Load the historical schema only for an explicitly isolated HPS run."""
+
+    config_values = load_composed_yaml_config(config_path)
+    cli_values = {
+        key: value for key, value in args_config.items() if key != "skip_metadata"
+    }
+    authored_values = merge_config_fragments((config_values, cli_values))
+    authored_values, extracted_metadata_values = extract_inline_metadata(
+        authored_values
+    )
+    config = try_catch_excess_keys(config_path, LegacySequifierConfig, authored_values)
+    if skip_metadata:
+        if extracted_metadata_values is None:
+            raise ValueError(
+                "skip_metadata requires inline metadata for an HPS training config"
+            )
+        metadata = DatasetMetadata.model_validate(extracted_metadata_values)
+    else:
+        metadata_path = config.metadata_config_path
+        if metadata_path is None and config.preprocessing_data_path is not None:
+            metadata_path = metadata_config_path_from_preprocessing_data_path(
+                config.preprocessing_data_path
+            )
+        if metadata_path is None:
+            raise ValueError("HPS training config requires preprocessing metadata")
+        metadata = load_dataset_metadata(
+            normalize_path(metadata_path, config.project_root)
+        )
+    resolved = legacy_resolve_sequifier_config(config, metadata)
+    return LegacyLoadedTrainConfig(
+        config=config,
+        resolved=resolved,
+        metadata=metadata,
+    )
+
+
+def legacy_load_train_config(
+    config_path: str, args_config: dict[str, Any], skip_metadata: bool
+) -> LegacyResolvedSequifierConfig:
+    return legacy_load_train_config_with_source(
+        config_path, args_config, skip_metadata
+    ).resolved
+
+
+_COMPOSABLE_EXPORTS = {
+    "DatasetFreezingSpecModel",
+    "DatasetPartSpecModel",
+    "DatasetTrainingSpecModel",
+    "EvaluationSpecModel",
+    "GlobalTrainingSpecModel",
+    "LoadedTrainConfig",
+    "ModelInterfaceSpecModel",
+    "ModelSpecModel",
+    "ResolvedDatasetPart",
+    "ResolvedDatasetTrainingSpec",
+    "ResolvedModelInterface",
+    "ResolvedSequifierConfig",
+    "ResolvedTrainingPhase",
+    "ResolvedTrainingSource",
+    "SequifierConfig",
+    "TrainModel",
+    "TrainingPhaseSpecModel",
+    "TrainingPlanModel",
+    "TrainingSourceSpecModel",
+    "dataset_part_view",
+    "interface_build_view",
+    "load_train_config",
+    "load_train_config_with_source",
+    "resolve_sequifier_config",
+}
+
+# Removing the colliding historical names lets PEP 562 resolve canonical public
+# imports lazily, without a circular import between component and root models.
+for _name in (
+    "LoadedTrainConfig",
+    "ModelSpecModel",
+    "ResolvedSequifierConfig",
+    "SequifierConfig",
+    "TrainModel",
+    "load_train_config",
+    "load_train_config_with_source",
+    "resolve_sequifier_config",
+):
+    globals().pop(_name, None)
+
+
+def __getattr__(name: str):
+    if name not in _COMPOSABLE_EXPORTS:
+        raise AttributeError(name)
+    from sequifier.config import composable_train_config
+
+    if name == "TrainModel":
+        return composable_train_config.ResolvedSequifierConfig
+    return getattr(composable_train_config, name)

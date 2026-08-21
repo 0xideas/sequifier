@@ -35,14 +35,20 @@ from sequifier.config.train_config import (
     FeatureLayoutRegistryModel,
     IngestionMergeConfig,
     IngestionSpecConfig,
-    ModelSpecModel,
+)
+from sequifier.config.train_config import LegacyModelSpecModel as ModelSpecModel
+from sequifier.config.train_config import (
+    LegacyResolvedSequifierConfig as ResolvedSequifierConfig,
+)
+from sequifier.config.train_config import LegacySequifierConfig as SequifierConfig
+from sequifier.config.train_config import LegacyTrainingSpecModel as TrainingSpecModel
+from sequifier.config.train_config import (
     NextOccurrenceConfigModel,
     ReplacementDistribution,
-    ResolvedSequifierConfig,
     ResumeConfig,
-    SequifierConfig,
-    TrainingSpecModel,
-    resolve_sequifier_config,
+)
+from sequifier.config.train_config import (
+    legacy_resolve_sequifier_config as resolve_sequifier_config,
 )
 from sequifier.helpers import (
     StoredWindowLayout,

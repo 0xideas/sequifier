@@ -1,5 +1,4 @@
 import csv
-import glob
 import hashlib
 import os
 import random
@@ -17,7 +16,7 @@ from loguru import logger
 from pydantic import ValidationError
 from torch import Tensor
 
-from sequifier.logging_paths import rank_log_prefix
+from sequifier.logging_paths import dataset_artifact_prefix, model_log_directory
 from sequifier.objectives import (
     ALLOWED_OBJECTIVE_NAMES,
     OBJECTIVE_NAME_MESSAGE,
@@ -39,7 +38,7 @@ def _warnings_and_errors_filter(record: dict[str, Any]) -> bool:
     return record["level"].no >= logger.level("WARNING").no
 
 
-_LOGGER_CONFIGURATION: tuple[int, str, str, int] | None = None
+_LOGGER_CONFIGURATION: tuple[int, str, str, int, tuple[str, ...], bool] | None = None
 
 PANDAS_TO_TORCH_TYPES = {
     "Float64": torch.float64,
@@ -827,8 +826,15 @@ def derive_target_column_types(
 
 
 @beartype
-def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0):
-    """Configure console plus exclusive rank-scoped operational log files."""
+def configure_logger(
+    project_root: str,
+    model_name: str,
+    rank: Optional[int] = 0,
+    *,
+    dataset_names: tuple[str, ...] = (),
+    rank_specific: bool = False,
+):
+    """Configure canonical model/dataset operational log files."""
     global _LOGGER_CONFIGURATION
     normalized_rank = 0 if rank is None else rank
     configuration = (
@@ -836,6 +842,8 @@ def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0
         os.path.abspath(project_root),
         model_name,
         normalized_rank,
+        dataset_names,
+        rank_specific,
     )
     if _LOGGER_CONFIGURATION == configuration:
         return logger
@@ -849,28 +857,22 @@ def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0
             level="INFO",
         )
 
-    prefix = rank_log_prefix(project_root, model_name, normalized_rank)
-    prefix.parent.mkdir(parents=True, exist_ok=True)
-
-    events_path = f"{prefix}-events-reports.log"
-    logger.add(
-        events_path,
-        level="DEBUG",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-        filter=_events_and_reports_filter,
-        enqueue=True,
-        mode="a",
-    )
-
-    warnings_path = f"{prefix}-warnings-errors.log"
-    logger.add(
-        warnings_path,
-        level="WARNING",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-        filter=_warnings_and_errors_filter,
-        enqueue=True,
-        mode="a",
-    )
+    names: tuple[str | None, ...] = dataset_names or (None,)
+    for dataset_name in names:
+        dataset_suffix = f"-{dataset_name}" if len(names) > 1 else ""
+        rank_suffix = f"-rank{normalized_rank}" if rank_specific else ""
+        path = (
+            model_log_directory(project_root, model_name)
+            / f"{model_name}{dataset_suffix}{rank_suffix}.log"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        logger.add(
+            str(path),
+            level="DEBUG",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+            enqueue=True,
+            mode="a",
+        )
     _LOGGER_CONFIGURATION = configuration
     return logger
 
@@ -918,31 +920,22 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
 def get_best_model_path(
     project_root: str, run_name: str, model_type: str
 ) -> tuple[str, int]:
-    """Return the highest-epoch exported best model path."""
-    search_pattern = os.path.join(
-        project_root, "models", f"sequifier-{run_name}-best-*.{model_type}"
+    """Return the canonical best-model path and its checkpoint epoch if known."""
+    best_model_path = os.path.join(
+        project_root, "models", f"{run_name}-best.{model_type}"
     )
-
-    matching_models = glob.glob(search_pattern)
-
-    if not matching_models:
+    if not os.path.exists(best_model_path):
         raise FileNotFoundError(
-            f"Could not find an exported 'best' model matching: {search_pattern}"
+            f"Could not find an exported 'best' model at: {best_model_path}"
         )
-
-    best_model_path = max(
-        matching_models,
-        key=lambda p: int(os.path.splitext(os.path.basename(p))[0].split("-")[-1]),
-    )
-    last_epoch = int(best_model_path.split("-")[-1].split(".")[0])
-    return best_model_path, last_epoch
+    return best_model_path, 0
 
 
 def get_last_training_batch_timedelta(
     model_name: str, rank: int, project_root: str = "."
 ) -> float:
     """Return seconds between the last two structured train observations."""
-    metrics_path = f"{rank_log_prefix(project_root, model_name, rank)}-training.csv"
+    metrics_path = f"{dataset_artifact_prefix(project_root, model_name)}-training.csv"
 
     if os.path.exists(metrics_path):
         observations = []

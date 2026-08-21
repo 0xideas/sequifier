@@ -58,7 +58,50 @@ def load_inferer_config(
     config = try_catch_excess_keys(config_path, InferenceConfig, authored_values)
 
     metadata_path = _effective_metadata_config_path(config)
-    if skip_metadata:
+    selected_metadata = None
+    if config.dataset is not None:
+        if config.training_config_path is None:
+            raise ValueError("dataset selection requires training_config_path")
+        from sequifier.config.composable_train_config import load_train_config
+
+        training = load_train_config(config.training_config_path, {}, False)
+        if config.dataset not in training.dataset_training_spec:
+            raise ValueError(f"Unknown inference dataset {config.dataset!r}")
+        dataset = training.dataset_training_spec[config.dataset]
+        part_name = config.part
+        if part_name is None:
+            if len(dataset.parts) != 1:
+                raise ValueError(
+                    f"Dataset {config.dataset!r} has multiple parts; select part"
+                )
+            part_name = next(iter(dataset.parts))
+            config.part = part_name
+        if part_name not in dataset.parts:
+            raise ValueError(f"Unknown inference part {config.dataset}.{part_name}")
+        if (
+            config.model_interface is not None
+            and config.model_interface != dataset.model_interface
+        ):
+            raise ValueError(
+                f"Dataset {config.dataset!r} maps to interface "
+                f"{dataset.model_interface!r}, not {config.model_interface!r}"
+            )
+        config.model_interface = dataset.model_interface
+        config.metadata_config_path = dataset.parts[part_name].metadata_config_path
+        metadata_path = config.metadata_config_path
+        selected_metadata = dataset.parts[part_name].metadata
+        interface = dataset.interface
+        config.input_columns = list(interface.input_columns)
+        config.target_columns = list(interface.target_columns)
+        config.target_column_types = dict(interface.target_column_types)
+        config.column_data_types = dict(interface.column_data_types)
+        config.training_objective = training.global_training_spec.training_objective
+        config.context_length = training.global_training_spec.context_length
+        config.target_offset = training.global_training_spec.target_offset
+
+    if selected_metadata is not None:
+        metadata = selected_metadata
+    elif skip_metadata:
         if inline_metadata_values is None:
             raise ValueError(
                 "skip_metadata requires inline storage_layout and column values "
@@ -174,6 +217,9 @@ class _InferenceConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
     training_objective: str
     data_path: _PathT = Field(default=None)
     training_config_path: Optional[str] = None
+    dataset: Optional[str] = None
+    part: Optional[str] = None
+    model_interface: Optional[str] = None
     read_format: str = Field(default="parquet")
     write_format: str = Field(default="csv")
 
@@ -197,6 +243,19 @@ class _InferenceConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
     infer_with_dropout: bool = Field(default=False)
     autoregression: bool = Field(default=False)
     autoregression_total_steps: Optional[int] = Field(default=None)
+
+    @model_validator(mode="after")
+    def validate_route_selection(self):
+        for usage, value in (
+            ("dataset", self.dataset),
+            ("part", self.part),
+            ("model_interface", self.model_interface),
+        ):
+            if value is not None and ("." in value or not value.isidentifier()):
+                raise ValueError(f"{usage} must be a valid identifier without '.'")
+        if self.part is not None and self.dataset is None:
+            raise ValueError("part selection requires dataset selection")
+        return self
 
     @field_validator("input_columns", mode="before")
     @classmethod
@@ -223,7 +282,11 @@ class _InferenceConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
 
     @model_validator(mode="after")
     def validate_authored_paths(self):
-        if self.metadata_config_path is None and self.preprocessing_data_path is None:
+        if (
+            self.metadata_config_path is None
+            and self.preprocessing_data_path is None
+            and not (self.training_config_path is not None and self.dataset is not None)
+        ):
             raise ValueError(
                 "metadata_config_path is required when preprocessing_data_path "
                 "is not provided"
