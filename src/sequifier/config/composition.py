@@ -18,12 +18,7 @@ ADDITIONAL_CONFIG_PATHS_KEY = "additional_config_paths"
 # fields from one discriminator variant from leaking into another variant.
 DEFAULT_ATOMIC_PATHS: frozenset[ConfigPath] = frozenset(
     {
-        ("model_spec", "ingestion"),
         ("model_spec", "backbone"),
-        ("model_spec", "decoder"),
-        ("training_spec", "optimizer"),
-        ("training_spec", "scheduler"),
-        ("training_spec", "bert_spec", "span_masking"),
         ("global_training_spec", "optimizer"),
         ("global_training_spec", "scheduler"),
         ("global_training_spec", "bert_spec", "span_masking"),

@@ -78,28 +78,26 @@ def setup_parser() -> ArgumentParser:
             help="File path to config for current processing step",
         )
 
-        if subparser != parser_hyperparameter_search:
-            subparser.add_argument("-r", "--randomize", action="store_true")
-            subparser.add_argument(
-                "-dp",
-                "--data-path",
-                dest=(
-                    "preprocessing_data_path"
-                    if subparser == parser_preprocess
-                    else "data_path"
-                ),
-                type=str,
-            )
+    for subparser in [parser_preprocess, parser_train, parser_infer]:
+        subparser.add_argument("-r", "--randomize", action="store_true")
+
+    parser_preprocess.add_argument(
+        "-dp",
+        "--data-path",
+        dest="preprocessing_data_path",
+        type=str,
+    )
+    parser_infer.add_argument("-dp", "--data-path", type=str)
+    parser_infer.add_argument(
+        "-ic",
+        "--input-columns",
+        type=str,
+        nargs="+",
+        help="Space-separated list of input columns (e.g. --input-columns col1 col2)",
+    )
+    parser_infer.add_argument("-mc", "--metadata-config-path", type=str)
 
     for subparser in [parser_train, parser_infer, parser_hyperparameter_search]:
-        subparser.add_argument(
-            "-ic",
-            "--input-columns",
-            type=str,
-            nargs="+",
-            help="Space-separated list of input columns (e.g. --input-columns col1 col2)",
-        )
-        subparser.add_argument("-mc", "--metadata-config-path", type=str)
         subparser.add_argument("-sm", "--skip-metadata", action="store_true")
 
     parser_preprocess.add_argument(
@@ -111,7 +109,6 @@ def setup_parser() -> ArgumentParser:
     )
     parser_train.add_argument("-mn", "--model-name", type=str)
     parser_train.add_argument("-s", "--seed", type=int)
-    parser_train.add_argument("--validation-data-path", type=str)
 
     parser_infer.add_argument("-mp", "--model-path", type=str)
     parser_infer.add_argument("-s", "--seed", type=int)

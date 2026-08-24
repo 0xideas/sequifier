@@ -33,8 +33,8 @@ import sequifier.optimizers
 from sequifier.config.freezing_config import LayerFreezingConfigFields
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
 
-# These component definitions are deliberately reused.  Their historical
-# freezing fields are rejected by ModelSpecModel and ModelInterfaceSpecModel.
+# These canonical component definitions are imported from the public config
+# facade to keep a single component schema.
 from sequifier.config.train_config import (  # noqa: E402  (late circular import)
     BackboneComponentConfig,
     BERTSpecModel,
@@ -53,6 +53,7 @@ from sequifier.helpers import (
     normalize_path,
     resolve_window_view,
 )
+from sequifier.model.embedding import validate_embedding_layer_names
 from sequifier.objectives import (
     ALLOWED_OBJECTIVE_NAMES,
     OBJECTIVE_NAME_MESSAGE,
@@ -252,16 +253,7 @@ class ModelInterfaceSpecModel(BaseModel):
         }
 
     @model_validator(mode="after")
-    def reject_architecture_freezing(self):
-        for name, component in (
-            ("ingestion", self.ingestion),
-            ("decoder", self.decoder),
-        ):
-            if component.has_freezing_policy:
-                raise ValueError(
-                    f"model interface {name} freezing is not architecture; "
-                    "configure it under dataset_training_spec.<dataset>.freezing"
-                )
+    def validate_interface_contract(self):
         input_columns = set(self.input_columns)
         auxiliary_columns = set(self.ingestion.auxiliary_input_columns)
         if missing := auxiliary_columns - input_columns:
@@ -273,8 +265,8 @@ class ModelInterfaceSpecModel(BaseModel):
             for layout_name, layout in self.feature_layout.items():
                 if missing := set(layout.columns) - input_columns:
                     raise ValueError(
-                        f"feature_layout {layout_name!r} references unknown input "
-                        f"columns: {sorted(missing)}"
+                        f"feature_layout {layout_name!r} references unknown "
+                        f"columns outside input_columns: {sorted(missing)}"
                     )
         return self
 
@@ -294,14 +286,25 @@ class ModelSpecModel(BaseModel):
             _identifier(name, "Model interface name")
         return value
 
-    @model_validator(mode="after")
-    def reject_backbone_freezing(self):
-        if self.backbone.has_freezing_policy:
-            raise ValueError(
-                "model_spec.backbone freezing is not architecture; configure it "
-                "under dataset_training_spec.<dataset>.freezing"
+    def _single_interface(self) -> ModelInterfaceSpecModel:
+        if len(self.interfaces) != 1:
+            raise AttributeError(
+                "A model interface selection is required when multiple interfaces "
+                "are configured"
             )
-        return self
+        return next(iter(self.interfaces.values()))
+
+    @property
+    def ingestion(self) -> IngestionComponentConfig:
+        """Single-interface compatibility view for low-level builders."""
+
+        return self._single_interface().ingestion
+
+    @property
+    def decoder(self) -> DecoderComponentConfig:
+        """Single-interface compatibility view for low-level builders."""
+
+        return self._single_interface().decoder
 
 
 class DatasetPartSpecModel(BaseModel):
@@ -504,6 +507,33 @@ class SequifierConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_relationships(self):
+        for interface in self.model_spec.interfaces.values():
+            validate_embedding_layer_names(
+                self.embedding_layer_names,
+                SimpleNamespace(
+                    backbone=self.model_spec.backbone,
+                    decoder=interface.decoder,
+                ),
+            )
+
+        scheduler_total_steps = self.global_training_spec.scheduler.get("total_steps")
+        if scheduler_total_steps is not None:
+            total_epochs = sum(phase.epochs for phase in self.training_plan.phases)
+            if self.global_training_spec.scheduler_step_on == "epoch":
+                if scheduler_total_steps != total_epochs:
+                    raise ValueError(
+                        "scheduler total steps: "
+                        f"{scheduler_total_steps} != {total_epochs}: total epochs"
+                    )
+            else:
+                warnings.warn(
+                    f"{scheduler_total_steps} scheduler steps at {total_epochs} "
+                    "epochs implies "
+                    f"{scheduler_total_steps / total_epochs:.2f} batches. "
+                    "Does this seem correct?",
+                    stacklevel=2,
+                )
+
         referenced_interfaces = set()
         for dataset_name, dataset in self.dataset_training_spec.items():
             if dataset.model_interface not in self.model_spec.interfaces:
@@ -530,12 +560,6 @@ class SequifierConfig(BaseModel):
                 raise ValueError(
                     f"Dataset {dataset_name!r} class_weights references unknown targets."
                 )
-            if set(dataset.class_share_log_columns) - set(interface.target_columns):
-                raise ValueError(
-                    f"Dataset {dataset_name!r} class_share_log_columns references "
-                    "unknown targets."
-                )
-
         unreferenced = set(self.model_spec.interfaces) - referenced_interfaces
         if unreferenced:
             warnings.warn(
@@ -641,6 +665,10 @@ class ResolvedModelInterface(BaseModel):
     n_classes: dict[str, int]
     id_maps: dict[str, dict[str | int, int]]
     special_token_ids: dict[str, int]
+    selected_columns_statistics: dict[str, dict[str, float]] = Field(
+        default_factory=dict
+    )
+    normalize_real_columns: bool = True
     target_decoder_ids: dict[str, list[int]]
     target_n_classes: dict[str, int]
     target_global_to_decoder: dict[str, list[int]]
@@ -686,10 +714,14 @@ class _TrainingSpecRuntimeView:
     """Attribute view joining run-wide and active-dataset training policy."""
 
     def __init__(
-        self, global_spec: GlobalTrainingSpecModel, dataset: ResolvedDatasetTrainingSpec
+        self,
+        global_spec: GlobalTrainingSpecModel,
+        dataset: ResolvedDatasetTrainingSpec,
+        epochs: int,
     ):
         object.__setattr__(self, "_global", global_spec)
         object.__setattr__(self, "_dataset", dataset)
+        object.__setattr__(self, "epochs", epochs)
 
     def __getattr__(self, name: str) -> Any:
         dataset = object.__getattribute__(self, "_dataset")
@@ -727,6 +759,64 @@ class ResolvedSequifierConfig(BaseModel):
     export_pt: bool
     export_with_dropout: bool = False
 
+    @model_validator(mode="after")
+    def validate_next_occurrence_metadata(self):
+        objective = get_objective_class(self.global_training_spec.training_objective)
+        if not issubclass(objective, NextOccurrenceObjective):
+            return self
+
+        next_config = self.global_training_spec.next_occurrence_config
+        if next_config is None:
+            raise ValueError(
+                "next_occurrence_config must be set for next_occurrence training"
+            )
+        column = next_config.column_name
+        for dataset_name, dataset in self.dataset_training_spec.items():
+            interface = dataset.interface
+            if column not in interface.target_columns:
+                raise ValueError(
+                    "next_occurrence_config.column_name must be one of "
+                    f"target_columns for dataset {dataset_name!r}, got {column!r}"
+                )
+            if interface.target_column_types.get(column) != "categorical":
+                raise ValueError(
+                    "next_occurrence_config.column_name must refer to a "
+                    "categorical target column"
+                )
+            if column not in interface.id_maps:
+                raise ValueError(
+                    "next_occurrence_config.column_name must have a "
+                    f"preprocessing id_map, got {column!r}"
+                )
+            missing = [
+                value
+                for value in next_config.target_values
+                if value not in interface.id_maps[column]
+            ]
+            if missing:
+                raise ValueError(
+                    "next_occurrence_config.target_values must match keys in "
+                    f"id_maps[{column!r}] exactly, missing {missing!r}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def validate_model_execution_plans(self):
+        """Compile each route while validation errors still retain Pydantic context."""
+
+        from sequifier.model.decoders import resolve_decoding_plan
+        from sequifier.model.ingestion_compiler import resolve_ingestion_plan
+
+        validated_interfaces: set[str] = set()
+        for dataset in self.dataset_training_spec.values():
+            if dataset.model_interface in validated_interfaces:
+                continue
+            view = interface_build_view(self, dataset.interface)
+            resolve_ingestion_plan(view)
+            resolve_decoding_plan(view)
+            validated_interfaces.add(dataset.model_interface)
+        return self
+
     @property
     def dataset_count(self) -> int:
         return len(self.dataset_training_spec)
@@ -761,7 +851,11 @@ class ResolvedSequifierConfig(BaseModel):
     @property
     def training_spec(self):
         dataset = next(iter(self.dataset_training_spec.values()))
-        return _TrainingSpecRuntimeView(self.global_training_spec, dataset)
+        return _TrainingSpecRuntimeView(
+            self.global_training_spec,
+            dataset,
+            sum(phase.epochs for phase in self.training_plan),
+        )
 
     @property
     def training_objective(self):
@@ -800,6 +894,8 @@ class ResolvedSequifierConfig(BaseModel):
             "n_classes",
             "id_maps",
             "special_token_ids",
+            "selected_columns_statistics",
+            "normalize_real_columns",
             "storage_layout",
             "window_view",
         }:
@@ -821,23 +917,6 @@ class LoadedTrainConfig:
     config: SequifierConfig
     resolved: ResolvedSequifierConfig
     metadata: dict[str, DatasetMetadata]
-
-    @property
-    def source_values(self) -> dict[str, Any]:
-        return self.config.model_dump(mode="python", exclude_unset=True)
-
-    @property
-    def model(self) -> ResolvedSequifierConfig:
-        return self.resolved
-
-    @property
-    def metadata_values(self) -> dict[str, Any]:
-        if len(self.metadata) == 1:
-            return next(iter(self.metadata.values())).model_dump(mode="python")
-        return {
-            ref: metadata.model_dump(mode="python")
-            for ref, metadata in self.metadata.items()
-        }
 
 
 def _source(
@@ -1016,6 +1095,11 @@ def _resolve_interface(
             if column in metadata.id_maps
         },
         special_token_ids=metadata.special_token_ids,
+        selected_columns_statistics={
+            column: metadata.selected_columns_statistics.get(column, {})
+            for column in real_columns
+        },
+        normalize_real_columns=metadata.normalize_real_columns,
         target_decoder_ids=target_decoder_ids,
         target_n_classes=target_n_classes,
         target_global_to_decoder=target_global_to_decoder,
@@ -1106,10 +1190,9 @@ def resolve_sequifier_config(
                 )
             resolved_parts[part_name] = ResolvedDatasetPart(
                 name=part_name,
-                metadata_config_path=normalize_path(
+                metadata_config_path=(
                     override.get("metadata_config_path")
-                    or part_spec.metadata_config_path,
-                    config.project_root,
+                    or part_spec.metadata_config_path
                 ),
                 metadata=part_metadata,
                 training_data_path=training_path,
@@ -1118,6 +1201,19 @@ def resolve_sequifier_config(
             )
 
         assert first_metadata is not None
+        target_types = derive_target_column_types(
+            interface_spec.target_columns,
+            first_metadata.column_data_types,
+        )
+        for column in dataset_spec.class_share_log_columns:
+            if column not in interface_spec.target_columns:
+                raise ValueError(f"Class-share column {column!r} must be a target")
+            if target_types[column] != "categorical":
+                raise ValueError(f"Class-share column {column!r} must be categorical")
+            if column not in first_metadata.n_classes:
+                raise ValueError(f"Class-share column {column!r} needs n_classes")
+            if column not in first_metadata.id_maps:
+                raise ValueError(f"Class-share column {column!r} needs an id_map")
         interface = _resolve_interface(
             dataset_spec.model_interface,
             interface_spec,
@@ -1134,12 +1230,6 @@ def resolve_sequifier_config(
             )
         else:
             interface_semantics[dataset_spec.model_interface] = semantic_contract
-
-        for column in dataset_spec.class_share_log_columns:
-            if interface.target_column_types[column] != "categorical":
-                raise ValueError(f"Class-share column {column!r} must be categorical")
-            if column not in interface.id_maps:
-                raise ValueError(f"Class-share column {column!r} needs an id_map")
 
         if dataset_spec.class_weights is not None:
             for column, weights in dataset_spec.class_weights.items():
@@ -1217,19 +1307,6 @@ def resolve_sequifier_config(
         export_pt=config.export_pt,
         export_with_dropout=config.export_with_dropout,
     )
-    # Resolve the existing ingestion and decoding plans here so configuration
-    # resolution remains the gate for interface/data-contract errors.
-    from sequifier.model.decoders import resolve_decoding_plan
-    from sequifier.model.ingestion_compiler import resolve_ingestion_plan
-
-    validated_interfaces: set[str] = set()
-    for dataset in resolved.dataset_training_spec.values():
-        if dataset.model_interface in validated_interfaces:
-            continue
-        view = interface_build_view(resolved, dataset.interface)
-        resolve_ingestion_plan(view)
-        resolve_decoding_plan(view)
-        validated_interfaces.add(dataset.model_interface)
     return resolved
 
 
@@ -1353,7 +1430,6 @@ def load_train_config_with_source(
 
     config = try_catch_excess_keys(config_path, SequifierConfig, raw)
     part_overrides: dict[str, dict[str, str]] = {}
-    selected_part = None
     if sensitive:
         selected_part = _override_part(config)
         dataset_name = selected_part.partition(".")[0]
@@ -1464,7 +1540,11 @@ def dataset_part_view(
     dataset = config.dataset_training_spec[dataset_name]
     part = dataset.parts[part_name]
     view = interface_build_view(config, dataset.interface)
-    view.training_spec = _TrainingSpecRuntimeView(config.global_training_spec, dataset)
+    view.training_spec = _TrainingSpecRuntimeView(
+        config.global_training_spec,
+        dataset,
+        sum(phase.epochs for phase in config.training_plan),
+    )
     view.read_format = config.global_training_spec.read_format
     view.model_window_stride = config.global_training_spec.model_window_stride
     view.data_path = part.training_data_path

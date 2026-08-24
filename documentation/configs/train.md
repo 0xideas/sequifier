@@ -148,10 +148,9 @@ such as `global_training_spec`, `model_spec.interfaces`, and
 `dataset_training_spec`; duplicate fields are rejected. CLI overrides are
 applied after composition and before metadata resolution.
 
-For exactly one dataset, `--data-path`, `--validation-data-path`,
-`--metadata-config-path`, `--input-columns`, and `--skip-metadata` map to the
-unambiguous dataset part/interface. They fail when several datasets or parts
-make the target ambiguous.
+The training command accepts `--model-name`, `--seed`, and `--skip-metadata` as
+configuration overrides. Dataset paths, columns, metadata paths, and device
+selection must use their canonical YAML locations.
 
 ## Artifacts
 

@@ -2,12 +2,7 @@ import numpy
 import yaml
 from pydantic import BaseModel
 
-from sequifier.config.train_config import (
-    DotDict,
-    ModelSpecModel,
-    TrainingSpecModel,
-    TrainModel,
-)
+from sequifier.config.train_config import DotDict
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
 
 
@@ -48,9 +43,6 @@ class TrainModelDumper(yaml.Dumper):
         return super(TrainModelDumper, self).increase_indent(flow, False)
 
 
-TrainModelDumper.add_representer(TrainModel, represent_sequifier_object)
-TrainModelDumper.add_representer(ModelSpecModel, represent_sequifier_object)
-TrainModelDumper.add_representer(TrainingSpecModel, represent_sequifier_object)
 TrainModelDumper.add_representer(StoredWindowLayout, represent_sequifier_object)
 TrainModelDumper.add_representer(ModelWindowView, represent_sequifier_object)
 TrainModelDumper.add_multi_representer(BaseModel, represent_sequifier_object)

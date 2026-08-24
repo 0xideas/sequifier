@@ -88,7 +88,6 @@ def load_model_for_analysis(
         resolved_config,
         device=torch.device(options.device),
         initialize=False,
-        apply_freezing=False,
     )
     network: nn.Module = built.network
     state = {

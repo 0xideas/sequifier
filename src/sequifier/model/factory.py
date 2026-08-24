@@ -11,15 +11,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from sequifier.helpers import get_torch_dtype
 from sequifier.model.backbone import TransformerBackbone
 from sequifier.model.decoders import build_target_decoding
-from sequifier.model.freezing import apply_model_freezing
 from sequifier.model.ingestion_compiler import compile_feature_ingestion
 from sequifier.model.initialization import initialize_model_weights
 from sequifier.model.layers import RMSNorm
-from sequifier.model.network import (
-    ComposableTransformerNetwork,
-    ModelInterfaceModule,
-    TransformerNetwork,
-)
+from sequifier.model.network import ComposableTransformerNetwork, ModelInterfaceModule
 from sequifier.objectives import CausalObjective, create_objective
 from sequifier.special_tokens import resolve_categorical_decoder_ids
 
@@ -56,7 +51,7 @@ class ModelRuntimeMetadata:
 
 @dataclass
 class BuiltModel:
-    network: TransformerNetwork | ComposableTransformerNetwork
+    network: ComposableTransformerNetwork
     objective: Any
     runtime_metadata: ModelRuntimeMetadata
 
@@ -123,9 +118,7 @@ def wrap_composable_ddp(model: Any, config: Any, local_rank: int) -> nn.Module |
 
 
 def _training_spec(config: Any) -> Any:
-    if hasattr(config, "global_training_spec"):
-        return config.global_training_spec
-    return config.training_spec
+    return config.global_training_spec
 
 
 def _apply_layer_dtypes(network: nn.Module, config: Any) -> None:
@@ -322,138 +315,19 @@ def _build_composable_network(
     )
 
 
-def _build_legacy_network(
-    config: Any,
-    *,
-    device: torch.device,
-    initialize: bool,
-    apply_freezing: bool,
-    logger: Any,
-) -> BuiltModel:
-    objective = create_objective(config)
-    backbone = TransformerBackbone(config.model_spec.backbone.architecture)
-    built_ingestion = compile_feature_ingestion(
-        hparams=config,
-        direct_real_dtype_provider=lambda: backbone.layers[
-            0
-        ].ff.get_first_layer_dtype(),
-        device_max_concat_length=config.training_spec.device_max_concat_length,
-    )
-    adapter: nn.Module = (
-        nn.Identity()
-        if built_ingestion.width == backbone.input_dim
-        else nn.Linear(built_ingestion.width, backbone.input_dim)
-    )
-    adapter._sequifier_layer_group = "ingestion.output_projection"  # type: ignore[attr-defined]
-    metadata = _decoder_metadata(config)
-    decoder = build_target_decoding(config, target_n_classes=metadata.target_n_classes)
-    network = TransformerNetwork(
-        ingestion=built_ingestion.module,
-        ingestion_adapter=adapter,
-        backbone=backbone,
-        decoder=decoder,
-        attention_mask_policy=objective.build_attention_mask_policy(
-            config.window_view.context_length
-        ),
-        decoding_support=config.model_spec.decoder.support,
-        prediction_length=config.model_spec.decoder.prediction_length,
-        target_columns=tuple(config.target_columns),
-        target_column_types=dict(config.target_column_types),
-    )
-    if initialize:
-        _initialize_components(
-            {
-                "ingestion": (
-                    network.ingestion,
-                    config.model_spec.ingestion.initialization,
-                ),
-                "ingestion_adapter": (
-                    network.ingestion_adapter,
-                    config.model_spec.ingestion.initialization,
-                ),
-                "backbone": (
-                    network.backbone,
-                    config.model_spec.backbone.initialization,
-                ),
-                "decoder": (
-                    network.decoder,
-                    config.model_spec.decoder.initialization,
-                ),
-            },
-            logger,
-        )
-    if apply_freezing:
-        components = {
-            "ingestion": (
-                config.model_spec.ingestion,
-                (network.ingestion, network.ingestion_adapter),
-            ),
-            "backbone": (config.model_spec.backbone, (network.backbone,)),
-            "decoder": (config.model_spec.decoder, (network.decoder,)),
-        }
-        for component_name, (component_config, modules) in components.items():
-            if not component_config.has_freezing_policy:
-                continue
-            matched_groups = set()
-            for module in modules:
-                result = apply_model_freezing(
-                    module,
-                    freezing=component_config.freezing,
-                    freezing_except=component_config.freezing_except,
-                    warn_unmatched=False,
-                )
-                matched_groups.update(result.matched_groups)
-            configured = set(
-                component_config.freezing
-                if component_config.freezing is not None
-                else component_config.freezing_except or []
-            )
-            unmatched = configured.difference(matched_groups)
-            if unmatched and component_config.freezing_except is not None:
-                raise ValueError(
-                    f"{component_name} freezing_except groups matched no "
-                    f"parameters: {', '.join(sorted(unmatched))}"
-                )
-            if unmatched:
-                logger.warning(
-                    f"{component_name} freezing groups matched no parameters: "
-                    f"{', '.join(sorted(unmatched))}"
-                )
-        if not any(parameter.requires_grad for parameter in network.parameters()):
-            raise ValueError("Freezing leaves the model with no trainable parameters")
-    _apply_layer_dtypes(network, config)
-    network.to(device)
-    return BuiltModel(
-        network=network,
-        objective=objective,
-        runtime_metadata=ModelRuntimeMetadata(
-            interfaces={"default": metadata}, device=device
-        ),
-    )
-
-
 def build_transformer_network(
     config: Any,
     *,
     device: torch.device,
     initialize: bool = True,
-    apply_freezing: bool = True,
     logger: Any | None = None,
 ) -> BuiltModel:
     """Build one shared backbone and every distinct named model interface."""
 
     resolved_logger: Any = logger if logger is not None else logging.getLogger(__name__)
-    if hasattr(config, "dataset_training_spec"):
-        return _build_composable_network(
-            config,
-            device=device,
-            initialize=initialize,
-            logger=resolved_logger,
-        )
-    return _build_legacy_network(
+    return _build_composable_network(
         config,
         device=device,
         initialize=initialize,
-        apply_freezing=apply_freezing,
         logger=resolved_logger,
     )

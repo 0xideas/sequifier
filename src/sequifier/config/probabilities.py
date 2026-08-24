@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Annotated, Literal, Optional, Union
 
 import torch
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProbabilityDistributionBaseClass(ABC):
@@ -22,6 +22,8 @@ class ProbabilityDistributionBaseClass(ABC):
 
 
 class GeometricDistribution(BaseModel, ProbabilityDistributionBaseClass):
+    model_config = ConfigDict(extra="forbid")
+
     type: Literal["GeometricDistribution"] = "GeometricDistribution"
     p: float = Field(..., gt=0.0, le=1.0)
 
@@ -41,6 +43,8 @@ class GeometricDistribution(BaseModel, ProbabilityDistributionBaseClass):
 
 
 class NormalDistributionDiscretizedFloor(BaseModel, ProbabilityDistributionBaseClass):
+    model_config = ConfigDict(extra="forbid")
+
     type: Literal["NormalDistributionDiscretizedFloor"] = (
         "NormalDistributionDiscretizedFloor"
     )
@@ -64,6 +68,8 @@ class NormalDistributionDiscretizedFloor(BaseModel, ProbabilityDistributionBaseC
 class LogNormalDistributionDiscretizedFloor(
     BaseModel, ProbabilityDistributionBaseClass
 ):
+    model_config = ConfigDict(extra="forbid")
+
     type: Literal["LogNormalDistributionDiscretizedFloor",] = (
         "LogNormalDistributionDiscretizedFloor"
     )
@@ -86,6 +92,8 @@ class LogNormalDistributionDiscretizedFloor(
 
 
 class PoissonDistributionFloor(BaseModel, ProbabilityDistributionBaseClass):
+    model_config = ConfigDict(extra="forbid")
+
     type: Literal["PoissonDistributionFloor"] = "PoissonDistributionFloor"
     rate: float = Field(..., gt=0.0)
 

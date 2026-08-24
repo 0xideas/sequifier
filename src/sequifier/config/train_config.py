@@ -28,7 +28,6 @@ from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
-from sequifier.config.freezing_config import LayerFreezingConfigFields
 from sequifier.config.initialization_config import ModelInitializationConfig
 from sequifier.config.metadata import (
     DatasetMetadata,
@@ -133,7 +132,7 @@ class FeatureLayoutRegistryModel(RootModel[dict[str, CartesianLayoutModel]]):
         return self.root[key]
 
 
-class IngestionComponentBase(LayerFreezingConfigFields):
+class IngestionComponentBase(BaseModel):
     """Settings shared by every feature-ingestion component."""
 
     model_config = ConfigDict(extra="forbid")
@@ -611,7 +610,7 @@ BranchDecodingConfig = Annotated[
 DecodingSpecConfig = BranchDecodingConfig | dict[str, BranchDecodingConfig]
 
 
-class DecoderComponentBase(LayerFreezingConfigFields):
+class DecoderComponentBase(BaseModel):
     """Settings shared by every target-decoder component."""
 
     model_config = ConfigDict(extra="forbid")
@@ -797,7 +796,7 @@ class BackboneRepositoryConfig(BaseModel):
     conflict_policy: Literal["compare_and_swap"] = "compare_and_swap"
 
 
-class BackboneComponentConfig(LayerFreezingConfigFields):
+class BackboneComponentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     architecture: BackboneArchitectureConfig
@@ -1020,6 +1019,8 @@ class DotDict(dict):
 
 
 class ReplacementDistribution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     masked: float = Field(..., ge=0.0, le=1.0)
     random: float = Field(..., ge=0.0, le=1.0)
     identical: float = Field(..., ge=0.0, le=1.0)
@@ -1035,12 +1036,16 @@ class ReplacementDistribution(BaseModel):
 
 
 class BERTSpecModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     masking_probability: float = Field(..., gt=0.0, le=1.0)
     replacement_distribution: ReplacementDistribution
     span_masking: ProbabilityDistribution
 
 
 class NextOccurrenceConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     column_name: str
     target_values: list[NextOccurrenceTargetValue] = Field(..., min_length=1)
 
@@ -1057,8 +1062,8 @@ class ResumeConfig(BaseModel):
     def validate_checkpoint_path(self):
         if self.policy == "required" and not self.checkpoint_path:
             raise ValueError(
-                "training_spec.resume.checkpoint_path is required when policy is "
-                "'required'"
+                "global_training_spec.resume.checkpoint_path is required when "
+                "policy is 'required'"
             )
         return self
 
@@ -1825,14 +1830,13 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
         return self
 
 
-# Compatibility name for integrations that construct or annotate the historical
-# resolved training model directly.  New authored config code should use
-# ``SequifierConfig`` and resolve it explicitly.
+# Private historical implementation names are captured here before the public
+# facade replaces the colliding root-schema names below.
 TrainModel = ResolvedSequifierConfig
 
-# Hyperparameter search deliberately remains on the historical schema until it
-# receives dedicated composable-dataset support.  Training and all public
-# configuration imports below use the canonical schema.
+# These aliases exist only so the private historical definitions below can be
+# constructed while this module initializes. They are removed from module
+# lookup after the canonical public export set is declared.
 LegacyTrainingSpecModel = TrainingSpecModel
 LegacyModelSpecModel = ModelSpecModel
 LegacySequifierConfig = SequifierConfig
@@ -1844,7 +1848,7 @@ LegacyLoadedTrainConfig = LoadedTrainConfig
 def legacy_resolve_sequifier_config(
     config: LegacySequifierConfig, metadata: DatasetMetadata
 ) -> LegacyResolvedSequifierConfig:
-    """Resolve the isolated concrete model used only by HPS trials."""
+    """Historical resolver retained only as unreachable private implementation."""
 
     storage_layout = metadata.storage_layout
     if storage_layout.version != 2:
@@ -1997,8 +2001,9 @@ _COMPOSABLE_EXPORTS = {
     "resolve_sequifier_config",
 }
 
-# Removing the colliding historical names lets PEP 562 resolve canonical public
-# imports lazily, without a circular import between component and root models.
+# Hide the historical root schema and its loaders. The definitions remain below
+# the shared component models only to avoid moving the component hierarchy in
+# this compatibility module; no public configuration path can resolve them.
 for _name in (
     "LoadedTrainConfig",
     "ModelSpecModel",
@@ -2008,6 +2013,16 @@ for _name in (
     "load_train_config",
     "load_train_config_with_source",
     "resolve_sequifier_config",
+    "TrainingSpecModel",
+    "LegacyTrainingSpecModel",
+    "LegacyModelSpecModel",
+    "LegacySequifierConfig",
+    "LegacyResolvedSequifierConfig",
+    "LegacyTrainModel",
+    "LegacyLoadedTrainConfig",
+    "legacy_resolve_sequifier_config",
+    "legacy_load_train_config_with_source",
+    "legacy_load_train_config",
 ):
     globals().pop(_name, None)
 

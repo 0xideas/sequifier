@@ -57,6 +57,7 @@ def resolved_config_from_model_config(
         batch_size=1,
         learning_rate=1e-3,
         layer_type_dtypes=values.get("layer_type_dtypes"),
+        next_occurrence_config=values.get("next_occurrence_config"),
         torch_compile="none",
     )
     authored_interfaces = {}
@@ -118,8 +119,14 @@ def resolved_config_from_model_config(
             ingestion=ingestion,
             decoder=decoder,
             n_classes=interface.get("n_classes", target_n_classes),
-            id_maps={},
-            special_token_ids=SPECIAL_TOKEN_IDS.ids_by_label,
+            id_maps=interface.get("id_maps", {}),
+            special_token_ids=interface.get(
+                "special_token_ids", SPECIAL_TOKEN_IDS.ids_by_label
+            ),
+            selected_columns_statistics=interface.get(
+                "selected_columns_statistics", {}
+            ),
+            normalize_real_columns=interface.get("normalize_real_columns", True),
             target_decoder_ids=target_decoder_ids,
             target_n_classes=target_n_classes,
             target_global_to_decoder=global_to_decoder,

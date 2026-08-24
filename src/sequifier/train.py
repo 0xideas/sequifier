@@ -78,7 +78,6 @@ from sequifier.config.composable_train_config import (  # noqa: E402
     ResolvedSequifierConfig as TrainModel,
 )
 from sequifier.config.composable_train_config import load_train_config  # noqa: E402
-from sequifier.config.train_config import legacy_load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
     conditional_beartype,
@@ -617,6 +616,8 @@ def train_worker(
     semantic_optimizer_grouping: bool = False,
 ):
     """Run one local distributed-training worker."""
+    if not hasattr(config, "dataset_training_spec"):
+        raise TypeError("Training requires a canonical resolved config")
     if hasattr(config, "dataset_training_spec"):
         return _train_composable_worker(
             local_rank,
@@ -1014,6 +1015,8 @@ def run_training(
     integration_instances: tuple[Any, ...] = (),
     semantic_optimizer_grouping: bool = False,
 ) -> None:
+    if not hasattr(config, "dataset_training_spec"):
+        raise TypeError("Training requires a canonical resolved config")
     if hasattr(config, "dataset_training_spec"):
         spec = config.global_training_spec
         if spec.distributed and integration_instances:
@@ -1137,12 +1140,7 @@ def run_training(
 def train(args: Any, args_config: dict[str, Any]) -> None:
     """Load train config and launch local or distributed training."""
     config_path = args.config_path or "configs/train.yaml"
-    loader = (
-        legacy_load_train_config
-        if os.getenv("SEQUIFIER_HYPERPARAMETER_SEARCH_RUN") == "1"
-        else load_train_config
-    )
-    config = loader(config_path, args_config, args.skip_metadata)
+    config = load_train_config(config_path, args_config, args.skip_metadata)
     run_training(config)
 
 
@@ -1291,6 +1289,8 @@ class TransformerModel(SequifierModel):
     ):
         """Build model modules and training state from config."""
         super().__init__()
+        if not hasattr(hparams, "dataset_training_spec"):
+            raise TypeError("TransformerModel requires a canonical resolved config")
         self.project_root = hparams.project_root
         self._composable = hasattr(hparams, "dataset_training_spec")
         self.active_dataset_name = (
@@ -1455,6 +1455,34 @@ class TransformerModel(SequifierModel):
                 )
             )
         )
+        if self._composable and self._freezing_active:
+            from sequifier.training.runtime import frozen_parameter_ids
+
+            frozen_by_dataset = []
+            for dataset_name, dataset in hparams.dataset_training_spec.items():
+                frozen = set(
+                    frozen_parameter_ids(
+                        network,
+                        dataset.model_interface,
+                        dataset.freezing,
+                    )
+                )
+                route = network.interfaces[dataset.model_interface]
+                active_parameter_ids = {
+                    id(parameter)
+                    for module in (network.backbone, route)
+                    for parameter in module.parameters()
+                }
+                if frozen >= active_parameter_ids:
+                    raise ValueError(
+                        f"Dataset {dataset_name!r} leaves no trainable parameters"
+                    )
+                frozen_by_dataset.append(frozen)
+
+            permanently_frozen = set.intersection(*frozen_by_dataset)
+            for parameter in network.parameters():
+                if id(parameter) in permanently_frozen:
+                    parameter.requires_grad_(False)
 
         self.scheduler_step_on = hparams.training_spec.scheduler_step_on
 
@@ -2187,6 +2215,16 @@ class TransformerModel(SequifierModel):
                     for phase in self.hparams.training_plan
                 ],
             }
+            if len(self.hparams.interface_names) == 1:
+                feature_layout = self.hparams.feature_layout
+                if feature_layout is not None:
+                    settings["feature_layout"] = feature_layout.model_dump(mode="json")
+            if self._freezing_active:
+                settings["trainable_parameter_names"] = [
+                    _canonical_parameter_name(name)
+                    for name, parameter in self.named_parameters(remove_duplicate=True)
+                    if parameter.requires_grad
+                ]
             encoded = json.dumps(settings, sort_keys=True, default=str).encode("utf-8")
             return {
                 "format_version": CHECKPOINT_FORMAT_VERSION,

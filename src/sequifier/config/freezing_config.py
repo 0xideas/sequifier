@@ -41,7 +41,7 @@ class LayerFreezingConfigFields(BaseModel):
 
     @model_serializer(mode="wrap")
     def serialize_freezing_fields(self, serializer):
-        """Omit inactive fields to preserve legacy resolved serialization."""
+        """Omit inactive fields from canonical dataset freezing policies."""
 
         values = serializer(self)
         if self.freezing is None:
