@@ -1374,11 +1374,10 @@ class Inferer:
             kwargs = {}
             if self.infer_with_dropout:
                 kwargs["disabled_optimizers"] = ["EliminateDropout"]
-
                 warnings.warn(
-                    "For inference with onnx, 'infer_with_dropout==True' is only effective if 'export_with_dropout==True' in training"
+                    "For ONNX inference, infer_with_dropout=true is only effective "
+                    "when the model was exported with export_with_dropout=true."
                 )
-
             self.ort_session = onnxruntime.InferenceSession(
                 normalize_path(model_path, project_root),
                 providers=execution_providers,

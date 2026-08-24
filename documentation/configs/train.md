@@ -83,12 +83,12 @@ export_generative_model: true
 export_embedding_model: false
 export_onnx: true
 export_pt: true
+export_with_dropout: false
 ```
 
 The historical flat training schema is not accepted. In particular,
 `training_spec`, top-level dataset paths/columns, `model_spec.ingestion`,
-`model_spec.decoder`, architecture-owned freezing, and `export_with_dropout`
-are not canonical fields.
+`model_spec.decoder`, and architecture-owned freezing are not canonical fields.
 
 ## Ownership and resolution
 
@@ -163,4 +163,6 @@ run-wide. Generated filenames do not use a `sequifier-` prefix.
 The PT inference bundle contains exactly `artifact_type`, `format_version`,
 `model_state_dict`, and an execution-only `model_config`. Optimizers, paths,
 parts, training plans, evaluation policy, and dataset bindings remain outside
-that bundle.
+that bundle. `export_with_dropout` affects ONNX export only: enabling it exports
+the ONNX graph in training mode and disables constant folding so dropout remains
+active.

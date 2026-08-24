@@ -90,7 +90,7 @@ These fields tell the inference engine which columns to extract from the new dat
 | `output_probabilities`| `bool` | No | `false` | If `true`, outputs the full probability distribution for categorical targets. Real-valued targets do not produce probability files. |
 | `sample_from_distribution_columns`| `Optional[list[str]]`| No | `null` | If set, the model **samples** from the predicted distribution for these columns instead of taking the top-1 (argmax). Essential for diversity in generation. |
 | `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). Must be `false` when all targets are real-valued. |
-| `infer_with_dropout` | `bool` | No | `false` | If `true`, explicitly re-enables dropout after deterministic model loading (useful for Monte Carlo dropout). Exported models themselves always use evaluation behavior. |
+| `infer_with_dropout` | `bool` | No | `false` | For PyTorch, explicitly re-enables dropout after model loading. For ONNX, preserves dropout nodes at runtime and is effective only when the model was exported with `export_with_dropout: true`. |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
 
 Prediction and embedding outputs include `subsequenceId` and

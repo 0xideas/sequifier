@@ -134,7 +134,7 @@ By default, Sequifier optimizes for the best validation loss. However, you can c
 | --- | --- | --- | --- | --- |
 | `evaluation_metrics` | `list[str]` | No | `null` | A list of metric names output by your script (e.g., `['accuracy', 'f1']`). |
 | `evaluation_metric_directions` | `list[str]` | *Conditional* | `null` | Required if metrics are defined. List of `minimize` or `maximize` for each metric. |
-| `evaluation_script` | `str` | *Conditional* | `null` | Required if metrics are defined. Path to a Python script that takes `[RUN_NAME]-best-[EPOCH]` as an argument and outputs a JSON file to `outputs/evaluations/` containing the metrics. |
+| `evaluation_script` | `str` | *Conditional* | `null` | Required if metrics are defined. Path to a Python script that takes `[RUN_NAME]-best` as an argument and outputs a JSON file to `outputs/evaluations/` containing the metrics. |
 | `evaluation_inference_config` | `str` | No | `null` | Path to an inference config. If provided, Sequifier runs inference on the newly trained model *before* calling your evaluation script. |
 
 ### 3. System & Export (Fixed Values)
@@ -414,8 +414,8 @@ If you define multiple metrics in `evaluation_metrics` (e.g., you want to maximi
 2. **Generated Configs:** Located in `model_config_write_path` (e.g., `configs/hp_search/`).
       * Valid, standalone `train.yaml` files generated for each trial.
 3. **Logs:** Located in `logs/`.
-      * Includes rank-scoped operational logs and rank-0 structured training, validation, and class-share CSV files. Optuna tails `sequifier-[RUN]-rank0-validation.csv` for intermediate validation loss.
+      * Includes operational logs and rank-0 structured training, validation, and class-share CSV files under `logs/[RUN]/`. Optuna tails `[RUN]-validation.csv` for intermediate validation loss.
 4.  **Models & Checkpoints:**
-      * Saved in `models/` and `checkpoints/` with filenames including the run number (e.g., `models/sequifier-my-search-run-5-best-10.onnx`).
+      * Saved in `models/` and `checkpoints/` with filenames including the run number (for example, `models/my-search-run-5-best.onnx` and `checkpoints/runs/my-search-run-5/my-search-run-5-latest.pt`).
 5. **Evaluations (Optional):**
-      * Saved in `outputs/evaluations/[RUN_NAME]-best-[EPOCH].json` if an evaluation script was utilized.
+      * Saved in `outputs/evaluations/[RUN_NAME]-best.json` if an evaluation script was utilized.

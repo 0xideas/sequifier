@@ -486,6 +486,7 @@ class SequifierConfig(BaseModel):
     )
     export_onnx: bool = True
     export_pt: bool = False
+    export_with_dropout: bool = False
 
     @field_validator("dataset_training_spec")
     @classmethod
@@ -724,6 +725,7 @@ class ResolvedSequifierConfig(BaseModel):
     embedding_layer_names: list[str]
     export_onnx: bool
     export_pt: bool
+    export_with_dropout: bool = False
 
     @property
     def dataset_count(self) -> int:
@@ -1213,6 +1215,7 @@ def resolve_sequifier_config(
         embedding_layer_names=config.embedding_layer_names,
         export_onnx=config.export_onnx,
         export_pt=config.export_pt,
+        export_with_dropout=config.export_with_dropout,
     )
     # Resolve the existing ingestion and decoding plans here so configuration
     # resolution remains the gate for interface/data-contract errors.

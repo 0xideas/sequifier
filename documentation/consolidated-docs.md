@@ -441,12 +441,12 @@ export_generative_model: true
 export_embedding_model: false
 export_onnx: true
 export_pt: true
+export_with_dropout: false
 ```
 
 The historical flat training schema is not accepted. In particular,
 `training_spec`, top-level dataset paths/columns, `model_spec.ingestion`,
-`model_spec.decoder`, architecture-owned freezing, and `export_with_dropout`
-are not canonical fields.
+`model_spec.decoder`, and architecture-owned freezing are not canonical fields.
 
 ## Ownership and resolution
 
@@ -521,7 +521,9 @@ run-wide. Generated filenames do not use a `sequifier-` prefix.
 The PT inference bundle contains exactly `artifact_type`, `format_version`,
 `model_state_dict`, and an execution-only `model_config`. Optimizers, paths,
 parts, training plans, evaluation policy, and dataset bindings remain outside
-that bundle.
+that bundle. `export_with_dropout` affects ONNX export only: enabling it exports
+the ONNX graph in training mode and disables constant folding so dropout remains
+active.
 
 
 # Infer Command Guide
@@ -616,7 +618,7 @@ These fields tell the inference engine which columns to extract from the new dat
 | `output_probabilities`| `bool` | No | `false` | If `true`, outputs the full probability distribution for categorical targets. Real-valued targets do not produce probability files. |
 | `sample_from_distribution_columns`| `Optional[list[str]]`| No | `null` | If set, the model **samples** from the predicted distribution for these columns instead of taking the top-1 (argmax). Essential for diversity in generation. |
 | `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). Must be `false` when all targets are real-valued. |
-| `infer_with_dropout` | `bool` | No | `false` | If `true`, explicitly re-enables dropout after deterministic model loading (useful for Monte Carlo dropout). Exported models themselves always use evaluation behavior. |
+| `infer_with_dropout` | `bool` | No | `false` | For PyTorch, explicitly re-enables dropout after model loading. For ONNX, preserves dropout nodes at runtime and is effective only when the model was exported with `export_with_dropout: true`. |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
 
 Prediction and embedding outputs include `subsequenceId` and
@@ -729,7 +731,7 @@ Unlike other commands that rely on a YAML config, `visualize-training` is config
 | `--bucket-training-batches` | `int` | `null` | Smooths the training loss curve by averaging the loss over a specified number of batches. **Must be a multiple of the logged batch interval** used during training. |
 | `--project-root` | `str` | `.` | The root directory of your Sequifier project. |
 
-The command reads `logs/sequifier-[MODEL_NAME]-rank0-training.csv` and `logs/sequifier-[MODEL_NAME]-rank0-validation.csv`.
+For a single-dataset model, the command reads `logs/[MODEL_NAME]/[MODEL_NAME]-training.csv` and `logs/[MODEL_NAME]/[MODEL_NAME]-validation.csv`.
 
 ## Outputs
 
@@ -880,7 +882,7 @@ By default, Sequifier optimizes for the best validation loss. However, you can c
 | --- | --- | --- | --- | --- |
 | `evaluation_metrics` | `list[str]` | No | `null` | A list of metric names output by your script (e.g., `['accuracy', 'f1']`). |
 | `evaluation_metric_directions` | `list[str]` | *Conditional* | `null` | Required if metrics are defined. List of `minimize` or `maximize` for each metric. |
-| `evaluation_script` | `str` | *Conditional* | `null` | Required if metrics are defined. Path to a Python script that takes `[RUN_NAME]-best-[EPOCH]` as an argument and outputs a JSON file to `outputs/evaluations/` containing the metrics. |
+| `evaluation_script` | `str` | *Conditional* | `null` | Required if metrics are defined. Path to a Python script that takes `[RUN_NAME]-best` as an argument and outputs a JSON file to `outputs/evaluations/` containing the metrics. |
 | `evaluation_inference_config` | `str` | No | `null` | Path to an inference config. If provided, Sequifier runs inference on the newly trained model *before* calling your evaluation script. |
 
 ### 3. System & Export (Fixed Values)
@@ -1160,11 +1162,11 @@ If you define multiple metrics in `evaluation_metrics` (e.g., you want to maximi
 2. **Generated Configs:** Located in `model_config_write_path` (e.g., `configs/hp_search/`).
       * Valid, standalone `train.yaml` files generated for each trial.
 3. **Logs:** Located in `logs/`.
-      * Includes rank-scoped operational logs and rank-0 structured training, validation, and class-share CSV files. Optuna tails `sequifier-[RUN]-rank0-validation.csv` for intermediate validation loss.
+      * Includes operational logs and rank-0 structured training, validation, and class-share CSV files under `logs/[RUN]/`. Optuna tails `[RUN]-validation.csv` for intermediate validation loss.
 4.  **Models & Checkpoints:**
-      * Saved in `models/` and `checkpoints/` with filenames including the run number (e.g., `models/sequifier-my-search-run-5-best-10.onnx`).
+      * Saved in `models/` and `checkpoints/` with filenames including the run number (for example, `models/my-search-run-5-best.onnx` and `checkpoints/runs/my-search-run-5/my-search-run-5-latest.pt`).
 5. **Evaluations (Optional):**
-      * Saved in `outputs/evaluations/[RUN_NAME]-best-[EPOCH].json` if an evaluation script was utilized.
+      * Saved in `outputs/evaluations/[RUN_NAME]-best.json` if an evaluation script was utilized.
 
 
 # Distributed and Multi-Node Training in Sequifier

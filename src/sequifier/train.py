@@ -1373,7 +1373,7 @@ class TransformerModel(SequifierModel):
         self.export_generative_model = hparams.export_generative_model
         self.export_onnx = hparams.export_onnx
         self.export_pt = hparams.export_pt
-        self.export_with_dropout = False
+        self.export_with_dropout = hparams.export_with_dropout
         self.early_stopping_epochs = hparams.training_spec.early_stopping_epochs
         self.hparams = hparams
         self.device = hparams.device
@@ -3904,16 +3904,23 @@ class TransformerModel(SequifierModel):
                 # Ignore the internal PyTree deprecation bubbling up from Python 3.14/copyreg
                 warnings.filterwarnings("ignore", category=FutureWarning)
 
+                training_mode = (
+                    torch._C._onnx.TrainingMode.TRAINING
+                    if self.export_with_dropout
+                    else torch._C._onnx.TrainingMode.EVAL
+                )
+                constant_folding = not self.export_with_dropout
+
                 torch.onnx.export(
                     export_wrapper,
                     x,
                     export_path,
                     export_params=True,
                     opset_version=18,
-                    do_constant_folding=True,
+                    do_constant_folding=constant_folding,
                     input_names=input_names,
                     output_names=output_names,
-                    training=torch._C._onnx.TrainingMode.EVAL,
+                    training=training_mode,
                 )
 
             onnx_model = onnx.load(export_path)
@@ -4360,6 +4367,8 @@ def load_inference_model(
                     module.train()
 
         model.to(device)
+        if not device.startswith("mps"):
+            model.compile()
 
     return model
 

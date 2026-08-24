@@ -114,6 +114,7 @@ export_embedding_model: PLEASE FILL # true or false
 embedding_layer_names: [backbone.final_norm]
 export_onnx: true
 export_pt: false
+export_with_dropout: false
 """
 
 infer_config_string = """project_root: .
