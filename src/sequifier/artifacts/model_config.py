@@ -169,7 +169,9 @@ def resolved_config_from_model_config(
         evaluation_monitor=None,
         export_generative_model=True,
         export_embedding_model=False,
-        embedding_layer_names=["backbone.final_norm"],
+        embedding_layer_names=values.get(
+            "embedding_layer_names", ["backbone.final_norm"]
+        ),
         export_onnx=False,
         export_pt=False,
     )

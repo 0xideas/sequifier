@@ -2204,6 +2204,29 @@ class TransformerModel(SequifierModel):
     ) -> dict[str, Any]:
         """Return resume-critical settings stored with each new checkpoint."""
         if self._composable:
+            model_settings = model_execution_config(self.hparams)
+            model_settings.pop("embedding_layer_names", None)
+            training_spec = self.hparams.global_training_spec
+            model_settings["resume_training"] = {
+                "seed": self.hparams.seed,
+                "read_format": training_spec.read_format,
+                "batch_size": training_spec.batch_size,
+                "accumulation_steps": training_spec.accumulation_steps,
+                "learning_rate": training_spec.learning_rate,
+                "optimizer": dict(training_spec.optimizer),
+                "scheduler": dict(training_spec.scheduler),
+                "scheduler_step_on": training_spec.scheduler_step_on,
+                "gradient_clip": training_spec.gradient_clip,
+                "distributed": training_spec.distributed,
+                "data_parallelism": training_spec.data_parallelism,
+                "world_size": (
+                    dist.get_world_size(group=self._data_parallel_process_group())
+                    if self._distributed_is_initialized()
+                    else training_spec.world_size
+                ),
+                "num_workers": training_spec.num_workers,
+                "load_full_data_to_ram": training_spec.load_full_data_to_ram,
+            }
             datasets = {}
             for name, dataset in self.hparams.dataset_training_spec.items():
                 first_part = next(iter(dataset.parts.values()))
@@ -2241,7 +2264,7 @@ class TransformerModel(SequifierModel):
                     "freezing": dataset.freezing.model_dump(mode="json"),
                 }
             settings = {
-                "model": model_execution_config(self.hparams),
+                "model": model_settings,
                 "datasets": datasets,
                 "training_plan": [
                     phase.model_dump(mode="json")

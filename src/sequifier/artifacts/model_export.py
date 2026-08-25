@@ -60,6 +60,7 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
             mode="python",
             exclude={"repository", "initialization"},
         ),
+        "embedding_layer_names": list(training_config.embedding_layer_names),
         "layer_type_dtypes": spec.layer_type_dtypes,
         "interfaces": interfaces,
     }

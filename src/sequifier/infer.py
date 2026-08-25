@@ -486,7 +486,46 @@ def infer_worker(
                 training_config = TrainModel.model_validate(
                     model_state["training_config"]
                 )
-                target_decoder_ids = training_config.target_decoder_ids
+                selected_dataset = route_args.get("dataset")
+                selected_interface = route_args.get("model_interface")
+                datasets = training_config.dataset_training_spec
+                if selected_dataset is not None:
+                    if selected_dataset not in datasets:
+                        raise ValueError(
+                            f"Unknown inference dataset {selected_dataset!r}"
+                        )
+                    dataset_config = datasets[selected_dataset]
+                    if (
+                        selected_interface is not None
+                        and dataset_config.model_interface != selected_interface
+                    ):
+                        raise ValueError(
+                            f"Dataset {selected_dataset!r} maps to interface "
+                            f"{dataset_config.model_interface!r}, not "
+                            f"{selected_interface!r}"
+                        )
+                elif selected_interface is not None:
+                    dataset_config = next(
+                        (
+                            dataset
+                            for dataset in datasets.values()
+                            if dataset.model_interface == selected_interface
+                        ),
+                        None,
+                    )
+                    if dataset_config is None:
+                        raise ValueError(
+                            "No execution route for model interface "
+                            f"{selected_interface!r}"
+                        )
+                elif len(datasets) == 1:
+                    dataset_config = next(iter(datasets.values()))
+                else:
+                    raise ValueError(
+                        "A dataset or model_interface selection is required for "
+                        "multi-dataset checkpoint inference"
+                    )
+                target_decoder_ids = dict(dataset_config.interface.target_decoder_ids)
             else:
                 raise ValueError(
                     "PyTorch artifact has neither model_config nor a resolved "

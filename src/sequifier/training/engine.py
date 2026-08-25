@@ -503,6 +503,7 @@ class TrainingEngine:
                         else 0
                     )
                     for runtime_batch in scheduler.iter_epoch(phase_epoch):
+                        model._check_and_terminate()
                         backward_started = False
                         batch_committed = False
                         batch_started = time.perf_counter()
