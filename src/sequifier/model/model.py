@@ -1,6 +1,7 @@
 from torch import Tensor, nn
 
 from sequifier.model.dtypes import cast_floating_to_module_dtype
+from sequifier.typechecking import beartype
 
 
 class SequifierModel(nn.Module):
@@ -11,6 +12,7 @@ class SequifierModel(nn.Module):
     backbone: nn.Module
     decoder: nn.Module
 
+    @beartype
     def __init__(
         self,
         ingestion: nn.Module | None = None,
@@ -36,6 +38,7 @@ class SequifierModel(nn.Module):
             raise ValueError("decoding_support must be positive.")
         self.decoding_support = decoding_support
 
+    @beartype
     def encode(
         self,
         features: dict[str, Tensor],
@@ -48,6 +51,7 @@ class SequifierModel(nn.Module):
         )
         return self.encode_ingested(hidden, metadata, attention_mask)
 
+    @beartype
     def encode_ingested(
         self,
         hidden: Tensor,
@@ -70,6 +74,7 @@ class SequifierModel(nn.Module):
         hidden = self.backbone(hidden, attention_mask)
         return hidden.masked_fill(~valid_mask[:, :, None], 0.0)
 
+    @beartype
     def decoder_input(self, hidden: Tensor) -> Tensor:
         """Return batch-first support windows for the target decoder."""
         if self.decoding_support == 1:
@@ -87,6 +92,7 @@ class SequifierModel(nn.Module):
             self.decoding_support * hidden.shape[2],
         )
 
+    @beartype
     def predict(
         self,
         features: dict[str, Tensor],
@@ -96,5 +102,6 @@ class SequifierModel(nn.Module):
         hidden = self.encode(features, metadata, attention_mask)
         return self.decoder(self.decoder_input(hidden))
 
+    @beartype
     def forward(self, *args, **kwargs):
         return self.predict(*args, **kwargs)

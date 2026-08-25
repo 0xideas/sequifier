@@ -6,14 +6,17 @@ import torch.nn.functional as F
 
 from sequifier.model.dtypes import cast_floating_to_module_dtype
 from sequifier.model.tracing import TraceContext
+from sequifier.typechecking import beartype, conditional_beartype
 
 
 class RMSNorm(nn.Module):
+    @beartype
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
+    @conditional_beartype
     def forward(self, x):
         x_fp32 = x.to(torch.float32)
         var = torch.mean(x_fp32.pow(2), dim=-1, keepdim=True)
@@ -23,6 +26,7 @@ class RMSNorm(nn.Module):
 
 
 class RotaryEmbedding(nn.Module):
+    @beartype
     def __init__(self, dim, max_seq_len=2048, theta=10000.0):
         super().__init__()
         inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
@@ -30,6 +34,7 @@ class RotaryEmbedding(nn.Module):
         self.max_seq_len = max_seq_len
         self._update_cos_sin_cache(max_seq_len)
 
+    @conditional_beartype
     def _update_cos_sin_cache(self, seq_len):
         t = torch.arange(
             seq_len, device=self.inv_freq.device, dtype=self.inv_freq.dtype
@@ -44,17 +49,20 @@ class RotaryEmbedding(nn.Module):
             "sin_cached", emb.sin()[None, None, :, :], persistent=False
         )
 
+    @conditional_beartype
     def forward(self, x, seq_len):
         return self.cos_cached[:, :, :seq_len, ...], self.sin_cached[
             :, :, :seq_len, ...
         ]
 
 
+@conditional_beartype
 def rotate_half(x):
     x1, x2 = x.chunk(2, dim=-1)
     return torch.cat((-x2, x1), dim=-1)
 
 
+@conditional_beartype
 def apply_rotary_pos_emb(q, k, cos, sin):
     # Ensure cos/sin match q/k dtype (fix for Mixed Precision/ONNX)
     cos = cos.to(dtype=q.dtype)
@@ -65,6 +73,7 @@ def apply_rotary_pos_emb(q, k, cos, sin):
 
 
 class FeedForward(nn.Module):
+    @beartype
     def __init__(self, dim_model, dim_feedforward, activation_fn, dropout):
         super().__init__()
         self.activation_fn = activation_fn
@@ -83,12 +92,14 @@ class FeedForward(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
+    @conditional_beartype
     def get_first_layer_dtype(self):
         if self.activation_fn == "swiglu":
             return self.w1.weight.dtype
         else:
             return self.linear1.weight.dtype
 
+    @conditional_beartype
     def forward(self, x, *, trace: TraceContext | None = None, site_prefix: str = ""):
         if self.activation_fn == "swiglu":
             w1_out = self.w1(cast_floating_to_module_dtype(x, self.w1))
@@ -132,6 +143,7 @@ class FeedForward(nn.Module):
 
 
 class SelfAttention(nn.Module):
+    @beartype
     def __init__(
         self,
         dim_model,
@@ -170,6 +182,7 @@ class SelfAttention(nn.Module):
             if self.head_dim % 2 != 0:
                 raise ValueError(f"head_dim ({self.head_dim}) must be even for RoPE")
 
+    @conditional_beartype
     def forward(
         self,
         x,
@@ -272,6 +285,7 @@ class SelfAttention(nn.Module):
 
 
 class SequifierEncoderLayer(nn.Module):
+    @beartype
     def __init__(self, architecture):
         super().__init__()
         dim_model = architecture.dim_model
@@ -307,6 +321,7 @@ class SequifierEncoderLayer(nn.Module):
         self.dropout = nn.Dropout(architecture.dropout)
 
     @staticmethod
+    @conditional_beartype
     def _residual_add(residual, update):
         if (
             residual.is_floating_point()
@@ -316,6 +331,7 @@ class SequifierEncoderLayer(nn.Module):
             residual = residual.to(dtype=update.dtype)
         return residual + update
 
+    @conditional_beartype
     def forward(
         self,
         src,

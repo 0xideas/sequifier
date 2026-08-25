@@ -6,6 +6,12 @@ from dataclasses import dataclass, field
 
 @dataclass
 class TrainingState:
+    phase_index: int = 0
+    phase_epoch: int = 0
+    phase_epoch_complete: bool = False
+    source_index: int = 0
+    source_scheduler_state: dict = field(default_factory=dict)
+    iterator_positions: dict[str, int] = field(default_factory=dict)
     epoch: int = 0
     batch: int = 0
     global_batch_step: int = 0

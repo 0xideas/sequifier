@@ -8,7 +8,6 @@ from typing import Annotated, Any, Generic, Literal, Optional, TypeAlias, TypeVa
 
 import torch
 import torch_optimizer
-from beartype import beartype
 from loguru import logger
 from pydantic import (
     BaseModel,
@@ -28,7 +27,6 @@ from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
-from sequifier.config.freezing_config import LayerFreezingConfigFields
 from sequifier.config.initialization_config import ModelInitializationConfig
 from sequifier.config.metadata import (
     DatasetMetadata,
@@ -63,6 +61,7 @@ from sequifier.special_tokens import (
     resolve_categorical_decoder_ids,
     validate_special_token_ids,
 )
+from sequifier.typechecking import beartype
 
 AnyType = str | int | float
 NextOccurrenceTargetValue: TypeAlias = StrictInt | StrictStr
@@ -77,6 +76,7 @@ class CartesianLayoutModel(BaseModel):
     columns: dict[str, dict[str, AnyType]] = Field(..., min_length=1)
 
     @model_validator(mode="after")
+    @beartype
     def validate_cartesian(self):
         axis_names = list(self.axes)
 
@@ -123,17 +123,20 @@ class FeatureLayoutRegistryModel(RootModel[dict[str, CartesianLayoutModel]]):
 
     root: dict[str, CartesianLayoutModel] = Field(..., min_length=1)
 
+    @beartype
     def items(self):
         return self.root.items()
 
+    @beartype
     def __contains__(self, key: str) -> bool:
         return key in self.root
 
+    @beartype
     def __getitem__(self, key: str) -> CartesianLayoutModel:
         return self.root[key]
 
 
-class IngestionComponentBase(LayerFreezingConfigFields):
+class IngestionComponentBase(BaseModel):
     """Settings shared by every feature-ingestion component."""
 
     model_config = ConfigDict(extra="forbid")
@@ -148,6 +151,7 @@ class IngestionComponentBase(LayerFreezingConfigFields):
 
     @field_validator("auxiliary_input_columns")
     @classmethod
+    @beartype
     def validate_auxiliary_input_columns(cls, value):
         _validate_column_list_unique(
             value, "model_spec.ingestion.auxiliary_input_columns"
@@ -167,6 +171,7 @@ class DirectEmbedIngestionConfig(IngestionComponentBase):
 
     @field_validator("columns")
     @classmethod
+    @beartype
     def validate_columns(cls, v):
         if v is not None:
             _validate_column_list_unique(v, "direct_embed ingestion columns")
@@ -174,6 +179,7 @@ class DirectEmbedIngestionConfig(IngestionComponentBase):
 
     @field_validator("feature_embedding_dims")
     @classmethod
+    @beartype
     def validate_feature_embedding_dims(cls, v):
         _validate_feature_embedding_dims(v, "direct_embed feature_embedding_dims")
         return v
@@ -190,6 +196,7 @@ class PassThroughIngestionConfig(IngestionComponentBase):
 
     @field_validator("columns")
     @classmethod
+    @beartype
     def validate_columns(cls, v):
         if v is not None:
             _validate_column_list_unique(v, "pass_through ingestion columns")
@@ -207,6 +214,7 @@ class FeaturePoolIngestionConfig(IngestionComponentBase):
 
     @field_validator("columns")
     @classmethod
+    @beartype
     def validate_columns(cls, v):
         _validate_column_list_unique(v, "feature_pool ingestion columns")
         return v
@@ -222,6 +230,7 @@ class GroupedIngestionConfig(IngestionComponentBase):
     groups: dict[str, list[str]] = Field(..., min_length=1)
 
     @model_validator(mode="after")
+    @beartype
     def validate_groups(self):
         grouped_columns = []
         for group_name, columns in self.groups.items():
@@ -252,6 +261,7 @@ class SiameseIngestionConfig(IngestionComponentBase):
 
     @field_validator("columns")
     @classmethod
+    @beartype
     def validate_columns(cls, v):
         _validate_column_list_unique(v, "siamese ingestion columns")
         return v
@@ -280,6 +290,7 @@ class TemporalConvIngestionConfig(IngestionComponentBase):
 
     @model_validator(mode="before")
     @classmethod
+    @beartype
     def default_num_layers_from_dilation_schedule(cls, values):
         if not isinstance(values, dict):
             return values
@@ -290,6 +301,7 @@ class TemporalConvIngestionConfig(IngestionComponentBase):
         return values
 
     @model_validator(mode="after")
+    @beartype
     def validate_temporal_conv(self):
         _validate_column_list_unique(self.columns, "temporal_conv ingestion columns")
         _validate_feature_embedding_dims(
@@ -321,6 +333,7 @@ class TemporalConvIngestionConfig(IngestionComponentBase):
         return self
 
     @property
+    @beartype
     def dilation_schedule(self) -> list[int]:
         if isinstance(self.dilation, list):
             return self.dilation
@@ -338,6 +351,7 @@ class AxisProjectionBlockModel(BaseModel):
     unshared_axes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
+    @beartype
     def validate_axes_unique(self):
         _validate_axis_list_unique(self.axes, "axes")
         _validate_axis_list_unique(self.unshared_axes, "unshared_axes")
@@ -356,6 +370,7 @@ class AxisConvBlockModel(BaseModel):
     unshared_axes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
+    @beartype
     def validate_axes_unique(self):
         _validate_axis_list_unique(self.axes, "axes")
         _validate_axis_list_unique(self.unshared_axes, "unshared_axes")
@@ -377,6 +392,7 @@ class AxisAttentionBlockModel(BaseModel):
     unshared_axes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
+    @beartype
     def validate_axes_unique(self):
         _validate_axis_list_unique(self.axes, "axes")
         _validate_axis_list_unique(self.unshared_axes, "unshared_axes")
@@ -395,6 +411,7 @@ class AxisPoolBlockModel(BaseModel):
     mode: Literal["mean", "sum", "max"] = "mean"
 
     @model_validator(mode="after")
+    @beartype
     def validate_axes_unique(self):
         _validate_axis_list_unique(self.axes, "axes")
         return self
@@ -411,16 +428,19 @@ StructuredProcessingBlock = Annotated[
 ]
 
 
+@beartype
 def _validate_axis_list_unique(axes: list[str], field_name: str) -> None:
     if len(axes) != len(set(axes)):
         raise ValueError(f"{field_name} cannot contain duplicate axes")
 
 
+@beartype
 def _validate_column_list_unique(columns: list[str], field_name: str) -> None:
     if len(columns) != len(set(columns)):
         raise ValueError(f"{field_name} cannot contain duplicate columns")
 
 
+@beartype
 def _validate_module_dict_key(key: str, usage: str) -> None:
     if key == "":
         raise ValueError(f"{usage} cannot be empty")
@@ -428,6 +448,7 @@ def _validate_module_dict_key(key: str, usage: str) -> None:
         raise ValueError(f"{usage} cannot contain '.'")
 
 
+@beartype
 def _validate_feature_embedding_dims(
     feature_embedding_dims: Optional[dict[str, int]], field_name: str
 ) -> None:
@@ -451,6 +472,7 @@ class AxisEmbeddingModel(BaseModel):
 
     @field_validator("type", mode="before")
     @classmethod
+    @beartype
     def normalize_type(cls, v):
         if v is None:
             return "none"
@@ -459,6 +481,7 @@ class AxisEmbeddingModel(BaseModel):
         return v
 
     @model_validator(mode="after")
+    @beartype
     def validate_axes(self):
         _validate_axis_list_unique(self.axes, "axis_embeddings.axes")
         if self.type == "none" and self.axes:
@@ -484,6 +507,7 @@ class StructuredIngestionConfig(IngestionComponentBase):
 
     @field_validator("axis_embeddings", mode="before")
     @classmethod
+    @beartype
     def normalize_axis_embeddings(cls, v):
         if v is None:
             return {"type": "none", "axes": []}
@@ -526,6 +550,7 @@ class CompositeIngestionConfig(IngestionComponentBase):
 
     @field_validator("branches")
     @classmethod
+    @beartype
     def validate_branch_names(cls, branches):
         for branch_name in branches:
             _validate_module_dict_key(
@@ -559,6 +584,7 @@ class LinearDecodingConfig(BaseModel):
 
     @field_validator("target_columns")
     @classmethod
+    @beartype
     def validate_target_columns(cls, v):
         if v is not None:
             _validate_column_list_unique(v, "linear decoding target_columns")
@@ -583,6 +609,7 @@ class MLPDecodingConfig(BaseModel):
 
     @field_validator("target_columns")
     @classmethod
+    @beartype
     def validate_target_columns(cls, v):
         if v is not None:
             _validate_column_list_unique(v, "mlp decoding target_columns")
@@ -590,6 +617,7 @@ class MLPDecodingConfig(BaseModel):
 
     @field_validator("hidden_dims")
     @classmethod
+    @beartype
     def validate_hidden_dims(cls, v):
         invalid_dims = [dim for dim in v if dim <= 0]
         if invalid_dims:
@@ -611,7 +639,7 @@ BranchDecodingConfig = Annotated[
 DecodingSpecConfig = BranchDecodingConfig | dict[str, BranchDecodingConfig]
 
 
-class DecoderComponentBase(LayerFreezingConfigFields):
+class DecoderComponentBase(BaseModel):
     """Settings shared by every target-decoder component."""
 
     model_config = ConfigDict(extra="forbid")
@@ -637,6 +665,7 @@ class CompositeDecoderComponentConfig(DecoderComponentBase):
 
     @field_validator("branches")
     @classmethod
+    @beartype
     def validate_branch_names(cls, branches):
         for branch_name in branches:
             _validate_module_dict_key(
@@ -664,6 +693,7 @@ class BackboneAttentionConfig(BaseModel):
     output_projection: bool = True
 
     @model_validator(mode="after")
+    @beartype
     def validate_heads(self):
         if self.n_kv_heads is None:
             if self.type == "gqa":
@@ -724,6 +754,7 @@ class BackboneArchitectureConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
+    @beartype
     def default_global_position_scope(cls, values):
         if not isinstance(values, dict):
             return values
@@ -742,6 +773,7 @@ class BackboneArchitectureConfig(BaseModel):
         return values
 
     @model_validator(mode="after")
+    @beartype
     def validate_architecture(self):
         n_heads = self.attention.n_heads
         if self.dim_model % n_heads != 0:
@@ -797,7 +829,7 @@ class BackboneRepositoryConfig(BaseModel):
     conflict_policy: Literal["compare_and_swap"] = "compare_and_swap"
 
 
-class BackboneComponentConfig(LayerFreezingConfigFields):
+class BackboneComponentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     architecture: BackboneArchitectureConfig
@@ -807,6 +839,7 @@ class BackboneComponentConfig(LayerFreezingConfigFields):
     )
 
 
+@beartype
 def _validate_class_share_log_columns(config_values: dict[str, Any]) -> None:
     training_spec = config_values.get("training_spec", {})
 
@@ -836,18 +869,21 @@ class LoadedTrainConfig:
     metadata: DatasetMetadata
 
     @property
+    @beartype
     def source_values(self) -> dict[str, Any]:
         """Compatibility view used by the legacy partial-search compiler."""
 
         return self.config.model_dump(mode="python", exclude_unset=True)
 
     @property
+    @beartype
     def model(self) -> "ResolvedSequifierConfig":
         """Compatibility alias for callers that previously consumed ``model``."""
 
         return self.resolved
 
     @property
+    @beartype
     def metadata_values(self) -> dict[str, Any]:
         """Compatibility view of validated preprocessing metadata."""
 
@@ -909,6 +945,7 @@ def load_train_config(
     ).resolved
 
 
+@beartype
 def _effective_metadata_config_path(config: "SequifierConfig") -> Optional[str]:
     if config.metadata_config_path:
         return config.metadata_config_path
@@ -919,6 +956,7 @@ def _effective_metadata_config_path(config: "SequifierConfig") -> Optional[str]:
     return None
 
 
+@beartype
 def resolve_sequifier_config(
     config: "SequifierConfig", metadata: DatasetMetadata
 ) -> "ResolvedSequifierConfig":
@@ -1009,22 +1047,28 @@ class DotDict(dict):
     __setattr__ = dict.__setitem__  # type: ignore
     __delattr__ = dict.__delitem__  # type: ignore
 
+    @beartype
     def __deepcopy__(self, memo=None):
         return DotDict(copy.deepcopy(dict(self), memo=memo))
 
+    @beartype
     def __getstate__(self):
         return dict(self)
 
+    @beartype
     def __setstate__(self, state):
         self.update(state)
 
 
 class ReplacementDistribution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     masked: float = Field(..., ge=0.0, le=1.0)
     random: float = Field(..., ge=0.0, le=1.0)
     identical: float = Field(..., ge=0.0, le=1.0)
 
     @model_validator(mode="after")
+    @beartype
     def validate_sum(self):
         total = self.masked + self.random + self.identical
         if not math.isclose(total, 1.0, abs_tol=1e-5):
@@ -1035,12 +1079,16 @@ class ReplacementDistribution(BaseModel):
 
 
 class BERTSpecModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     masking_probability: float = Field(..., gt=0.0, le=1.0)
     replacement_distribution: ReplacementDistribution
     span_masking: ProbabilityDistribution
 
 
 class NextOccurrenceConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     column_name: str
     target_values: list[NextOccurrenceTargetValue] = Field(..., min_length=1)
 
@@ -1054,11 +1102,12 @@ class ResumeConfig(BaseModel):
     checkpoint_path: Optional[str] = None
 
     @model_validator(mode="after")
+    @beartype
     def validate_checkpoint_path(self):
         if self.policy == "required" and not self.checkpoint_path:
             raise ValueError(
-                "training_spec.resume.checkpoint_path is required when policy is "
-                "'required'"
+                "global_training_spec.resume.checkpoint_path is required when "
+                "policy is 'required'"
             )
         return self
 
@@ -1111,6 +1160,7 @@ class TrainingSpecModel(BaseModel):
     torch_compile: str = "outer"
     float32_matmul_precision: str = "highest"
 
+    @beartype
     def __init__(self, **kwargs):
         values = dict(kwargs)
         optimizer = values.pop("optimizer", {"name": "Adam"})
@@ -1130,11 +1180,13 @@ class TrainingSpecModel(BaseModel):
         )
 
     @field_serializer("optimizer", "scheduler")
+    @beartype
     def serialize_dotdict(self, value: DotDict) -> dict[str, Any]:
         return dict(value)
 
     @field_validator("layer_type_dtypes")
     @classmethod
+    @beartype
     def validate_layer_type_dtypes(cls, v):
         expected_keys = ["embedding", "linear", "conv", "norm", "decoder"]
         allowed_types = [
@@ -1167,6 +1219,7 @@ class TrainingSpecModel(BaseModel):
 
     @field_validator("float32_matmul_precision")
     @classmethod
+    @beartype
     def validate_float32_matmul_precision(cls, v):
         allowed_precisions = ["highest", "high", "medium"]
         if v not in allowed_precisions:
@@ -1177,6 +1230,7 @@ class TrainingSpecModel(BaseModel):
 
     @field_validator("criterion")
     @classmethod
+    @beartype
     def validate_criterion(cls, v):
         for vv in v.values():
             if not hasattr(torch.nn, vv):
@@ -1185,6 +1239,7 @@ class TrainingSpecModel(BaseModel):
 
     @field_validator("optimizer")
     @classmethod
+    @beartype
     def validate_optimizer_config(cls, v):
         if "name" not in v:
             raise ValueError("optimizer dict must specify 'name' field")
@@ -1198,6 +1253,7 @@ class TrainingSpecModel(BaseModel):
 
     @field_validator("scheduler")
     @classmethod
+    @beartype
     def validate_scheduler_config(cls, v, info_dict):
         if "name" not in v:
             raise ValueError("scheduler dict must specify 'name' field")
@@ -1217,6 +1273,7 @@ class TrainingSpecModel(BaseModel):
 
     @field_validator("scheduler_step_on")
     @classmethod
+    @beartype
     def validate_scheduler_step_on(cls, v):
         if v not in ["epoch", "batch"]:
             raise ValueError(
@@ -1226,6 +1283,7 @@ class TrainingSpecModel(BaseModel):
 
     @field_validator("data_parallelism")
     @classmethod
+    @beartype
     def validate_data_parallelism(cls, v):
         if v is not None and v not in ["DDP", "FSDP"]:
             raise ValueError(
@@ -1294,6 +1352,7 @@ class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
 
     @field_validator("training_objective")
     @classmethod
+    @beartype
     def validate_authored_training_objective(cls, value: str) -> str:
         if value not in ALLOWED_OBJECTIVE_NAMES:
             raise ValueError(
@@ -1303,6 +1362,7 @@ class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
 
     @field_validator("model_name")
     @classmethod
+    @beartype
     def validate_authored_model_name(cls, value: str) -> str:
         if "embedding" in value:
             raise ValueError("model_name cannot contain 'embedding'")
@@ -1310,6 +1370,7 @@ class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
 
     @field_validator("read_format")
     @classmethod
+    @beartype
     def validate_authored_read_format(cls, value: str) -> str:
         if value not in {"csv", "parquet", "pt"}:
             raise ValueError("Currently only 'csv', 'parquet' and 'pt' are supported")
@@ -1317,6 +1378,7 @@ class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
 
     @field_validator("target_column_types")
     @classmethod
+    @beartype
     def validate_authored_target_column_types(cls, value, info):
         if value is None:
             return value
@@ -1332,6 +1394,7 @@ class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
         return value
 
     @model_validator(mode="after")
+    @beartype
     def validate_authored_relationships(self):
         validate_embedding_layer_names(
             self.embedding_layer_names,
@@ -1442,6 +1505,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
 
     @model_validator(mode="before")
     @classmethod
+    @beartype
     def derive_optional_config_values(cls, values):
         if not isinstance(values, dict):
             return values
@@ -1475,6 +1539,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
         return values
 
     @model_validator(mode="after")
+    @beartype
     def validate_required_paths(self):
         if self.metadata_config_path is None:
             raise ValueError(
@@ -1489,12 +1554,14 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
 
     @field_validator("training_objective")
     @classmethod
+    @beartype
     def validate_training_objective(cls, v):
         if v not in ALLOWED_OBJECTIVE_NAMES:
             raise ValueError(f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {v}")
         return v
 
     @model_validator(mode="after")
+    @beartype
     def validate_objective_specific_config(self):
         objective_class = get_objective_class(self.training_objective)
         is_bert_objective = issubclass(objective_class, BERTObjective)
@@ -1528,11 +1595,13 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
 
     @field_validator("special_token_ids")
     @classmethod
+    @beartype
     def validate_special_token_ids_match_runtime(cls, v):
         return validate_special_token_ids(v, source="TrainModel")
 
     @field_validator("categorical_decoder_special_tokens")
     @classmethod
+    @beartype
     def validate_decoder_special_token_lists(cls, v):
         if any(len(tokens) != len(set(tokens)) for tokens in v.values()):
             raise ValueError(
@@ -1544,6 +1613,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
         }
 
     @model_validator(mode="after")
+    @beartype
     def validate_decoder_special_token_columns(self):
         target_column_types = self.target_column_types
         if target_column_types is None:
@@ -1568,6 +1638,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
         return self
 
     @model_validator(mode="after")
+    @beartype
     def validate_bert_prediction_length_matches_context_length(self):
         if self.window_view.objective != self.training_objective:
             raise ValueError(
@@ -1583,6 +1654,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
         return self
 
     @model_validator(mode="after")
+    @beartype
     def validate_next_occurrence_config_matches_targets(self):
         target_column_types = self.target_column_types
         if target_column_types is None:
@@ -1626,6 +1698,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
 
     @field_validator("model_name")
     @classmethod
+    @beartype
     def validate_model_name(cls, v):
         if not "embedding" not in v:
             raise ValueError("model_name cannot contain 'embedding'")
@@ -1633,6 +1706,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
 
     @field_validator("target_column_types")
     @classmethod
+    @beartype
     def validate_target_column_types(cls, v, info):
         if not all(vv in ["categorical", "real"] for vv in v.values()):
             raise ValueError(
@@ -1646,6 +1720,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
 
     @field_validator("read_format")
     @classmethod
+    @beartype
     def validate_read_format(cls, v):
         if v not in [
             "csv",
@@ -1657,6 +1732,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
 
     @field_validator("training_spec")
     @classmethod
+    @beartype
     def validate_training_spec(cls, v, info):
         if not set(info.data.get("target_columns")) == set(v.criterion.keys()):
             raise ValueError(
@@ -1752,6 +1828,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
 
     @field_validator("column_data_types")
     @classmethod
+    @beartype
     def validate_column_types(cls, v, info):
         target_columns = info.data.get("target_columns", [])
         column_ordered = list(v.keys())
@@ -1761,6 +1838,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
         return v
 
     @model_validator(mode="after")
+    @beartype
     def validate_feature_layout_columns(self):
         if self.feature_layout is None:
             return self
@@ -1777,6 +1855,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
         return self
 
     @model_validator(mode="after")
+    @beartype
     def validate_auxiliary_input_columns(self):
         auxiliary_columns = set(self.model_spec.ingestion.auxiliary_input_columns)
         missing_columns = auxiliary_columns - set(self.input_columns)
@@ -1789,6 +1868,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
         return self
 
     @model_validator(mode="after")
+    @beartype
     def validate_decoder(self):
         decoder_support = self.model_spec.decoder.support
         context_length = self.window_view.context_length
@@ -1815,6 +1895,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
         return self
 
     @model_validator(mode="after")
+    @beartype
     def validate_ingestion(self):
         # Keep public configuration models independent from runtime modules while
         # using the same resolver for cross-field validation and construction.
@@ -1825,7 +1906,212 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
         return self
 
 
-# Compatibility name for integrations that construct or annotate the historical
-# resolved training model directly.  New authored config code should use
-# ``SequifierConfig`` and resolve it explicitly.
+# Private historical implementation names are captured here before the public
+# facade replaces the colliding root-schema names below.
 TrainModel = ResolvedSequifierConfig
+
+# These aliases exist only so the private historical definitions below can be
+# constructed while this module initializes. They are removed from module
+# lookup after the canonical public export set is declared.
+LegacyTrainingSpecModel = TrainingSpecModel
+LegacyModelSpecModel = ModelSpecModel
+LegacySequifierConfig = SequifierConfig
+LegacyResolvedSequifierConfig = ResolvedSequifierConfig
+LegacyTrainModel = TrainModel
+LegacyLoadedTrainConfig = LoadedTrainConfig
+
+
+@beartype
+def legacy_resolve_sequifier_config(
+    config: LegacySequifierConfig, metadata: DatasetMetadata
+) -> LegacyResolvedSequifierConfig:
+    """Historical resolver retained only as unreachable private implementation."""
+
+    storage_layout = metadata.storage_layout
+    if storage_layout.version != 2:
+        raise ValueError(
+            "Training requires metadata stored_window_layout_version=2, "
+            f"got {storage_layout.version}."
+        )
+    column_data_types = config.column_data_types or metadata.column_data_types
+    input_columns = (
+        list(column_data_types)
+        if config.input_columns is None
+        else config.input_columns
+    )
+    categorical_columns = [
+        column
+        for column, type_name in column_data_types.items()
+        if "int" in type_name.lower() and column in input_columns
+    ]
+    real_columns = [
+        column
+        for column, type_name in column_data_types.items()
+        if "float" in type_name.lower() and column in input_columns
+    ]
+    if not categorical_columns and not real_columns:
+        raise ValueError("No columns found in resolved HPS training config")
+    target_column_types = config.target_column_types or derive_target_column_types(
+        config.target_columns, column_data_types
+    )
+    target_offset = target_offset_for_objective(
+        config.training_objective, config.target_offset
+    )
+    window_view = ModelWindowView(
+        context_length=config.context_length,
+        objective=config.training_objective,
+        target_offset=target_offset,
+    )
+    resolve_window_view(storage_layout, window_view)
+    if not metadata.split_paths and (
+        config.data_path is None or config.validation_data_path is None
+    ):
+        raise ValueError(
+            "Resolved HPS config needs data_path and validation_data_path when "
+            "metadata does not provide split_paths."
+        )
+    data_path = config.data_path or metadata.split_paths[0]
+    validation_data_path = (
+        config.validation_data_path
+        or metadata.split_paths[min(1, len(metadata.split_paths) - 1)]
+    )
+    metadata_path = config.metadata_config_path
+    if metadata_path is None and config.preprocessing_data_path is not None:
+        metadata_path = metadata_config_path_from_preprocessing_data_path(
+            config.preprocessing_data_path
+        )
+    resolved_values = config.model_dump(mode="python")
+    resolved_values.update(
+        {
+            "metadata_config_path": metadata_path,
+            "data_path": normalize_path(data_path, config.project_root),
+            "validation_data_path": normalize_path(
+                validation_data_path, config.project_root
+            ),
+            "input_columns": input_columns,
+            "column_data_types": column_data_types,
+            "categorical_columns": categorical_columns,
+            "real_columns": real_columns,
+            "target_column_types": target_column_types,
+            "id_maps": metadata.id_maps,
+            "special_token_ids": metadata.special_token_ids,
+            "storage_layout": storage_layout,
+            "window_view": window_view,
+            "n_classes": metadata.n_classes,
+        }
+    )
+    _validate_class_share_log_columns(resolved_values)
+    return LegacyResolvedSequifierConfig.model_validate(resolved_values)
+
+
+@beartype
+def legacy_load_train_config_with_source(
+    config_path: str, args_config: dict[str, Any], skip_metadata: bool
+) -> LegacyLoadedTrainConfig:
+    """Load the historical schema only for an explicitly isolated HPS run."""
+
+    config_values = load_composed_yaml_config(config_path)
+    cli_values = {
+        key: value for key, value in args_config.items() if key != "skip_metadata"
+    }
+    authored_values = merge_config_fragments((config_values, cli_values))
+    authored_values, extracted_metadata_values = extract_inline_metadata(
+        authored_values
+    )
+    config = try_catch_excess_keys(config_path, LegacySequifierConfig, authored_values)
+    if skip_metadata:
+        if extracted_metadata_values is None:
+            raise ValueError(
+                "skip_metadata requires inline metadata for an HPS training config"
+            )
+        metadata = DatasetMetadata.model_validate(extracted_metadata_values)
+    else:
+        metadata_path = config.metadata_config_path
+        if metadata_path is None and config.preprocessing_data_path is not None:
+            metadata_path = metadata_config_path_from_preprocessing_data_path(
+                config.preprocessing_data_path
+            )
+        if metadata_path is None:
+            raise ValueError("HPS training config requires preprocessing metadata")
+        metadata = load_dataset_metadata(
+            normalize_path(metadata_path, config.project_root)
+        )
+    resolved = legacy_resolve_sequifier_config(config, metadata)
+    return LegacyLoadedTrainConfig(
+        config=config,
+        resolved=resolved,
+        metadata=metadata,
+    )
+
+
+@beartype
+def legacy_load_train_config(
+    config_path: str, args_config: dict[str, Any], skip_metadata: bool
+) -> LegacyResolvedSequifierConfig:
+    return legacy_load_train_config_with_source(
+        config_path, args_config, skip_metadata
+    ).resolved
+
+
+_COMPOSABLE_EXPORTS = {
+    "DatasetFreezingSpecModel",
+    "DatasetPartSpecModel",
+    "DatasetTrainingSpecModel",
+    "EvaluationSpecModel",
+    "GlobalTrainingSpecModel",
+    "LoadedTrainConfig",
+    "ModelInterfaceSpecModel",
+    "ModelSpecModel",
+    "ResolvedDatasetPart",
+    "ResolvedDatasetTrainingSpec",
+    "ResolvedModelInterface",
+    "ResolvedSequifierConfig",
+    "ResolvedTrainingPhase",
+    "ResolvedTrainingSource",
+    "SequifierConfig",
+    "TrainModel",
+    "TrainingPhaseSpecModel",
+    "TrainingPlanModel",
+    "TrainingSourceSpecModel",
+    "dataset_part_view",
+    "interface_build_view",
+    "load_train_config",
+    "load_train_config_with_source",
+    "resolve_sequifier_config",
+}
+
+# Hide the historical root schema and its loaders. The definitions remain below
+# the shared component models only to avoid moving the component hierarchy in
+# this compatibility module; no public configuration path can resolve them.
+for _name in (
+    "LoadedTrainConfig",
+    "ModelSpecModel",
+    "ResolvedSequifierConfig",
+    "SequifierConfig",
+    "TrainModel",
+    "load_train_config",
+    "load_train_config_with_source",
+    "resolve_sequifier_config",
+    "TrainingSpecModel",
+    "LegacyTrainingSpecModel",
+    "LegacyModelSpecModel",
+    "LegacySequifierConfig",
+    "LegacyResolvedSequifierConfig",
+    "LegacyTrainModel",
+    "LegacyLoadedTrainConfig",
+    "legacy_resolve_sequifier_config",
+    "legacy_load_train_config_with_source",
+    "legacy_load_train_config",
+):
+    globals().pop(_name, None)
+
+
+@beartype
+def __getattr__(name: str):
+    if name not in _COMPOSABLE_EXPORTS:
+        raise AttributeError(name)
+    from sequifier.config import composable_train_config
+
+    if name == "TrainModel":
+        return composable_train_config.ResolvedSequifierConfig
+    return getattr(composable_train_config, name)

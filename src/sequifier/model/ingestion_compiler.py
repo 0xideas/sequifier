@@ -20,6 +20,7 @@ from sequifier.model.ingestions import (
     _feature_dims_for_columns,
     _split_columns,
 )
+from sequifier.typechecking import beartype
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,7 @@ class IngestionHandler:
     ]
 
 
+@beartype
 def _layout_for_config(hparams: Any, config: Any) -> Any:
     if hparams.feature_layout is None:
         raise ValueError(
@@ -81,6 +83,7 @@ def _layout_for_config(hparams: Any, config: Any) -> Any:
     return hparams.feature_layout[config.layout]
 
 
+@beartype
 def _flat_columns_for_config(
     hparams: Any,
     config: Any,
@@ -94,6 +97,7 @@ def _flat_columns_for_config(
     return list(columns), None
 
 
+@beartype
 def _grouped_columns_for_config(
     hparams: Any,
     config: Any,
@@ -110,6 +114,7 @@ def _grouped_columns_for_config(
     )
 
 
+@beartype
 def _structured_columns_for_config(
     hparams: Any,
     config: Any,
@@ -120,6 +125,7 @@ def _structured_columns_for_config(
     return list(layout.columns), layout
 
 
+@beartype
 def _validate_ingestion_columns(hparams: Any, usage: str, columns: list[str]) -> None:
     missing_columns = set(columns) - set(hparams.input_columns)
     if missing_columns:
@@ -144,6 +150,7 @@ def _validate_ingestion_columns(hparams: Any, usage: str, columns: list[str]) ->
         )
 
 
+@beartype
 def _validate_direct_embed_config(
     hparams: Any,
     usage: str,
@@ -191,6 +198,7 @@ def _validate_direct_embed_config(
         )
 
 
+@beartype
 def _validate_pass_through_config(
     hparams: Any,
     usage: str,
@@ -211,6 +219,7 @@ def _validate_pass_through_config(
         raise ValueError(f"{usage} type 'pass_through' requires real columns")
 
 
+@beartype
 def _validate_structured_config(
     hparams: Any,
     usage: str,
@@ -250,6 +259,7 @@ def _validate_structured_config(
         )
 
 
+@beartype
 def _validate_temporal_conv_config(
     hparams: Any,
     usage: str,
@@ -263,6 +273,7 @@ def _validate_temporal_conv_config(
         _validate_pass_through_config(hparams, usage, columns, config, layout)
 
 
+@beartype
 def _validate_noop(
     hparams: Any,
     usage: str,
@@ -273,6 +284,7 @@ def _validate_noop(
     _ = hparams, usage, columns, config, layout
 
 
+@beartype
 def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
     """Lower the public union/dictionary syntax into one validated plan."""
     model_spec = hparams.model_spec
@@ -362,6 +374,7 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
     )
 
 
+@beartype
 def _common_branch_kwargs(
     branch: ResolvedIngestionBranch, context: IngestionBuildContext
 ) -> dict[str, Any]:
@@ -375,6 +388,7 @@ def _common_branch_kwargs(
     }
 
 
+@beartype
 def _build_direct_embed_handler(
     branch: ResolvedIngestionBranch, context: IngestionBuildContext
 ) -> BaseFeatureIngestion:
@@ -395,6 +409,7 @@ def _build_direct_embed_handler(
     )
 
 
+@beartype
 def _build_pass_through_module(
     branch: ResolvedIngestionBranch,
     context: IngestionBuildContext,
@@ -412,12 +427,14 @@ def _build_pass_through_module(
     )
 
 
+@beartype
 def _build_pass_through_handler(
     branch: ResolvedIngestionBranch, context: IngestionBuildContext
 ) -> BaseFeatureIngestion:
     return _build_pass_through_module(branch, context, projection_dim=branch.width)
 
 
+@beartype
 def _build_temporal_conv_handler(
     branch: ResolvedIngestionBranch, context: IngestionBuildContext
 ) -> BaseFeatureIngestion:
@@ -444,6 +461,7 @@ def _build_temporal_conv_handler(
     )
 
 
+@beartype
 def _build_feature_pool_handler(
     branch: ResolvedIngestionBranch, context: IngestionBuildContext
 ) -> BaseFeatureIngestion:
@@ -454,6 +472,7 @@ def _build_feature_pool_handler(
     )
 
 
+@beartype
 def _build_grouped_handler(
     branch: ResolvedIngestionBranch, context: IngestionBuildContext
 ) -> BaseFeatureIngestion:
@@ -464,6 +483,7 @@ def _build_grouped_handler(
     )
 
 
+@beartype
 def _build_siamese_handler(
     branch: ResolvedIngestionBranch, context: IngestionBuildContext
 ) -> BaseFeatureIngestion:
@@ -474,6 +494,7 @@ def _build_siamese_handler(
     )
 
 
+@beartype
 def _build_structured_handler(
     branch: ResolvedIngestionBranch, context: IngestionBuildContext
 ) -> BaseFeatureIngestion:
@@ -526,6 +547,7 @@ INGESTION_HANDLERS: dict[str, IngestionHandler] = {
 }
 
 
+@beartype
 def compile_feature_ingestion(
     *,
     hparams: Any,
@@ -565,6 +587,7 @@ def compile_feature_ingestion(
     )
 
 
+@beartype
 def build_feature_ingestion(
     *,
     hparams: Any,

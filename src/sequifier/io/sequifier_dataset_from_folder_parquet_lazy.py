@@ -2,7 +2,8 @@ import json
 import math
 import os
 from collections import Counter
-from typing import Dict, Iterator
+from collections.abc import Iterator
+from typing import Any, Dict
 
 import polars as pl
 import torch
@@ -10,7 +11,6 @@ import torch.distributed as dist
 from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
-from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     columns_from_slice,
@@ -29,12 +29,14 @@ from sequifier.io.iteration_state import (
     write_shared_int,
 )
 from sequifier.io.window_sampling import build_window_batch
+from sequifier.typechecking import beartype
 
 
 class SequifierDatasetFromFolderParquetLazy(IterableDataset):
     """Streams long-format Parquet chunks into rank/worker-aligned batches."""
 
-    def __init__(self, data_path: str, config: TrainModel, shuffle: bool = True):
+    @beartype
+    def __init__(self, data_path: str, config: Any, shuffle: bool = True):
         super().__init__()
         self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
@@ -103,6 +105,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             f"Lazy Parquet Dataset mapped with {self.target_samples} samples and {self.total_batches} batches."
         )
 
+    @beartype
     def _calculate_total_batches(self, target_samples: int) -> int:
         num_workers = self.config.training_spec.num_workers
         num_workers_to_use = num_workers if num_workers > 0 else 1
@@ -115,14 +118,17 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             total_batches += math.ceil(worker_samples / self.batch_size)
         return total_batches
 
+    @beartype
     def set_epoch(self, epoch: int):
         """Set the shuffle epoch."""
         write_shared_int(self._epoch_state, epoch)
 
+    @beartype
     def set_start_batch(self, start_batch: int):
         """Set the first global batch to yield on the next iteration."""
         write_shared_int(self._start_batch_state, start_batch)
 
+    @beartype
     def _get_target_samples(self) -> int:
         """Return the padded per-rank sample count for aligned distributed steps."""
         world_size = dist.get_world_size() if dist.is_initialized() else 1
@@ -138,9 +144,11 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
 
         return max(samples_per_rank)
 
+    @beartype
     def __len__(self) -> int:
         return self.total_batches
 
+    @beartype
     def __iter__(
         self,
     ) -> Iterator[SequifierBatch]:

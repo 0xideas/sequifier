@@ -1,5 +1,7 @@
 import os
 
+from sequifier.typechecking import beartype
+
 preprocess_config_string = """project_root: .
 preprocessing_data_path: PLEASE FILL
 read_format: csv
@@ -19,33 +21,31 @@ max_rows: null
 """
 
 train_config_string = """project_root: .
-preprocessing_data_path: PLEASE FILL
 model_name: PLEASE FILL
-training_objective: causal
 device: cuda
-read_format: parquet
+seed: 1010
 
-input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns
-feature_layout: null # optional structure annotations for flat input columns
-target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
-target_column_types: # 'criterion' in training_spec must also be adapted
-  EXAMPLE_TARGET_COLUMN_NAME: real
-
-context_length: 48
-model_window_stride: null # null loads one right-aligned view; a positive integer loads all contained views at this stride
-inference_batch_size: 10
-
-export_generative_model: PLEASE FILL # true or false
-export_embedding_model: PLEASE FILL # true or false
-embedding_layer_names: [backbone.final_norm] # optional ordered activation sources to concatenate
-export_onnx: true
+global_training_spec:
+  read_format: parquet
+  training_objective: causal
+  context_length: 48
+  target_offset: 1
+  model_window_stride: null
+  inference_batch_size: 10
+  batch_size: 10
+  accumulation_steps: 1
+  learning_rate: 0.0001
+  optimizer:
+    name: AdamW
+  scheduler:
+    name: StepLR
+    step_size: 1
+    gamma: 0.99
+  scheduler_step_on: epoch
+  gradient_clip: null
+  save_interval_epochs: 1
 
 model_spec:
-  ingestion:
-    type: direct_embed
-    output_dim: 128
-    initialization: {} # optional ingestion initialization overrides
-    feature_embedding_dims: null # optional, e.g. {EXAMPLE_INPUT_COLUMN_NAME: 128}; unnecessary if all inputs share one numeric kind
   backbone:
     architecture:
       dim_model: 128
@@ -74,33 +74,49 @@ model_spec:
       publish: true
       conflict_policy: compare_and_swap
     initialization: {}
-  decoder:
-    type: linear
-    prediction_length: 1
-    support: 1
-    initialization: {}
-training_spec:
-  epochs: 10
-  save_interval_epochs: 10
-  batch_size: 10
-  log_interval: 10
-  learning_rate: 0.0001
-  accumulation_steps: 1
-  gradient_clip: null
-  criterion:
-    EXAMPLE_TARGET_COLUMN_NAME: MSELoss
-  optimizer:
-    name: AdamW
-  scheduler:
-    name: OneCycleLR
-    max_lr: 0.001
-    pct_start: 0.1
-    div_factor: 100
-    final_div_factor: 1000
-    anneal_strategy: cos
-    total_steps: PLEASE FILL
-    three_phase: false
-  scheduler_step_on: batch
+  interfaces:
+    prediction:
+      input_columns: [EXAMPLE_INPUT_COLUMN_NAME]
+      target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
+      feature_layout: null
+      ingestion:
+        type: direct_embed
+        output_dim: 128
+        initialization: {}
+        feature_embedding_dims: null
+      decoder:
+        type: linear
+        prediction_length: 1
+        support: 1
+        initialization: {}
+
+dataset_training_spec:
+  main:
+    model_interface: prediction
+    parts:
+      original:
+        metadata_config_path: PLEASE FILL
+    criterion:
+      EXAMPLE_TARGET_COLUMN_NAME: MSELoss
+
+training_plan:
+  phases:
+  - name: training
+    epochs: 10
+    mode: sequential
+    sources:
+    - ref: main
+
+evaluation:
+  sources:
+  - ref: main
+
+export_generative_model: PLEASE FILL # true or false
+export_embedding_model: PLEASE FILL # true or false
+embedding_layer_names: [backbone.final_norm]
+export_onnx: true
+export_pt: false
+export_with_dropout: false
 """
 
 infer_config_string = """project_root: .
@@ -133,6 +149,7 @@ state/
 .DS_Store"""
 
 
+@beartype
 def make(args):
     """Create a sequifier project scaffold."""
     project_name = args.project_name

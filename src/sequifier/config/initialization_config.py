@@ -14,6 +14,7 @@ from pydantic import (
 )
 
 from sequifier.config.layer_groups import LayerGroup
+from sequifier.typechecking import beartype
 
 ParameterKind: TypeAlias = Literal["weight", "bias"]
 InitializationTarget: TypeAlias = tuple[LayerGroup, ParameterKind]
@@ -41,6 +42,7 @@ class UniformInitialization(_InitializationMethod):
     high: float
 
     @model_validator(mode="after")
+    @beartype
     def validate_bounds(self):
         if self.low > self.high:
             raise ValueError(
@@ -60,6 +62,7 @@ class XavierUniformInitialization(_InitializationMethod):
     fan_mode: Literal["per_tensor", "joint"] = "per_tensor"
 
     @field_serializer("method")
+    @beartype
     def serialize_method(self, method):
         return "xavier_uniform"
 
@@ -70,6 +73,7 @@ class XavierNormalInitialization(_InitializationMethod):
     fan_mode: Literal["per_tensor", "joint"] = "per_tensor"
 
     @field_serializer("method")
+    @beartype
     def serialize_method(self, method):
         return "xavier_normal"
 
@@ -109,6 +113,7 @@ class IdentityPlusNormalInitialization(_InitializationMethod):
     std: float = Field(0.02, ge=0.0)
 
 
+@beartype
 def _expand_method_shorthand(value: Any) -> Any:
     return {"method": value} if isinstance(value, str) else value
 
@@ -141,6 +146,7 @@ class LayerGroupInitialization(BaseModel):
     bias: InitializationMethodConfig | None = None
 
     @model_validator(mode="after")
+    @beartype
     def validate_not_empty(self):
         if self.weight is None and self.bias is None:
             raise ValueError("layer initialization must configure weight or bias")
@@ -152,9 +158,11 @@ class ModelInitializationConfig(RootModel[dict[LayerGroup, LayerGroupInitializat
 
     root: dict[LayerGroup, LayerGroupInitialization] = Field(default_factory=dict)
 
+    @beartype
     def override_for(self, group: LayerGroup) -> LayerGroupInitialization | None:
         return self.root.get(group)
 
+    @beartype
     def configured_targets(self) -> set[InitializationTarget]:
         return {
             (group, parameter_kind)
@@ -187,6 +195,7 @@ class LayerGroupInitializationSampling(BaseModel):
     bias: InitializationMethodSamplingConfig | None = None
 
     @model_validator(mode="after")
+    @beartype
     def validate_not_empty(self):
         if self.weight is None and self.bias is None:
             raise ValueError("layer initialization must configure weight or bias")
@@ -203,6 +212,7 @@ class ModelInitializationSamplingConfig(
     )
 
     @staticmethod
+    @beartype
     def _validation_method(
         value: InitializationMethodSamplingConfig,
     ) -> InitializationMethodConfig:
@@ -211,6 +221,7 @@ class ModelInitializationSamplingConfig(
         return value.model_copy(deep=True)
 
     @staticmethod
+    @beartype
     def _sample_method(
         trial: Any,
         name: str,
@@ -226,6 +237,7 @@ class ModelInitializationSamplingConfig(
         )
         return value.candidates[candidate_index].model_copy(deep=True)
 
+    @beartype
     def validation_config(self) -> ModelInitializationConfig:
         """Build a concrete config from the first value in every candidate list."""
 
@@ -245,6 +257,7 @@ class ModelInitializationSamplingConfig(
             )
         return ModelInitializationConfig(values)
 
+    @beartype
     def sample_trial(
         self,
         trial: Any,
@@ -277,6 +290,7 @@ class ModelInitializationSamplingConfig(
             )
         return ModelInitializationConfig(values)
 
+    @beartype
     def grid_size(self) -> int:
         """Return the cartesian count of configured initialization candidates."""
 

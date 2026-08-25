@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
+from sequifier.typechecking import beartype
 
 
 class Objective(ABC):
@@ -16,18 +17,22 @@ class Objective(ABC):
     forward_looking: ClassVar[bool] = True
     uses_causal_attention: ClassVar[bool] = True
 
+    @beartype
     def __init__(self, config: Optional[Any] = None) -> None:
         self.config = config
 
     @classmethod
+    @beartype
     def default_target_offset(cls) -> int:
         return 1
 
     @classmethod
+    @beartype
     def default_prediction_length(cls, context_length: int) -> int:
         return 1
 
     @classmethod
+    @beartype
     def validate_window_view(cls, context_length: int, target_offset: int) -> None:
         if target_offset < 1:
             raise ValueError(
@@ -36,6 +41,7 @@ class Objective(ABC):
             )
 
     @classmethod
+    @beartype
     def validate_prediction_length(
         cls,
         prediction_length: int,
@@ -46,6 +52,7 @@ class Objective(ABC):
         return None
 
     @classmethod
+    @beartype
     def build_attention_mask_policy(cls, context_length: int) -> Tensor:
         if cls.uses_causal_attention:
             return torch.triu(
@@ -54,6 +61,7 @@ class Objective(ABC):
             )
         return torch.zeros(context_length, context_length)
 
+    @beartype
     def prepare_batch(
         self,
         data_batch: dict[str, Tensor],
@@ -63,6 +71,7 @@ class Objective(ABC):
     ) -> tuple[dict[str, Tensor], dict[str, Tensor], dict[str, Tensor]]:
         return data_batch, targets_batch, metadata_batch
 
+    @beartype
     def build_loss_mask(self, metadata: dict[str, Tensor]) -> Tensor:
         valid_mask = metadata["target_valid_mask"].bool()
 
@@ -83,6 +92,7 @@ class Objective(ABC):
 
         return valid_mask
 
+    @beartype
     def transform_targets_for_loss(
         self,
         targets: dict[str, Tensor],
@@ -90,11 +100,13 @@ class Objective(ABC):
     ) -> tuple[dict[str, Tensor], Tensor]:
         return targets, valid_mask
 
+    @beartype
     def target_values_for_loss(
         self, target_column: str, targets: dict[str, Tensor]
     ) -> Tensor:
         return targets[target_column]
 
+    @beartype
     def baseline_prediction_values(
         self,
         target_column: str,
@@ -104,12 +116,14 @@ class Objective(ABC):
     ) -> Tensor:
         return data[target_column].transpose(0, 1)
 
+    @beartype
     def baseline_target_values(
         self, target_column: str, targets: dict[str, Tensor]
     ) -> Tensor:
         return targets[target_column]
 
     @classmethod
+    @beartype
     def item_positions(
         cls,
         start_positions: np.ndarray,
@@ -130,6 +144,7 @@ class CausalObjective(Objective):
 class FinalValueObjective(CausalObjective):
     name = "final_value"
 
+    @beartype
     def target_values_for_loss(
         self, target_column: str, targets: dict[str, Tensor]
     ) -> Tensor:
@@ -140,6 +155,7 @@ class FinalValueObjective(CausalObjective):
 class NextOccurrenceObjective(CausalObjective):
     name = "next_occurrence"
 
+    @beartype
     def __init__(self, config: Any) -> None:
         super().__init__(config)
         next_occurrence_config = config.training_spec.next_occurrence_config
@@ -150,6 +166,7 @@ class NextOccurrenceObjective(CausalObjective):
             id_map[value] for value in next_occurrence_config.target_values
         ]
 
+    @beartype
     def transform_targets_for_loss(
         self,
         targets: dict[str, Tensor],
@@ -199,19 +216,23 @@ class BERTObjective(Objective):
     uses_causal_attention = False
 
     @classmethod
+    @beartype
     def default_target_offset(cls) -> int:
         return 0
 
     @classmethod
+    @beartype
     def default_prediction_length(cls, context_length: int) -> int:
         return context_length
 
     @classmethod
+    @beartype
     def validate_window_view(cls, context_length: int, target_offset: int) -> None:
         if target_offset != 0:
             raise ValueError("BERT views require target_offset=0")
 
     @classmethod
+    @beartype
     def validate_prediction_length(
         cls,
         prediction_length: int,
@@ -240,6 +261,7 @@ class BERTObjective(Objective):
                 f"context_length={context_length})."
             )
 
+    @beartype
     def prepare_batch(
         self,
         data_batch: dict[str, Tensor],
@@ -255,12 +277,14 @@ class BERTObjective(Objective):
             eval_seed,
         )
 
+    @beartype
     def build_loss_mask(self, metadata: dict[str, Tensor]) -> Tensor:
         valid_mask = super().build_loss_mask(metadata)
         if "bert_mask" not in metadata:
             raise ValueError("BERT loss masking requires metadata['bert_mask']")
         return valid_mask & metadata["bert_mask"].bool()
 
+    @beartype
     def baseline_prediction_values(
         self,
         target_column: str,
@@ -276,6 +300,7 @@ class BERTObjective(Objective):
         return shifted_targets.transpose(0, 1)
 
     @classmethod
+    @beartype
     def item_positions(
         cls,
         start_positions: np.ndarray,
@@ -299,6 +324,7 @@ OBJECTIVE_NAME_MESSAGE = "'causal', 'bert', 'final_value', and 'next_occurrence'
 ALLOWED_OBJECTIVE_NAMES = frozenset(OBJECTIVE_REGISTRY)
 
 
+@beartype
 def get_objective_class(name: str) -> type[Objective]:
     try:
         return OBJECTIVE_REGISTRY[name]
@@ -308,10 +334,12 @@ def get_objective_class(name: str) -> type[Objective]:
         ) from exc
 
 
+@beartype
 def create_objective(config: Any) -> Objective:
     return get_objective_class(config.training_objective)(config)
 
 
+@beartype
 def target_offset_for_objective(name: str, configured_target_offset: int = 1) -> int:
     objective_class = get_objective_class(name)
     if objective_class.default_target_offset() == 0:
@@ -319,6 +347,7 @@ def target_offset_for_objective(name: str, configured_target_offset: int = 1) ->
     return configured_target_offset
 
 
+@beartype
 def forward_objective_names() -> frozenset[str]:
     return frozenset(
         name
@@ -327,6 +356,7 @@ def forward_objective_names() -> frozenset[str]:
     )
 
 
+@beartype
 def _build_bert_span_mask(
     valid_mask: Tensor,
     masking_probability: float,
@@ -423,6 +453,7 @@ def _build_bert_span_mask(
     return valid_mask & (started_spans > ended_spans)
 
 
+@beartype
 def apply_bert_masking(
     data_batch: dict[str, Tensor],
     targets_batch: dict[str, Tensor],

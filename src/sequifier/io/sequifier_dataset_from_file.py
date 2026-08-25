@@ -1,12 +1,12 @@
 import math
-from typing import Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import torch
 import torch.distributed as dist
 from loguru import logger
 from torch.utils.data import IterableDataset
 
-from sequifier.config.train_config import TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configured_model_window_stride,
@@ -23,12 +23,14 @@ from sequifier.io.iteration_state import (
     write_shared_int,
 )
 from sequifier.io.window_sampling import build_window_batch
+from sequifier.typechecking import beartype
 
 
 class SequifierDatasetFromFile(IterableDataset):
     """Eager single-file dataset yielding pre-collated batches."""
 
-    def __init__(self, data_path: str, config: TrainModel, shuffle: bool = True):
+    @beartype
+    def __init__(self, data_path: str, config: Any, shuffle: bool = True):
         super().__init__()
         self.config = config
         self.batch_size = config.training_spec.batch_size
@@ -72,14 +74,17 @@ class SequifierDatasetFromFile(IterableDataset):
 
         logger.info(f"Dataset loaded with {self.n_samples} samples.")
 
+    @beartype
     def set_epoch(self, epoch: int):
         """Set the shuffle epoch."""
         write_shared_int(self._epoch_state, epoch)
 
+    @beartype
     def set_start_batch(self, start_batch: int):
         """Set the first global batch to yield on the next iteration."""
         write_shared_int(self._start_batch_state, start_batch)
 
+    @beartype
     def __len__(self) -> int:
         num_workers = max(1, self.config.training_spec.num_workers)
         total_batches = 0
@@ -90,6 +95,7 @@ class SequifierDatasetFromFile(IterableDataset):
             total_batches += math.ceil(worker_samples / self.batch_size)
         return total_batches
 
+    @beartype
     def __iter__(
         self,
     ) -> Iterator[SequifierBatch]:

@@ -2,6 +2,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from sequifier.typechecking import beartype
+
 
 @dataclass(frozen=True)
 class SpecialTokenIds:
@@ -10,10 +12,12 @@ class SpecialTokenIds:
     mask: int = 2
 
     @property
+    @beartype
     def user_start(self) -> int:
         return max(asdict(self).values()) + 1
 
     @property
+    @beartype
     def labels_by_id(self) -> dict[int, str]:
         return {
             self.unknown: "[unknown]",
@@ -22,6 +26,7 @@ class SpecialTokenIds:
         }
 
     @property
+    @beartype
     def ids_by_label(self) -> dict[str, int]:
         return {label: id_ for id_, label in self.labels_by_id.items()}
 
@@ -33,6 +38,7 @@ SPECIAL_TOKEN_NAMES = ("unknown", "other", "mask")
 ONNX_CATEGORICAL_TARGET_CODECS_KEY = "sequifier.categorical_target_codecs"
 
 
+@beartype
 def validate_special_token_ids(
     special_token_ids: Mapping[str, Any],
     source: str = "metadata",
@@ -56,6 +62,7 @@ def validate_special_token_ids(
     return normalized
 
 
+@beartype
 def resolve_categorical_decoder_ids(
     target_columns: Sequence[str],
     target_column_types: Mapping[str, str],

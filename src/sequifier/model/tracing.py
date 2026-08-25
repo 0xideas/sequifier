@@ -8,6 +8,8 @@ from typing import Any, Protocol
 import torch
 from torch import Tensor
 
+from sequifier.typechecking import beartype
+
 
 @dataclass(frozen=True)
 class TraceSite:
@@ -24,6 +26,7 @@ class CaptureRequest:
     clone: bool = False
     positions: slice | Tensor | None = None
 
+    @beartype
     def __post_init__(self) -> None:
         if len(self.sites) != len(set(self.sites)):
             raise ValueError("CaptureRequest sites must be unique.")
@@ -40,6 +43,7 @@ class ForwardContext:
 
 
 class Intervention(Protocol):
+    @beartype
     def transform(
         self, site: TraceSite, tensor: Tensor, context: ForwardContext
     ) -> Tensor: ...
@@ -52,6 +56,7 @@ class InterventionBinding:
 
 
 class TraceContext:
+    @beartype
     def __init__(
         self,
         request: CaptureRequest | None = None,
@@ -70,15 +75,18 @@ class TraceContext:
                 binding.intervention
             )
 
+    @beartype
     def requires(self, site_name: str) -> bool:
         return (
             site_name in self._capture_sites or site_name in self._interventions_by_site
         )
 
     @property
+    @beartype
     def enabled(self) -> bool:
         return bool(self._capture_sites or self._interventions_by_site)
 
+    @beartype
     def emit(
         self,
         name: str,
@@ -120,6 +128,7 @@ class TraceContext:
                 captured.retain_grad()
                 if captured is not transformed:
 
+                    @beartype
                     def retain_derived_gradient(gradient: Tensor) -> Tensor:
                         captured_gradient = (
                             gradient if selection is None else gradient[selection]
@@ -141,11 +150,13 @@ _ACTIVE_TRACE: contextvars.ContextVar[TraceContext | None] = contextvars.Context
 )
 
 
+@beartype
 def active_trace_context() -> TraceContext | None:
     return _ACTIVE_TRACE.get()
 
 
 @contextlib.contextmanager
+@beartype
 def activate_trace_context(context: TraceContext | None):
     if context is None:
         yield None
@@ -158,6 +169,7 @@ def activate_trace_context(context: TraceContext | None):
 
 
 @contextlib.contextmanager
+@beartype
 def analysis_execution(
     model: Any,
     *,
@@ -189,12 +201,14 @@ def analysis_execution(
             yield context
 
 
+@beartype
 def functional_state(model: Any) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     parameters = dict(model.named_parameters(remove_duplicate=True))
     buffers = dict(model.named_buffers(remove_duplicate=True))
     return parameters, buffers
 
 
+@beartype
 def functional_forward(
     model: Any,
     parameters: dict[str, Tensor],
@@ -207,6 +221,7 @@ def functional_forward(
     return torch.func.functional_call(model, (parameters, buffers), args, kwargs)
 
 
+@beartype
 def trace_sites(
     *,
     num_layers: int,

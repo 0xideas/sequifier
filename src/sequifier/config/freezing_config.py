@@ -11,6 +11,7 @@ from pydantic import (
 )
 
 from sequifier.config.layer_groups import LayerGroup
+from sequifier.typechecking import beartype
 
 
 class LayerFreezingConfigFields(BaseModel):
@@ -23,6 +24,7 @@ class LayerFreezingConfigFields(BaseModel):
 
     @field_validator("freezing", "freezing_except")
     @classmethod
+    @beartype
     def validate_unique_groups(
         cls, value: Optional[list[LayerGroup]]
     ) -> Optional[list[LayerGroup]]:
@@ -31,6 +33,7 @@ class LayerFreezingConfigFields(BaseModel):
         return value
 
     @model_validator(mode="after")
+    @beartype
     def validate_mutually_exclusive(self):
         if self.freezing is not None and self.freezing_except is not None:
             raise ValueError(
@@ -40,8 +43,9 @@ class LayerFreezingConfigFields(BaseModel):
         return self
 
     @model_serializer(mode="wrap")
+    @beartype
     def serialize_freezing_fields(self, serializer):
-        """Omit inactive fields to preserve legacy resolved serialization."""
+        """Omit inactive fields from canonical dataset freezing policies."""
 
         values = serializer(self)
         if self.freezing is None:
@@ -51,5 +55,6 @@ class LayerFreezingConfigFields(BaseModel):
         return values
 
     @property
+    @beartype
     def has_freezing_policy(self) -> bool:
         return self.freezing is not None or self.freezing_except is not None

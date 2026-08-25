@@ -3,6 +3,8 @@ from typing import Optional
 
 import torch
 
+from sequifier.typechecking import beartype
+
 REQUIRED_METADATA_KEYS = frozenset({"attention_valid_mask", "target_valid_mask"})
 
 
@@ -14,6 +16,7 @@ class SequifierBatch:
     sequence_ids: Optional[torch.Tensor] = None
     subsequence_ids: Optional[torch.Tensor] = None
 
+    @beartype
     def __post_init__(self) -> None:
         metadata_keys = self.metadata.keys() if self.metadata is not None else set()
         missing_keys = REQUIRED_METADATA_KEYS - metadata_keys
@@ -23,6 +26,7 @@ class SequifierBatch:
                 f"SequifierBatch metadata is missing required keys: {missing}"
             )
 
+    @beartype
     def pin_memory(self) -> "SequifierBatch":
         return SequifierBatch(
             inputs={k: v.pin_memory() for k, v in self.inputs.items()},

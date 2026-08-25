@@ -3,7 +3,8 @@ from datetime import timedelta
 
 import torch
 import torch.distributed as dist
-from beartype import beartype
+
+from sequifier.typechecking import beartype
 
 
 @beartype

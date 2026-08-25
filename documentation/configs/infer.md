@@ -23,6 +23,9 @@ and typed components replace the YAML value.
 | `-sm`, `--skip-metadata` | Skips loading metadata-derived config values. All required schema fields must then be supplied directly. |
 | `-mp`, `--model-path` | Overrides `model_path`. |
 | `-s`, `--seed` | Overrides `seed`, unless `--randomize` is also set. |
+| `--dataset` | Selects a configured dataset and therefore its mapped model interface. |
+| `--part` | Selects a part within `--dataset`; it does not change the interface. |
+| `--model-interface` | Selects a named interface directly from a multi-interface PT bundle. |
 
 Inference follows the same authored/resolved boundary as training. The YAML is
 validated as `InferenceConfig`, then preprocessing metadata is resolved into an
@@ -51,8 +54,11 @@ The configuration is defined in a YAML file (e.g., `infer.yaml`).
 | `additional_config_paths` | `str`, `list[str]`, or `null` | No | `null` | Direct complementary YAML fragments. Relative paths resolve against `project_root`; recursive composition and duplicate fields are rejected. |
 | `preprocessing_data_path` | `str` | Conditional | `null` | Raw preprocessing input path. When set, Sequifier derives `metadata_config_path` and defaults `data_path` to the inference/test preprocessing split. |
 | `data_path` | `str` | No | Metadata split 2 | Path to the input data file (`csv` or `parquet`) or folder (`pt` or `parquet`). Defaults to split 2 from metadata, or the last available split if fewer than three splits exist. |
-| `model_path` | `str` or `list[str]` | **Yes** | - | Path to a specific model file, or a list of paths to process sequentially. (e.g., `models/sequifier-[NAME]-best-[EPOCH].pt`). |
-| `training_config_path`| `str` | No | `configs/train.yaml`| Path to the config used to train the model. Required only to reconstruct PyTorch `.pt` exports; ONNX models load categorical target codecs from model metadata. |
+| `model_path` | `str` or `list[str]` | **Yes** | - | Path to a specific model file, or a list of paths to process sequentially, for example `models/my-model-best.pt`. |
+| `training_config_path`| `str` | No | `null` | Optional training config used to resolve a dataset selection to its interface. Lean PT bundles reconstruct themselves from `model_config`. |
+| `dataset` | `str` | Conditional | `null` | Dataset to resolve through `training_config_path`. Required when that config has several datasets unless `model_interface` is supplied. |
+| `part` | `str` | No | `null` | Part within `dataset`; changes the data selection, not model weights. |
+| `model_interface` | `str` | Conditional | Implicit for one interface | Named PT route. Required for a multi-interface PT bundle unless `dataset` resolves it. |
 | `metadata_config_path`| `str` | Conditional | Derived from `preprocessing_data_path` | Path to the JSON metadata file generated during preprocessing. Required when `preprocessing_data_path` is omitted. |
 | `read_format` | `str` | No | `parquet` | Format of input data. Single-file inference supports `csv` and `parquet`; folder inference supports `parquet` and `pt`. |
 | `write_format` | `str` | No | `csv` | Format for output predictions (`csv`, `parquet`). |
@@ -84,7 +90,7 @@ These fields tell the inference engine which columns to extract from the new dat
 | `output_probabilities`| `bool` | No | `false` | If `true`, outputs the full probability distribution for categorical targets. Real-valued targets do not produce probability files. |
 | `sample_from_distribution_columns`| `Optional[list[str]]`| No | `null` | If set, the model **samples** from the predicted distribution for these columns instead of taking the top-1 (argmax). Essential for diversity in generation. |
 | `map_to_id` | `bool` | No | `true` | If `true`, converts integer class predictions back to original string IDs (e.g., 0 -\> "cat"). Must be `false` when all targets are real-valued. |
-| `infer_with_dropout` | `bool` | No | `false` | If `true`, keeps dropout active during inference (useful for uncertainty estimation/Monte Carlo Dropout). For ONNX models, this is only effective if the model was exported with `export_with_dropout: true` during training. |
+| `infer_with_dropout` | `bool` | No | `false` | For PyTorch, explicitly re-enables dropout after model loading. For ONNX, preserves dropout nodes at runtime and is effective only when the model was exported with `export_with_dropout: true`. |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
 
 Prediction and embedding outputs include `subsequenceId` and

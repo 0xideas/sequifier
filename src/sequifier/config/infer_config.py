@@ -1,16 +1,8 @@
 import os
-from typing import Generic, Optional, TypeVar, Union
+from typing import Any, Generic, Optional, TypeVar, Union
 
 import numpy as np
-from beartype import beartype
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    ValidationInfo,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from sequifier.config.composition import (
     load_composed_yaml_config,
@@ -37,6 +29,7 @@ from sequifier.objectives import (
     get_objective_class,
     target_offset_for_objective,
 )
+from sequifier.typechecking import beartype
 
 
 @beartype
@@ -58,7 +51,50 @@ def load_inferer_config(
     config = try_catch_excess_keys(config_path, InferenceConfig, authored_values)
 
     metadata_path = _effective_metadata_config_path(config)
-    if skip_metadata:
+    selected_metadata = None
+    if config.dataset is not None:
+        if config.training_config_path is None:
+            raise ValueError("dataset selection requires training_config_path")
+        from sequifier.config.composable_train_config import load_train_config
+
+        training = load_train_config(config.training_config_path, {}, False)
+        if config.dataset not in training.dataset_training_spec:
+            raise ValueError(f"Unknown inference dataset {config.dataset!r}")
+        dataset = training.dataset_training_spec[config.dataset]
+        part_name = config.part
+        if part_name is None:
+            if len(dataset.parts) != 1:
+                raise ValueError(
+                    f"Dataset {config.dataset!r} has multiple parts; select part"
+                )
+            part_name = next(iter(dataset.parts))
+            config.part = part_name
+        if part_name not in dataset.parts:
+            raise ValueError(f"Unknown inference part {config.dataset}.{part_name}")
+        if (
+            config.model_interface is not None
+            and config.model_interface != dataset.model_interface
+        ):
+            raise ValueError(
+                f"Dataset {config.dataset!r} maps to interface "
+                f"{dataset.model_interface!r}, not {config.model_interface!r}"
+            )
+        config.model_interface = dataset.model_interface
+        config.metadata_config_path = dataset.parts[part_name].metadata_config_path
+        metadata_path = config.metadata_config_path
+        selected_metadata = dataset.parts[part_name].metadata
+        interface = dataset.interface
+        config.input_columns = list(interface.input_columns)
+        config.target_columns = list(interface.target_columns)
+        config.target_column_types = dict(interface.target_column_types)
+        config.column_data_types = dict(interface.column_data_types)
+        config.training_objective = training.global_training_spec.training_objective
+        config.context_length = training.global_training_spec.context_length
+        config.target_offset = training.global_training_spec.target_offset
+
+    if selected_metadata is not None:
+        metadata = selected_metadata
+    elif skip_metadata:
         if inline_metadata_values is None:
             raise ValueError(
                 "skip_metadata requires inline storage_layout and column values "
@@ -78,6 +114,7 @@ def load_inferer_config(
     return resolve_inference_config(config, metadata)
 
 
+@beartype
 def _effective_metadata_config_path(config: "InferenceConfig") -> Optional[str]:
     if config.metadata_config_path:
         return config.metadata_config_path
@@ -88,6 +125,7 @@ def _effective_metadata_config_path(config: "InferenceConfig") -> Optional[str]:
     return None
 
 
+@beartype
 def resolve_inference_config(
     config: "InferenceConfig", metadata: DatasetMetadata
 ) -> "ResolvedInferenceConfig":
@@ -174,6 +212,9 @@ class _InferenceConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
     training_objective: str
     data_path: _PathT = Field(default=None)
     training_config_path: Optional[str] = None
+    dataset: Optional[str] = None
+    part: Optional[str] = None
+    model_interface: Optional[str] = None
     read_format: str = Field(default="parquet")
     write_format: str = Field(default="csv")
 
@@ -198,8 +239,23 @@ class _InferenceConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
     autoregression: bool = Field(default=False)
     autoregression_total_steps: Optional[int] = Field(default=None)
 
+    @model_validator(mode="after")
+    @beartype
+    def validate_route_selection(self):
+        for usage, value in (
+            ("dataset", self.dataset),
+            ("part", self.part),
+            ("model_interface", self.model_interface),
+        ):
+            if value is not None and ("." in value or not value.isidentifier()):
+                raise ValueError(f"{usage} must be a valid identifier without '.'")
+        if self.part is not None and self.dataset is None:
+            raise ValueError("part selection requires dataset selection")
+        return self
+
     @field_validator("input_columns", mode="before")
     @classmethod
+    @beartype
     def normalize_single_input_column(cls, value):
         if isinstance(value, str):
             return [value]
@@ -207,6 +263,7 @@ class _InferenceConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
 
     @field_validator("training_objective")
     @classmethod
+    @beartype
     def validate_authored_training_objective(cls, value: str) -> str:
         if value not in ALLOWED_OBJECTIVE_NAMES:
             raise ValueError(
@@ -216,14 +273,20 @@ class _InferenceConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
 
     @field_validator("model_type")
     @classmethod
+    @beartype
     def validate_authored_model_type(cls, value: str) -> str:
         if value not in {"embedding", "generative"}:
             raise ValueError("model_type must be either embedding or generative")
         return value
 
     @model_validator(mode="after")
+    @beartype
     def validate_authored_paths(self):
-        if self.metadata_config_path is None and self.preprocessing_data_path is None:
+        if (
+            self.metadata_config_path is None
+            and self.preprocessing_data_path is None
+            and not (self.training_config_path is not None and self.dataset is not None)
+        ):
             raise ValueError(
                 "metadata_config_path is required when preprocessing_data_path "
                 "is not provided"
@@ -260,6 +323,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
 
     @model_validator(mode="before")
     @classmethod
+    @beartype
     def derive_optional_config_values(cls, values):
         if not isinstance(values, dict):
             return values
@@ -293,6 +357,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
         return values
 
     @model_validator(mode="after")
+    @beartype
     def validate_required_paths(self):
         if self.metadata_config_path is None:
             raise ValueError(
@@ -306,6 +371,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
         return self
 
     @model_validator(mode="after")
+    @beartype
     def normalize_prediction_length(self):
         if self.window_view.objective != self.training_objective:
             raise ValueError(
@@ -328,6 +394,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
 
     @field_validator("training_objective")
     @classmethod
+    @beartype
     def validate_training_objective(cls, v):
         if v not in ALLOWED_OBJECTIVE_NAMES:
             raise ValueError(f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {v}")
@@ -335,6 +402,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
 
     @field_validator("model_type")
     @classmethod
+    @beartype
     def validate_model_type(cls, v: str) -> str:
         if v not in [
             "embedding",
@@ -347,7 +415,8 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
 
     @field_validator("output_probabilities")
     @classmethod
-    def validate_output_probabilities(cls, v: str, info: ValidationInfo) -> str:
+    @beartype
+    def validate_output_probabilities(cls, v: bool, info: Any) -> bool:
         if v and info.data.get("model_type") == "embedding":
             raise ValueError(
                 "For embedding models, 'output_probabilities' must be set to false"
@@ -355,6 +424,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
         return v
 
     @model_validator(mode="after")
+    @beartype
     def validate_training_config_path(self):
         model_paths = (
             self.model_path if isinstance(self.model_path, list) else [self.model_path]
@@ -370,8 +440,9 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
 
     @field_validator("autoregression_total_steps")
     @classmethod
+    @beartype
     def validate_autoregression_total_steps(
-        cls, v: Optional[int], info: ValidationInfo
+        cls, v: Optional[int], info: Any
     ) -> Optional[int]:
         if v is None and info.data.get("autoregression") is True:
             raise ValueError(
@@ -397,7 +468,8 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
 
     @field_validator("autoregression")
     @classmethod
-    def validate_autoregression(cls, v: bool, info: ValidationInfo):
+    @beartype
+    def validate_autoregression(cls, v: bool, info: Any):
         if v and info.data.get("model_type") == "embedding":
             raise ValueError("Autoregression is not possible for embedding models")
         if (
@@ -431,9 +503,8 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
 
     @field_validator("data_path")
     @classmethod
-    def validate_data_path(
-        cls, v: Optional[str], info: ValidationInfo
-    ) -> Optional[str]:
+    @beartype
+    def validate_data_path(cls, v: Optional[str], info: Any) -> Optional[str]:
         if v is None:
             return v
         v2 = normalize_path(v, info.data.get("project_root"))
@@ -443,6 +514,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
 
     @field_validator("read_format")
     @classmethod
+    @beartype
     def validate_read_format(cls, v: str) -> str:
         if v not in ["csv", "parquet", "pt"]:
             raise ValueError(
@@ -453,6 +525,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
 
     @field_validator("write_format")
     @classmethod
+    @beartype
     def validate_write_format(cls, v: str) -> str:
         if v not in ["csv", "parquet"]:
             raise ValueError(
@@ -463,7 +536,8 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
 
     @field_validator("target_column_types")
     @classmethod
-    def validate_target_column_types(cls, v: dict, info: ValidationInfo) -> dict:
+    @beartype
+    def validate_target_column_types(cls, v: dict, info: Any) -> dict:
         if not all(vv in ["categorical", "real"] for vv in v.values()):
             raise ValueError(
                 "Target column types must be either 'categorical' or 'real'"
@@ -476,7 +550,8 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
 
     @field_validator("column_data_types")
     @classmethod
-    def validate_column_types(cls, v: dict, info: ValidationInfo) -> dict:
+    @beartype
+    def validate_column_types(cls, v: dict, info: Any) -> dict:
         normalized = {
             column: canonicalize_polars_dtype_name(dtype) for column, dtype in v.items()
         }
@@ -493,7 +568,8 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
 
     @field_validator("map_to_id")
     @classmethod
-    def validate_map_to_id(cls, v: bool, info: ValidationInfo) -> bool:
+    @beartype
+    def validate_map_to_id(cls, v: bool, info: Any) -> bool:
         if v and not any(
             vv == "categorical"
             for vv in info.data.get("target_column_types", {}).values()
@@ -503,6 +579,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
             )
         return v
 
+    @beartype
     def __init__(self, **data):
         super().__init__(**data)
         column_ordered = list(self.column_data_types.keys())

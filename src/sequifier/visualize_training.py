@@ -9,13 +9,13 @@ from typing import Any, Optional
 import numpy as np
 import plotly.colors as pc
 import plotly.graph_objects as go
-from beartype import beartype
 from loguru import logger
 from plotly.subplots import make_subplots
 
 from sequifier.helpers import configure_logger
-from sequifier.logging_paths import rank_log_prefix
+from sequifier.logging_paths import dataset_artifact_prefix
 from sequifier.training.metrics import TOTAL_TARGET
+from sequifier.typechecking import beartype
 
 
 class DataContinuityError(Exception):
@@ -39,6 +39,7 @@ class TrainingMetrics:
 class StructuredMetricsParser:
     """Read rank-0 training and validation tables for the latest logical run."""
 
+    @beartype
     def __init__(self, model_name: str):
         self.model = model_name
 
@@ -89,14 +90,24 @@ class StructuredMetricsParser:
             )
         if not metrics.baseline_losses:
             raise DataContinuityError(f"[{self.model}]: No baseline loss data found.")
+        missing_baselines = sorted(
+            set(metrics.val_losses).difference(metrics.baseline_losses)
+        )
+        if missing_baselines:
+            raise DataContinuityError(
+                f"[{self.model}]: Missing baseline loss data for validation "
+                f"positions {missing_baselines!r}."
+            )
         return metrics
 
     @staticmethod
+    @beartype
     def _read_rows(path: str) -> list[dict[str, str]]:
         with open(path, "r", encoding="utf-8", newline="") as file:
             return list(csv.DictReader(file))
 
     @staticmethod
+    @beartype
     def _epoch_position(row: dict[str, str]) -> float:
         epoch = int(row["epoch"])
         batch = int(row["batch"])
@@ -143,8 +154,8 @@ def resolve_models(args: argparse.Namespace) -> tuple[list[str], Optional[str]]:
 
 @beartype
 def get_metrics_filepaths(args: argparse.Namespace, model: str) -> tuple[str, str]:
-    """Return the rank-0 training and validation metric paths for a model."""
-    prefix = rank_log_prefix(args.project_root, model, 0)
+    """Return canonical single-dataset metric paths for a model."""
+    prefix = dataset_artifact_prefix(args.project_root, model)
     training_file = f"{prefix}-training.csv"
     validation_file = f"{prefix}-validation.csv"
     missing = [
@@ -218,6 +229,7 @@ def format_plot_data(
     }
 
 
+@beartype
 def _add_invalid_runs(fig: go.Figure, invalid_runs: dict[str, str]) -> None:
     """Add skipped run details below a report."""
     invalid_text = "<br>".join(

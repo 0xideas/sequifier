@@ -2,6 +2,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from sequifier.typechecking import beartype
+
 DEFAULT_EMBEDDING_LAYER_NAMES = ["backbone.final_norm"]
 ONNX_EMBEDDING_LAYER_NAMES_KEY = "sequifier.embedding_layer_names"
 
@@ -21,6 +23,7 @@ class EmbeddingLayerSelector:
     branch: str | None = None
 
 
+@beartype
 def parse_embedding_layer_name(name: str) -> EmbeddingLayerSelector:
     """Parse one public embedding-layer name."""
     if name == "backbone.final_norm":
@@ -50,6 +53,7 @@ def parse_embedding_layer_name(name: str) -> EmbeddingLayerSelector:
     )
 
 
+@beartype
 def available_embedding_layer_names(model_spec: Any) -> list[str]:
     """Return every valid embedding activation selector for a model spec."""
     architecture = model_spec.backbone.architecture
@@ -74,6 +78,7 @@ def available_embedding_layer_names(model_spec: Any) -> list[str]:
     return names
 
 
+@beartype
 def validate_embedding_layer_names(
     layer_names: list[str], model_spec: Any
 ) -> list[str]:
@@ -92,6 +97,7 @@ def validate_embedding_layer_names(
     return layer_names
 
 
+@beartype
 def embedding_layer_trace_site(name: str) -> str:
     selector = parse_embedding_layer_name(name)
     if selector.source == "backbone_final_norm":

@@ -15,6 +15,7 @@ from sequifier.model.dtypes import (
     module_param_dtype,
 )
 from sequifier.model.layers import RMSNorm
+from sequifier.typechecking import beartype, conditional_beartype
 
 EMBEDDING_INDEX_DTYPES = (torch.int32, torch.int64)
 NARROW_EMBEDDING_INDEX_DTYPES = (
@@ -26,6 +27,7 @@ NARROW_EMBEDDING_INDEX_DTYPES = (
 WIDE_UNSIGNED_EMBEDDING_INDEX_DTYPES = (torch.uint32, torch.uint64)
 
 
+@conditional_beartype
 def _smallest_embedding_safe_dtype(dtype: torch.dtype) -> torch.dtype:
     if dtype in EMBEDDING_INDEX_DTYPES:
         return dtype
@@ -36,6 +38,7 @@ def _smallest_embedding_safe_dtype(dtype: torch.dtype) -> torch.dtype:
     raise TypeError(f"Embedding indices must use an integer dtype, got {dtype}.")
 
 
+@conditional_beartype
 def embedding_safe_indices(indices: Tensor) -> Tensor:
     target_dtype = _smallest_embedding_safe_dtype(indices.dtype)
     if indices.dtype == target_dtype:
@@ -43,6 +46,7 @@ def embedding_safe_indices(indices: Tensor) -> Tensor:
     return indices.to(dtype=target_dtype)
 
 
+@beartype
 def _validate_module_dict_key(key: str, usage: str) -> None:
     if key == "":
         raise ValueError(f"{usage} cannot be empty")
@@ -50,6 +54,7 @@ def _validate_module_dict_key(key: str, usage: str) -> None:
         raise ValueError(f"{usage} cannot contain '.'")
 
 
+@beartype
 def get_feature_embedding_dims(
     embedding_size: int,
     categorical_columns: list[str],
@@ -105,10 +110,12 @@ def get_feature_embedding_dims(
 
 
 class BaseFeatureIngestion(nn.Module):
+    @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         raise NotImplementedError
 
     @staticmethod
+    @conditional_beartype
     def _scale_embedding(x: Tensor, embedding_dim: int) -> Tensor:
         return x * math.sqrt(embedding_dim)
 
@@ -116,6 +123,7 @@ class BaseFeatureIngestion(nn.Module):
 class RealFeatureProjection(nn.Linear):
     """Project one standardized real-valued feature into an embedding space."""
 
+    @beartype
     def __init__(self, embedding_dim: int):
         super().__init__(1, embedding_dim)
 
@@ -123,6 +131,7 @@ class RealFeatureProjection(nn.Linear):
 class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
     """The original sequifier per-column embedding path."""
 
+    @beartype
     def __init__(
         self,
         *,
@@ -188,6 +197,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         else:
             self.output_projection_layer = None
 
+    @conditional_beartype
     def _recursive_concat(self, srcs: list[Tensor]) -> Tensor:
         if len(srcs) <= self.device_max_concat_length:
             return torch.cat(srcs, 2)
@@ -205,6 +215,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         pos = pos.repeat(batch_size, 1)
         return self.pos_encoder[col](pos)  # type: ignore[index]
 
+    @conditional_beartype
     def _with_position(self, col: str, src_t: Tensor) -> Tensor:
         if not self.add_ingestion_position:
             return self.drop(src_t)
@@ -212,6 +223,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         src_p = cast_floating_to_dtype(src_p, src_t.dtype)
         return self.drop(src_t + src_p)
 
+    @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         srcs = []
         for col in self.categorical_columns:
@@ -239,6 +251,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
 class PassThroughFeatureIngestion(BaseFeatureIngestion):
     """Pass real-valued columns through without per-feature encoders."""
 
+    @beartype
     def __init__(
         self,
         *,
@@ -279,6 +292,7 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
         else:
             self.output_projection_layer = None
 
+    @conditional_beartype
     def _recursive_concat(self, srcs: list[Tensor]) -> Tensor:
         if len(srcs) <= self.device_max_concat_length:
             return torch.cat(srcs, 2)
@@ -291,6 +305,7 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
             srcs_inner.append(src)
         return self._recursive_concat(srcs_inner)
 
+    @conditional_beartype
     def _target_dtype(self, src: dict[str, Tensor]) -> torch.dtype:
         if self.output_projection_layer is not None:
             return self.output_projection_layer.weight.dtype
@@ -303,6 +318,7 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
         pos = pos.repeat(batch_size, 1)
         return self.pos_encoder[col](pos)  # type: ignore[index]
 
+    @conditional_beartype
     def _with_position(self, col: str, src_t: Tensor) -> Tensor:
         if not self.add_ingestion_position:
             return self.drop(src_t)
@@ -310,6 +326,7 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
         src_p = cast_floating_to_dtype(src_p, src_t.dtype)
         return self.drop(src_t + src_p)
 
+    @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         srcs = []
         target_dtype = self._target_dtype(src)
@@ -328,10 +345,11 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
 class TemporalConvFeatureIngestion(BaseFeatureIngestion):
     """Apply Conv1D over time after flat-column encoding."""
 
+    @beartype
     def __init__(
         self,
         *,
-        base_ingestion: BaseFeatureIngestion,
+        base_ingestion: nn.Module,
         base_ingestion_width: int,
         channels: int,
         kernel_size: int,
@@ -375,6 +393,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
         self.post_conv_norm = self._norm(post_conv_norm, norm_dim)
 
     @staticmethod
+    @conditional_beartype
     def _activation(name: str) -> nn.Module:
         if name == "relu":
             return nn.ReLU()
@@ -385,6 +404,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
         raise ValueError(f"Unknown temporal_conv activation_fn: {name}")
 
     @staticmethod
+    @conditional_beartype
     def _norm(name: str, output_dim: int) -> nn.Module:
         if name == "layer_norm":
             return nn.LayerNorm(output_dim, eps=1e-3)
@@ -394,6 +414,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
             return nn.Identity()
         raise ValueError(f"Unknown temporal_conv post_conv_norm: {name}")
 
+    @conditional_beartype
     def _apply_post_conv_norm(self, output: Tensor) -> Tensor:
         if self.orientation == "within_column":
             output = output.transpose(1, 2)
@@ -409,12 +430,14 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
             f"Unknown temporal_conv normalization orientation: {self.orientation}"
         )
 
+    @conditional_beartype
     def _temporal_padding(self, dilation: int) -> tuple[int, int]:
         padding = (self.kernel_size - 1) * dilation
         if self.causal:
             return padding, 0
         return padding // 2, padding // 2
 
+    @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         output = self.base_ingestion(src, metadata)
         for layer, dilation in zip(self.layers, self.dilation_schedule):
@@ -426,6 +449,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
 
 
 class _ColumnTokenIngestion(BaseFeatureIngestion):
+    @beartype
     def __init__(
         self,
         *,
@@ -459,6 +483,7 @@ class _ColumnTokenIngestion(BaseFeatureIngestion):
         else:
             self.pos_encoder = None
 
+    @conditional_beartype
     def _encode_column(self, col: str, src: dict[str, Tensor]) -> Tensor:
         if col in self.categorical_columns:
             embedding = cast(nn.Embedding, self.encoder[col])
@@ -469,6 +494,7 @@ class _ColumnTokenIngestion(BaseFeatureIngestion):
         layer = cast(nn.Linear, self.encoder[col])
         return layer(src[col][:, :, None].to(dtype=layer.weight.dtype))
 
+    @conditional_beartype
     def _with_position(self, x: Tensor) -> Tensor:
         if not self.add_ingestion_position:
             return self.drop(x)
@@ -482,12 +508,14 @@ class _ColumnTokenIngestion(BaseFeatureIngestion):
 class FeaturePoolFeatureIngestion(_ColumnTokenIngestion):
     """Encode each feature as a token and pool feature tokens per time step."""
 
+    @beartype
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
         self.feature_embedding = nn.Parameter(
             torch.zeros(len(self.columns), self.token_dim)
         )
 
+    @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         encoded = [self._encode_column(col, src) for col in self.columns]
         tokens = torch.stack(encoded, dim=2)
@@ -502,6 +530,7 @@ class FeaturePoolFeatureIngestion(_ColumnTokenIngestion):
 class GroupedFeatureIngestion(BaseFeatureIngestion):
     """Encode configured column groups and average the group representations."""
 
+    @beartype
     def __init__(
         self,
         *,
@@ -537,6 +566,7 @@ class GroupedFeatureIngestion(BaseFeatureIngestion):
                 dropout=dropout,
             )
 
+    @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         outputs = [
             ingestion(src, metadata) for ingestion in self.group_ingestions.values()
@@ -547,6 +577,7 @@ class GroupedFeatureIngestion(BaseFeatureIngestion):
 class SiameseFeatureIngestion(BaseFeatureIngestion):
     """Apply shared encoders across branch columns and pool their outputs."""
 
+    @beartype
     def __init__(
         self,
         *,
@@ -584,6 +615,7 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
         else:
             self.pos_encoder = None
 
+    @conditional_beartype
     def _with_position(self, x: Tensor) -> Tensor:
         if not self.add_ingestion_position:
             return self.drop(x)
@@ -593,6 +625,7 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
         pos_embedding = cast_floating_to_dtype(pos_embedding, x.dtype)
         return self.drop(x + pos_embedding)
 
+    @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         encoded = []
         for col in self.columns:
@@ -615,6 +648,7 @@ class SiameseFeatureIngestion(BaseFeatureIngestion):
         return self._with_position(output)
 
 
+@conditional_beartype
 def _product(values: list[int]) -> int:
     result = 1
     for value in values:
@@ -622,12 +656,14 @@ def _product(values: list[int]) -> int:
     return result
 
 
+@conditional_beartype
 def _module_key(indices: tuple[int, ...]) -> str:
     if not indices:
         return "shared"
     return "_".join(str(index) for index in indices)
 
 
+@conditional_beartype
 def _rotate_half_last_dim(x: Tensor) -> Tensor:
     x1, x2 = x.chunk(2, dim=-1)
     return torch.cat((-x2, x1), dim=-1)
@@ -636,6 +672,7 @@ def _rotate_half_last_dim(x: Tensor) -> Tensor:
 class _AxisProjectionBlock(nn.Module):
     """Project one or more cartesian axes into the channel dimension."""
 
+    @beartype
     def __init__(
         self,
         *,
@@ -668,6 +705,7 @@ class _AxisProjectionBlock(nn.Module):
             }
         )
 
+    @conditional_beartype
     def _apply_shared(
         self,
         x: Tensor,
@@ -688,6 +726,7 @@ class _AxisProjectionBlock(nn.Module):
         x = layer(x)
         return x.reshape(*leading_shape, self.output_dim)
 
+    @conditional_beartype
     def forward(self, x: Tensor) -> Tensor:
         if not self.unshared_axes:
             return self._apply_shared(
@@ -743,6 +782,7 @@ class _AxisConvBlock(nn.Module):
         3: nn.Conv3d,
     }
 
+    @beartype
     def __init__(
         self,
         *,
@@ -780,6 +820,7 @@ class _AxisConvBlock(nn.Module):
             }
         )
 
+    @conditional_beartype
     def _apply_shared(
         self,
         x: Tensor,
@@ -812,6 +853,7 @@ class _AxisConvBlock(nn.Module):
         )
         return x.permute(*permute_back)
 
+    @conditional_beartype
     def forward(self, x: Tensor) -> Tensor:
         if not self.unshared_axes:
             return self._apply_shared(
@@ -861,6 +903,7 @@ class _AxisConvBlock(nn.Module):
 
 
 class _AxisAttentionLayer(nn.Module):
+    @beartype
     def __init__(
         self,
         *,
@@ -882,6 +925,7 @@ class _AxisAttentionLayer(nn.Module):
             batch_first=True,
         )
 
+    @conditional_beartype
     def forward(self, x: Tensor) -> Tensor:
         x = cast_floating_to_module_dtype(x, self.input_projection)
         x = self.input_projection(x)
@@ -893,6 +937,7 @@ class _AxisAttentionLayer(nn.Module):
 class _AxisAttentionBlock(nn.Module):
     """Apply self-attention over one or more cartesian axes."""
 
+    @beartype
     def __init__(
         self,
         *,
@@ -930,6 +975,7 @@ class _AxisAttentionBlock(nn.Module):
             }
         )
 
+    @conditional_beartype
     def _apply_shared(
         self,
         x: Tensor,
@@ -960,6 +1006,7 @@ class _AxisAttentionBlock(nn.Module):
         )
         return x.permute(*permute_back)
 
+    @conditional_beartype
     def forward(self, x: Tensor) -> Tensor:
         if not self.unshared_axes:
             return self._apply_shared(
@@ -1010,6 +1057,7 @@ class _AxisAttentionBlock(nn.Module):
 class _AxisPoolBlock(nn.Module):
     """Reduce one or more cartesian axes."""
 
+    @beartype
     def __init__(
         self,
         *,
@@ -1023,6 +1071,7 @@ class _AxisPoolBlock(nn.Module):
         self.active_axes = active_axes
         self.output_axes = [axis for axis in active_axes if axis not in axes]
 
+    @conditional_beartype
     def forward(self, x: Tensor) -> Tensor:
         dims = tuple(2 + self.active_axes.index(axis) for axis in self.axes)
         if self.mode == "mean":
@@ -1044,6 +1093,7 @@ class StructuredBlockHandler:
     build: Callable[[Any, AxisShape, dict[str, int]], nn.Module]
 
 
+@beartype
 def _validate_block_axes(block: Any, shape: AxisShape) -> None:
     unknown_axes = [axis for axis in block.axes if axis not in shape.active_axes]
     if unknown_axes:
@@ -1065,6 +1115,7 @@ def _validate_block_axes(block: Any, shape: AxisShape) -> None:
         )
 
 
+@beartype
 def _resolve_axis_projection(block: Any, shape: AxisShape) -> AxisShape:
     _validate_block_axes(block, shape)
     return AxisShape(
@@ -1073,11 +1124,13 @@ def _resolve_axis_projection(block: Any, shape: AxisShape) -> AxisShape:
     )
 
 
+@beartype
 def _resolve_axis_preserving(block: Any, shape: AxisShape) -> AxisShape:
     _validate_block_axes(block, shape)
     return AxisShape(shape.active_axes, block.output_dim)
 
 
+@beartype
 def _resolve_axis_pool(block: Any, shape: AxisShape) -> AxisShape:
     _validate_block_axes(block, shape)
     return AxisShape(
@@ -1086,6 +1139,7 @@ def _resolve_axis_pool(block: Any, shape: AxisShape) -> AxisShape:
     )
 
 
+@beartype
 def _build_axis_projection(
     block: Any, shape: AxisShape, axis_sizes: dict[str, int]
 ) -> nn.Module:
@@ -1099,6 +1153,7 @@ def _build_axis_projection(
     )
 
 
+@beartype
 def _build_axis_conv(
     block: Any, shape: AxisShape, axis_sizes: dict[str, int]
 ) -> nn.Module:
@@ -1113,6 +1168,7 @@ def _build_axis_conv(
     )
 
 
+@beartype
 def _build_axis_attention(
     block: Any, shape: AxisShape, axis_sizes: dict[str, int]
 ) -> nn.Module:
@@ -1128,6 +1184,7 @@ def _build_axis_attention(
     )
 
 
+@beartype
 def _build_axis_pool(
     block: Any, shape: AxisShape, axis_sizes: dict[str, int]
 ) -> nn.Module:
@@ -1153,6 +1210,7 @@ STRUCTURED_BLOCK_HANDLERS: dict[str, StructuredBlockHandler] = {
 class StructuredFeatureIngestion(_ColumnTokenIngestion):
     """Compile a cartesian layout into an ordered cell tensor."""
 
+    @beartype
     def __init__(
         self,
         *,
@@ -1241,6 +1299,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
 
         self.active_axes_after_blocks = list(shape.active_axes)
 
+    @conditional_beartype
     def _dense_cells(self, src: dict[str, Tensor]) -> Tensor:
         encoded = [self._encode_column(col, src) for col in self.ordered_columns]
         cells = torch.stack(encoded, dim=2)
@@ -1251,6 +1310,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
             self.cell_dim,
         )
 
+    @conditional_beartype
     def _axis_broadcast_shape(self, x: Tensor, axis_name: str) -> list[int]:
         axis_idx = self.axis_names.index(axis_name)
         target_dim = axis_idx + 2
@@ -1259,6 +1319,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         broadcast_shape[target_dim] = axis_size
         return broadcast_shape
 
+    @conditional_beartype
     def _apply_learned_axis_embeddings(self, dense_cells: Tensor) -> Tensor:
         output = dense_cells
         for axis_name, embedding_layer in zip(
@@ -1274,6 +1335,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
             )
         return output
 
+    @conditional_beartype
     def _axis_rope_cos_sin(self, x: Tensor, axis_name: str) -> tuple[Tensor, Tensor]:
         axis_size = self.axis_size_by_name[axis_name]
         compute_dtype = torch.float32
@@ -1292,6 +1354,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         sin = emb.sin().to(dtype=x.dtype).view(*broadcast_shape)
         return cos, sin
 
+    @conditional_beartype
     def _apply_rope_axis_embeddings(self, dense_cells: Tensor) -> Tensor:
         output = dense_cells
         for axis_name in self.axis_embedding_axes:
@@ -1299,6 +1362,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
             output = (output * cos) + (_rotate_half_last_dim(output) * sin)
         return output
 
+    @conditional_beartype
     def _apply_axis_embeddings(self, dense_cells: Tensor) -> Tensor:
         if self.axis_embedding_type == "none":
             return dense_cells
@@ -1308,6 +1372,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
             return self._apply_rope_axis_embeddings(dense_cells)
         raise ValueError(f"Unknown axis embedding type: {self.axis_embedding_type}")
 
+    @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         dense_cells = self._apply_axis_embeddings(self._dense_cells(src))
         if not self.axis_blocks:
@@ -1326,6 +1391,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
 
 
 class IngestionMerge(nn.Module):
+    @beartype
     def __init__(self, merge_type: str, branch_dims: dict[str, int], merge_dim: int):
         super().__init__()
         self.merge_type = merge_type
@@ -1363,6 +1429,7 @@ class IngestionMerge(nn.Module):
                 f"'attention', got {self.merge_type!r}"
             )
 
+    @conditional_beartype
     def forward(self, branch_outputs: dict[str, Tensor]) -> Tensor:
         if self.merge_type == "concat":
             merged = torch.cat(
@@ -1401,10 +1468,11 @@ class IngestionMerge(nn.Module):
 
 
 class CompositeFeatureIngestion(BaseFeatureIngestion):
+    @beartype
     def __init__(
         self,
         *,
-        branches: dict[str, BaseFeatureIngestion],
+        branches: dict[str, nn.Module],
         branch_widths: dict[str, int],
         merge_type: str,
         merge_dim: int,
@@ -1421,6 +1489,7 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
             merge_dim,
         )
 
+    @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         branch_outputs = {
             name: branch(src, metadata) for name, branch in self.branches.items()
@@ -1428,6 +1497,7 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
         return self.merge(branch_outputs)
 
 
+@beartype
 def _split_columns(
     columns: list[str], categorical_columns: list[str], real_columns: list[str]
 ) -> tuple[list[str], list[str]]:
@@ -1446,6 +1516,7 @@ def _split_columns(
     )
 
 
+@beartype
 def _feature_dims_for_columns(
     ingestion_config: Any, columns: list[str]
 ) -> Optional[dict[str, int]]:
@@ -1455,12 +1526,14 @@ def _feature_dims_for_columns(
     return {col: feature_embedding_dims[col] for col in columns}
 
 
+@beartype
 def resolve_ingestion_plan(hparams: Any):
     from sequifier.model.ingestion_compiler import resolve_ingestion_plan as resolve
 
     return resolve(hparams)
 
 
+@beartype
 def compile_feature_ingestion(
     *,
     hparams: Any,
@@ -1476,6 +1549,7 @@ def compile_feature_ingestion(
     )
 
 
+@beartype
 def build_feature_ingestion(
     *,
     hparams: Any,

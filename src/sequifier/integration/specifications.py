@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from sequifier.typechecking import beartype
+
 RankPolicy = Literal["all", "rank_zero", "all_reduce_summary"]
 StatePolicy = Literal["required", "if_present", "fresh"]
 
@@ -23,6 +25,7 @@ class IntegrationSpec:
     rank_policy: RankPolicy = "all"
     state_policy: StatePolicy = "if_present"
 
+    @beartype
     def __post_init__(self) -> None:
         if not self.integration_id.strip():
             raise ValueError("integration_id must not be empty.")

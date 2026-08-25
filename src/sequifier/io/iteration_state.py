@@ -2,7 +2,10 @@ from collections.abc import Sequence
 
 import torch
 
+from sequifier.typechecking import beartype
 
+
+@beartype
 def shared_int(value: int = 0) -> torch.Tensor:
     """Return a shared scalar int tensor visible to DataLoader worker copies."""
     state = torch.empty((), dtype=torch.int64)
@@ -11,14 +14,17 @@ def shared_int(value: int = 0) -> torch.Tensor:
     return state
 
 
+@beartype
 def read_shared_int(state: torch.Tensor) -> int:
     return int(state.item())
 
 
+@beartype
 def write_shared_int(state: torch.Tensor, value: int) -> None:
     state.fill_(int(value))
 
 
+@beartype
 def resolve_resume_worker(
     start_batch: int,
     worker_id: int,
@@ -74,6 +80,7 @@ def resolve_resume_worker(
     return logical_worker_id, skips[logical_worker_id]
 
 
+@beartype
 def skip_samples_for_batches(
     skip_batches: int, batch_size: int, total_samples: int
 ) -> int:

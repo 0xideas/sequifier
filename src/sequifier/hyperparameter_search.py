@@ -12,9 +12,10 @@ from typing import Any, Union
 import optuna
 import torch._dynamo
 import yaml
-from beartype import beartype
 from loguru import logger
 from optuna.trial import TrialState
+
+from sequifier.typechecking import beartype
 
 torch._dynamo.config.suppress_errors = True
 from sequifier.config.hyperparameter_search_config import (  # noqa: E402
@@ -25,13 +26,37 @@ from sequifier.helpers import (  # noqa: E402
     get_last_training_batch_timedelta,
 )
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
-from sequifier.logging_paths import model_log_directory  # noqa: E402
+from sequifier.logging_paths import (  # noqa: E402
+    dataset_artifact_prefix,
+    model_log_directory,
+)
 from sequifier.training.metrics import VALIDATION_FIELDS  # noqa: E402
 
 _DUPLICATE_OF_USER_ATTR = "sequifier_duplicate_of"
 _MAX_CONSECUTIVE_DUPLICATE_PROPOSALS = 1000
 
 
+@beartype
+def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
+    dataset_names = tuple(run_config.dataset_training_spec)
+    dataset_count = len(dataset_names)
+    if dataset_count == 1:
+        return None, dataset_count
+    evaluation = getattr(run_config, "evaluation", None)
+    monitor = getattr(evaluation, "monitor", None)
+    if monitor is None:
+        raise ValueError(
+            "Multi-dataset hyperparameter search requires evaluation.monitor"
+        )
+    dataset_name = monitor.source.split(".", 1)[0]
+    if dataset_name not in run_config.dataset_training_spec:
+        raise ValueError(
+            f"evaluation.monitor references unknown dataset {dataset_name!r}"
+        )
+    return dataset_name, dataset_count
+
+
+@beartype
 def create_sampler(config: Any) -> optuna.samplers.BaseSampler:
     strategy = getattr(config, "search_strategy", "bayesian")
     global_seed = getattr(config, "global_seed", None)
@@ -47,6 +72,7 @@ def create_sampler(config: Any) -> optuna.samplers.BaseSampler:
     )
 
 
+@beartype
 def set_pdeathsig():
     """Ask Linux to SIGTERM children when this parent dies."""
     if sys.platform.startswith("linux"):
@@ -54,6 +80,7 @@ def set_pdeathsig():
         libc.prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG = 1
 
 
+@beartype
 def objective(
     trial: optuna.Trial, accepted_trials: int, config, run_config: Any = None
 ) -> Union[float, tuple[float, ...]]:
@@ -61,6 +88,7 @@ def objective(
     if run_config is None:
         run_config = config.sample_trial(trial, accepted_trials)
     run_name = run_config.model_name
+    monitored_dataset, dataset_count = _monitored_dataset(run_config)
 
     config_path = os.path.join(
         config.project_root, config.model_config_write_path, f"{run_name}.yaml"
@@ -75,12 +103,20 @@ def objective(
             sort_keys=False,
         )
 
-    os.environ["SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"] = "1"
-
     log_dir = model_log_directory(config.project_root, run_name)
     log_dir.mkdir(parents=True, exist_ok=True)
-    validation_path = str(log_dir / f"sequifier-{run_name}-rank0-validation.csv")
-    prune_path = str(log_dir / f"sequifier-{run_name}.prune")
+    validation_path = (
+        str(
+            dataset_artifact_prefix(
+                config.project_root,
+                run_name,
+                dataset_name=monitored_dataset,
+                dataset_count=dataset_count,
+            )
+        )
+        + "-validation.csv"
+    )
+    prune_path = str(log_dir / f"{run_name}.prune")
     consumed_evaluation_ids: set[str] = set()
     if os.path.exists(validation_path):
         with open(validation_path, "r", encoding="utf-8", newline="") as file:
@@ -95,6 +131,7 @@ def objective(
             )
 
     env = os.environ.copy()
+    env["SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"] = "1"
     cmd = ["sequifier", "train", f"--config-path={config_path}"]
     process = subprocess.Popen(
         cmd,
@@ -105,6 +142,7 @@ def objective(
     best_val_loss = float("inf")
     completed_epochs = 0
 
+    @beartype
     def consume_metrics(
         best_val_loss: float, completed_epochs: int
     ) -> tuple[float, int]:
@@ -193,16 +231,29 @@ def objective(
         raise RuntimeError(f"Training failed with exit code {exit_code}")
 
     model_type = "onnx" if run_config.export_onnx else "pt"
-    model_path, last_epoch = get_best_model_path(
-        config.project_root, run_name, model_type
+    model_path, _last_epoch = get_best_model_path(
+        config.project_root,
+        run_name,
+        model_type,
+        dataset_name=(monitored_dataset if model_type == "onnx" else None),
+        dataset_count=(dataset_count if model_type == "onnx" else 1),
     )
+    evaluation_id = os.path.splitext(os.path.basename(model_path))[0]
 
     if config.evaluation_inference_config:
+        evaluation_inference_config = config.evaluation_inference_config
+        if not os.path.isabs(evaluation_inference_config) and not os.path.exists(
+            evaluation_inference_config
+        ):
+            evaluation_inference_config = os.path.join(
+                config.project_root,
+                evaluation_inference_config,
+            )
         subprocess.run(
             [
                 "sequifier",
                 "infer",
-                f"--config-path={config.evaluation_inference_config}",
+                f"--config-path={evaluation_inference_config}",
                 f"--model-path={model_path}",
             ],
             check=True,
@@ -210,7 +261,7 @@ def objective(
 
     if config.evaluation_script and config.evaluation_metrics:
         eval_script_path = config.evaluation_script
-        cmd = [sys.executable, eval_script_path, f"{run_name}-best-{last_epoch}"]
+        cmd = [sys.executable, eval_script_path, evaluation_id]
 
         eval_process = subprocess.run(
             cmd, capture_output=True, text=True, cwd=config.project_root
@@ -225,7 +276,7 @@ def objective(
             config.project_root,
             "outputs",
             "evaluations",
-            f"{run_name}-best-{last_epoch}.json",
+            f"{evaluation_id}.json",
         )
         if not os.path.exists(eval_json_path):
             raise FileNotFoundError(
@@ -264,6 +315,7 @@ def objective(
     return best_val_loss
 
 
+@beartype
 def _parameter_signature(params: dict[str, Any]) -> str:
     """Return a stable identity for one fully sampled Optuna parameter set."""
     return json.dumps(
@@ -274,6 +326,7 @@ def _parameter_signature(params: dict[str, Any]) -> str:
     )
 
 
+@beartype
 def _trained_parameter_signatures(study: optuna.Study) -> dict[str, int]:
     """Map trained parameter sets to the first trial that used each set."""
     signatures: dict[str, int] = {}
@@ -283,6 +336,7 @@ def _trained_parameter_signatures(study: optuna.Study) -> dict[str, int]:
     return signatures
 
 
+@beartype
 def _trained_trial_count(study: optuna.Study) -> int:
     """Count completed and pruned trials that consumed a training run."""
     return len(
@@ -293,6 +347,7 @@ def _trained_trial_count(study: optuna.Study) -> int:
     )
 
 
+@beartype
 def _optimize_distinct_trials(study: optuna.Study, config: Any, n_trials: int) -> None:
     """Train novel configurations until the study contains ``n_trials`` runs."""
     trained_signatures = _trained_parameter_signatures(study)
@@ -404,6 +459,7 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
             None if n_trials is None else max(0, n_trials - accepted_trials)
         )
 
+        @beartype
         def grid_objective(trial: optuna.Trial):
             nonlocal accepted_trials
             try:

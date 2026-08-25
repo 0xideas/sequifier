@@ -1,10 +1,9 @@
 import csv
-import glob
 import hashlib
 import os
 import random
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional, Union
@@ -12,20 +11,25 @@ from typing import Any, Optional, Union
 import numpy as np
 import polars as pl
 import torch
-from beartype import BeartypeConf, BeartypeStrategy, beartype
 from loguru import logger
 from pydantic import ValidationError
 from torch import Tensor
 
-from sequifier.logging_paths import rank_log_prefix
+from sequifier.logging_paths import (
+    dataset_artifact_prefix,
+    model_artifact_path,
+    model_log_directory,
+)
 from sequifier.objectives import (
     ALLOWED_OBJECTIVE_NAMES,
     OBJECTIVE_NAME_MESSAGE,
     get_objective_class,
 )
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
+from sequifier.typechecking import beartype
 
 
+@beartype
 def _events_and_reports_filter(record: dict[str, Any]) -> bool:
     """Keep non-warning, non-metric-console records in the narrative log."""
     return (
@@ -34,12 +38,13 @@ def _events_and_reports_filter(record: dict[str, Any]) -> bool:
     )
 
 
+@beartype
 def _warnings_and_errors_filter(record: dict[str, Any]) -> bool:
     """Keep warnings and errors in their dedicated operational log."""
     return record["level"].no >= logger.level("WARNING").no
 
 
-_LOGGER_CONFIGURATION: tuple[int, str, str, int] | None = None
+_LOGGER_CONFIGURATION: tuple[int, str, str, int, tuple[str, ...], bool] | None = None
 
 PANDAS_TO_TORCH_TYPES = {
     "Float64": torch.float64,
@@ -239,6 +244,7 @@ class StoredWindowLayout:
     max_target_offset: int
     version: int
 
+    @beartype
     def __post_init__(self) -> None:
         if self.stored_context_width < 1:
             raise ValueError("stored_context_width must be a positive integer")
@@ -256,6 +262,7 @@ class ModelWindowView:
     objective: str
     target_offset: int
 
+    @beartype
     def __post_init__(self) -> None:
         if self.context_length < 1:
             raise ValueError("context_length must be a positive integer")
@@ -278,6 +285,7 @@ class ResolvedWindowView:
     input_slice: slice
     target_slice: slice
 
+    @beartype
     def build_masks(self, left_pad_lengths: Tensor) -> dict[str, Tensor]:
         """Build explicit input-attention and target-validity masks for this view."""
         return {
@@ -297,15 +305,18 @@ class ModelWindowSamplingPlan:
     resolved_view: ResolvedWindowView
     stride: Optional[int] = None
 
+    @beartype
     def __post_init__(self) -> None:
         if self.stride is not None and self.stride < 1:
             raise ValueError("model_window_stride must be a positive integer")
 
     @property
+    @beartype
     def legacy_single_window(self) -> bool:
         return self.stride is None
 
     @property
+    @beartype
     def max_input_start(self) -> int:
         start = self.resolved_view.input_slice.start
         if start is None:
@@ -313,6 +324,7 @@ class ModelWindowSamplingPlan:
         return start
 
     @property
+    @beartype
     def candidate_input_starts(self) -> Tensor:
         """Return chronological starts, anchored to include the rightmost view."""
         max_start = self.max_input_start
@@ -328,6 +340,7 @@ class ModelWindowSamplingPlan:
             dtype=torch.int64,
         )
 
+    @beartype
     def first_eligible_start_indices(self, left_pad_lengths: Tensor) -> Tensor:
         """Return the first candidate with at least one valid target position."""
         left_pad_lengths = left_pad_lengths.to(dtype=torch.int64, device="cpu")
@@ -350,6 +363,7 @@ class ModelWindowSamplingPlan:
         )
         return first_indices.clamp(0, candidate_count)
 
+    @beartype
     def sample_counts(self, left_pad_lengths: Tensor) -> Tensor:
         """Return the number of usable logical samples in each stored row."""
         left_pad_lengths = left_pad_lengths.to(dtype=torch.int64, device="cpu")
@@ -361,10 +375,12 @@ class ModelWindowSamplingPlan:
         first_indices = self.first_eligible_start_indices(left_pad_lengths)
         return (candidate_count - first_indices).clamp_min(0)
 
+    @beartype
     def sample_count_for_left_pad(self, left_pad_length: int) -> int:
         count = self.sample_counts(torch.tensor([left_pad_length], dtype=torch.int64))
         return int(count.item())
 
+    @beartype
     def sample_count_from_histogram(
         self,
         histogram: Mapping[Any, int],
@@ -374,9 +390,11 @@ class ModelWindowSamplingPlan:
             for left_pad_length, frequency in histogram.items()
         )
 
+    @beartype
     def build_index(self, left_pad_lengths: Tensor) -> "WindowSampleIndex":
         return WindowSampleIndex(self, left_pad_lengths)
 
+    @beartype
     def gather(
         self,
         tensor: Tensor,
@@ -398,6 +416,7 @@ class ModelWindowSamplingPlan:
         )
         return tensor[stored_row_indices[:, None], positions]
 
+    @beartype
     def build_masks(
         self,
         left_pad_lengths: Tensor,
@@ -421,6 +440,7 @@ class ModelWindowSamplingPlan:
 class WindowSampleIndex:
     """Compact logical-index mapping for variable per-row window counts."""
 
+    @beartype
     def __init__(
         self,
         plan: ModelWindowSamplingPlan,
@@ -435,11 +455,13 @@ class WindowSampleIndex:
         self.counts = plan.sample_counts(self.left_pad_lengths)
         self.cumulative_counts = torch.cumsum(self.counts, dim=0)
 
+    @beartype
     def __len__(self) -> int:
         if self.cumulative_counts.numel() == 0:
             return 0
         return int(self.cumulative_counts[-1].item())
 
+    @beartype
     def share_memory_(self) -> "WindowSampleIndex":
         for tensor in (
             self.left_pad_lengths,
@@ -451,19 +473,23 @@ class WindowSampleIndex:
             tensor.share_memory_()
         return self
 
-    def resolve(self, logical_indices: Tensor) -> tuple[Tensor, Tensor]:
-        logical_indices = torch.as_tensor(logical_indices, dtype=torch.int64)
-        if logical_indices.numel() == 0:
+    @beartype
+    def resolve(self, logical_indices: Tensor | Sequence[int]) -> tuple[Tensor, Tensor]:
+        logical_indices_tensor: Tensor = torch.as_tensor(
+            logical_indices, dtype=torch.int64
+        )
+        if logical_indices_tensor.numel() == 0:
             empty = torch.empty(0, dtype=torch.int64)
             return empty, empty
-        if logical_indices.min().item() < 0 or logical_indices.max().item() >= len(
-            self
+        if (
+            logical_indices_tensor.min().item() < 0
+            or logical_indices_tensor.max().item() >= len(self)
         ):
             raise IndexError("Logical model-window sample index is out of range")
 
         stored_rows = torch.searchsorted(
             self.cumulative_counts,
-            logical_indices,
+            logical_indices_tensor,
             right=True,
         )
         previous_counts = torch.where(
@@ -471,7 +497,7 @@ class WindowSampleIndex:
             torch.zeros_like(stored_rows),
             self.cumulative_counts[stored_rows - 1],
         )
-        local_indices = logical_indices - previous_counts
+        local_indices = logical_indices_tensor - previous_counts
         start_indices = self.first_start_indices[stored_rows] + local_indices
         return stored_rows, self.starts[start_indices]
 
@@ -527,6 +553,7 @@ def resolve_window_sampling_plan(
     )
 
 
+@beartype
 def configured_model_window_stride(config: Any) -> Optional[int]:
     """Read the optional stride from validated configs or legacy test doubles."""
     value = getattr(config, "model_window_stride", None)
@@ -549,15 +576,6 @@ def stored_window_layout_from_metadata(metadata: dict) -> StoredWindowLayout:
         max_target_offset=int(metadata["max_target_offset"]),
         version=int(metadata["stored_window_layout_version"]),
     )
-
-
-# Check an environment variable to see if we are in a testing context
-IS_TESTING = os.environ.get("SEQUIFIER_TESTING", "0") == "1"
-
-# O1 is the default type-checking strategy. O0 completely disables it.
-current_strategy = BeartypeStrategy.O1 if IS_TESTING else BeartypeStrategy.O0
-
-conditional_beartype = beartype(conf=BeartypeConf(strategy=current_strategy))
 
 
 @beartype
@@ -827,8 +845,15 @@ def derive_target_column_types(
 
 
 @beartype
-def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0):
-    """Configure console plus exclusive rank-scoped operational log files."""
+def configure_logger(
+    project_root: str,
+    model_name: str,
+    rank: Optional[int] = 0,
+    *,
+    dataset_names: tuple[str, ...] = (),
+    rank_specific: bool = False,
+):
+    """Configure canonical model/dataset operational log files."""
     global _LOGGER_CONFIGURATION
     normalized_rank = 0 if rank is None else rank
     configuration = (
@@ -836,6 +861,8 @@ def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0
         os.path.abspath(project_root),
         model_name,
         normalized_rank,
+        dataset_names,
+        rank_specific,
     )
     if _LOGGER_CONFIGURATION == configuration:
         return logger
@@ -849,28 +876,22 @@ def configure_logger(project_root: str, model_name: str, rank: Optional[int] = 0
             level="INFO",
         )
 
-    prefix = rank_log_prefix(project_root, model_name, normalized_rank)
-    prefix.parent.mkdir(parents=True, exist_ok=True)
-
-    events_path = f"{prefix}-events-reports.log"
-    logger.add(
-        events_path,
-        level="DEBUG",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-        filter=_events_and_reports_filter,
-        enqueue=True,
-        mode="a",
-    )
-
-    warnings_path = f"{prefix}-warnings-errors.log"
-    logger.add(
-        warnings_path,
-        level="WARNING",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-        filter=_warnings_and_errors_filter,
-        enqueue=True,
-        mode="a",
-    )
+    names: tuple[str | None, ...] = dataset_names or (None,)
+    for dataset_name in names:
+        dataset_suffix = f"-{dataset_name}" if len(names) > 1 else ""
+        rank_suffix = f"-rank{normalized_rank}" if rank_specific else ""
+        path = (
+            model_log_directory(project_root, model_name)
+            / f"{model_name}{dataset_suffix}{rank_suffix}.log"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        logger.add(
+            str(path),
+            level="DEBUG",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+            enqueue=True,
+            mode="a",
+        )
     _LOGGER_CONFIGURATION = configuration
     return logger
 
@@ -915,34 +936,39 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
     return dtype_map[dtype_str]
 
 
+@beartype
 def get_best_model_path(
-    project_root: str, run_name: str, model_type: str
+    project_root: str,
+    run_name: str,
+    model_type: str,
+    *,
+    dataset_name: str | None = None,
+    dataset_count: int = 1,
 ) -> tuple[str, int]:
-    """Return the highest-epoch exported best model path."""
-    search_pattern = os.path.join(
-        project_root, "models", f"sequifier-{run_name}-best-*.{model_type}"
-    )
-
-    matching_models = glob.glob(search_pattern)
-
-    if not matching_models:
-        raise FileNotFoundError(
-            f"Could not find an exported 'best' model matching: {search_pattern}"
+    """Return the canonical best-model path and its checkpoint epoch if known."""
+    best_model_path = str(
+        model_artifact_path(
+            project_root,
+            run_name,
+            "best",
+            model_type,
+            dataset_name=dataset_name,
+            dataset_count=dataset_count,
         )
-
-    best_model_path = max(
-        matching_models,
-        key=lambda p: int(os.path.splitext(os.path.basename(p))[0].split("-")[-1]),
     )
-    last_epoch = int(best_model_path.split("-")[-1].split(".")[0])
-    return best_model_path, last_epoch
+    if not os.path.exists(best_model_path):
+        raise FileNotFoundError(
+            f"Could not find an exported 'best' model at: {best_model_path}"
+        )
+    return best_model_path, 0
 
 
+@beartype
 def get_last_training_batch_timedelta(
     model_name: str, rank: int, project_root: str = "."
 ) -> float:
     """Return seconds between the last two structured train observations."""
-    metrics_path = f"{rank_log_prefix(project_root, model_name, rank)}-training.csv"
+    metrics_path = f"{dataset_artifact_prefix(project_root, model_name)}-training.csv"
 
     if os.path.exists(metrics_path):
         observations = []
