@@ -67,8 +67,10 @@ from sequifier.special_tokens import (
     SPECIAL_TOKEN_NAMES,
     resolve_categorical_decoder_ids,
 )
+from sequifier.typechecking import beartype
 
 
+@beartype
 def _identifier(value: str, usage: str) -> str:
     if "." in value or not value.isidentifier() or keyword.iskeyword(value):
         raise ValueError(
@@ -77,6 +79,7 @@ def _identifier(value: str, usage: str) -> str:
     return value
 
 
+@beartype
 def _unique_columns(value: list[str], usage: str) -> list[str]:
     if len(value) != len(set(value)):
         raise ValueError(f"{usage} cannot contain duplicate columns.")
@@ -134,6 +137,7 @@ class GlobalTrainingSpecModel(BaseModel):
 
     @field_validator("training_objective")
     @classmethod
+    @beartype
     def validate_objective(cls, value: str) -> str:
         if value not in ALLOWED_OBJECTIVE_NAMES:
             raise ValueError(
@@ -143,6 +147,7 @@ class GlobalTrainingSpecModel(BaseModel):
 
     @field_validator("optimizer", mode="before")
     @classmethod
+    @beartype
     def validate_optimizer(cls, value: Any) -> DotDict:
         value = dict(value)
         name = value.get("name")
@@ -157,11 +162,13 @@ class GlobalTrainingSpecModel(BaseModel):
         return DotDict(value)
 
     @field_serializer("optimizer", "scheduler")
+    @beartype
     def serialize_dot_dict(self, value: DotDict) -> dict[str, Any]:
         return dict(value)
 
     @field_validator("scheduler", mode="before")
     @classmethod
+    @beartype
     def validate_scheduler(cls, value: Any) -> DotDict:
         value = dict(value)
         name = value.get("name")
@@ -173,6 +180,7 @@ class GlobalTrainingSpecModel(BaseModel):
 
     @field_validator("layer_type_dtypes")
     @classmethod
+    @beartype
     def validate_layer_dtypes(cls, value: Optional[dict[str, str]]):
         if value is None:
             return value
@@ -192,6 +200,7 @@ class GlobalTrainingSpecModel(BaseModel):
         return value
 
     @model_validator(mode="after")
+    @beartype
     def validate_distribution(self):
         if self.distributed and self.data_parallelism is None:
             raise ValueError("distributed=true requires data_parallelism")
@@ -237,11 +246,13 @@ class ModelInterfaceSpecModel(BaseModel):
 
     @field_validator("input_columns", "target_columns")
     @classmethod
+    @beartype
     def validate_columns(cls, value: list[str], info):
         return _unique_columns(value, info.field_name)
 
     @field_validator("categorical_decoder_special_tokens")
     @classmethod
+    @beartype
     def validate_decoder_tokens(cls, value):
         if any(len(tokens) != len(set(tokens)) for tokens in value.values()):
             raise ValueError(
@@ -253,6 +264,7 @@ class ModelInterfaceSpecModel(BaseModel):
         }
 
     @model_validator(mode="after")
+    @beartype
     def validate_interface_contract(self):
         input_columns = set(self.input_columns)
         auxiliary_columns = set(self.ingestion.auxiliary_input_columns)
@@ -281,11 +293,13 @@ class ModelSpecModel(BaseModel):
 
     @field_validator("interfaces")
     @classmethod
+    @beartype
     def validate_interface_names(cls, value):
         for name in value:
             _identifier(name, "Model interface name")
         return value
 
+    @beartype
     def _single_interface(self) -> ModelInterfaceSpecModel:
         if len(self.interfaces) != 1:
             raise AttributeError(
@@ -295,12 +309,14 @@ class ModelSpecModel(BaseModel):
         return next(iter(self.interfaces.values()))
 
     @property
+    @beartype
     def ingestion(self) -> IngestionComponentConfig:
         """Single-interface compatibility view for low-level builders."""
 
         return self._single_interface().ingestion
 
     @property
+    @beartype
     def decoder(self) -> DecoderComponentConfig:
         """Single-interface compatibility view for low-level builders."""
 
@@ -328,6 +344,7 @@ class DatasetFreezingSpecModel(BaseModel):
     )
 
     @property
+    @beartype
     def active(self) -> bool:
         return self.ingestion_adapter or any(
             value.has_freezing_policy
@@ -348,11 +365,13 @@ class DatasetTrainingSpecModel(BaseModel):
 
     @field_validator("model_interface")
     @classmethod
+    @beartype
     def validate_interface_name(cls, value):
         return _identifier(value, "Model interface reference")
 
     @field_validator("parts")
     @classmethod
+    @beartype
     def validate_part_names(cls, value):
         for name in value:
             _identifier(name, "Dataset part name")
@@ -360,6 +379,7 @@ class DatasetTrainingSpecModel(BaseModel):
 
     @field_validator("criterion")
     @classmethod
+    @beartype
     def validate_criteria(cls, value):
         for name in value.values():
             if not hasattr(torch.nn, name):
@@ -376,6 +396,7 @@ class TrainingSourceSpecModel(BaseModel):
 
     @field_validator("ref")
     @classmethod
+    @beartype
     def validate_ref(cls, value):
         parts = value.split(".")
         if len(parts) > 2:
@@ -396,10 +417,12 @@ class TrainingPhaseSpecModel(BaseModel):
 
     @field_validator("name")
     @classmethod
+    @beartype
     def validate_name(cls, value):
         return _identifier(value, "Training phase name")
 
     @model_validator(mode="after")
+    @beartype
     def validate_mode_fields(self):
         if self.mode == "sequential":
             if self.selection is not None:
@@ -425,6 +448,7 @@ class TrainingPlanModel(BaseModel):
     phases: list[TrainingPhaseSpecModel] = Field(..., min_length=1)
 
     @model_validator(mode="after")
+    @beartype
     def validate_unique_names(self):
         names = [phase.name for phase in self.phases]
         if len(names) != len(set(names)):
@@ -447,6 +471,7 @@ class EvaluationSpecModel(BaseModel):
     monitor: Optional[EvaluationMonitorSpecModel] = None
 
     @model_validator(mode="after")
+    @beartype
     def validate_monitor(self):
         if any(
             source.weight is not None or source.batches_per_selection is not None
@@ -493,6 +518,7 @@ class SequifierConfig(BaseModel):
 
     @field_validator("dataset_training_spec")
     @classmethod
+    @beartype
     def validate_dataset_names(cls, value):
         for name in value:
             _identifier(name, "Dataset name")
@@ -500,13 +526,20 @@ class SequifierConfig(BaseModel):
 
     @field_validator("model_name")
     @classmethod
+    @beartype
     def validate_model_name(cls, value):
         if "embedding" in value:
             raise ValueError("model_name cannot contain 'embedding'")
         return value
 
     @model_validator(mode="after")
+    @beartype
     def validate_relationships(self):
+        if self.global_training_spec.early_stopping_epochs is not None and (
+            self.evaluation is None or self.evaluation.monitor is None
+        ):
+            raise ValueError("early stopping requires evaluation.monitor")
+
         for interface in self.model_spec.interfaces.values():
             validate_embedding_layer_names(
                 self.embedding_layer_names,
@@ -628,6 +661,7 @@ class SequifierConfig(BaseModel):
             raise ValueError("At least one model export must be enabled")
         return self
 
+    @beartype
     def _validate_source(self, ref: str, usage: str) -> None:
         dataset_name, _, part_name = ref.partition(".")
         dataset = self.dataset_training_spec.get(dataset_name)
@@ -713,6 +747,7 @@ class ResolvedTrainingPhase(BaseModel):
 class _TrainingSpecRuntimeView:
     """Attribute view joining run-wide and active-dataset training policy."""
 
+    @beartype
     def __init__(
         self,
         global_spec: GlobalTrainingSpecModel,
@@ -723,12 +758,14 @@ class _TrainingSpecRuntimeView:
         object.__setattr__(self, "_dataset", dataset)
         object.__setattr__(self, "epochs", epochs)
 
+    @beartype
     def __getattr__(self, name: str) -> Any:
         dataset = object.__getattribute__(self, "_dataset")
         if hasattr(dataset, name):
             return getattr(dataset, name)
         return getattr(object.__getattribute__(self, "_global"), name)
 
+    @beartype
     def __setattr__(self, name: str, value: Any) -> None:
         global_spec = object.__getattribute__(self, "_global")
         if hasattr(global_spec, name):
@@ -760,6 +797,7 @@ class ResolvedSequifierConfig(BaseModel):
     export_with_dropout: bool = False
 
     @model_validator(mode="after")
+    @beartype
     def validate_next_occurrence_metadata(self):
         objective = get_objective_class(self.global_training_spec.training_objective)
         if not issubclass(objective, NextOccurrenceObjective):
@@ -801,6 +839,7 @@ class ResolvedSequifierConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    @beartype
     def validate_model_execution_plans(self):
         """Compile each route while validation errors still retain Pydantic context."""
 
@@ -818,13 +857,16 @@ class ResolvedSequifierConfig(BaseModel):
         return self
 
     @property
+    @beartype
     def dataset_count(self) -> int:
         return len(self.dataset_training_spec)
 
     @property
+    @beartype
     def interface_names(self) -> tuple[str, ...]:
         return tuple(self.model_spec.interfaces)
 
+    @beartype
     def dataset(self, name: Optional[str] = None) -> ResolvedDatasetTrainingSpec:
         if name is None:
             if len(self.dataset_training_spec) != 1:
@@ -832,6 +874,7 @@ class ResolvedSequifierConfig(BaseModel):
             return next(iter(self.dataset_training_spec.values()))
         return self.dataset_training_spec[name]
 
+    @beartype
     def interface(self, name: Optional[str] = None) -> ResolvedModelInterface:
         if name is None:
             names = {
@@ -849,6 +892,7 @@ class ResolvedSequifierConfig(BaseModel):
     # Internal, single-route compatibility properties used by existing IO and
     # objective implementations.  They cannot be authored in YAML.
     @property
+    @beartype
     def training_spec(self):
         dataset = next(iter(self.dataset_training_spec.values()))
         return _TrainingSpecRuntimeView(
@@ -858,29 +902,36 @@ class ResolvedSequifierConfig(BaseModel):
         )
 
     @property
+    @beartype
     def training_objective(self):
         return self.global_training_spec.training_objective
 
     @property
+    @beartype
     def read_format(self):
         return self.global_training_spec.read_format
 
     @property
+    @beartype
     def context_length(self):
         return self.global_training_spec.context_length
 
     @property
+    @beartype
     def target_offset(self):
         return self.global_training_spec.target_offset
 
     @property
+    @beartype
     def model_window_stride(self):
         return self.global_training_spec.model_window_stride
 
     @property
+    @beartype
     def inference_batch_size(self):
         return self.global_training_spec.inference_batch_size
 
+    @beartype
     def __getattr__(self, name: str):
         if name in {
             "input_columns",
@@ -919,6 +970,7 @@ class LoadedTrainConfig:
     metadata: dict[str, DatasetMetadata]
 
 
+@beartype
 def _source(
     ref: str, accumulation_steps: Optional[int], **values: Any
 ) -> ResolvedTrainingSource:
@@ -934,6 +986,7 @@ def _source(
     )
 
 
+@beartype
 def _storage_form(path: str) -> Literal["file", "folder"]:
     value = Path(path)
     if value.exists():
@@ -941,6 +994,7 @@ def _storage_form(path: str) -> Literal["file", "folder"]:
     return "file" if value.suffix else "folder"
 
 
+@beartype
 def _evaluated_parts(config: SequifierConfig) -> set[str]:
     selected: set[str] = set()
     if config.evaluation is None:
@@ -957,6 +1011,7 @@ def _evaluated_parts(config: SequifierConfig) -> set[str]:
     return selected
 
 
+@beartype
 def _part_signature(
     metadata: DatasetMetadata, interface: ModelInterfaceSpecModel
 ) -> dict[str, Any]:
@@ -1003,6 +1058,7 @@ def _part_signature(
     }
 
 
+@beartype
 def _assert_compatible(
     expected: dict[str, Any], actual: dict[str, Any], usage: str
 ) -> None:
@@ -1014,6 +1070,7 @@ def _assert_compatible(
         )
 
 
+@beartype
 def _resolve_interface(
     name: str,
     spec: ModelInterfaceSpecModel,
@@ -1108,6 +1165,7 @@ def _resolve_interface(
     )
 
 
+@beartype
 def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
     return interface.model_dump(
         mode="python",
@@ -1115,6 +1173,7 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
     )
 
 
+@beartype
 def resolve_sequifier_config(
     config: SequifierConfig,
     metadata: DatasetMetadata | dict[str, DatasetMetadata],
@@ -1334,6 +1393,7 @@ _INLINE_METADATA_KEYS = {
 }
 
 
+@beartype
 def _override_part(config: SequifierConfig) -> str:
     if len(config.dataset_training_spec) != 1:
         raise ValueError(
@@ -1362,6 +1422,7 @@ def _override_part(config: SequifierConfig) -> str:
     )
 
 
+@beartype
 def _inline_metadata(
     values: dict[str, Any], global_spec: GlobalTrainingSpecModel
 ) -> DatasetMetadata:
@@ -1404,6 +1465,7 @@ def _inline_metadata(
     )
 
 
+@beartype
 def load_train_config_with_source(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
 ) -> LoadedTrainConfig:
@@ -1489,6 +1551,7 @@ def load_train_config_with_source(
     )
 
 
+@beartype
 def load_train_config(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
 ) -> ResolvedSequifierConfig:
@@ -1497,6 +1560,7 @@ def load_train_config(
     ).resolved
 
 
+@beartype
 def interface_build_view(
     config: ResolvedSequifierConfig, interface: ResolvedModelInterface
 ) -> SimpleNamespace:
@@ -1530,6 +1594,7 @@ def interface_build_view(
     )
 
 
+@beartype
 def dataset_part_view(
     config: ResolvedSequifierConfig,
     dataset_name: str,

@@ -1,7 +1,10 @@
 from pathlib import Path
 from typing import Any
 
+from sequifier.typechecking import beartype
 
+
+@beartype
 def checkpoint_path(training_config: Any) -> Path:
     resume = training_config.training_spec.resume
     configured_path = resume.checkpoint_path if resume is not None else None
@@ -20,6 +23,7 @@ def checkpoint_path(training_config: Any) -> Path:
     return path.resolve()
 
 
+@beartype
 def select_run_checkpoint(training_config: Any) -> dict[str, Any] | None:
     resume = training_config.training_spec.resume
     if resume is None or resume.policy == "never":

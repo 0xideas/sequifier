@@ -2,12 +2,16 @@
 
 from pathlib import Path
 
+from sequifier.typechecking import beartype
 
+
+@beartype
 def model_log_directory(project_root: str | Path, model_name: str) -> Path:
     """Return the directory containing one model's logging artifacts."""
     return Path(project_root) / "logs" / model_name
 
 
+@beartype
 def rank_log_prefix(
     project_root: str | Path,
     model_name: str,
@@ -22,6 +26,7 @@ def rank_log_prefix(
     )
 
 
+@beartype
 def dataset_artifact_prefix(
     project_root: str | Path,
     model_name: str,
@@ -37,6 +42,7 @@ def dataset_artifact_prefix(
     return model_log_directory(project_root, model_name) / f"{model_name}{suffix}"
 
 
+@beartype
 def model_artifact_path(
     project_root: str | Path,
     model_name: str,

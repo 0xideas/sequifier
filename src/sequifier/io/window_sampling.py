@@ -6,8 +6,10 @@ from torch import Tensor
 
 from sequifier.helpers import WindowSampleIndex
 from sequifier.io.batch import SequifierBatch
+from sequifier.typechecking import beartype
 
 
+@beartype
 def build_window_batch(
     sequences: dict[str, Tensor],
     input_columns: Sequence[str],

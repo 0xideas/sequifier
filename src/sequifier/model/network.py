@@ -15,6 +15,7 @@ from sequifier.model.tracing import (
     active_trace_context,
     trace_sites,
 )
+from sequifier.typechecking import beartype, conditional_beartype
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class TracedModelOutput:
 
 
 class TransformerNetwork(nn.Module):
+    @beartype
     def __init__(
         self,
         *,
@@ -67,14 +69,17 @@ class TransformerNetwork(nn.Module):
         )
 
     @property
+    @conditional_beartype
     def dim_model(self) -> int:
         return int(self.backbone.dim_model)
 
     @property
+    @conditional_beartype
     def context_length(self) -> int:
         return int(self.attention_mask_policy.shape[-1])
 
     @property
+    @conditional_beartype
     def trace_catalog(self) -> tuple[TraceSite, ...]:
         branch_counts = {
             name: tuple(branch.hidden_dims)
@@ -90,6 +95,7 @@ class TransformerNetwork(nn.Module):
             target_branches=dict(self.decoder.target_to_branch),
         )
 
+    @conditional_beartype
     def _build_attention_mask(self, valid_mask: Tensor, dtype: torch.dtype) -> Tensor:
         batch_size, context_length = valid_mask.shape
         if context_length != self.context_length:
@@ -113,6 +119,7 @@ class TransformerNetwork(nn.Module):
         )
         return base_mask + padding_mask
 
+    @conditional_beartype
     def encode(
         self,
         features: dict[str, Tensor],
@@ -147,6 +154,7 @@ class TransformerNetwork(nn.Module):
         hidden = self.backbone(hidden, attention_mask, trace=trace)
         return hidden.masked_fill(~valid_mask[:, :, None], 0.0)
 
+    @conditional_beartype
     def decoder_input(self, representation: Tensor) -> Tensor:
         if representation.ndim != 3:
             raise ValueError(
@@ -173,6 +181,7 @@ class TransformerNetwork(nn.Module):
             self.decoding_support * representation.shape[2],
         )
 
+    @conditional_beartype
     def decode_representation(
         self,
         representation: Tensor,
@@ -211,6 +220,7 @@ class TransformerNetwork(nn.Module):
             }
         return outputs
 
+    @conditional_beartype
     def forward(
         self,
         features: dict[str, Tensor],
@@ -227,6 +237,7 @@ class TransformerNetwork(nn.Module):
         start = max(0, next(iter(logits.values())).shape[1] - self.prediction_length)
         return ModelOutput(logits=logits, prediction_positions=slice(start, None))
 
+    @conditional_beartype
     def trace(
         self,
         features: dict[str, Tensor],
@@ -250,11 +261,18 @@ class TransformerNetwork(nn.Module):
 
 
 class LegacyOutputAdapter(nn.Module):
-    def __init__(self, network: TransformerNetwork, *, apply_output_transform: bool):
+    @beartype
+    def __init__(
+        self,
+        network: TransformerNetwork | ComposableTransformerNetwork,
+        *,
+        apply_output_transform: bool,
+    ):
         super().__init__()
         self.network = network
         self.apply_output_transform = apply_output_transform
 
+    @conditional_beartype
     def forward(
         self, features: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> dict[str, Tensor]:
@@ -278,6 +296,7 @@ class LegacyOutputAdapter(nn.Module):
 class ModelInterfaceModule(nn.Module):
     """One named ingestion/adapter/decoder route around the shared backbone."""
 
+    @beartype
     def __init__(
         self,
         *,
@@ -300,6 +319,7 @@ class ModelInterfaceModule(nn.Module):
         self.target_columns = target_columns
         self.target_column_types = target_column_types
 
+    @conditional_beartype
     def ingest(
         self, features: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> Tensor:
@@ -308,6 +328,7 @@ class ModelInterfaceModule(nn.Module):
             cast_floating_to_module_dtype(hidden, self.ingestion_adapter)
         )
 
+    @conditional_beartype
     def decoder_input(self, representation: Tensor) -> Tensor:
         if representation.ndim != 3:
             raise ValueError(
@@ -329,6 +350,7 @@ class ModelInterfaceModule(nn.Module):
             self.decoding_support * representation.shape[2],
         )
 
+    @conditional_beartype
     def decode(
         self,
         representation: Tensor,
@@ -367,6 +389,7 @@ class ModelInterfaceModule(nn.Module):
 class ComposableTransformerNetwork(nn.Module):
     """A shared backbone with explicitly selected named model interfaces."""
 
+    @beartype
     def __init__(
         self,
         *,
@@ -384,13 +407,16 @@ class ComposableTransformerNetwork(nn.Module):
         )
 
     @property
+    @conditional_beartype
     def dim_model(self) -> int:
         return int(self.backbone.dim_model)
 
     @property
+    @conditional_beartype
     def context_length(self) -> int:
         return int(self.attention_mask_policy.shape[-1])
 
+    @conditional_beartype
     def resolve_interface(self, interface_name: str | None) -> ModelInterfaceModule:
         if interface_name is None:
             if len(self.interfaces) != 1:
@@ -402,6 +428,7 @@ class ComposableTransformerNetwork(nn.Module):
             raise ValueError(f"Unknown model interface {interface_name!r}.")
         return self.interfaces[interface_name]
 
+    @conditional_beartype
     def trace_catalog_for(
         self, interface_name: str | None = None
     ) -> tuple[TraceSite, ...]:
@@ -421,9 +448,11 @@ class ComposableTransformerNetwork(nn.Module):
         )
 
     @property
+    @conditional_beartype
     def trace_catalog(self) -> tuple[TraceSite, ...]:
         return self.trace_catalog_for()
 
+    @conditional_beartype
     def _build_attention_mask(self, valid_mask: Tensor, dtype: torch.dtype) -> Tensor:
         batch_size, context_length = valid_mask.shape
         if context_length != self.context_length:
@@ -446,6 +475,7 @@ class ComposableTransformerNetwork(nn.Module):
             (~valid_mask.bool())[:, None, None, :], torch.finfo(dtype).min
         )
 
+    @conditional_beartype
     def encode(
         self,
         features: dict[str, Tensor],
@@ -479,6 +509,7 @@ class ComposableTransformerNetwork(nn.Module):
         hidden = self.backbone(hidden, attention_mask, trace=trace)
         return hidden.masked_fill(~valid_mask[:, :, None], 0.0)
 
+    @conditional_beartype
     def decode_representation(
         self,
         representation: Tensor,
@@ -499,6 +530,7 @@ class ComposableTransformerNetwork(nn.Module):
             )
         return route.decode(representation, request, trace=trace)
 
+    @conditional_beartype
     def forward(
         self,
         features: dict[str, Tensor],
@@ -519,6 +551,7 @@ class ComposableTransformerNetwork(nn.Module):
         start = max(0, next(iter(logits.values())).shape[1] - route.prediction_length)
         return ModelOutput(logits=logits, prediction_positions=slice(start, None))
 
+    @conditional_beartype
     def trace(
         self,
         features: dict[str, Tensor],

@@ -1,16 +1,19 @@
-# type: ignore
-
-# from https://github.com/nanowell/AdEMAMix-Optimizer-Pytorch. Thanks a lot!
-
 import math
 
 import torch
 from torch.optim import Optimizer
 
+from sequifier.typechecking import beartype
+
+# type: ignore
+
+# from https://github.com/nanowell/AdEMAMix-Optimizer-Pytorch. Thanks a lot!
+
 
 class AdEMAMix(Optimizer):
     """AdEMAMix optimizer."""
 
+    @beartype
     def __init__(
         self,
         params={},
@@ -42,10 +45,12 @@ class AdEMAMix(Optimizer):
         )
         super(AdEMAMix, self).__init__(params, defaults)
 
+    @beartype
     def __setstate__(self, state):
         super(AdEMAMix, self).__setstate__(state)
 
     @torch.no_grad()
+    @beartype
     def step(self, closure=None):
         """Run one optimizer step."""
         loss = None
@@ -114,6 +119,7 @@ class AdEMAMix(Optimizer):
 
         return loss
 
+    @beartype
     def _update_adamemix(
         self,
         params,

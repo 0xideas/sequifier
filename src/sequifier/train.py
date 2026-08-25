@@ -21,7 +21,6 @@ import torch  # noqa: E402
 import torch._dynamo  # noqa: E402
 import torch.distributed as dist  # noqa: E402
 import torch.multiprocessing as mp  # noqa: E402
-from beartype import beartype  # noqa: E402
 from loguru import logger as loguru_logger  # noqa: E402
 from packaging import version  # noqa: E402
 from torch import Tensor, nn  # noqa: E402
@@ -80,7 +79,6 @@ from sequifier.config.composable_train_config import (  # noqa: E402
 from sequifier.config.composable_train_config import load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
-    conditional_beartype,
     configure_determinism,
     configure_logger,
     construct_index_maps,
@@ -156,13 +154,16 @@ from sequifier.training.lifecycle import (  # noqa: E402
 from sequifier.training.metrics import StructuredMetricWriters  # noqa: E402
 from sequifier.training.session import TrainingSession  # noqa: E402
 from sequifier.training.state import TrainingState  # noqa: E402
+from sequifier.typechecking import beartype, conditional_beartype  # noqa: E402
 
 
+@beartype
 def cleanup():
     """Destroy the active distributed process group."""
     dist.destroy_process_group()
 
 
+@beartype
 def _smallest_embedding_safe_dtype(dtype: torch.dtype) -> torch.dtype:
     """Return the narrowest dtype accepted by torch embedding for this integer dtype."""
     if dtype in EMBEDDING_INDEX_DTYPES:
@@ -206,6 +207,7 @@ def create_dummy_data_and_metadata(
     return dummy_data, dummy_metadata
 
 
+@beartype
 def _canonical_parameter_name(name: str) -> str:
     """Return a parameter name independent of compile and component DDP wrappers."""
     canonical = name.replace("_orig_mod.", "")
@@ -214,6 +216,7 @@ def _canonical_parameter_name(name: str) -> str:
     return canonical.replace(".module.", ".")
 
 
+@beartype
 def _canonical_parameter_names(value: Any) -> Any:
     """Canonicalize a checkpoint parameter-name list when it has the expected form."""
     if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
@@ -221,6 +224,7 @@ def _canonical_parameter_names(value: Any) -> Any:
     return [_canonical_parameter_name(name) for name in value]
 
 
+@beartype
 def _run_training_session(
     *,
     model: Any,
@@ -294,6 +298,7 @@ def _run_training_session(
     session.run(ddp_model=ddp_model)
 
 
+@beartype
 def _optimizer_parameters(model: Any, *, semantic_grouping: bool) -> Any:
     parameters = tuple(model.parameters_to_optimize())
     if not semantic_grouping:
@@ -303,6 +308,7 @@ def _optimizer_parameters(model: Any, *, semantic_grouping: bool) -> Any:
     )
 
 
+@beartype
 def _train_composable_worker(
     local_rank: int,
     world_size: int,
@@ -447,7 +453,12 @@ def _train_composable_worker(
         config.global_training_spec.distributed
         and config.global_training_spec.data_parallelism == "DDP"
     ):
-        ddp_model = wrap_composable_ddp(model, config, local_rank)
+        ddp_model = wrap_composable_ddp(
+            model,
+            config,
+            local_rank,
+            callable_model=callable_model,
+        )
         if ddp_model is not None:
             callable_model = ddp_model
 
@@ -1154,6 +1165,7 @@ def format_number(number: int | float | np.float32) -> str:
     return f"{value: .2e}"
 
 
+@beartype
 def _get_evaluation_loss_mask(metadata: dict[str, Tensor]) -> Tensor:
     """Build the effective loss mask from token, objective, and sample masks."""
     valid_mask = metadata["target_valid_mask"].bool()
@@ -1186,6 +1198,7 @@ def _checkpoint_start_position(
     return checkpoint["epoch"], checkpoint["batch"] + 1
 
 
+@beartype
 def _update_file_metadata_hash(hasher: Any, file_path: str) -> None:
     """Hash file identity metadata without reading the file contents."""
     normalized_path = os.path.abspath(file_path)
@@ -1241,6 +1254,7 @@ def accumulate_class_counts(
 class TransformerEmbeddingModel(nn.Module):
     """Embedding-only wrapper for TransformerModel."""
 
+    @beartype
     def __init__(self, transformer_model: "TransformerModel"):
         super().__init__()
         self.transformer_model = transformer_model
@@ -1265,6 +1279,7 @@ class TransformerEmbeddingModel(nn.Module):
 
 
 class _OnnxExportWrapper(nn.Module):
+    @beartype
     def __init__(
         self,
         model: Union["TransformerModel", TransformerEmbeddingModel],
@@ -1274,6 +1289,7 @@ class _OnnxExportWrapper(nn.Module):
         self.model = model
         self.feature_columns = feature_columns
 
+    @conditional_beartype
     def forward(self, *inputs: Tensor):
         features = dict(zip(self.feature_columns, inputs[:-1]))
         metadata = {"attention_valid_mask": inputs[-1]}
@@ -1395,7 +1411,9 @@ class TransformerModel(SequifierModel):
             logger=self.logger,
         )
         network = built_model.network
-        self.objective = built_model.objective
+        self.objectives = built_model.objectives
+        assert self.active_interface_name is not None
+        self.objective = self.objectives[self.active_interface_name]
         self.dim_model = network.dim_model
         self.backbone = network.backbone
         if isinstance(network, ComposableTransformerNetwork):
@@ -1517,6 +1535,7 @@ class TransformerModel(SequifierModel):
 
         object.__setattr__(self, "network", network)
 
+    @beartype
     def __getattr__(self, name: str):
         try:
             return super().__getattr__(name)
@@ -1529,6 +1548,7 @@ class TransformerModel(SequifierModel):
                     return getattr(interfaces[interface_name], name)
             raise
 
+    @beartype
     def activate_dataset(self, name: str, runtime: Any | None = None) -> None:
         """Activate one dataset's interface, loss, and metric policy."""
 
@@ -1537,6 +1557,7 @@ class TransformerModel(SequifierModel):
         dataset = self.hparams.dataset_training_spec[name]
         self.active_dataset_name = name
         self.active_interface_name = dataset.model_interface
+        self.objective = self.objectives[self.active_interface_name]
         interface = dataset.interface
         self.input_columns = interface.input_columns
         self.categorical_columns = interface.categorical_columns
@@ -1568,6 +1589,7 @@ class TransformerModel(SequifierModel):
         if runtime is not None:
             self.criterion = runtime.criteria
 
+    @beartype
     def evaluate_sources(
         self,
         source_configs: list[Any],
@@ -1575,6 +1597,10 @@ class TransformerModel(SequifierModel):
         *,
         phase_index: int,
         phase_epoch: int,
+        evaluation_kind: str,
+        run_epoch: int,
+        training_batch: int,
+        training_batches_total: int,
     ) -> dict[str, float]:
         """Evaluate configured dataset/part sources using count-weighted losses."""
 
@@ -1788,12 +1814,10 @@ class TransformerModel(SequifierModel):
                         writer.write_validation(
                             run_id=self.run_id,
                             session_id=self.session_id,
-                            evaluation_kind=(
-                                "dataset" if source_config.part is None else "part"
-                            ),
-                            epoch=phase_epoch,
-                            batch=self._training_engine.state.global_batch_step,
-                            batches_total=source.num_batches("validation"),
+                            evaluation_kind=evaluation_kind,
+                            epoch=run_epoch,
+                            batch=training_batch,
+                            batches_total=training_batches_total,
                             global_step=(self._training_engine.state.global_batch_step),
                             total_loss=results[source_config.ref],
                             target_losses=target_losses,
@@ -1810,21 +1834,26 @@ class TransformerModel(SequifierModel):
         return results
 
     @property
+    @beartype
     def encoder(self) -> ModuleDict:
         return getattr(self.ingestion, "encoder", ModuleDict())
 
     @property
+    @beartype
     def pos_encoder(self):
         return getattr(self.ingestion, "pos_encoder", None)
 
     @property
+    @beartype
     def layers(self) -> nn.ModuleList:
         return self.backbone.layers
 
     @property
+    @beartype
     def real_columns_direct(self) -> list[str]:
         return getattr(self.ingestion, "real_columns_direct", [])
 
+    @beartype
     def _ingestion_direct_real_dtype(self) -> torch.dtype:
         return self.backbone.layers[0].ff.get_first_layer_dtype()
 
@@ -1843,6 +1872,7 @@ class TransformerModel(SequifierModel):
         self.scheduler = self._get_scheduler(**self._filter_key(sched_kwargs, "name"))
         self.scheduler_step_on = self.hparams.training_spec.scheduler_step_on
 
+    @beartype
     def parameters_to_optimize(self):
         """Return the legacy iterator or the active policy's trainable parameters."""
 
@@ -1940,11 +1970,13 @@ class TransformerModel(SequifierModel):
         return criterion
 
     @staticmethod
+    @beartype
     def _generate_square_subsequent_mask(sz: int) -> Tensor:
         """Return a causal attention mask."""
         return torch.triu(torch.ones(sz, sz) * float("-inf"), diagonal=1)
 
     @staticmethod
+    @beartype
     def _filter_key(dict_: dict[str, Any], key: str) -> dict[str, Any]:
         """Return a copy without key."""
         return {k: v for k, v in dict_.items() if k != key}
@@ -2110,6 +2142,7 @@ class TransformerModel(SequifierModel):
             for target_column, out in output.items()
         }
 
+    @beartype
     def _get_full_state_dict(
         self, ddp_model: Optional[nn.Module] = None
     ) -> dict[str, Tensor]:
@@ -3814,7 +3847,9 @@ class TransformerModel(SequifierModel):
                 self._export_model(export_model, suffix, epoch)
         if self.export_embedding_model:
             if self._composable:
-                for dataset_name in export_hparams.dataset_training_spec:
+                for index, dataset_name in enumerate(
+                    export_hparams.dataset_training_spec
+                ):
                     export_model.activate_dataset(dataset_name)
                     model2 = TransformerEmbeddingModel(export_model)
                     self._export_model(
@@ -3822,7 +3857,7 @@ class TransformerModel(SequifierModel):
                         f"{suffix}-embedding",
                         epoch,
                         dataset_name=dataset_name,
-                        write_pt=False,
+                        write_pt=index == 0,
                     )
             else:
                 model2 = TransformerEmbeddingModel(export_model)

@@ -31,6 +31,7 @@ from sequifier.config.composable_train_config import (
     load_train_config_with_source,
 )
 from sequifier.config.composition import load_composed_yaml_config
+from sequifier.typechecking import beartype
 
 ConfigPath = tuple[str | int, ...]
 _MISSING = object()
@@ -38,6 +39,7 @@ _DISTRIBUTION_KEYS = frozenset({"low", "high", "step", "log", "type"})
 _PRIMITIVE_CATEGORICAL_TYPES = (str, int, float, bool, type(None))
 
 
+@beartype
 def _path_name(path: ConfigPath) -> str:
     """Return a stable, readable Optuna parameter name."""
 
@@ -50,6 +52,7 @@ def _path_name(path: ConfigPath) -> str:
     return value or "config"
 
 
+@beartype
 def _candidate_identity(value: Any) -> str:
     try:
         return json.dumps(
@@ -74,14 +77,17 @@ class _SearchSpace:
     log: bool = False
 
     @property
+    @beartype
     def name(self) -> str:
         return _path_name(self.path)
 
+    @beartype
     def baseline(self) -> Any:
         if self.kind == "categorical":
             return copy.deepcopy(self.choices[0])
         return self.low
 
+    @beartype
     def sample(self, trial: Any) -> Any:
         if self.kind == "int":
             assert isinstance(self.low, int) and isinstance(self.high, int)
@@ -114,6 +120,7 @@ class _SearchSpace:
         )
         return copy.deepcopy(self.choices[index])
 
+    @beartype
     def grid_size(self) -> int:
         if self.kind == "categorical":
             return len(self.choices)
@@ -132,6 +139,7 @@ class _SearchSpace:
         step = Decimal(str(self.step))
         return int((high - low) // step) + 1
 
+    @beartype
     def validation_parameters(self) -> list[tuple[str, Any]]:
         """Return trial parameters covering categorical values or range extrema."""
 
@@ -170,12 +178,15 @@ class _SearchSpace:
 class _ValidationTrial:
     """Minimal Optuna-trial interface used for eager candidate validation."""
 
+    @beartype
     def __init__(self, params: dict[str, Any]):
         self.params = params
 
+    @beartype
     def suggest_categorical(self, name: str, choices: list[Any]) -> Any:
         return self.params.get(name, choices[0])
 
+    @beartype
     def suggest_int(
         self,
         name: str,
@@ -187,6 +198,7 @@ class _ValidationTrial:
     ) -> int:
         return self.params.get(name, low)
 
+    @beartype
     def suggest_float(
         self,
         name: str,
@@ -200,9 +212,11 @@ class _ValidationTrial:
 
 
 class _CompiledValue:
+    @beartype
     def materialize(self, trial: Any | None) -> Any:
         raise NotImplementedError
 
+    @beartype
     def spaces(self) -> list[_SearchSpace]:
         return []
 
@@ -211,6 +225,7 @@ class _CompiledValue:
 class _LiteralValue(_CompiledValue):
     value: Any
 
+    @beartype
     def materialize(self, trial: Any | None) -> Any:
         return copy.deepcopy(self.value)
 
@@ -219,9 +234,11 @@ class _LiteralValue(_CompiledValue):
 class _SampledValue(_CompiledValue):
     space: _SearchSpace
 
+    @beartype
     def materialize(self, trial: Any | None) -> Any:
         return self.space.baseline() if trial is None else self.space.sample(trial)
 
+    @beartype
     def spaces(self) -> list[_SearchSpace]:
         return [self.space]
 
@@ -231,16 +248,19 @@ class _MappingValue(_CompiledValue):
     base: dict[str, Any]
     children: dict[str, _CompiledValue]
 
+    @beartype
     def materialize(self, trial: Any | None) -> dict[str, Any]:
         result = copy.deepcopy(self.base)
         for key, child in self.children.items():
             result[key] = child.materialize(trial)
         return result
 
+    @beartype
     def spaces(self) -> list[_SearchSpace]:
         return [space for child in self.children.values() for space in child.spaces()]
 
 
+@beartype
 def _merge_fixed_patch(base: Any, patch: Any) -> Any:
     """Merge one fixed partial variant using canonical component semantics."""
 
@@ -259,6 +279,7 @@ def _merge_fixed_patch(base: Any, patch: Any) -> Any:
     return result
 
 
+@beartype
 def _materialize_against(
     compiled: _CompiledValue,
     current: Any,
@@ -299,6 +320,7 @@ class _VariantMappingValue(_CompiledValue):
     variants: _SampledValue
     children: dict[str, _CompiledValue]
 
+    @beartype
     def materialize(self, trial: Any | None) -> dict[str, Any]:
         variant = self.variants.materialize(trial)
         result = _merge_fixed_patch(self.base, variant)
@@ -310,6 +332,7 @@ class _VariantMappingValue(_CompiledValue):
             )
         return result
 
+    @beartype
     def spaces(self) -> list[_SearchSpace]:
         return [
             *self.variants.spaces(),
@@ -322,16 +345,19 @@ class _ListValue(_CompiledValue):
     base: list[Any]
     children: dict[int, _CompiledValue]
 
+    @beartype
     def materialize(self, trial: Any | None) -> list[Any]:
         result = copy.deepcopy(self.base)
         for index, child in self.children.items():
             result[index] = child.materialize(trial)
         return result
 
+    @beartype
     def spaces(self) -> list[_SearchSpace]:
         return [space for child in self.children.values() for space in child.spaces()]
 
 
+@beartype
 def _categorical_space(path: ConfigPath, choices: Any) -> _SampledValue:
     if not isinstance(choices, list) or not choices:
         raise ValueError(f"{_path_name(path)} choices must be a non-empty list")
@@ -343,6 +369,7 @@ def _categorical_space(path: ConfigPath, choices: Any) -> _SampledValue:
     )
 
 
+@beartype
 def _distribution_space(
     path: ConfigPath,
     expression: dict[str, Any],
@@ -428,12 +455,14 @@ def _distribution_space(
     )
 
 
-def _is_distribution(expression: dict[str, Any]) -> bool:
+@beartype
+def _is_distribution(expression: dict[Any, Any]) -> bool:
     keys = set(expression)
     return {"low", "high"} <= keys and keys <= _DISTRIBUTION_KEYS
 
 
-def _list_index_mapping(expression: dict[str, Any]) -> dict[int, Any] | None:
+@beartype
+def _list_index_mapping(expression: dict[Any, Any]) -> dict[int, Any] | None:
     if not expression:
         return {}
     converted: dict[int, Any] = {}
@@ -448,6 +477,7 @@ def _list_index_mapping(expression: dict[str, Any]) -> dict[int, Any] | None:
     return converted
 
 
+@beartype
 def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledValue:
     if (
         isinstance(expression, dict)
@@ -580,6 +610,7 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
     _compiled_config: _CompiledValue = PrivateAttr()
 
     @model_validator(mode="after")
+    @beartype
     def validate_search_controls(self):
         reserved_overrides = {"model_name", "project_root"} & set(self.overrides)
         if reserved_overrides:
@@ -638,12 +669,15 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
         return self
 
     @property
+    @beartype
     def search_spaces(self) -> tuple[_SearchSpace, ...]:
         return tuple(self._compiled_config.spaces())
 
+    @beartype
     def grid_size(self) -> int:
         return math.prod(space.grid_size() for space in self.search_spaces)
 
+    @beartype
     def validate_compiled_search(self) -> None:
         """Validate the representative candidate and finite-grid controls."""
 
@@ -685,6 +719,7 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
                     f"{self.n_trials}. Remove n_samples to run the complete grid."
                 )
 
+    @beartype
     def _materialized_values(self, trial: Any | None, run_index: int) -> dict[str, Any]:
         values = self._compiled_config.materialize(trial)
         if not isinstance(values, dict):
@@ -714,6 +749,7 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
         values["model_name"] = f"{self.hp_search_name}-run-{run_index}"
         return values
 
+    @beartype
     def sample_trial(self, trial: Any, run_index: int) -> SequifierConfig:
         """Sample and validate one concrete canonical authored training config."""
 
@@ -728,6 +764,7 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
             ) from error
 
 
+@beartype
 def resolve_base_config_path(config_path: str, base_config_path: str) -> str:
     """Resolve a base config relative to the hyperparameter-search entry file."""
 
@@ -738,6 +775,7 @@ def resolve_base_config_path(config_path: str, base_config_path: str) -> str:
     )
 
 
+@beartype
 def compile_canonical_hyperparameter_search_config(
     config_path: str,
     config_values: dict[str, Any],

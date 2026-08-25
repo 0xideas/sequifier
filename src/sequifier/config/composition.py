@@ -9,6 +9,8 @@ from typing import Any
 
 import yaml
 
+from sequifier.typechecking import beartype
+
 ConfigPath = tuple[str, ...]
 
 ADDITIONAL_CONFIG_PATHS_KEY = "additional_config_paths"
@@ -26,6 +28,7 @@ DEFAULT_ATOMIC_PATHS: frozenset[ConfigPath] = frozenset(
 )
 
 
+@beartype
 def _is_atomic(path: ConfigPath, atomic_paths: frozenset[ConfigPath]) -> bool:
     if path in atomic_paths:
         return True
@@ -36,6 +39,7 @@ def _is_atomic(path: ConfigPath, atomic_paths: frozenset[ConfigPath]) -> bool:
     )
 
 
+@beartype
 def deep_merge_config(
     base: Mapping[str, Any],
     override: Mapping[str, Any],
@@ -52,6 +56,7 @@ def deep_merge_config(
     return _deep_merge_dicts(base, override, (), atomic_paths)
 
 
+@beartype
 def merge_config_fragments(
     fragments: Iterable[Mapping[str, Any]],
     *,
@@ -67,6 +72,7 @@ def merge_config_fragments(
     return merged
 
 
+@beartype
 def load_composed_yaml_config(
     config_path: str,
     *,
@@ -129,6 +135,7 @@ def load_composed_yaml_config(
     )
 
 
+@beartype
 def merge_complementary_config_fragments(
     fragments: Iterable[tuple[str, Mapping[str, Any]]],
     *,
@@ -152,6 +159,7 @@ def merge_complementary_config_fragments(
     return merged
 
 
+@beartype
 def _load_yaml_mapping(path: str) -> dict[str, Any]:
     try:
         with open(path, "r") as file:
@@ -166,6 +174,7 @@ def _load_yaml_mapping(path: str) -> dict[str, Any]:
     return values
 
 
+@beartype
 def _normalize_additional_config_paths(
     value: Any,
     config_path: str,
@@ -190,12 +199,14 @@ def _normalize_additional_config_paths(
     return paths
 
 
+@beartype
 def _resolve_additional_config_path(path: str, project_root: str) -> str:
     if os.path.isabs(path):
         return os.path.abspath(path)
     return os.path.abspath(os.path.join(project_root, path))
 
 
+@beartype
 def _merge_complementary_dicts(
     merged: dict[str, Any],
     fragment: Mapping[str, Any],
@@ -243,6 +254,7 @@ def _merge_complementary_dicts(
         )
 
 
+@beartype
 def _record_field_sources(
     value: Any,
     path: ConfigPath,
@@ -263,6 +275,7 @@ def _record_field_sources(
         )
 
 
+@beartype
 def _field_source_for_path(
     field_sources: Mapping[ConfigPath, str],
     path: ConfigPath,
@@ -275,6 +288,7 @@ def _field_source_for_path(
     return "unknown source"
 
 
+@beartype
 def _deep_merge_dicts(
     base: Mapping[str, Any],
     override: Mapping[str, Any],
@@ -303,6 +317,7 @@ def _deep_merge_dicts(
     return merged
 
 
+@beartype
 def _changes_discriminator(
     base: Mapping[str, Any], override: Mapping[str, Any]
 ) -> bool:

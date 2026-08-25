@@ -13,6 +13,7 @@ from sequifier.model.ingestions import (
     TemporalConvFeatureIngestion,
 )
 from sequifier.model.layers import FeedForward, RMSNorm, SelfAttention
+from sequifier.typechecking import beartype
 
 CONVOLUTION_TYPES = (nn.Conv1d, nn.Conv2d, nn.Conv3d)
 
@@ -20,6 +21,7 @@ CONVOLUTION_TYPES = (nn.Conv1d, nn.Conv2d, nn.Conv3d)
 class SemanticParameterGroups:
     """Build a deduplicated parameter inventory using initialization precedence."""
 
+    @beartype
     def __init__(self, model: nn.Module):
         self.model = model
         self._claimed_parameter_ids: set[int] = set()
@@ -28,6 +30,7 @@ class SemanticParameterGroups:
         self._ingestion_projection_module_ids = self._ingestion_projection_ids()
         self._decoder_output_module_ids = self._decoder_output_ids()
 
+    @beartype
     def collect(self) -> dict[LayerGroup, tuple[nn.Parameter, ...]]:
         """Return every parameter exactly once under its semantic group."""
 
@@ -41,6 +44,7 @@ class SemanticParameterGroups:
         self._collect_free_parameters()
         return {group: tuple(parameters) for group, parameters in self._groups.items()}
 
+    @beartype
     def _claim(
         self,
         group: LayerGroup,
@@ -55,12 +59,14 @@ class SemanticParameterGroups:
             self._claimed_parameter_ids.add(parameter_id)
             self._groups[group].append(parameter)
 
+    @beartype
     def _decoder_module(self) -> Optional[nn.Module]:
         if isinstance(self.model, (TargetDecoding, TargetDecoderBranch)):
             return self.model
         decoder = getattr(self.model, "decoder", None)
         return decoder if isinstance(decoder, nn.Module) else None
 
+    @beartype
     def _position_embedding_ids(self) -> set[int]:
         position_embeddings: set[int] = set()
         for module in self.model.modules():
@@ -80,6 +86,7 @@ class SemanticParameterGroups:
                 )
         return position_embeddings
 
+    @beartype
     def _ingestion_projection_ids(self) -> set[int]:
         projections: set[int] = set()
         for module in self.model.modules():
@@ -105,6 +112,7 @@ class SemanticParameterGroups:
                 )
         return projections
 
+    @beartype
     def _decoder_output_ids(self) -> set[int]:
         decoder = self._decoder_module()
         if decoder is None:
@@ -122,15 +130,18 @@ class SemanticParameterGroups:
             id(module) for module in decoder.modules() if isinstance(module, nn.Linear)
         }
 
+    @beartype
     def _claim_linear(self, layer: nn.Linear, group: LayerGroup) -> None:
         self._claim(group, (layer.weight, layer.bias))
 
+    @beartype
     def _claim_convolution(self, layer: nn.Module, group: LayerGroup) -> None:
         self._claim(
             group,
             (getattr(layer, "weight", None), getattr(layer, "bias", None)),
         )
 
+    @beartype
     def _collect_transformer_layers(self) -> None:
         for module in self.model.modules():
             if isinstance(module, SelfAttention):
@@ -156,6 +167,7 @@ class SemanticParameterGroups:
                     self._claim_linear(module.linear1, "feed_forward.input")
                     self._claim_linear(module.linear2, "feed_forward.output")
 
+    @beartype
     def _collect_decoder(self) -> None:
         decoder = self._decoder_module()
         if decoder is None:
@@ -170,6 +182,7 @@ class SemanticParameterGroups:
             )
             self._claim_linear(module, group)
 
+    @beartype
     def _collect_range_position_projection(self) -> None:
         projection = getattr(self.model, "range_position_projection", None)
         if projection is None:
@@ -177,11 +190,13 @@ class SemanticParameterGroups:
         if isinstance(projection, nn.Linear):
             self._claim_linear(projection, "position.range_projection")
 
+    @beartype
     def _collect_real_feature_projections(self) -> None:
         for module in self.model.modules():
             if isinstance(module, RealFeatureProjection):
                 self._claim_linear(module, "real_feature_projection")
 
+    @beartype
     def _collect_temporal_convolutions(self) -> None:
         for module in self.model.modules():
             if not isinstance(module, TemporalConvFeatureIngestion):
@@ -190,6 +205,7 @@ class SemanticParameterGroups:
                 if isinstance(layer, CONVOLUTION_TYPES):
                     self._claim_convolution(layer, "temporal_convolution")
 
+    @beartype
     def _collect_multihead_attention(self) -> None:
         for module in self.model.modules():
             if not isinstance(module, nn.MultiheadAttention):
@@ -208,6 +224,7 @@ class SemanticParameterGroups:
             )
             self._claim_linear(module.out_proj, "attention.output")
 
+    @beartype
     def _collect_remaining_modules(self) -> None:
         for module in self.model.modules():
             if isinstance(module, nn.Embedding):
@@ -232,11 +249,13 @@ class SemanticParameterGroups:
             elif isinstance(module, CONVOLUTION_TYPES):
                 self._claim_convolution(module, "fallback.convolution")
 
+    @beartype
     def _collect_free_parameters(self) -> None:
         for _, parameter in self.model.named_parameters(remove_duplicate=True):
             self._claim("free_parameter", (parameter,))
 
 
+@beartype
 def semantic_parameter_groups(
     model: nn.Module,
 ) -> dict[LayerGroup, tuple[nn.Parameter, ...]]:

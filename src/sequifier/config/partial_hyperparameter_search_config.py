@@ -14,10 +14,12 @@ from sequifier.config.canonical_hyperparameter_search_config import (
     CanonicalHyperparameterSearchConfig,
     compile_canonical_hyperparameter_search_config,
 )
+from sequifier.typechecking import beartype
 
 PartialHyperparameterSearchConfig: TypeAlias = CanonicalHyperparameterSearchConfig
 
 
+@beartype
 def compile_hyperparameter_search_override_config(
     config_path: str,
     config_values: dict[str, Any],

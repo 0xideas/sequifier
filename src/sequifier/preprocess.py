@@ -14,7 +14,6 @@ import numpy as np
 import polars as pl
 import pyarrow.parquet as pq
 import torch
-from beartype import beartype
 from loguru import logger
 
 from sequifier.config.preprocess_config import load_preprocessor_config
@@ -35,6 +34,7 @@ from sequifier.special_tokens import (
     SPECIAL_TOKEN_LABELS,
     validate_special_token_ids,
 )
+from sequifier.typechecking import beartype
 
 INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
 REAL_MASK_VALUE = 0.0
@@ -73,6 +73,7 @@ FLOAT_EXACT_INTEGER_LIMITS = {
 }
 
 
+@beartype
 def _stable_json_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {
@@ -88,6 +89,7 @@ def _stable_json_value(value: Any) -> Any:
     return value
 
 
+@beartype
 def _stable_json_digest(value: Any) -> str:
     encoded = json.dumps(
         _stable_json_value(value),
@@ -1534,6 +1536,7 @@ def _load_and_preprocess_data(
     return data
 
 
+@beartype
 def _check_file_has_been_processed(
     project_root: str,
     data_name_root: str,

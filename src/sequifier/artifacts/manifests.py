@@ -5,7 +5,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from sequifier.typechecking import beartype
 
+
+@beartype
 def write_manifest(path: str | Path, manifest: dict[str, Any]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -3,7 +3,10 @@ from typing import Any
 import torch
 import torch.distributed as dist
 
+from sequifier.typechecking import beartype
 
+
+@beartype
 def broadcast_initial_state(
     selected_on_rank_zero: dict[str, Any] | None, rank: int
 ) -> dict[str, Any]:
@@ -21,6 +24,7 @@ def broadcast_initial_state(
     return source
 
 
+@beartype
 def broadcast_publication_result(
     result_on_rank_zero: dict[str, Any] | None, rank: int
 ) -> dict[str, Any]:
@@ -32,6 +36,7 @@ def broadcast_publication_result(
     return result
 
 
+@beartype
 def verify_loaded_revision(parent_revision_id: str | None) -> None:
     loaded_revisions: list[Any] = [None] * dist.get_world_size()
     dist.all_gather_object(loaded_revisions, parent_revision_id)
@@ -41,6 +46,7 @@ def verify_loaded_revision(parent_revision_id: str | None) -> None:
         )
 
 
+@beartype
 def broadcast_source_selection(
     selected_on_rank_zero: tuple[int, int, int, int, int] | None,
 ) -> tuple[int, int, int, int, int]:

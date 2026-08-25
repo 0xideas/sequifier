@@ -4,8 +4,10 @@ from typing import Any
 from sequifier.artifacts.backbone_repository import publish_revision
 from sequifier.artifacts.manifests import write_manifest
 from sequifier.artifacts.run_checkpoint import checkpoint_path
+from sequifier.typechecking import beartype
 
 
+@beartype
 def publish_final_backbone(model: Any, source_epoch: int) -> dict[str, Any]:
     config = model.hparams.model_spec.backbone
     if config.repository is None:
@@ -22,10 +24,12 @@ def publish_final_backbone(model: Any, source_epoch: int) -> dict[str, Any]:
     )
 
 
+@beartype
 def terminal_manifest_path(training_config: Any) -> Path:
     return checkpoint_path(training_config).parent / "manifest.json"
 
 
+@beartype
 def write_terminal_manifest(
     model: Any,
     *,

@@ -5,11 +5,13 @@ from __future__ import annotations
 import csv
 import os
 import uuid
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from sequifier.logging_paths import dataset_artifact_prefix
+from sequifier.typechecking import beartype
 
 METRICS_SCHEMA_VERSION = 1
 TOTAL_TARGET = "__total__"
@@ -61,6 +63,7 @@ CLASS_SHARE_FIELDS = COMMON_FIELDS + [
 ]
 
 
+@beartype
 def _timestamp_utc() -> str:
     """Return an RFC 3339 UTC timestamp suitable for tabular interchange."""
     return (
@@ -70,6 +73,7 @@ def _timestamp_utc() -> str:
     )
 
 
+@beartype
 def _metric_value(value: Any) -> float:
     """Convert scalar tensor/NumPy/Python values without display rounding."""
     item = getattr(value, "item", None)
@@ -80,12 +84,14 @@ def _metric_value(value: Any) -> float:
 class _CsvAppender:
     """Validate and append complete row groups to one CSV file."""
 
+    @beartype
     def __init__(self, path: Path, fields: list[str]) -> None:
         self.path = path
         self.fields = fields
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_header()
 
+    @beartype
     def _ensure_header(self) -> None:
         if self.path.exists() and self.path.stat().st_size > 0:
             with self.path.open("r", encoding="utf-8", newline="") as file:
@@ -101,6 +107,7 @@ class _CsvAppender:
             csv.DictWriter(file, fieldnames=self.fields).writeheader()
             file.flush()
 
+    @beartype
     def append(self, rows: Iterable[Mapping[str, Any]], *, durable: bool) -> None:
         row_group = list(rows)
         if not row_group:
@@ -116,6 +123,7 @@ class _CsvAppender:
 class StructuredMetricWriters:
     """Own the three rank-0 structured metric tables for one model."""
 
+    @beartype
     def __init__(
         self,
         project_root: str,
@@ -151,6 +159,7 @@ class StructuredMetricWriters:
         self.validation_enabled = validation_enabled
         self._class_shares: _CsvAppender | None = None
 
+    @beartype
     def _common(
         self,
         *,
@@ -179,6 +188,7 @@ class StructuredMetricWriters:
             "global_step": global_step,
         }
 
+    @beartype
     def write_training(
         self,
         *,
@@ -225,6 +235,7 @@ class StructuredMetricWriters:
             self._training = _CsvAppender(self.training_path, TRAINING_FIELDS)
         self._training.append(rows, durable=False)
 
+    @beartype
     def write_validation(
         self,
         *,

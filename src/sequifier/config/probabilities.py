@@ -5,6 +5,8 @@ from typing import Annotated, Literal, Optional, Union
 import torch
 from pydantic import BaseModel, ConfigDict, Field
 
+from sequifier.typechecking import beartype
+
 
 class ProbabilityDistributionBaseClass(ABC):
     """
@@ -12,6 +14,7 @@ class ProbabilityDistributionBaseClass(ABC):
     """
 
     @abstractmethod
+    @beartype
     def sample(
         self,
         shape: tuple[int, ...],
@@ -27,6 +30,7 @@ class GeometricDistribution(BaseModel, ProbabilityDistributionBaseClass):
     type: Literal["GeometricDistribution"] = "GeometricDistribution"
     p: float = Field(..., gt=0.0, le=1.0)
 
+    @beartype
     def sample(
         self,
         shape: tuple[int, ...],
@@ -51,6 +55,7 @@ class NormalDistributionDiscretizedFloor(BaseModel, ProbabilityDistributionBaseC
     mean: float
     standard_deviation: float = Field(..., gt=0.0)
 
+    @beartype
     def sample(
         self,
         shape: tuple[int, ...],
@@ -76,6 +81,7 @@ class LogNormalDistributionDiscretizedFloor(
     mean: float
     standard_deviation: float = Field(..., gt=0.0)
 
+    @beartype
     def sample(
         self,
         shape: tuple[int, ...],
@@ -97,6 +103,7 @@ class PoissonDistributionFloor(BaseModel, ProbabilityDistributionBaseClass):
     type: Literal["PoissonDistributionFloor"] = "PoissonDistributionFloor"
     rate: float = Field(..., gt=0.0)
 
+    @beartype
     def sample(
         self,
         shape: tuple[int, ...],

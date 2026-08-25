@@ -8,6 +8,8 @@ from typing import Any
 
 from torch.optim import Optimizer
 
+from sequifier.typechecking import beartype
+
 _PROTECTED_GROUP_FIELDS = frozenset({"params", "group_id"})
 _NON_NEGATIVE_GROUP_FIELDS = frozenset({"lr", "weight_decay", "momentum", "eps"})
 
@@ -23,6 +25,7 @@ class TrainingDirective:
     disable_gradient_clipping: bool = False
     skip_scheduler_step: bool = False
 
+    @beartype
     def __post_init__(self) -> None:
         if self.gradient_clip_norm is not None and self.gradient_clip_norm < 0:
             raise ValueError("gradient_clip_norm must be non-negative.")
@@ -47,6 +50,7 @@ class TrainingDirective:
             raise ValueError("Scheduler state field names must not be empty.")
 
 
+@beartype
 def _normalize_sequence_update(
     *, group_id: str, field_name: str, value: Any, current: tuple[Any, ...]
 ) -> tuple[Any, ...]:
@@ -69,6 +73,7 @@ def _normalize_sequence_update(
     return normalized
 
 
+@beartype
 def _normalize_group_update(
     *, group_id: str, field_name: str, value: Any, current: Any
 ) -> Any:
@@ -114,6 +119,7 @@ def _normalize_group_update(
     return value
 
 
+@beartype
 def apply_training_directive(
     optimizer: Optimizer,
     directive: TrainingDirective,

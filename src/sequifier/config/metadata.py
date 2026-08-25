@@ -10,6 +10,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
+from sequifier.typechecking import beartype
 
 RESOLVED_ONLY_CONFIG_KEYS = {
     "categorical_columns",
@@ -50,10 +51,12 @@ class DatasetMetadata(BaseModel):
 
     @field_validator("special_token_ids")
     @classmethod
+    @beartype
     def validate_token_ids(cls, value: dict[str, int]) -> dict[str, int]:
         return validate_special_token_ids(value, source="dataset metadata")
 
     @property
+    @beartype
     def storage_layout(self) -> StoredWindowLayout:
         return StoredWindowLayout(
             stored_context_width=self.stored_context_width,
@@ -62,6 +65,7 @@ class DatasetMetadata(BaseModel):
         )
 
 
+@beartype
 def load_dataset_metadata(path: str) -> DatasetMetadata:
     """Load and validate one preprocessing metadata JSON file."""
 
@@ -72,6 +76,7 @@ def load_dataset_metadata(path: str) -> DatasetMetadata:
     return DatasetMetadata.model_validate(values)
 
 
+@beartype
 def extract_inline_metadata(
     values: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:

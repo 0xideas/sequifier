@@ -10,6 +10,8 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
+from sequifier.typechecking import beartype
+
 ARTIFACT_TYPE = "sequifier_backbone"
 FORMAT_VERSION = 1
 SUPPORTED_DTYPES = {
@@ -31,6 +33,7 @@ SUPPORTED_DTYPES.update(
 )
 
 
+@beartype
 def canonical_architecture(architecture: Any) -> dict[str, Any]:
     if hasattr(architecture, "model_dump"):
         return architecture.model_dump(mode="json")
@@ -39,6 +42,7 @@ def canonical_architecture(architecture: Any) -> dict[str, Any]:
     return architecture
 
 
+@beartype
 def architecture_fingerprint(architecture: Any) -> str:
     payload = json.dumps(
         canonical_architecture(architecture),
@@ -49,6 +53,7 @@ def architecture_fingerprint(architecture: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+@beartype
 def resolve_repository_path(path: str, project_root: str) -> Path:
     repository_path = Path(path)
     if not repository_path.is_absolute():
@@ -56,6 +61,7 @@ def resolve_repository_path(path: str, project_root: str) -> Path:
     return repository_path.resolve()
 
 
+@beartype
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text())
@@ -68,6 +74,7 @@ def _read_json(path: Path) -> dict[str, Any]:
     return value
 
 
+@beartype
 def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -83,6 +90,7 @@ def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
             temporary_path.unlink()
 
 
+@beartype
 def latest_pointer(repository_path: Path) -> dict[str, Any] | None:
     path = repository_path / "latest.json"
     if not path.exists():
@@ -101,6 +109,7 @@ def latest_pointer(repository_path: Path) -> dict[str, Any] | None:
     return pointer
 
 
+@beartype
 def select_revision(backbone_config: Any, project_root: str) -> dict[str, Any] | None:
     repository = backbone_config.repository
     if repository is None:
@@ -168,6 +177,7 @@ def select_revision(backbone_config: Any, project_root: str) -> dict[str, Any] |
     }
 
 
+@beartype
 def _validate_state_dict(backbone: nn.Module, state_dict: Any) -> None:
     if not isinstance(state_dict, dict) or not all(
         isinstance(key, str) and isinstance(value, Tensor)
@@ -205,6 +215,7 @@ def _validate_state_dict(backbone: nn.Module, state_dict: Any) -> None:
         )
 
 
+@beartype
 def load_revision(backbone: nn.Module, selected_revision: dict[str, Any]) -> None:
     state_dict = torch.load(
         selected_revision["weights_path"], map_location="cpu", weights_only=True
@@ -213,11 +224,13 @@ def load_revision(backbone: nn.Module, selected_revision: dict[str, Any]) -> Non
     backbone.load_state_dict(state_dict, strict=True)
 
 
+@beartype
 def _new_revision_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return f"{timestamp}-{uuid.uuid4().hex[:12]}"
 
 
+@beartype
 def publish_revision(
     backbone: nn.Module,
     backbone_config: Any,

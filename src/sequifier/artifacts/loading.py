@@ -14,6 +14,7 @@ from sequifier.config.composable_train_config import (
 from sequifier.config.composable_train_config import load_train_config
 from sequifier.model.factory import build_transformer_network
 from sequifier.model.parameter_catalog import ParameterCatalog
+from sequifier.typechecking import beartype
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class LoadedModel:
     artifact_metadata: dict[str, Any]
 
 
+@beartype
 def _resolve_config(
     payload: dict[str, Any],
     config: TrainModel | str | Path | None,
@@ -60,6 +62,7 @@ def _resolve_config(
     )
 
 
+@beartype
 def load_model_for_analysis(
     path: str | Path,
     *,

@@ -9,7 +9,6 @@ import numpy as np
 import onnxruntime
 import polars as pl
 import torch
-from beartype import beartype
 from beartype.typing import Iterator
 from loguru import logger
 
@@ -42,6 +41,7 @@ from sequifier.train import (
     infer_with_generative_model,
     load_inference_model,
 )
+from sequifier.typechecking import beartype
 
 ONNX_NUMPY_DTYPES = {
     "tensor(float16)": np.float16,
@@ -561,6 +561,7 @@ def infer_worker(
     logger.info("--- Inference Complete ---")
 
 
+@beartype
 def calculate_item_positions(
     start_positions: np.ndarray,
     context_length: int,
@@ -821,6 +822,7 @@ def infer_embedding(
         )
 
 
+@beartype
 def infer_generative(
     config: "InfererModel",
     inferer: "Inferer",
@@ -1416,6 +1418,7 @@ class Inferer:
         mean = self.selected_columns_statistics[target_column]["mean"]
         return (values * (std + 1e-9)) + mean
 
+    @beartype
     def _exclude_mask_token(
         self,
         values: np.ndarray,

@@ -1,7 +1,10 @@
 import torch
 from torch import Tensor, nn
 
+from sequifier.typechecking import conditional_beartype
 
+
+@conditional_beartype
 def module_param_dtype(module: nn.Module) -> torch.dtype | None:
     """Return the first floating parameter dtype for a module tree."""
     for parameter in module.parameters():
@@ -10,12 +13,14 @@ def module_param_dtype(module: nn.Module) -> torch.dtype | None:
     return None
 
 
+@conditional_beartype
 def cast_floating_to_dtype(x: Tensor, dtype: torch.dtype) -> Tensor:
     if not x.is_floating_point() or x.dtype == dtype:
         return x
     return x.to(dtype=dtype)
 
 
+@conditional_beartype
 def cast_floating_to_module_dtype(x: Tensor, module: nn.Module) -> Tensor:
     target_dtype = module_param_dtype(module)
     if target_dtype is None:

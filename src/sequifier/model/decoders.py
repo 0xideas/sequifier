@@ -8,8 +8,10 @@ from torch.nn import ModuleDict
 
 from sequifier.model.dtypes import cast_floating_to_module_dtype
 from sequifier.model.tracing import TraceContext
+from sequifier.typechecking import beartype, conditional_beartype
 
 
+@beartype
 def _validate_module_dict_key(key: str, usage: str) -> None:
     if key == "":
         raise ValueError(f"{usage} cannot be empty")
@@ -18,6 +20,7 @@ def _validate_module_dict_key(key: str, usage: str) -> None:
 
 
 class TargetDecoderBranch(nn.Module):
+    @beartype
     def __init__(
         self,
         *,
@@ -68,6 +71,7 @@ class TargetDecoderBranch(nn.Module):
             self.output_layers[target_column] = nn.Linear(layer_input_dim, output_dim)
 
     @staticmethod
+    @conditional_beartype
     def _activation(name: str) -> nn.Module:
         if name == "relu":
             return nn.ReLU()
@@ -77,10 +81,12 @@ class TargetDecoderBranch(nn.Module):
             return nn.SiLU()
         raise ValueError(f"Unknown decoder activation_fn: {name}")
 
+    @conditional_beartype
     def _project_hidden(self, x: Tensor) -> Tensor:
         hidden, _ = self._project_hidden_with_activations(x, ())
         return hidden
 
+    @conditional_beartype
     def _project_hidden_with_activations(
         self, x: Tensor, block_indices: tuple[int, ...]
     ) -> tuple[Tensor, dict[int, Tensor]]:
@@ -102,6 +108,7 @@ class TargetDecoderBranch(nn.Module):
                 activations[block_index] = hidden
         return hidden, activations
 
+    @conditional_beartype
     def project_hidden_with_activations(
         self, x: Tensor, block_indices: tuple[int, ...]
     ) -> dict[int, Tensor]:
@@ -109,6 +116,7 @@ class TargetDecoderBranch(nn.Module):
         _, activations = self._project_hidden_with_activations(x, block_indices)
         return activations
 
+    @conditional_beartype
     def decode(self, target_column: str, x: Tensor) -> Tensor:
         hidden = self._project_hidden(x)
         output_layer = cast(nn.Linear, self.output_layers[target_column])
@@ -116,15 +124,18 @@ class TargetDecoderBranch(nn.Module):
             torch.float32
         )
 
+    @conditional_beartype
     def target_dtype(self, target_column: str) -> torch.dtype:
         return cast(nn.Linear, self.output_layers[target_column]).weight.dtype
 
+    @conditional_beartype
     def hidden_weight_parameters(self) -> Iterator[nn.Parameter]:
         """Yield hidden linear kernels, excluding biases and output layers."""
         for layer in self.hidden_layers:
             if isinstance(layer, nn.Linear):
                 yield layer.weight
 
+    @conditional_beartype
     def forward(
         self,
         x: Tensor,
@@ -168,6 +179,7 @@ class TargetDecoderBranch(nn.Module):
 
 
 class TargetDecoding(nn.Module):
+    @beartype
     def __init__(
         self,
         *,
@@ -184,9 +196,11 @@ class TargetDecoding(nn.Module):
         self.target_columns = target_columns
         self.target_to_branch = target_to_branch
 
+    @conditional_beartype
     def __contains__(self, target_column: object) -> bool:
         return isinstance(target_column, str) and target_column in self.target_to_branch
 
+    @conditional_beartype
     def decode(self, target_column: str, x: Tensor) -> Tensor:
         branch = cast(
             TargetDecoderBranch,
@@ -194,6 +208,7 @@ class TargetDecoding(nn.Module):
         )
         return branch.decode(target_column, x)
 
+    @conditional_beartype
     def target_dtype(self, target_column: str) -> torch.dtype:
         branch = cast(
             TargetDecoderBranch,
@@ -201,6 +216,7 @@ class TargetDecoding(nn.Module):
         )
         return branch.target_dtype(target_column)
 
+    @conditional_beartype
     def regularization_loss(self) -> Tensor:
         """Return decoder-scoped L2 for unique hidden linear kernels."""
         loss: Optional[Tensor] = None
@@ -228,6 +244,7 @@ class TargetDecoding(nn.Module):
         reference_parameter = next(self.parameters())
         return reference_parameter.new_zeros((), dtype=torch.float32)
 
+    @conditional_beartype
     def hidden_block_activations(
         self,
         x: Tensor,
@@ -248,6 +265,7 @@ class TargetDecoding(nn.Module):
             )
         return activations
 
+    @conditional_beartype
     def forward(
         self, x: Tensor, *, trace: TraceContext | None = None
     ) -> dict[str, Tensor]:
@@ -286,6 +304,7 @@ DECODER_HIDDEN_DIMS: dict[str, Callable[[Any], list[int]]] = {
 }
 
 
+@beartype
 def resolve_decoding_plan(hparams: Any) -> DecodingPlan:
     decoding_spec = hparams.model_spec.decoder
 
@@ -341,6 +360,7 @@ def resolve_decoding_plan(hparams: Any) -> DecodingPlan:
     return DecodingPlan(tuple(branches), target_to_branch)
 
 
+@beartype
 def build_target_decoding(
     hparams: Any,
     target_n_classes: Optional[dict[str, int]] = None,

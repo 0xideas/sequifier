@@ -9,13 +9,13 @@ from typing import Any, Optional
 import numpy as np
 import plotly.colors as pc
 import plotly.graph_objects as go
-from beartype import beartype
 from loguru import logger
 from plotly.subplots import make_subplots
 
 from sequifier.helpers import configure_logger
 from sequifier.logging_paths import dataset_artifact_prefix
 from sequifier.training.metrics import TOTAL_TARGET
+from sequifier.typechecking import beartype
 
 
 class DataContinuityError(Exception):
@@ -39,6 +39,7 @@ class TrainingMetrics:
 class StructuredMetricsParser:
     """Read rank-0 training and validation tables for the latest logical run."""
 
+    @beartype
     def __init__(self, model_name: str):
         self.model = model_name
 
@@ -100,11 +101,13 @@ class StructuredMetricsParser:
         return metrics
 
     @staticmethod
+    @beartype
     def _read_rows(path: str) -> list[dict[str, str]]:
         with open(path, "r", encoding="utf-8", newline="") as file:
             return list(csv.DictReader(file))
 
     @staticmethod
+    @beartype
     def _epoch_position(row: dict[str, str]) -> float:
         epoch = int(row["epoch"])
         batch = int(row["batch"])
@@ -226,6 +229,7 @@ def format_plot_data(
     }
 
 
+@beartype
 def _add_invalid_runs(fig: go.Figure, invalid_runs: dict[str, str]) -> None:
     """Add skipped run details below a report."""
     invalid_text = "<br>".join(

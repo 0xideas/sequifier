@@ -24,16 +24,20 @@ from sequifier.model.tracing import (
     InterventionBinding,
     TraceContext,
 )
+from sequifier.typechecking import beartype
 
 
 @runtime_checkable
 class TrainingObserver(Protocol):
     integration_id: str
 
+    @beartype
     def handle(self, event: TrainingEvent) -> None: ...
 
+    @beartype
     def state_dict(self) -> dict[str, Any]: ...
 
+    @beartype
     def load_state_dict(self, state: dict[str, Any]) -> None: ...
 
 
@@ -41,12 +45,15 @@ class TrainingObserver(Protocol):
 class TrainingController(Protocol):
     integration_id: str
 
+    @beartype
     def on_gradients_unscaled(
         self, event: GradientsUnscaled
     ) -> TrainingDirective | None: ...
 
+    @beartype
     def state_dict(self) -> dict[str, Any]: ...
 
+    @beartype
     def load_state_dict(self, state: dict[str, Any]) -> None: ...
 
 
@@ -58,6 +65,7 @@ class _RegisteredIntegration:
     rank_policy: str
 
 
+@beartype
 def _load_factory(path: str) -> Any:
     module_name, attribute_name = path.split(":", 1)
     module = importlib.import_module(module_name)
@@ -68,6 +76,7 @@ def _load_factory(path: str) -> Any:
 
 
 class IntegrationManager:
+    @beartype
     def __init__(
         self,
         *,
@@ -142,21 +151,26 @@ class IntegrationManager:
             )
 
     @property
+    @beartype
     def enabled(self) -> bool:
         return bool(self._observers or self._controller)
 
     @property
+    @beartype
     def controller(self) -> Any | None:
         return None if self._controller is None else self._controller.instance
 
     @property
+    @beartype
     def control_enabled(self) -> bool:
         return self._controller_configured
 
+    @beartype
     def emit(self, event: TrainingEvent) -> None:
         for item in self._observers:
             item.instance.handle(event)
 
+    @beartype
     def forward_trace(self, event: BatchPrepared) -> TraceContext | None:
         requests: list[CaptureRequest] = []
         interventions: list[InterventionBinding] = []
@@ -188,6 +202,7 @@ class IntegrationManager:
 
         positions = requests[0].positions if requests else None
 
+        @beartype
         def positions_equal(left: Any, right: Any) -> bool:
             if isinstance(left, torch.Tensor) or isinstance(right, torch.Tensor):
                 return (
@@ -223,6 +238,7 @@ class IntegrationManager:
             forward_context=ForwardContext(training=True, metadata=event.metadata),
         )
 
+    @beartype
     def validate_execution(
         self, *, torch_compile: str, data_parallelism: str | None
     ) -> None:
@@ -266,6 +282,7 @@ class IntegrationManager:
                     "execution mode unsupported during FSDP training."
                 )
 
+    @beartype
     def directive(self, event: GradientsUnscaled) -> TrainingDirective | None:
         if not self._controller_configured:
             return None
@@ -341,6 +358,7 @@ class IntegrationManager:
             directive = payload[0]
         return directive
 
+    @beartype
     def state_dict(self) -> dict[str, dict[str, Any]]:
         result: dict[str, dict[str, Any]] = {}
         items = [*self._observers]
@@ -355,6 +373,7 @@ class IntegrationManager:
             }
         return result
 
+    @beartype
     def checkpoint_state_dict(self) -> dict[str, dict[str, Any]]:
         local_state = self.state_dict()
         if not self.distributed:
@@ -392,6 +411,7 @@ class IntegrationManager:
             }
         return collected
 
+    @beartype
     def load_state_dict(self, saved: dict[str, Any] | None) -> None:
         saved = saved or {}
         items = [*self._observers]

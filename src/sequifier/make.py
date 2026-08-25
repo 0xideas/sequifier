@@ -1,5 +1,7 @@
 import os
 
+from sequifier.typechecking import beartype
+
 preprocess_config_string = """project_root: .
 preprocessing_data_path: PLEASE FILL
 read_format: csv
@@ -147,6 +149,7 @@ state/
 .DS_Store"""
 
 
+@beartype
 def make(args):
     """Create a sequifier project scaffold."""
     project_name = args.project_name

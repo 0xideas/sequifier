@@ -21,12 +21,14 @@ from sequifier.model.ingestions import (
     TemporalConvFeatureIngestion,
 )
 from sequifier.model.layers import FeedForward, RMSNorm, SelfAttention
+from sequifier.typechecking import beartype
 
 EMBEDDING_INIT_STD = 0.02
 CONVOLUTION_TYPES = (nn.Conv1d, nn.Conv2d, nn.Conv3d)
 Convolution: TypeAlias = nn.Conv1d | nn.Conv2d | nn.Conv3d
 
 
+@beartype
 def _fan_in(weight: Tensor) -> int:
     if weight.ndim < 2:
         raise ValueError(
@@ -35,6 +37,7 @@ def _fan_in(weight: Tensor) -> int:
     return weight.shape[1] * math.prod(weight.shape[2:])
 
 
+@beartype
 def _fan_out(weight: Tensor) -> int:
     if weight.ndim < 2:
         raise ValueError(
@@ -46,6 +49,7 @@ def _fan_out(weight: Tensor) -> int:
 class _ModelWeightInitializer:
     """Apply current defaults with optional semantic layer-group overrides."""
 
+    @beartype
     def __init__(
         self,
         model: nn.Module,
@@ -59,12 +63,14 @@ class _ModelWeightInitializer:
         self.ingestion_projection_module_ids = self._ingestion_projection_module_ids()
         self.decoder_output_module_ids = self._decoder_output_module_ids()
 
+    @beartype
     def _decoder_module(self) -> Optional[nn.Module]:
         if isinstance(self.model, (TargetDecoding, TargetDecoderBranch)):
             return self.model
         decoder = getattr(self.model, "decoder", None)
         return decoder if isinstance(decoder, nn.Module) else None
 
+    @beartype
     def initialize(self) -> None:
         # Keep this order stable: it is part of seeded initialization compatibility.
         self._initialize_transformer_layers()
@@ -76,6 +82,7 @@ class _ModelWeightInitializer:
         self._initialize_remaining_modules()
         self._initialize_free_parameters()
 
+    @beartype
     def _position_embedding_module_ids(self) -> set[int]:
         position_embeddings: set[int] = set()
         for module in self.model.modules():
@@ -96,6 +103,7 @@ class _ModelWeightInitializer:
                 )
         return position_embeddings
 
+    @beartype
     def _ingestion_projection_module_ids(self) -> set[int]:
         projections: set[int] = set()
         for module in self.model.modules():
@@ -122,6 +130,7 @@ class _ModelWeightInitializer:
                 )
         return projections
 
+    @beartype
     def _decoder_output_module_ids(self) -> set[int]:
         decoder = self._decoder_module()
         if decoder is None:
@@ -140,13 +149,16 @@ class _ModelWeightInitializer:
             id(module) for module in decoder.modules() if isinstance(module, nn.Linear)
         }
 
+    @beartype
     def _is_initialized(self, parameter: Optional[Tensor]) -> bool:
         return parameter is None or id(parameter) in self.initialized_parameter_ids
 
+    @beartype
     def _mark_initialized(self, parameter: Optional[Tensor]) -> None:
         if parameter is not None:
             self.initialized_parameter_ids.add(id(parameter))
 
+    @beartype
     def _override_method(
         self,
         group: LayerGroup,
@@ -161,6 +173,7 @@ class _ModelWeightInitializer:
             return override.bias
         raise ValueError(f"Unknown parameter kind: {parameter_kind}")
 
+    @beartype
     def _apply_override(
         self,
         group: LayerGroup,
@@ -173,6 +186,7 @@ class _ModelWeightInitializer:
         self._apply_method(group, parameter_kind, parameters, method)
         return True
 
+    @beartype
     def _apply_method(
         self,
         group: LayerGroup,
@@ -272,6 +286,7 @@ class _ModelWeightInitializer:
             self._mark_initialized(parameter)
 
     @staticmethod
+    @beartype
     def _joint_xavier_uniform_raw(
         parameters: Iterable[Tensor],
         *,
@@ -284,6 +299,7 @@ class _ModelWeightInitializer:
             nn.init.uniform_(weight, -bound, bound)
 
     @staticmethod
+    @beartype
     def _joint_xavier_normal_raw(
         parameters: Iterable[Tensor],
         *,
@@ -296,6 +312,7 @@ class _ModelWeightInitializer:
             nn.init.normal_(weight, mean=0.0, std=std)
 
     @staticmethod
+    @beartype
     def _identity_plus_normal_raw(
         parameter: Tensor,
         *,
@@ -318,24 +335,28 @@ class _ModelWeightInitializer:
             )
             parameter[:, -1].normal_(mean=mean, std=std)
 
+    @beartype
     def _zero_(self, parameter: Optional[Tensor]) -> None:
         if parameter is None or self._is_initialized(parameter):
             return
         nn.init.zeros_(parameter)
         self._mark_initialized(parameter)
 
+    @beartype
     def _normal_(self, parameter: Tensor, std: float) -> None:
         if self._is_initialized(parameter):
             return
         nn.init.normal_(parameter, mean=0.0, std=std)
         self._mark_initialized(parameter)
 
+    @beartype
     def _xavier_uniform_(self, parameter: Tensor, gain: float = 1.0) -> None:
         if self._is_initialized(parameter):
             return
         nn.init.xavier_uniform_(parameter, gain=gain)
         self._mark_initialized(parameter)
 
+    @beartype
     def _joint_xavier_uniform_(
         self,
         parameters: Iterable[Tensor],
@@ -351,6 +372,7 @@ class _ModelWeightInitializer:
             nn.init.uniform_(weight, -bound, bound)
             self._mark_initialized(weight)
 
+    @beartype
     def _initialize_linear_xavier(
         self,
         layer: nn.Linear,
@@ -361,6 +383,7 @@ class _ModelWeightInitializer:
         if not self._apply_override(group, "bias", [layer.bias]):
             self._zero_(layer.bias)
 
+    @beartype
     def _initialize_conv_xavier(
         self,
         layer: Convolution,
@@ -371,6 +394,7 @@ class _ModelWeightInitializer:
         if not self._apply_override(group, "bias", [layer.bias]):
             self._zero_(layer.bias)
 
+    @beartype
     def _initialize_transformer_layers(self) -> None:
         for module in self.model.modules():
             if isinstance(module, SelfAttention):
@@ -394,6 +418,7 @@ class _ModelWeightInitializer:
             elif isinstance(module, FeedForward):
                 self._initialize_feed_forward(module)
 
+    @beartype
     def _initialize_feed_forward(self, feed_forward: FeedForward) -> None:
         if feed_forward.activation_fn == "swiglu":
             input_weights = [feed_forward.w1.weight, feed_forward.w2.weight]
@@ -412,6 +437,7 @@ class _ModelWeightInitializer:
         self._initialize_linear_xavier(feed_forward.linear1, "feed_forward.input")
         self._initialize_linear_xavier(feed_forward.linear2, "feed_forward.output")
 
+    @beartype
     def _initialize_decoder(self) -> None:
         decoder = self._decoder_module()
         if decoder is None:
@@ -427,6 +453,7 @@ class _ModelWeightInitializer:
             )
             self._initialize_linear_xavier(module, group)
 
+    @beartype
     def _initialize_range_position_projection(self) -> None:
         projection = getattr(self.model, "range_position_projection", None)
         if projection is None:
@@ -455,11 +482,13 @@ class _ModelWeightInitializer:
         ):
             self._zero_(projection.bias)
 
+    @beartype
     def _initialize_real_feature_projections(self) -> None:
         for module in self.model.modules():
             if isinstance(module, RealFeatureProjection):
                 self._initialize_linear_xavier(module, "real_feature_projection")
 
+    @beartype
     def _initialize_temporal_convolutions(self) -> None:
         for module in self.model.modules():
             if not isinstance(module, TemporalConvFeatureIngestion):
@@ -468,6 +497,7 @@ class _ModelWeightInitializer:
                 if isinstance(layer, CONVOLUTION_TYPES):
                     self._initialize_conv_xavier(layer, "temporal_convolution")
 
+    @beartype
     def _initialize_multihead_attention(self) -> None:
         for module in self.model.modules():
             if not isinstance(module, nn.MultiheadAttention):
@@ -508,6 +538,7 @@ class _ModelWeightInitializer:
 
             self._initialize_linear_xavier(module.out_proj, "attention.output")
 
+    @beartype
     def _initialize_remaining_modules(self) -> None:
         for module in self.model.modules():
             if isinstance(module, nn.Embedding):
@@ -540,6 +571,7 @@ class _ModelWeightInitializer:
             elif isinstance(module, CONVOLUTION_TYPES):
                 self._initialize_conv_xavier(module, "fallback.convolution")
 
+    @beartype
     def _initialize_free_parameters(self) -> None:
         for _, parameter in self.model.named_parameters(remove_duplicate=True):
             if self._is_initialized(parameter):
@@ -553,6 +585,7 @@ class _ModelWeightInitializer:
                 self._normal_(parameter, EMBEDDING_INIT_STD)
 
 
+@beartype
 def initialize_model_weights(
     model: nn.Module,
     initialization: Optional[ModelInitializationConfig] = None,

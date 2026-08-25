@@ -31,6 +31,7 @@ from sequifier.training.distributed import broadcast_publication_result
 from sequifier.training.lifecycle import publish_final_backbone, write_terminal_manifest
 from sequifier.training.metrics import StructuredMetricWriters
 from sequifier.training.state import TrainingState
+from sequifier.typechecking import beartype
 
 
 @dataclass
@@ -44,6 +45,7 @@ class TrainingEngine:
     state: TrainingState
     integrations: IntegrationManager
 
+    @beartype
     def __post_init__(self) -> None:
         access_model = getattr(self.model, "network", self.model)
         self.parameter_catalog = ParameterCatalog(access_model)
@@ -61,16 +63,19 @@ class TrainingEngine:
         )
 
     @property
+    @beartype
     def rank(self) -> int:
         rank = getattr(self.model, "rank", None)
         return int(rank or 0)
 
     @property
+    @beartype
     def world_size(self) -> int:
         if dist.is_available() and dist.is_initialized():
             return dist.get_world_size()
         return 1
 
+    @beartype
     def identity(
         self,
         *,
@@ -92,18 +97,22 @@ class TrainingEngine:
             world_size=self.world_size,
         )
 
+    @beartype
     def update_batch_state(self, identity: StepIdentity) -> None:
         self.state.epoch = identity.epoch
         self.state.batch = identity.batch
         self.state.global_batch_step = identity.global_batch_step
         self.state.accumulation_index = identity.accumulation_index
 
+    @beartype
     def emit(self, event: TrainingEvent) -> None:
         self.integrations.emit(event)
 
+    @beartype
     def model_ready(self) -> None:
         self.emit(ModelReady(access=self.access))
 
+    @beartype
     def step_scheduler(self) -> bool:
         if self._skip_next_scheduler_step:
             self._skip_next_scheduler_step = False
@@ -116,6 +125,7 @@ class TrainingEngine:
         self.scheduler.step()
         return True
 
+    @beartype
     def backward_and_step(
         self,
         *,
@@ -213,6 +223,7 @@ class TrainingEngine:
             self.stop_requested = True
         return step_applied
 
+    @beartype
     def accumulate_loss(self, loss: Tensor, identity: StepIdentity) -> None:
         """Backpropagate one unnormalized accumulation microbatch."""
 
@@ -227,6 +238,7 @@ class TrainingEngine:
                 )
             )
 
+    @beartype
     def flush_accumulation(
         self,
         *,
@@ -327,6 +339,7 @@ class TrainingEngine:
             self.stop_requested = True
         return step_applied
 
+    @beartype
     def run_plan(
         self,
         config: Any,
@@ -352,6 +365,7 @@ class TrainingEngine:
         batch_committed = False
         flush_in_progress = False
         completion_reason = "normal_completion"
+        metric_windows: dict[str, dict[str, Any]] = {}
         current_run_epoch = max(
             1,
             self.state.epoch
@@ -363,6 +377,7 @@ class TrainingEngine:
         self.model_ready()
         self.optimizer.zero_grad(set_to_none=True)
 
+        @beartype
         def flush() -> None:
             nonlocal accumulation_count, flush_in_progress, last_boundary_state
             if accumulation_count == 0:
@@ -385,6 +400,7 @@ class TrainingEngine:
             accumulation_count = 0
             last_boundary_state = copy.deepcopy(self.state.__dict__)
 
+        @beartype
         def update_monitor(evaluation_results: dict[str, float]) -> tuple[float, bool]:
             monitor = config.evaluation_monitor
             if monitor is None or monitor.source not in evaluation_results:
@@ -424,11 +440,20 @@ class TrainingEngine:
                 and config.evaluation_sources
                 and config.global_training_spec.calculate_validation_loss_on_initialization
             ):
+                first_phase = config.training_plan[0]
+                initial_batches_total = sum(
+                    build_source_runtime(source, dataset_runtimes).num_batches()
+                    for source in first_phase.sources
+                )
                 model.evaluate_sources(
                     config.evaluation_sources,
                     dataset_runtimes,
                     phase_index=0,
                     phase_epoch=0,
+                    evaluation_kind="initial",
+                    run_epoch=0,
+                    training_batch=0,
+                    training_batches_total=initial_batches_total,
                 )
 
             for phase_index, phase in enumerate(config.training_plan):
@@ -546,36 +571,58 @@ class TrainingEngine:
                             self.state.iterator_positions.get(position_ref, 0) + 1
                         )
                         batch_committed = True
-                        if (
-                            self.rank == 0
-                            and self.state.global_batch_step % model.log_interval == 0
-                        ):
-                            writer = model.metric_writers_by_dataset[dataset_name]
-                            accounting_dtype = (
-                                torch.float32
-                                if local_count.device.type == "mps"
-                                else torch.float64
+                        window = metric_windows.get(dataset_name)
+                        if window is None:
+                            window_sums, window_count = model._new_loss_accumulators(
+                                list(model.target_columns)
                             )
-                            denominator = local_count.clamp_min(1).to(accounting_dtype)
-                            writer.write_training(
-                                run_id=model.run_id,
-                                session_id=model.session_id,
-                                epoch=phase_epoch,
-                                batch=current_epoch_batch,
-                                batches_total=batches_total,
-                                global_step=self.state.global_batch_step,
-                                window_batches=accumulation_count,
-                                total_loss=loss.detach(),
-                                target_losses={
-                                    target: value.detach().to(accounting_dtype)
-                                    / denominator
-                                    for target, value in local_sums.items()
-                                },
-                                learning_rate=self.optimizer.param_groups[0]["lr"],
-                                seconds_per_batch=time.perf_counter() - batch_started,
-                                dataset=dataset_name,
-                                part=runtime_batch.part,
+                            window = {
+                                "sums": window_sums,
+                                "count": window_count,
+                                "target_names": list(model.target_columns),
+                                "batches": 0,
+                                "seconds": 0.0,
+                                "part": runtime_batch.part,
+                            }
+                            metric_windows[dataset_name] = window
+                        model._accumulate_loss_components(
+                            window["sums"],
+                            window["count"],
+                            local_sums,
+                            local_count,
+                        )
+                        window["batches"] += 1
+                        window["seconds"] += time.perf_counter() - batch_started
+                        if window["part"] != runtime_batch.part:
+                            window["part"] = None
+                        if window["batches"] >= model.log_interval:
+                            total_loss, target_losses = model._finalize_loss_components(
+                                window["sums"],
+                                window["count"],
+                                window["target_names"],
+                                "training metrics",
+                                raise_on_empty=False,
                             )
+                            if self.rank == 0:
+                                writer = model.metric_writers_by_dataset[dataset_name]
+                                writer.write_training(
+                                    run_id=model.run_id,
+                                    session_id=model.session_id,
+                                    epoch=current_run_epoch,
+                                    batch=current_epoch_batch,
+                                    batches_total=batches_total,
+                                    global_step=self.state.global_batch_step,
+                                    window_batches=window["batches"],
+                                    total_loss=total_loss,
+                                    target_losses=target_losses,
+                                    learning_rate=self.optimizer.param_groups[0]["lr"],
+                                    seconds_per_batch=(
+                                        window["seconds"] / window["batches"]
+                                    ),
+                                    dataset=dataset_name,
+                                    part=window["part"],
+                                )
+                            del metric_windows[dataset_name]
                         if accumulation_count == accumulation_steps:
                             flush()
                         now = time.monotonic()
@@ -634,6 +681,10 @@ class TrainingEngine:
                                     dataset_runtimes,
                                     phase_index=phase_index,
                                     phase_epoch=phase_epoch,
+                                    evaluation_kind="interval",
+                                    run_epoch=current_run_epoch,
+                                    training_batch=current_epoch_batch,
+                                    training_batches_total=batches_total,
                                 )
                                 active_dataset = None
                                 monitor = config.evaluation_monitor
@@ -667,6 +718,10 @@ class TrainingEngine:
                             dataset_runtimes,
                             phase_index=phase_index,
                             phase_epoch=phase_epoch,
+                            evaluation_kind="epoch_end",
+                            run_epoch=current_run_epoch,
+                            training_batch=current_epoch_batch,
+                            training_batches_total=batches_total,
                         )
                         active_dataset = None
                     else:
@@ -736,6 +791,7 @@ class TrainingEngine:
             flush()
         return completion_reason
 
+    @beartype
     def run(
         self, train_loader: Any, validation_loader: Any, ddp_model: Any = None
     ) -> None:

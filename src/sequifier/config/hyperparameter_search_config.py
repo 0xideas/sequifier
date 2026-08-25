@@ -14,11 +14,13 @@ from sequifier.config.canonical_hyperparameter_search_config import (
     compile_canonical_hyperparameter_search_config,
 )
 from sequifier.config.composition import load_composed_yaml_config
+from sequifier.typechecking import beartype
 
 HyperparameterSearchConfig: TypeAlias = CanonicalHyperparameterSearchConfig
 PartialHyperparameterSearchConfig: TypeAlias = CanonicalHyperparameterSearchConfig
 
 
+@beartype
 def compile_hyperparameter_search_override_config(
     config_path: str,
     config_values: dict[str, Any],
@@ -33,6 +35,7 @@ def compile_hyperparameter_search_override_config(
     )
 
 
+@beartype
 def load_hyperparameter_search_config(
     config_path: str,
     skip_metadata: bool,

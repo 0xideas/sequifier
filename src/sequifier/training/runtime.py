@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import random
 import warnings
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Literal, Optional
+from typing import Any, Literal, Optional, Protocol, runtime_checkable
 
 import torch
 import torch.distributed as dist
@@ -34,6 +35,7 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (
 )
 from sequifier.model.network import ComposableTransformerNetwork
 from sequifier.model.parameter_groups import semantic_parameter_groups
+from sequifier.typechecking import beartype
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,7 @@ class PartLoaderFactory:
     dataset_name: str
     part_name: str
 
+    @beartype
     def build(self, split: Literal["training", "validation"]) -> DataLoader:
         dataset_config: Any = dataset_part_view(
             self.config, self.dataset_name, self.part_name
@@ -129,6 +132,7 @@ class TrainingSourceRuntime:
     part_names: tuple[str, ...]
     loaders: dict[str, list[tuple[str, DataLoader]]] = field(default_factory=dict)
 
+    @beartype
     def _loaders(self, split: Literal["training", "validation"]):
         if split not in self.loaders:
             self.loaders[split] = [
@@ -140,12 +144,14 @@ class TrainingSourceRuntime:
             ]
         return self.loaders[split]
 
+    @beartype
     def set_epoch(self, epoch: int, split: Literal["training", "validation"]):
         for _, loader in self._loaders(split):
             set_epoch = getattr(loader.dataset, "set_epoch", None)
             if callable(set_epoch):
                 set_epoch(epoch)
 
+    @beartype
     def iter_batches(
         self, split: Literal["training", "validation"] = "training"
     ) -> Iterator[RuntimeBatch]:
@@ -158,10 +164,30 @@ class TrainingSourceRuntime:
                     )
                 yield RuntimeBatch(self.dataset.config.name, part_name, batch)
 
+    @beartype
     def num_batches(self, split: Literal["training", "validation"] = "training"):
         return sum(len(loader) for _, loader in self._loaders(split))
 
 
+@runtime_checkable
+class ScheduledSource(Protocol):
+    """Structural source contract consumed by the deterministic scheduler."""
+
+    config: ResolvedTrainingSource
+    dataset: DatasetRuntime
+
+    @beartype
+    def set_epoch(
+        self, epoch: int, split: Literal["training", "validation"]
+    ) -> None: ...
+
+    @beartype
+    def iter_batches(
+        self, split: Literal["training", "validation"] = "training"
+    ) -> Iterator[Any]: ...
+
+
+@beartype
 def _policy_parameter_ids(module: nn.Module, policy: Any, usage: str) -> set[int]:
     if not policy.has_freezing_policy:
         return set()
@@ -189,6 +215,7 @@ def _policy_parameter_ids(module: nn.Module, policy: Any, usage: str) -> set[int
     return {id(parameter) for parameter in module.parameters()} - selected
 
 
+@beartype
 def frozen_parameter_ids(
     network: ComposableTransformerNetwork,
     interface_name: str,
@@ -207,6 +234,7 @@ def frozen_parameter_ids(
     return frozenset(frozen)
 
 
+@beartype
 def _criterion_modules(
     dataset: ResolvedDatasetTrainingSpec, device: torch.device
 ) -> dict[str, nn.Module]:
@@ -229,6 +257,7 @@ def _criterion_modules(
     return modules
 
 
+@beartype
 def build_dataset_runtimes(
     config: ResolvedSequifierConfig,
     network: ComposableTransformerNetwork,
@@ -269,6 +298,7 @@ def build_dataset_runtimes(
     return runtimes
 
 
+@beartype
 def build_source_runtime(
     source: ResolvedTrainingSource,
     datasets: dict[str, DatasetRuntime],
@@ -283,10 +313,11 @@ def build_source_runtime(
 class SourceScheduler:
     """Deterministic sequential/interleaved selection for one phase epoch."""
 
+    @beartype
     def __init__(
         self,
         phase: ResolvedTrainingPhase,
-        sources: list[TrainingSourceRuntime],
+        sources: Sequence[ScheduledSource],
         *,
         seed: int,
         phase_index: int = 0,
@@ -303,6 +334,7 @@ class SourceScheduler:
         self.pending_batches = 0
         self.sequential_source = 0
 
+    @beartype
     def state_dict(self) -> dict[str, Any]:
         return {
             "rng_state": self.rng.getstate(),
@@ -315,6 +347,7 @@ class SourceScheduler:
             "sequential_source": self.sequential_source,
         }
 
+    @beartype
     def load_state_dict(self, state: dict[str, Any]) -> None:
         self.rng.setstate(state["rng_state"])
         self.round_robin_cursor = int(state["round_robin_cursor"])
@@ -330,6 +363,7 @@ class SourceScheduler:
         self.pending_batches = int(state.get("pending_batches", 0))
         self.sequential_source = int(state.get("sequential_source", 0))
 
+    @beartype
     def _choose(self, active: list[int]) -> int:
         if self.phase.selection == "weighted_random":
             return self.rng.choices(
@@ -344,6 +378,7 @@ class SourceScheduler:
                 return selected
         raise RuntimeError("No active source remains")
 
+    @beartype
     def iter_epoch(self, epoch: int) -> Iterator[RuntimeBatch]:
         for source in self.sources:
             source.set_epoch(epoch, "training")

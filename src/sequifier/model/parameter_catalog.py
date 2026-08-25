@@ -9,11 +9,13 @@ import torch
 from torch import nn
 
 from sequifier.model.parameter_groups import semantic_parameter_groups
+from sequifier.typechecking import beartype
 
 ParameterComponent = Literal["ingestion", "backbone", "decoder"]
 ParameterKind = Literal["weight", "bias", "other"]
 
 
+@beartype
 def _canonical_name(name: str) -> str:
     return name.replace("_orig_mod.", "")
 
@@ -32,6 +34,7 @@ class ParameterDescriptor:
 
 
 class ParameterCatalog:
+    @beartype
     def __init__(self, model: nn.Module):
         self.model = model
         grouped = semantic_parameter_groups(model)
@@ -80,6 +83,7 @@ class ParameterCatalog:
         self._aliases = aliases
 
     @staticmethod
+    @beartype
     def _component(name: str) -> ParameterComponent:
         root = name.split(".", 1)[0]
         if root in {"ingestion", "ingestion_adapter"}:
@@ -89,6 +93,7 @@ class ParameterCatalog:
         return "backbone"
 
     @staticmethod
+    @beartype
     def _kind(name: str) -> ParameterKind:
         leaf = name.rsplit(".", 1)[-1]
         if leaf == "weight":
@@ -97,9 +102,11 @@ class ParameterCatalog:
             return "bias"
         return "other"
 
+    @beartype
     def descriptors(self) -> tuple[ParameterDescriptor, ...]:
         return self._descriptors
 
+    @beartype
     def parameter(self, parameter_id: str) -> nn.Parameter:
         resolved = self._aliases.get(parameter_id, parameter_id)
         try:
@@ -109,6 +116,7 @@ class ParameterCatalog:
                 f"Unknown parameter_id or alias: {parameter_id!r}."
             ) from error
 
+    @beartype
     def select(
         self,
         *,
@@ -122,6 +130,7 @@ class ParameterCatalog:
             and (semantic_group is None or descriptor.semantic_group == semantic_group)
         )
 
+    @beartype
     def fingerprint(self) -> str:
         payload = [
             {
@@ -137,6 +146,7 @@ class ParameterCatalog:
         return hashlib.sha256(encoded).hexdigest()
 
 
+@beartype
 def optimizer_group_id(descriptor: ParameterDescriptor) -> str:
     group = descriptor.semantic_group
     if group.startswith("decoder."):
@@ -150,6 +160,7 @@ def optimizer_group_id(descriptor: ParameterDescriptor) -> str:
     return f"{descriptor.component}.{group}"
 
 
+@beartype
 def semantic_optimizer_groups(
     catalog: ParameterCatalog,
     *,

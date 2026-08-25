@@ -7,6 +7,7 @@ from torch import Tensor, nn
 from sequifier.model.dtypes import cast_floating_to_module_dtype
 from sequifier.model.layers import RMSNorm, SequifierEncoderLayer
 from sequifier.model.tracing import TraceContext
+from sequifier.typechecking import beartype, conditional_beartype
 
 
 class TransformerBackbone(nn.Module):
@@ -19,6 +20,7 @@ class TransformerBackbone(nn.Module):
     broadcastable attention mask.
     """
 
+    @beartype
     def __init__(self, architecture: Any):
         super().__init__()
         self.architecture = architecture
@@ -68,6 +70,7 @@ class TransformerBackbone(nn.Module):
             self.final_norm = nn.Identity()
 
     @staticmethod
+    @conditional_beartype
     def _sinusoidal_positions(length: int, dim: int, theta: float) -> Tensor:
         positions = torch.arange(length, dtype=torch.float32).unsqueeze(1)
         frequencies = torch.exp(
@@ -81,6 +84,7 @@ class TransformerBackbone(nn.Module):
             )
         return values
 
+    @conditional_beartype
     def _add_temporal_position(self, x: Tensor) -> Tensor:
         sequence_length = x.shape[1]
         if sequence_length > self.max_context_length:
@@ -133,6 +137,7 @@ class TransformerBackbone(nn.Module):
 
         return x
 
+    @conditional_beartype
     def _forward_with_activations(
         self,
         x: Tensor,
@@ -196,6 +201,7 @@ class TransformerBackbone(nn.Module):
             activations["final_norm"] = x
         return x, activations
 
+    @conditional_beartype
     def forward_with_activations(
         self,
         x: Tensor,
@@ -213,6 +219,7 @@ class TransformerBackbone(nn.Module):
             trace,
         )
 
+    @conditional_beartype
     def forward(
         self,
         x: Tensor,

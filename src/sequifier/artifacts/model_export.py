@@ -1,6 +1,9 @@
 from typing import Any
 
+from sequifier.typechecking import beartype
 
+
+@beartype
 def model_execution_config(training_config: Any) -> dict[str, Any]:
     """Return only configuration required to reconstruct model execution."""
 
@@ -62,6 +65,7 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
     }
 
 
+@beartype
 def pt_bundle(model: Any, training_config: Any) -> dict[str, Any]:
     """Return the canonical lean PyTorch inference bundle."""
 

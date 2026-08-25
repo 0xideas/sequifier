@@ -2,11 +2,13 @@ import torch
 import torch_optimizer  # noqa: F401
 
 from sequifier.optimizers.ademamix import AdEMAMix
+from sequifier.typechecking import beartype
 
 CUSTOM_OPTIMIZERS = {"AdEMAMix": AdEMAMix}
 
 
-def get_optimizer_class(optimizer_name: str) -> torch.optim.Optimizer:
+@beartype
+def get_optimizer_class(optimizer_name: str) -> type[torch.optim.Optimizer]:
     """Resolve a custom, torch-optimizer, or torch optimizer class."""
     if optimizer_name in CUSTOM_OPTIMIZERS:
         return CUSTOM_OPTIMIZERS[optimizer_name]

@@ -2,13 +2,13 @@ from argparse import ArgumentParser
 from typing import Any
 
 import numpy as np
-from beartype import beartype
 
 from sequifier.hyperparameter_search import hyperparameter_search
 from sequifier.infer import infer
 from sequifier.make import make
 from sequifier.preprocess import preprocess
 from sequifier.train import train
+from sequifier.typechecking import beartype
 from sequifier.visualize_training import visualize_training
 
 
@@ -145,6 +145,7 @@ def setup_parser() -> ArgumentParser:
     return parser
 
 
+@beartype
 def main() -> None:
     """
     Main function to run the Sequifier CLI.

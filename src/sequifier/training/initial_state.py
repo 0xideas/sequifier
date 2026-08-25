@@ -4,8 +4,10 @@ import torch
 
 from sequifier.artifacts.backbone_repository import load_revision, select_revision
 from sequifier.artifacts.run_checkpoint import select_run_checkpoint
+from sequifier.typechecking import beartype
 
 
+@beartype
 def select_initial_state(training_config: Any) -> dict[str, Any]:
     """Choose exactly one source, with complete-run resume taking precedence."""
     run_checkpoint = select_run_checkpoint(training_config)
@@ -20,6 +22,7 @@ def select_initial_state(training_config: Any) -> dict[str, Any]:
     return {"kind": "fresh"}
 
 
+@beartype
 def load_model_initial_state(model: Any, source: dict[str, Any]) -> dict | None:
     """Load model tensors before wrapping and optimizer construction."""
     if source["kind"] == "fresh":

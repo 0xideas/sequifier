@@ -1,23 +1,16 @@
 import os
 import warnings
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
-from beartype import beartype
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    ValidationInfo,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
 from sequifier.helpers import canonicalize_polars_dtype_name, try_catch_excess_keys
+from sequifier.typechecking import beartype
 
 
 @beartype
@@ -65,6 +58,7 @@ class PreprocessorModel(BaseModel):
 
     @field_validator("preprocessing_data_path")
     @classmethod
+    @beartype
     def validate_preprocessing_data_path(cls, v: str) -> str:
         if not os.path.exists(v):
             raise ValueError(f"{v} does not exist")
@@ -72,6 +66,7 @@ class PreprocessorModel(BaseModel):
 
     @field_validator("read_format")
     @classmethod
+    @beartype
     def validate_read_format(cls, v: str) -> str:
         supported_formats = ["csv", "parquet"]
         if v not in supported_formats:
@@ -83,6 +78,7 @@ class PreprocessorModel(BaseModel):
 
     @field_validator("write_format")
     @classmethod
+    @beartype
     def validate_write_format(cls, v: str) -> str:
         supported_formats = ["csv", "parquet", "pt"]
         if v not in supported_formats:
@@ -94,7 +90,8 @@ class PreprocessorModel(BaseModel):
 
     @field_validator("merge_output")
     @classmethod
-    def validate_format2(cls, v: bool, info: ValidationInfo):
+    @beartype
+    def validate_format2(cls, v: bool, info: Any):
         write_format = info.data.get("write_format")
 
         if write_format == "pt" and v is True:
@@ -118,6 +115,7 @@ class PreprocessorModel(BaseModel):
 
     @field_validator("split_ratios")
     @classmethod
+    @beartype
     def validate_proportions_sum(cls, v: list[float]) -> list[float]:
         if not np.isclose(np.sum(v), 1.0):
             raise ValueError(f"split_ratios must sum to 1.0, but sums to {np.sum(v)}")
@@ -127,6 +125,7 @@ class PreprocessorModel(BaseModel):
 
     @field_validator("split_method")
     @classmethod
+    @beartype
     def validate_split_method(cls, v: str) -> str:
         if v not in ["within_sequence", "between_sequence"]:
             raise ValueError(
@@ -136,9 +135,8 @@ class PreprocessorModel(BaseModel):
 
     @field_validator("stride_by_split")
     @classmethod
-    def validate_step_sizes(
-        cls, v: Optional[list[int]], info: ValidationInfo
-    ) -> list[int]:
+    @beartype
+    def validate_step_sizes(cls, v: Optional[list[int]], info: Any) -> list[int]:
         split_ratios = info.data.get("split_ratios")
         if not (split_ratios is not None):
             raise ValueError("split_ratios must be set to validate stride_by_split")
@@ -157,6 +155,7 @@ class PreprocessorModel(BaseModel):
 
     @field_validator("batches_per_file")
     @classmethod
+    @beartype
     def validate_batches_per_file(cls, v: int) -> int:
         if v < 1:
             raise ValueError("batches_per_file must be a positive integer")
@@ -164,8 +163,9 @@ class PreprocessorModel(BaseModel):
 
     @field_validator("column_data_types")
     @classmethod
+    @beartype
     def validate_column_types(
-        cls, v: Optional[dict[str, str]], info: ValidationInfo
+        cls, v: Optional[dict[str, str]], info: Any
     ) -> Optional[dict[str, str]]:
         if not v:
             return None
@@ -188,7 +188,8 @@ class PreprocessorModel(BaseModel):
 
     @field_validator("continue_preprocessing")
     @classmethod
-    def validate_continue_preprocessing(cls, v: bool, info: ValidationInfo) -> bool:
+    @beartype
+    def validate_continue_preprocessing(cls, v: bool, info: Any) -> bool:
         if v and info.data.get("merge_output"):
             raise ValueError(
                 "'continue_preprocessing' can only be set to true if "
@@ -198,6 +199,7 @@ class PreprocessorModel(BaseModel):
 
     @field_validator("subsequence_start_mode")
     @classmethod
+    @beartype
     def validate_subsequence_start_mode(cls, v: str) -> str:
         if v not in ["distribute", "exact"]:
             raise ValueError(
@@ -206,6 +208,7 @@ class PreprocessorModel(BaseModel):
         return v
 
     @model_validator(mode="after")
+    @beartype
     def validate_mask_column_requires_metadata(self) -> "PreprocessorModel":
         if self.mask_column is not None and self.metadata_config_path is None:
             raise ValueError("metadata_config_path must be set when mask_column is set")
@@ -217,6 +220,7 @@ class PreprocessorModel(BaseModel):
             )
         return self
 
+    @beartype
     def __init__(self, **kwargs):
         default_stride_for_split = [kwargs["stored_context_width"]] * len(
             kwargs["split_ratios"]

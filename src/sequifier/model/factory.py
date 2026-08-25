@@ -17,6 +17,7 @@ from sequifier.model.layers import RMSNorm
 from sequifier.model.network import ComposableTransformerNetwork, ModelInterfaceModule
 from sequifier.objectives import CausalObjective, create_objective
 from sequifier.special_tokens import resolve_categorical_decoder_ids
+from sequifier.typechecking import beartype
 
 
 @dataclass(frozen=True)
@@ -31,20 +32,24 @@ class ModelRuntimeMetadata:
     interfaces: dict[str, InterfaceRuntimeMetadata]
     device: torch.device
 
+    @beartype
     def _only(self) -> InterfaceRuntimeMetadata:
         if len(self.interfaces) != 1:
             raise ValueError("A model interface selection is required")
         return next(iter(self.interfaces.values()))
 
     @property
+    @beartype
     def target_decoder_ids(self) -> dict[str, list[int]]:
         return self._only().target_decoder_ids
 
     @property
+    @beartype
     def target_n_classes(self) -> dict[str, int]:
         return self._only().target_n_classes
 
     @property
+    @beartype
     def target_global_to_decoder(self) -> dict[str, list[int]]:
         return self._only().target_global_to_decoder
 
@@ -52,10 +57,18 @@ class ModelRuntimeMetadata:
 @dataclass
 class BuiltModel:
     network: ComposableTransformerNetwork
-    objective: Any
+    objectives: dict[str, Any]
     runtime_metadata: ModelRuntimeMetadata
 
+    @property
+    @beartype
+    def objective(self) -> Any:
+        """Return the only objective, or the first for compatibility."""
 
+        return next(iter(self.objectives.values()))
+
+
+@beartype
 def compile_unique_layers(layers: nn.ModuleList) -> None:
     """Compile each distinct layer once while preserving shared-layer aliases."""
 
@@ -69,6 +82,7 @@ def compile_unique_layers(layers: nn.ModuleList) -> None:
         layers[index] = compiled_layer
 
 
+@beartype
 def compile_composable_training_model(model: Any, config: Any) -> nn.Module:
     """Compile a canonical training model according to configured datasets."""
 
@@ -90,12 +104,20 @@ def compile_composable_training_model(model: Any, config: Any) -> nn.Module:
     return model
 
 
-def wrap_composable_ddp(model: Any, config: Any, local_rank: int) -> nn.Module | None:
+@beartype
+def wrap_composable_ddp(
+    model: Any,
+    config: Any,
+    local_rank: int,
+    *,
+    callable_model: nn.Module | None = None,
+) -> nn.Module | None:
     """Apply whole-model or component DDP wrapping for canonical training."""
 
     device_ids = [local_rank] if config.device.startswith("cuda") else None
     if len(config.dataset_training_spec) == 1:
-        return DDP(model, device_ids=device_ids, find_unused_parameters=False)
+        model_to_wrap = callable_model if callable_model is not None else model
+        return DDP(model_to_wrap, device_ids=device_ids, find_unused_parameters=False)
 
     model.backbone = DDP(
         model.backbone, device_ids=device_ids, find_unused_parameters=False
@@ -117,10 +139,12 @@ def wrap_composable_ddp(model: Any, config: Any, local_rank: int) -> nn.Module |
     return None
 
 
+@beartype
 def _training_spec(config: Any) -> Any:
     return config.global_training_spec
 
 
+@beartype
 def _apply_layer_dtypes(network: nn.Module, config: Any) -> None:
     layer_config = _training_spec(config).layer_type_dtypes
     if not layer_config:
@@ -148,6 +172,7 @@ def _apply_layer_dtypes(network: nn.Module, config: Any) -> None:
             module.to(dtype=get_torch_dtype(layer_config["norm"]))
 
 
+@beartype
 def _initialize_components(
     components: dict[str, tuple[nn.Module, Any]], logger: Any
 ) -> None:
@@ -168,6 +193,7 @@ def _initialize_components(
         logger.warning(f"Initialization overrides matched no parameters: {targets}")
 
 
+@beartype
 def _decoder_metadata(view: Any) -> InterfaceRuntimeMetadata:
     target_decoder_ids = resolve_categorical_decoder_ids(
         view.target_columns,
@@ -189,6 +215,7 @@ def _decoder_metadata(view: Any) -> InterfaceRuntimeMetadata:
     )
 
 
+@beartype
 def _build_composable_network(
     config: Any,
     *,
@@ -201,19 +228,19 @@ def _build_composable_network(
     resolved_interfaces = {}
     for dataset in config.dataset_training_spec.values():
         resolved_interfaces.setdefault(dataset.model_interface, dataset.interface)
-    first_interface = next(iter(resolved_interfaces.values()))
-    objective_view = interface_build_view(config, first_interface)
-    # A lean inference bundle intentionally omits next-occurrence loss
-    # configuration and categorical ID maps.  Its forward attention policy is
-    # the ordinary causal policy; training configs still construct the complete
-    # objective below.
-    if (
-        config.global_training_spec.training_objective == "next_occurrence"
-        and config.global_training_spec.next_occurrence_config is None
-    ):
-        objective = CausalObjective(objective_view)
-    else:
-        objective = create_objective(objective_view)
+    objectives = {}
+    for name, interface in resolved_interfaces.items():
+        objective_view = interface_build_view(config, interface)
+        # A lean inference bundle may omit next-occurrence loss metadata. Its
+        # forward attention policy remains the ordinary causal policy.
+        if (
+            config.global_training_spec.training_objective == "next_occurrence"
+            and config.global_training_spec.next_occurrence_config is None
+        ):
+            objectives[name] = CausalObjective(objective_view)
+        else:
+            objectives[name] = create_objective(objective_view)
+    objective = next(iter(objectives.values()))
     backbone = TransformerBackbone(config.model_spec.backbone.architecture)
 
     routes = {}
@@ -307,7 +334,7 @@ def _build_composable_network(
     network.to(device)
     return BuiltModel(
         network=network,
-        objective=objective,
+        objectives=objectives,
         runtime_metadata=ModelRuntimeMetadata(
             interfaces=runtime_metadata,
             device=device,
@@ -315,6 +342,7 @@ def _build_composable_network(
     )
 
 
+@beartype
 def build_transformer_network(
     config: Any,
     *,

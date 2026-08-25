@@ -21,8 +21,10 @@ from sequifier.config.train_config import (
 )
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
+from sequifier.typechecking import beartype
 
 
+@beartype
 def resolved_config_from_model_config(
     values: dict,
     *,
