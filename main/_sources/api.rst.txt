@@ -9,7 +9,7 @@ Preprocessing Config
 Training Config
 ---------------------
 .. automodule:: sequifier.config.train_config
-   :members: SequifierConfig, ResolvedSequifierConfig, TrainModel, ModelSpecModel, TrainingSpecModel, LoadedTrainConfig, load_train_config_with_source, resolve_sequifier_config
+   :members: SequifierConfig, ResolvedSequifierConfig, TrainModel, GlobalTrainingSpecModel, ModelSpecModel, ModelInterfaceSpecModel, DatasetTrainingSpecModel, TrainingPlanModel, LoadedTrainConfig, load_train_config, load_train_config_with_source, resolve_sequifier_config
 
 Inference Config
 ---------------------
@@ -27,7 +27,7 @@ Config Composition and Metadata
 Hyperparameter Search Config
 ---------------------------------
 .. automodule:: sequifier.config.hyperparameter_search_config
-   :members: HyperparameterSearchConfig, PartialHyperparameterSearchConfig, HyperparameterSearchOverrides, ModelSpecHyperparameterSampling, ModelSpecHyperparameterSamplingOverride, TrainingSpecHyperparameterSampling, TrainingSpecHyperparameterSamplingOverride
+   :members: CanonicalHyperparameterSearchConfig, HyperparameterSearchConfig, load_hyperparameter_search_config, compile_canonical_hyperparameter_search_config
 
 Non-standard Optimizers
 --------------------------

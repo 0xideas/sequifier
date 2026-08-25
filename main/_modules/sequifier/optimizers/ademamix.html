@@ -272,19 +272,22 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.optimizers.ademamix</h1><div class="highlight"><pre>
-<span></span><span class="c1"># type: ignore</span>
-
-<span class="c1"># from https://github.com/nanowell/AdEMAMix-Optimizer-Pytorch. Thanks a lot!</span>
-
-<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch.optim</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optimizer</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
+
+<span class="c1"># type: ignore</span>
+
+<span class="c1"># from https://github.com/nanowell/AdEMAMix-Optimizer-Pytorch. Thanks a lot!</span>
 
 
 <div class="viewcode-block" id="AdEMAMix"><a class="viewcode-back" href="../../../api.html#sequifier.optimizers.ademamix.AdEMAMix">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">AdEMAMix</span><span class="p">(</span><span class="n">Optimizer</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">"""AdEMAMix optimizer."""</span>
 
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">params</span><span class="o">=</span><span class="p">{},</span>
@@ -316,10 +319,12 @@
         <span class="p">)</span>
         <span class="nb">super</span><span class="p">(</span><span class="n">AdEMAMix</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">defaults</span><span class="p">)</span>
 
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">__setstate__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
         <span class="nb">super</span><span class="p">(</span><span class="n">AdEMAMix</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__setstate__</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
 
 <div class="viewcode-block" id="AdEMAMix.step"><a class="viewcode-back" href="../../../api.html#sequifier.optimizers.ademamix.AdEMAMix.step">[docs]</a>    <span class="nd">@torch</span><span class="o">.</span><span class="n">no_grad</span><span class="p">()</span>
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">step</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">closure</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">"""Run one optimizer step."""</span>
         <span class="n">loss</span> <span class="o">=</span> <span class="kc">None</span>
@@ -388,6 +393,7 @@
 
         <span class="k">return</span> <span class="n">loss</span></div>
 
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_update_adamemix</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">params</span><span class="p">,</span>

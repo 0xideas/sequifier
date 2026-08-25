@@ -276,11 +276,13 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch_optimizer</span>  <span class="c1"># noqa: F401</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.optimizers.ademamix</span><span class="w"> </span><span class="kn">import</span> <span class="n">AdEMAMix</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 
 <span class="n">CUSTOM_OPTIMIZERS</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"AdEMAMix"</span><span class="p">:</span> <span class="n">AdEMAMix</span><span class="p">}</span>
 
 
-<div class="viewcode-block" id="get_optimizer_class"><a class="viewcode-back" href="../../../api.html#sequifier.optimizers.optimizers.get_optimizer_class">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">get_optimizer_class</span><span class="p">(</span><span class="n">optimizer_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">:</span>
+<div class="viewcode-block" id="get_optimizer_class"><a class="viewcode-back" href="../../../api.html#sequifier.optimizers.optimizers.get_optimizer_class">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_optimizer_class</span><span class="p">(</span><span class="n">optimizer_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">type</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">optim</span><span class="o">.</span><span class="n">Optimizer</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""Resolve a custom, torch-optimizer, or torch optimizer class."""</span>
     <span class="k">if</span> <span class="n">optimizer_name</span> <span class="ow">in</span> <span class="n">CUSTOM_OPTIMIZERS</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">CUSTOM_OPTIMIZERS</span><span class="p">[</span><span class="n">optimizer_name</span><span class="p">]</span>

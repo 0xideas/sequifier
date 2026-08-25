@@ -274,24 +274,17 @@
           <h1>Source code for sequifier.config.preprocess_config</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Optional</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">beartype</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-    <span class="n">BaseModel</span><span class="p">,</span>
-    <span class="n">ConfigDict</span><span class="p">,</span>
-    <span class="n">Field</span><span class="p">,</span>
-    <span class="n">ValidationInfo</span><span class="p">,</span>
-    <span class="n">field_validator</span><span class="p">,</span>
-    <span class="n">model_validator</span><span class="p">,</span>
-<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span><span class="p">,</span> <span class="n">ConfigDict</span><span class="p">,</span> <span class="n">Field</span><span class="p">,</span> <span class="n">field_validator</span><span class="p">,</span> <span class="n">model_validator</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.composition</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">load_composed_yaml_config</span><span class="p">,</span>
     <span class="n">merge_config_fragments</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">canonicalize_polars_dtype_name</span><span class="p">,</span> <span class="n">try_catch_excess_keys</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 
 
 <span class="nd">@beartype</span>
@@ -339,6 +332,7 @@
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"preprocessing_data_path"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_preprocessing_data_path</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">v</span><span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">v</span><span class="si">}</span><span class="s2"> does not exist"</span><span class="p">)</span>
@@ -346,6 +340,7 @@
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"read_format"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_read_format</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="n">supported_formats</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"csv"</span><span class="p">,</span> <span class="s2">"parquet"</span><span class="p">]</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">supported_formats</span><span class="p">:</span>
@@ -357,6 +352,7 @@
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"write_format"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_write_format</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="n">supported_formats</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"csv"</span><span class="p">,</span> <span class="s2">"parquet"</span><span class="p">,</span> <span class="s2">"pt"</span><span class="p">]</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">supported_formats</span><span class="p">:</span>
@@ -368,7 +364,8 @@
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"merge_output"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_format2</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span><span class="p">):</span>
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_format2</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">info</span><span class="p">:</span> <span class="n">Any</span><span class="p">):</span>
         <span class="n">write_format</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"write_format"</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="n">write_format</span> <span class="o">==</span> <span class="s2">"pt"</span> <span class="ow">and</span> <span class="n">v</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">:</span>
@@ -392,6 +389,7 @@
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"split_ratios"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_proportions_sum</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]:</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isclose</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">v</span><span class="p">),</span> <span class="mf">1.0</span><span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"split_ratios must sum to 1.0, but sums to </span><span class="si">{</span><span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">v</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -401,6 +399,7 @@
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"split_method"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_split_method</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"within_sequence"</span><span class="p">,</span> <span class="s2">"between_sequence"</span><span class="p">]:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -410,9 +409,8 @@
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"stride_by_split"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_step_sizes</span><span class="p">(</span>
-        <span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_step_sizes</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span> <span class="n">info</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
         <span class="n">split_ratios</span> <span class="o">=</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"split_ratios"</span><span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">split_ratios</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"split_ratios must be set to validate stride_by_split"</span><span class="p">)</span>
@@ -431,6 +429,7 @@
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"batches_per_file"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_batches_per_file</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">v</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"batches_per_file must be a positive integer"</span><span class="p">)</span>
@@ -438,8 +437,9 @@
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"column_data_types"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_column_types</span><span class="p">(</span>
-        <span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span>
+        <span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span> <span class="n">info</span><span class="p">:</span> <span class="n">Any</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]:</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">v</span><span class="p">:</span>
             <span class="k">return</span> <span class="kc">None</span>
@@ -462,7 +462,8 @@
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"continue_preprocessing"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_continue_preprocessing</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">info</span><span class="p">:</span> <span class="n">ValidationInfo</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_continue_preprocessing</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">info</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">and</span> <span class="n">info</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"merge_output"</span><span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="s2">"'continue_preprocessing' can only be set to true if "</span>
@@ -472,6 +473,7 @@
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"subsequence_start_mode"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_subsequence_start_mode</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">v</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"distribute"</span><span class="p">,</span> <span class="s2">"exact"</span><span class="p">]:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -480,6 +482,7 @@
         <span class="k">return</span> <span class="n">v</span>
 
     <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_mask_column_requires_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"PreprocessorModel"</span><span class="p">:</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">mask_column</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata_config_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"metadata_config_path must be set when mask_column is set"</span><span class="p">)</span>
@@ -491,6 +494,7 @@
             <span class="p">)</span>
         <span class="k">return</span> <span class="bp">self</span>
 
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
         <span class="n">default_stride_for_split</span> <span class="o">=</span> <span class="p">[</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">"stored_context_width"</span><span class="p">]]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span>
             <span class="n">kwargs</span><span class="p">[</span><span class="s2">"split_ratios"</span><span class="p">]</span>

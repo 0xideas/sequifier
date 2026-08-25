@@ -286,9 +286,10 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">optuna</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch._dynamo</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">yaml</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">beartype</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">optuna.trial</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrialState</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 
 <span class="n">torch</span><span class="o">.</span><span class="n">_dynamo</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">suppress_errors</span> <span class="o">=</span> <span class="kc">True</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.hyperparameter_search_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
@@ -299,13 +300,37 @@
     <span class="n">get_last_training_batch_timedelta</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.yaml</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModelDumper</span>  <span class="c1"># noqa: E402</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.logging_paths</span><span class="w"> </span><span class="kn">import</span> <span class="n">model_log_directory</span>  <span class="c1"># noqa: E402</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.logging_paths</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: E402</span>
+    <span class="n">dataset_artifact_prefix</span><span class="p">,</span>
+    <span class="n">model_log_directory</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.training.metrics</span><span class="w"> </span><span class="kn">import</span> <span class="n">VALIDATION_FIELDS</span>  <span class="c1"># noqa: E402</span>
 
 <span class="n">_DUPLICATE_OF_USER_ATTR</span> <span class="o">=</span> <span class="s2">"sequifier_duplicate_of"</span>
 <span class="n">_MAX_CONSECUTIVE_DUPLICATE_PROPOSALS</span> <span class="o">=</span> <span class="mi">1000</span>
 
 
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_monitored_dataset</span><span class="p">(</span><span class="n">run_config</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
+    <span class="n">dataset_names</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">run_config</span><span class="o">.</span><span class="n">dataset_training_spec</span><span class="p">)</span>
+    <span class="n">dataset_count</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">dataset_names</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">dataset_count</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span><span class="p">,</span> <span class="n">dataset_count</span>
+    <span class="n">evaluation</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">run_config</span><span class="p">,</span> <span class="s2">"evaluation"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">monitor</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">evaluation</span><span class="p">,</span> <span class="s2">"monitor"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">monitor</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"Multi-dataset hyperparameter search requires evaluation.monitor"</span>
+        <span class="p">)</span>
+    <span class="n">dataset_name</span> <span class="o">=</span> <span class="n">monitor</span><span class="o">.</span><span class="n">source</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"."</span><span class="p">,</span> <span class="mi">1</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">dataset_name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">run_config</span><span class="o">.</span><span class="n">dataset_training_spec</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"evaluation.monitor references unknown dataset </span><span class="si">{</span><span class="n">dataset_name</span><span class="si">!r}</span><span class="s2">"</span>
+        <span class="p">)</span>
+    <span class="k">return</span> <span class="n">dataset_name</span><span class="p">,</span> <span class="n">dataset_count</span>
+
+
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">create_sampler</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">optuna</span><span class="o">.</span><span class="n">samplers</span><span class="o">.</span><span class="n">BaseSampler</span><span class="p">:</span>
     <span class="n">strategy</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">"search_strategy"</span><span class="p">,</span> <span class="s2">"bayesian"</span><span class="p">)</span>
     <span class="n">global_seed</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">"global_seed"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
@@ -321,20 +346,23 @@
     <span class="p">)</span>
 
 
-<div class="viewcode-block" id="set_pdeathsig"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.set_pdeathsig">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">set_pdeathsig</span><span class="p">():</span>
+<div class="viewcode-block" id="set_pdeathsig"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.set_pdeathsig">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">set_pdeathsig</span><span class="p">():</span>
 <span class="w">    </span><span class="sd">"""Ask Linux to SIGTERM children when this parent dies."""</span>
     <span class="k">if</span> <span class="n">sys</span><span class="o">.</span><span class="n">platform</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"linux"</span><span class="p">):</span>
         <span class="n">libc</span> <span class="o">=</span> <span class="n">ctypes</span><span class="o">.</span><span class="n">CDLL</span><span class="p">(</span><span class="s2">"libc.so.6"</span><span class="p">)</span>
         <span class="n">libc</span><span class="o">.</span><span class="n">prctl</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">signal</span><span class="o">.</span><span class="n">SIGTERM</span><span class="p">)</span>  <span class="c1"># PR_SET_PDEATHSIG = 1</span></div>
 
 
-<div class="viewcode-block" id="objective"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.objective">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">objective</span><span class="p">(</span>
+<div class="viewcode-block" id="objective"><a class="viewcode-back" href="../../api.html#sequifier.hyperparameter_search.objective">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">objective</span><span class="p">(</span>
     <span class="n">trial</span><span class="p">:</span> <span class="n">optuna</span><span class="o">.</span><span class="n">Trial</span><span class="p">,</span> <span class="n">accepted_trials</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">run_config</span><span class="p">:</span> <span class="n">Any</span> <span class="o">=</span> <span class="kc">None</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="o">...</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">"""Run one Optuna trial through the CLI trainer and validation metrics."""</span>
     <span class="k">if</span> <span class="n">run_config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">run_config</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">sample_trial</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="n">accepted_trials</span><span class="p">)</span>
     <span class="n">run_name</span> <span class="o">=</span> <span class="n">run_config</span><span class="o">.</span><span class="n">model_name</span>
+    <span class="n">monitored_dataset</span><span class="p">,</span> <span class="n">dataset_count</span> <span class="o">=</span> <span class="n">_monitored_dataset</span><span class="p">(</span><span class="n">run_config</span><span class="p">)</span>
 
     <span class="n">config_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
         <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">model_config_write_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">.yaml"</span>
@@ -349,12 +377,20 @@
             <span class="n">sort_keys</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
         <span class="p">)</span>
 
-    <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">"SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"1"</span>
-
     <span class="n">log_dir</span> <span class="o">=</span> <span class="n">model_log_directory</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="n">run_name</span><span class="p">)</span>
     <span class="n">log_dir</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-    <span class="n">validation_path</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">log_dir</span> <span class="o">/</span> <span class="sa">f</span><span class="s2">"sequifier-</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">-rank0-validation.csv"</span><span class="p">)</span>
-    <span class="n">prune_path</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">log_dir</span> <span class="o">/</span> <span class="sa">f</span><span class="s2">"sequifier-</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">.prune"</span><span class="p">)</span>
+    <span class="n">validation_path</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="nb">str</span><span class="p">(</span>
+            <span class="n">dataset_artifact_prefix</span><span class="p">(</span>
+                <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
+                <span class="n">run_name</span><span class="p">,</span>
+                <span class="n">dataset_name</span><span class="o">=</span><span class="n">monitored_dataset</span><span class="p">,</span>
+                <span class="n">dataset_count</span><span class="o">=</span><span class="n">dataset_count</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+        <span class="o">+</span> <span class="s2">"-validation.csv"</span>
+    <span class="p">)</span>
+    <span class="n">prune_path</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">log_dir</span> <span class="o">/</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">.prune"</span><span class="p">)</span>
     <span class="n">consumed_evaluation_ids</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
     <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">validation_path</span><span class="p">):</span>
         <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">validation_path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">,</span> <span class="n">newline</span><span class="o">=</span><span class="s2">""</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
@@ -369,6 +405,7 @@
             <span class="p">)</span>
 
     <span class="n">env</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">env</span><span class="p">[</span><span class="s2">"SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"1"</span>
     <span class="n">cmd</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"sequifier"</span><span class="p">,</span> <span class="s2">"train"</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"--config-path=</span><span class="si">{</span><span class="n">config_path</span><span class="si">}</span><span class="s2">"</span><span class="p">]</span>
     <span class="n">process</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">(</span>
         <span class="n">cmd</span><span class="p">,</span>
@@ -379,6 +416,7 @@
     <span class="n">best_val_loss</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"inf"</span><span class="p">)</span>
     <span class="n">completed_epochs</span> <span class="o">=</span> <span class="mi">0</span>
 
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">consume_metrics</span><span class="p">(</span>
         <span class="n">best_val_loss</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">completed_epochs</span><span class="p">:</span> <span class="nb">int</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
@@ -467,16 +505,29 @@
         <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Training failed with exit code </span><span class="si">{</span><span class="n">exit_code</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
     <span class="n">model_type</span> <span class="o">=</span> <span class="s2">"onnx"</span> <span class="k">if</span> <span class="n">run_config</span><span class="o">.</span><span class="n">export_onnx</span> <span class="k">else</span> <span class="s2">"pt"</span>
-    <span class="n">model_path</span><span class="p">,</span> <span class="n">last_epoch</span> <span class="o">=</span> <span class="n">get_best_model_path</span><span class="p">(</span>
-        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="n">run_name</span><span class="p">,</span> <span class="n">model_type</span>
+    <span class="n">model_path</span><span class="p">,</span> <span class="n">_last_epoch</span> <span class="o">=</span> <span class="n">get_best_model_path</span><span class="p">(</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
+        <span class="n">run_name</span><span class="p">,</span>
+        <span class="n">model_type</span><span class="p">,</span>
+        <span class="n">dataset_name</span><span class="o">=</span><span class="p">(</span><span class="n">monitored_dataset</span> <span class="k">if</span> <span class="n">model_type</span> <span class="o">==</span> <span class="s2">"onnx"</span> <span class="k">else</span> <span class="kc">None</span><span class="p">),</span>
+        <span class="n">dataset_count</span><span class="o">=</span><span class="p">(</span><span class="n">dataset_count</span> <span class="k">if</span> <span class="n">model_type</span> <span class="o">==</span> <span class="s2">"onnx"</span> <span class="k">else</span> <span class="mi">1</span><span class="p">),</span>
     <span class="p">)</span>
+    <span class="n">evaluation_id</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">basename</span><span class="p">(</span><span class="n">model_path</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
 
     <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">evaluation_inference_config</span><span class="p">:</span>
+        <span class="n">evaluation_inference_config</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">evaluation_inference_config</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isabs</span><span class="p">(</span><span class="n">evaluation_inference_config</span><span class="p">)</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span>
+            <span class="n">evaluation_inference_config</span>
+        <span class="p">):</span>
+            <span class="n">evaluation_inference_config</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+                <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
+                <span class="n">evaluation_inference_config</span><span class="p">,</span>
+            <span class="p">)</span>
         <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
             <span class="p">[</span>
                 <span class="s2">"sequifier"</span><span class="p">,</span>
                 <span class="s2">"infer"</span><span class="p">,</span>
-                <span class="sa">f</span><span class="s2">"--config-path=</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">evaluation_inference_config</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
+                <span class="sa">f</span><span class="s2">"--config-path=</span><span class="si">{</span><span class="n">evaluation_inference_config</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
                 <span class="sa">f</span><span class="s2">"--model-path=</span><span class="si">{</span><span class="n">model_path</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
             <span class="p">],</span>
             <span class="n">check</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
@@ -484,7 +535,7 @@
 
     <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">evaluation_script</span> <span class="ow">and</span> <span class="n">config</span><span class="o">.</span><span class="n">evaluation_metrics</span><span class="p">:</span>
         <span class="n">eval_script_path</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">evaluation_script</span>
-        <span class="n">cmd</span> <span class="o">=</span> <span class="p">[</span><span class="n">sys</span><span class="o">.</span><span class="n">executable</span><span class="p">,</span> <span class="n">eval_script_path</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">-best-</span><span class="si">{</span><span class="n">last_epoch</span><span class="si">}</span><span class="s2">"</span><span class="p">]</span>
+        <span class="n">cmd</span> <span class="o">=</span> <span class="p">[</span><span class="n">sys</span><span class="o">.</span><span class="n">executable</span><span class="p">,</span> <span class="n">eval_script_path</span><span class="p">,</span> <span class="n">evaluation_id</span><span class="p">]</span>
 
         <span class="n">eval_process</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
             <span class="n">cmd</span><span class="p">,</span> <span class="n">capture_output</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">cwd</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span>
@@ -499,7 +550,7 @@
             <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
             <span class="s2">"outputs"</span><span class="p">,</span>
             <span class="s2">"evaluations"</span><span class="p">,</span>
-            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">run_name</span><span class="si">}</span><span class="s2">-best-</span><span class="si">{</span><span class="n">last_epoch</span><span class="si">}</span><span class="s2">.json"</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">evaluation_id</span><span class="si">}</span><span class="s2">.json"</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">eval_json_path</span><span class="p">):</span>
             <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span>
@@ -538,6 +589,7 @@
     <span class="k">return</span> <span class="n">best_val_loss</span></div>
 
 
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_parameter_signature</span><span class="p">(</span><span class="n">params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Return a stable identity for one fully sampled Optuna parameter set."""</span>
     <span class="k">return</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span>
@@ -548,6 +600,7 @@
     <span class="p">)</span>
 
 
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_trained_parameter_signatures</span><span class="p">(</span><span class="n">study</span><span class="p">:</span> <span class="n">optuna</span><span class="o">.</span><span class="n">Study</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""Map trained parameter sets to the first trial that used each set."""</span>
     <span class="n">signatures</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
@@ -557,6 +610,7 @@
     <span class="k">return</span> <span class="n">signatures</span>
 
 
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_trained_trial_count</span><span class="p">(</span><span class="n">study</span><span class="p">:</span> <span class="n">optuna</span><span class="o">.</span><span class="n">Study</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Count completed and pruned trials that consumed a training run."""</span>
     <span class="k">return</span> <span class="nb">len</span><span class="p">(</span>
@@ -567,6 +621,7 @@
     <span class="p">)</span>
 
 
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_optimize_distinct_trials</span><span class="p">(</span><span class="n">study</span><span class="p">:</span> <span class="n">optuna</span><span class="o">.</span><span class="n">Study</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">n_trials</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Train novel configurations until the study contains ``n_trials`` runs."""</span>
     <span class="n">trained_signatures</span> <span class="o">=</span> <span class="n">_trained_parameter_signatures</span><span class="p">(</span><span class="n">study</span><span class="p">)</span>
@@ -678,6 +733,7 @@
             <span class="kc">None</span> <span class="k">if</span> <span class="n">n_trials</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">n_trials</span> <span class="o">-</span> <span class="n">accepted_trials</span><span class="p">)</span>
         <span class="p">)</span>
 
+        <span class="nd">@beartype</span>
         <span class="k">def</span><span class="w"> </span><span class="nf">grid_objective</span><span class="p">(</span><span class="n">trial</span><span class="p">:</span> <span class="n">optuna</span><span class="o">.</span><span class="n">Trial</span><span class="p">):</span>
             <span class="k">nonlocal</span> <span class="n">accepted_trials</span>
             <span class="k">try</span><span class="p">:</span>

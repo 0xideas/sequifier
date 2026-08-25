@@ -276,16 +276,13 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">yaml</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-    <span class="n">DotDict</span><span class="p">,</span>
-    <span class="n">ModelSpecModel</span><span class="p">,</span>
-    <span class="n">TrainingSpecModel</span><span class="p">,</span>
-    <span class="n">TrainModel</span><span class="p">,</span>
-<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">DotDict</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">ModelWindowView</span><span class="p">,</span> <span class="n">StoredWindowLayout</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 
 
-<div class="viewcode-block" id="represent_sequifier_object"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.represent_sequifier_object">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">represent_sequifier_object</span><span class="p">(</span><span class="n">dumper</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+<div class="viewcode-block" id="represent_sequifier_object"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.represent_sequifier_object">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">represent_sequifier_object</span><span class="p">(</span><span class="n">dumper</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">"""Represent sequifier config objects as plain YAML mappings."""</span>
     <span class="n">values</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="vm">__dict__</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">field_name</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"freezing"</span><span class="p">,</span> <span class="s2">"freezing_except"</span><span class="p">):</span>
@@ -299,17 +296,20 @@
     <span class="k">return</span> <span class="n">dumper</span><span class="o">.</span><span class="n">represent_dict</span><span class="p">(</span><span class="n">values</span><span class="p">)</span></div>
 
 
-<div class="viewcode-block" id="represent_dot_dict"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.represent_dot_dict">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">represent_dot_dict</span><span class="p">(</span><span class="n">dumper</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+<div class="viewcode-block" id="represent_dot_dict"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.represent_dot_dict">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">represent_dot_dict</span><span class="p">(</span><span class="n">dumper</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">"""Represent DotDict as a plain YAML mapping."""</span>
     <span class="k">return</span> <span class="n">dumper</span><span class="o">.</span><span class="n">represent_dict</span><span class="p">(</span><span class="nb">dict</span><span class="p">(</span><span class="n">data</span><span class="p">))</span></div>
 
 
-<div class="viewcode-block" id="represent_numpy_float"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.represent_numpy_float">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">represent_numpy_float</span><span class="p">(</span><span class="n">dumper</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+<div class="viewcode-block" id="represent_numpy_float"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.represent_numpy_float">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">represent_numpy_float</span><span class="p">(</span><span class="n">dumper</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">"""Represent NumPy floats as YAML floats."""</span>
     <span class="k">return</span> <span class="n">dumper</span><span class="o">.</span><span class="n">represent_float</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">data</span><span class="p">))</span></div>
 
 
-<div class="viewcode-block" id="represent_numpy_int"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.represent_numpy_int">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">represent_numpy_int</span><span class="p">(</span><span class="n">dumper</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+<div class="viewcode-block" id="represent_numpy_int"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.represent_numpy_int">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">represent_numpy_int</span><span class="p">(</span><span class="n">dumper</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">"""Represent NumPy integers as YAML integers."""</span>
     <span class="k">return</span> <span class="n">dumper</span><span class="o">.</span><span class="n">represent_int</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">data</span><span class="p">))</span></div>
 
@@ -317,14 +317,12 @@
 <div class="viewcode-block" id="TrainModelDumper"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.TrainModelDumper">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TrainModelDumper</span><span class="p">(</span><span class="n">yaml</span><span class="o">.</span><span class="n">Dumper</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">"""YAML dumper for sequifier config objects."""</span>
 
-<div class="viewcode-block" id="TrainModelDumper.increase_indent"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.TrainModelDumper.increase_indent">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">increase_indent</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">flow</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">indentless</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<div class="viewcode-block" id="TrainModelDumper.increase_indent"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.TrainModelDumper.increase_indent">[docs]</a>    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">increase_indent</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">flow</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">indentless</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
 <span class="w">        </span><span class="sd">"""Indent block sequences."""</span>
         <span class="k">return</span> <span class="nb">super</span><span class="p">(</span><span class="n">TrainModelDumper</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">increase_indent</span><span class="p">(</span><span class="n">flow</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span></div></div>
 
 
-<span class="n">TrainModelDumper</span><span class="o">.</span><span class="n">add_representer</span><span class="p">(</span><span class="n">TrainModel</span><span class="p">,</span> <span class="n">represent_sequifier_object</span><span class="p">)</span>
-<span class="n">TrainModelDumper</span><span class="o">.</span><span class="n">add_representer</span><span class="p">(</span><span class="n">ModelSpecModel</span><span class="p">,</span> <span class="n">represent_sequifier_object</span><span class="p">)</span>
-<span class="n">TrainModelDumper</span><span class="o">.</span><span class="n">add_representer</span><span class="p">(</span><span class="n">TrainingSpecModel</span><span class="p">,</span> <span class="n">represent_sequifier_object</span><span class="p">)</span>
 <span class="n">TrainModelDumper</span><span class="o">.</span><span class="n">add_representer</span><span class="p">(</span><span class="n">StoredWindowLayout</span><span class="p">,</span> <span class="n">represent_sequifier_object</span><span class="p">)</span>
 <span class="n">TrainModelDumper</span><span class="o">.</span><span class="n">add_representer</span><span class="p">(</span><span class="n">ModelWindowView</span><span class="p">,</span> <span class="n">represent_sequifier_object</span><span class="p">)</span>
 <span class="n">TrainModelDumper</span><span class="o">.</span><span class="n">add_multi_representer</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">,</span> <span class="n">represent_sequifier_object</span><span class="p">)</span>

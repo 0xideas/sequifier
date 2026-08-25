@@ -283,6 +283,8 @@
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">yaml</span>
 
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
+
 <span class="n">ConfigPath</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
 
 <span class="n">ADDITIONAL_CONFIG_PATHS_KEY</span> <span class="o">=</span> <span class="s2">"additional_config_paths"</span>
@@ -292,17 +294,27 @@
 <span class="c1"># fields from one discriminator variant from leaking into another variant.</span>
 <span class="n">DEFAULT_ATOMIC_PATHS</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">]</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">(</span>
     <span class="p">{</span>
-        <span class="p">(</span><span class="s2">"model_spec"</span><span class="p">,</span> <span class="s2">"ingestion"</span><span class="p">),</span>
         <span class="p">(</span><span class="s2">"model_spec"</span><span class="p">,</span> <span class="s2">"backbone"</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">"model_spec"</span><span class="p">,</span> <span class="s2">"decoder"</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">"training_spec"</span><span class="p">,</span> <span class="s2">"optimizer"</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">"training_spec"</span><span class="p">,</span> <span class="s2">"scheduler"</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">"training_spec"</span><span class="p">,</span> <span class="s2">"bert_spec"</span><span class="p">,</span> <span class="s2">"span_masking"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"global_training_spec"</span><span class="p">,</span> <span class="s2">"optimizer"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"global_training_spec"</span><span class="p">,</span> <span class="s2">"scheduler"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"global_training_spec"</span><span class="p">,</span> <span class="s2">"bert_spec"</span><span class="p">,</span> <span class="s2">"span_masking"</span><span class="p">),</span>
     <span class="p">}</span>
 <span class="p">)</span>
 
 
-<div class="viewcode-block" id="deep_merge_config"><a class="viewcode-back" href="../../../api.html#sequifier.config.composition.deep_merge_config">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">deep_merge_config</span><span class="p">(</span>
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_is_atomic</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">ConfigPath</span><span class="p">,</span> <span class="n">atomic_paths</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">atomic_paths</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">True</span>
+    <span class="k">return</span> <span class="p">(</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">path</span><span class="p">)</span> <span class="o">==</span> <span class="mi">4</span>
+        <span class="ow">and</span> <span class="n">path</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="p">(</span><span class="s2">"model_spec"</span><span class="p">,</span> <span class="s2">"interfaces"</span><span class="p">)</span>
+        <span class="ow">and</span> <span class="n">path</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"ingestion"</span><span class="p">,</span> <span class="s2">"decoder"</span><span class="p">}</span>
+    <span class="p">)</span>
+
+
+<div class="viewcode-block" id="deep_merge_config"><a class="viewcode-back" href="../../../api.html#sequifier.config.composition.deep_merge_config">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">deep_merge_config</span><span class="p">(</span>
     <span class="n">base</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
     <span class="n">override</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
     <span class="o">*</span><span class="p">,</span>
@@ -318,7 +330,8 @@
     <span class="k">return</span> <span class="n">_deep_merge_dicts</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="n">override</span><span class="p">,</span> <span class="p">(),</span> <span class="n">atomic_paths</span><span class="p">)</span></div>
 
 
-<div class="viewcode-block" id="merge_config_fragments"><a class="viewcode-back" href="../../../api.html#sequifier.config.composition.merge_config_fragments">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">merge_config_fragments</span><span class="p">(</span>
+<div class="viewcode-block" id="merge_config_fragments"><a class="viewcode-back" href="../../../api.html#sequifier.config.composition.merge_config_fragments">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">merge_config_fragments</span><span class="p">(</span>
     <span class="n">fragments</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span>
     <span class="o">*</span><span class="p">,</span>
     <span class="n">atomic_paths</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">]</span> <span class="o">=</span> <span class="n">DEFAULT_ATOMIC_PATHS</span><span class="p">,</span>
@@ -333,7 +346,8 @@
     <span class="k">return</span> <span class="n">merged</span></div>
 
 
-<div class="viewcode-block" id="load_composed_yaml_config"><a class="viewcode-back" href="../../../api.html#sequifier.config.composition.load_composed_yaml_config">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">load_composed_yaml_config</span><span class="p">(</span>
+<div class="viewcode-block" id="load_composed_yaml_config"><a class="viewcode-back" href="../../../api.html#sequifier.config.composition.load_composed_yaml_config">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">load_composed_yaml_config</span><span class="p">(</span>
     <span class="n">config_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
     <span class="n">atomic_paths</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">]</span> <span class="o">=</span> <span class="n">DEFAULT_ATOMIC_PATHS</span><span class="p">,</span>
@@ -395,7 +409,8 @@
     <span class="p">)</span></div>
 
 
-<div class="viewcode-block" id="merge_complementary_config_fragments"><a class="viewcode-back" href="../../../api.html#sequifier.config.composition.merge_complementary_config_fragments">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">merge_complementary_config_fragments</span><span class="p">(</span>
+<div class="viewcode-block" id="merge_complementary_config_fragments"><a class="viewcode-back" href="../../../api.html#sequifier.config.composition.merge_complementary_config_fragments">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">merge_complementary_config_fragments</span><span class="p">(</span>
     <span class="n">fragments</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]],</span>
     <span class="o">*</span><span class="p">,</span>
     <span class="n">atomic_paths</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">]</span> <span class="o">=</span> <span class="n">DEFAULT_ATOMIC_PATHS</span><span class="p">,</span>
@@ -418,6 +433,7 @@
     <span class="k">return</span> <span class="n">merged</span></div>
 
 
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_load_yaml_mapping</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
     <span class="k">try</span><span class="p">:</span>
         <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
@@ -432,6 +448,7 @@
     <span class="k">return</span> <span class="n">values</span>
 
 
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_normalize_additional_config_paths</span><span class="p">(</span>
     <span class="n">value</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">config_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
@@ -456,12 +473,14 @@
     <span class="k">return</span> <span class="n">paths</span>
 
 
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_resolve_additional_config_path</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
     <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isabs</span><span class="p">(</span><span class="n">path</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">project_root</span><span class="p">,</span> <span class="n">path</span><span class="p">))</span>
 
 
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_merge_complementary_dicts</span><span class="p">(</span>
     <span class="n">merged</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
     <span class="n">fragment</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
@@ -485,7 +504,7 @@
 
         <span class="n">current_value</span> <span class="o">=</span> <span class="n">merged</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
         <span class="k">if</span> <span class="p">(</span>
-            <span class="n">child_path</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">atomic_paths</span>
+            <span class="ow">not</span> <span class="n">_is_atomic</span><span class="p">(</span><span class="n">child_path</span><span class="p">,</span> <span class="n">atomic_paths</span><span class="p">)</span>
             <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">current_value</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">)</span>
             <span class="ow">and</span> <span class="n">current_value</span>
             <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">incoming_value</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">)</span>
@@ -509,6 +528,7 @@
         <span class="p">)</span>
 
 
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_record_field_sources</span><span class="p">(</span>
     <span class="n">value</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">path</span><span class="p">:</span> <span class="n">ConfigPath</span><span class="p">,</span>
@@ -516,7 +536,7 @@
     <span class="n">field_sources</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span>
     <span class="n">atomic_paths</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">atomic_paths</span> <span class="ow">or</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">value</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">_is_atomic</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">atomic_paths</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">value</span><span class="p">:</span>
         <span class="n">field_sources</span><span class="p">[</span><span class="n">path</span><span class="p">]</span> <span class="o">=</span> <span class="n">source</span>
         <span class="k">return</span>
     <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">child_value</span> <span class="ow">in</span> <span class="n">value</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
@@ -529,6 +549,7 @@
         <span class="p">)</span>
 
 
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_field_source_for_path</span><span class="p">(</span>
     <span class="n">field_sources</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span>
     <span class="n">path</span><span class="p">:</span> <span class="n">ConfigPath</span><span class="p">,</span>
@@ -541,6 +562,7 @@
     <span class="k">return</span> <span class="s2">"unknown source"</span>
 
 
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_deep_merge_dicts</span><span class="p">(</span>
     <span class="n">base</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
     <span class="n">override</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
@@ -553,7 +575,7 @@
         <span class="n">base_value</span> <span class="o">=</span> <span class="n">merged</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="p">(</span>
-            <span class="n">child_path</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">atomic_paths</span>
+            <span class="ow">not</span> <span class="n">_is_atomic</span><span class="p">(</span><span class="n">child_path</span><span class="p">,</span> <span class="n">atomic_paths</span><span class="p">)</span>
             <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">base_value</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">)</span>
             <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">override_value</span><span class="p">,</span> <span class="n">Mapping</span><span class="p">)</span>
             <span class="ow">and</span> <span class="ow">not</span> <span class="n">_changes_discriminator</span><span class="p">(</span><span class="n">base_value</span><span class="p">,</span> <span class="n">override_value</span><span class="p">)</span>
@@ -569,6 +591,7 @@
     <span class="k">return</span> <span class="n">merged</span>
 
 
+<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_changes_discriminator</span><span class="p">(</span>
     <span class="n">base</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">override</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>

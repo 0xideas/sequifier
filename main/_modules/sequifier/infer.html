@@ -283,12 +283,13 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">onnxruntime</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">polars</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pl</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">beartype</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">beartype.typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Iterator</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
 
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.composable_train_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">ResolvedSequifierConfig</span> <span class="k">as</span> <span class="n">TrainModel</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.infer_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">InfererModel</span><span class="p">,</span> <span class="n">load_inferer_config</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">TrainModel</span><span class="p">,</span> <span class="n">load_train_config</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">,</span>
     <span class="n">configure_determinism</span><span class="p">,</span>
@@ -308,13 +309,13 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">ONNX_CATEGORICAL_TARGET_CODECS_KEY</span><span class="p">,</span>
     <span class="n">SPECIAL_TOKEN_IDS</span><span class="p">,</span>
-    <span class="n">resolve_categorical_decoder_ids</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.train</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">infer_with_embedding_model</span><span class="p">,</span>
     <span class="n">infer_with_generative_model</span><span class="p">,</span>
     <span class="n">load_inference_model</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 
 <span class="n">ONNX_NUMPY_DTYPES</span> <span class="o">=</span> <span class="p">{</span>
     <span class="s2">"tensor(float16)"</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span>
@@ -729,39 +730,81 @@
     <span class="p">)</span>
     <span class="k">for</span> <span class="n">model_path</span> <span class="ow">in</span> <span class="n">model_paths</span><span class="p">:</span>
         <span class="n">target_decoder_ids</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">route_args</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">args_config</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"dataset"</span><span class="p">,</span> <span class="s2">"part"</span><span class="p">,</span> <span class="s2">"model_interface"</span><span class="p">):</span>
+            <span class="n">value</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">value</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">route_args</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
         <span class="k">if</span> <span class="n">model_path</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">".pt"</span><span class="p">):</span>
             <span class="n">model_state</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
                 <span class="n">normalize_path</span><span class="p">(</span><span class="n">model_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">),</span>
                 <span class="n">map_location</span><span class="o">=</span><span class="s2">"cpu"</span><span class="p">,</span>
                 <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
             <span class="p">)</span>
-            <span class="n">embedded_config</span> <span class="o">=</span> <span class="n">model_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"training_config"</span><span class="p">)</span>
-            <span class="k">if</span> <span class="n">embedded_config</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="n">training_config</span> <span class="o">=</span> <span class="n">TrainModel</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span><span class="n">embedded_config</span><span class="p">)</span>
-            <span class="k">elif</span> <span class="n">config</span><span class="o">.</span><span class="n">training_config_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="n">training_config</span> <span class="o">=</span> <span class="n">load_train_config</span><span class="p">(</span>
-                    <span class="n">config</span><span class="o">.</span><span class="n">training_config_path</span><span class="p">,</span>
-                    <span class="p">{</span>
-                        <span class="n">key</span><span class="p">:</span> <span class="n">value</span>
-                        <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">args_config</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-                        <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"model_path"</span><span class="p">,</span> <span class="s2">"data_path"</span><span class="p">]</span>
-                    <span class="p">},</span>
-                    <span class="n">args_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"skip_metadata"</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span>
+            <span class="n">embedded_model_config</span> <span class="o">=</span> <span class="n">model_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model_config"</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">embedded_model_config</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">interface_name</span> <span class="o">=</span> <span class="n">route_args</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model_interface"</span><span class="p">)</span>
+                <span class="k">if</span> <span class="p">(</span>
+                    <span class="n">interface_name</span> <span class="ow">is</span> <span class="kc">None</span>
+                    <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">embedded_model_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"interfaces"</span><span class="p">,</span> <span class="p">{}))</span> <span class="o">==</span> <span class="mi">1</span>
+                <span class="p">):</span>
+                    <span class="n">interface_name</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">embedded_model_config</span><span class="p">[</span><span class="s2">"interfaces"</span><span class="p">]))</span>
+                <span class="k">if</span> <span class="n">interface_name</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">interface</span> <span class="o">=</span> <span class="n">embedded_model_config</span><span class="p">[</span><span class="s2">"interfaces"</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">interface_name</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">interface</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                            <span class="sa">f</span><span class="s2">"Unknown PT model interface </span><span class="si">{</span><span class="n">interface_name</span><span class="si">!r}</span><span class="s2">"</span>
+                        <span class="p">)</span>
+                    <span class="n">target_decoder_ids</span> <span class="o">=</span> <span class="n">interface</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"target_decoder_ids"</span><span class="p">,</span> <span class="p">{})</span>
+            <span class="k">elif</span> <span class="n">model_state</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"training_config"</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">training_config</span> <span class="o">=</span> <span class="n">TrainModel</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span>
+                    <span class="n">model_state</span><span class="p">[</span><span class="s2">"training_config"</span><span class="p">]</span>
                 <span class="p">)</span>
+                <span class="n">selected_dataset</span> <span class="o">=</span> <span class="n">route_args</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"dataset"</span><span class="p">)</span>
+                <span class="n">selected_interface</span> <span class="o">=</span> <span class="n">route_args</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model_interface"</span><span class="p">)</span>
+                <span class="n">datasets</span> <span class="o">=</span> <span class="n">training_config</span><span class="o">.</span><span class="n">dataset_training_spec</span>
+                <span class="k">if</span> <span class="n">selected_dataset</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">selected_dataset</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">datasets</span><span class="p">:</span>
+                        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                            <span class="sa">f</span><span class="s2">"Unknown inference dataset </span><span class="si">{</span><span class="n">selected_dataset</span><span class="si">!r}</span><span class="s2">"</span>
+                        <span class="p">)</span>
+                    <span class="n">dataset_config</span> <span class="o">=</span> <span class="n">datasets</span><span class="p">[</span><span class="n">selected_dataset</span><span class="p">]</span>
+                    <span class="k">if</span> <span class="p">(</span>
+                        <span class="n">selected_interface</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                        <span class="ow">and</span> <span class="n">dataset_config</span><span class="o">.</span><span class="n">model_interface</span> <span class="o">!=</span> <span class="n">selected_interface</span>
+                    <span class="p">):</span>
+                        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                            <span class="sa">f</span><span class="s2">"Dataset </span><span class="si">{</span><span class="n">selected_dataset</span><span class="si">!r}</span><span class="s2"> maps to interface "</span>
+                            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">dataset_config</span><span class="o">.</span><span class="n">model_interface</span><span class="si">!r}</span><span class="s2">, not "</span>
+                            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">selected_interface</span><span class="si">!r}</span><span class="s2">"</span>
+                        <span class="p">)</span>
+                <span class="k">elif</span> <span class="n">selected_interface</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">dataset_config</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span>
+                        <span class="p">(</span>
+                            <span class="n">dataset</span>
+                            <span class="k">for</span> <span class="n">dataset</span> <span class="ow">in</span> <span class="n">datasets</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+                            <span class="k">if</span> <span class="n">dataset</span><span class="o">.</span><span class="n">model_interface</span> <span class="o">==</span> <span class="n">selected_interface</span>
+                        <span class="p">),</span>
+                        <span class="kc">None</span><span class="p">,</span>
+                    <span class="p">)</span>
+                    <span class="k">if</span> <span class="n">dataset_config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                            <span class="s2">"No execution route for model interface "</span>
+                            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">selected_interface</span><span class="si">!r}</span><span class="s2">"</span>
+                        <span class="p">)</span>
+                <span class="k">elif</span> <span class="nb">len</span><span class="p">(</span><span class="n">datasets</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+                    <span class="n">dataset_config</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">datasets</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="s2">"A dataset or model_interface selection is required for "</span>
+                        <span class="s2">"multi-dataset checkpoint inference"</span>
+                    <span class="p">)</span>
+                <span class="n">target_decoder_ids</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">dataset_config</span><span class="o">.</span><span class="n">interface</span><span class="o">.</span><span class="n">target_decoder_ids</span><span class="p">)</span>
             <span class="k">else</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">"PyTorch model has no embedded training config and "</span>
-                    <span class="s2">"training_config_path was not provided."</span>
+                    <span class="s2">"PyTorch artifact has neither model_config nor a resolved "</span>
+                    <span class="s2">"training_config."</span>
                 <span class="p">)</span>
-            <span class="n">target_column_types</span> <span class="o">=</span> <span class="n">training_config</span><span class="o">.</span><span class="n">target_column_types</span>
-            <span class="k">if</span> <span class="n">target_column_types</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"target_column_types must be provided or derived"</span><span class="p">)</span>
-            <span class="n">target_decoder_ids</span> <span class="o">=</span> <span class="n">resolve_categorical_decoder_ids</span><span class="p">(</span>
-                <span class="n">training_config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">,</span>
-                <span class="n">target_column_types</span><span class="p">,</span>
-                <span class="n">training_config</span><span class="o">.</span><span class="n">n_classes</span><span class="p">,</span>
-                <span class="n">training_config</span><span class="o">.</span><span class="n">categorical_decoder_special_tokens</span><span class="p">,</span>
-            <span class="p">)</span>
 
         <span class="k">if</span> <span class="n">is_folder_input</span><span class="p">:</span>
             <span class="k">if</span> <span class="n">percentage_limits</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -809,7 +852,7 @@
             <span class="n">prediction_length</span><span class="p">,</span>
             <span class="n">config</span><span class="o">.</span><span class="n">inference_batch_size</span><span class="p">,</span>
             <span class="n">config</span><span class="o">.</span><span class="n">device</span><span class="p">,</span>
-            <span class="n">args_config</span><span class="o">=</span><span class="n">args_config</span><span class="p">,</span>
+            <span class="n">args_config</span><span class="o">=</span><span class="n">route_args</span><span class="p">,</span>
             <span class="n">training_config_path</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">training_config_path</span><span class="p">,</span>
             <span class="n">training_objective</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">training_objective</span><span class="p">,</span>
             <span class="n">normalize_real_columns</span><span class="o">=</span><span class="n">normalize_real_columns</span><span class="p">,</span>
@@ -831,7 +874,8 @@
     <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"--- Inference Complete ---"</span><span class="p">)</span></div>
 
 
-<div class="viewcode-block" id="calculate_item_positions"><a class="viewcode-back" href="../../api.html#sequifier.infer.calculate_item_positions">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_item_positions</span><span class="p">(</span>
+<div class="viewcode-block" id="calculate_item_positions"><a class="viewcode-back" href="../../api.html#sequifier.infer.calculate_item_positions">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">calculate_item_positions</span><span class="p">(</span>
     <span class="n">start_positions</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
     <span class="n">context_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">prediction_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
@@ -1091,7 +1135,8 @@
         <span class="p">)</span></div>
 
 
-<div class="viewcode-block" id="infer_generative"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer_generative">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">infer_generative</span><span class="p">(</span>
+<div class="viewcode-block" id="infer_generative"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer_generative">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">infer_generative</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="s2">"InfererModel"</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">"Inferer"</span><span class="p">,</span>
     <span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
@@ -1644,11 +1689,10 @@
             <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{}</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">infer_with_dropout</span><span class="p">:</span>
                 <span class="n">kwargs</span><span class="p">[</span><span class="s2">"disabled_optimizers"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"EliminateDropout"</span><span class="p">]</span>
-
                 <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
-                    <span class="s2">"For inference with onnx, 'infer_with_dropout==True' is only effective if 'export_with_dropout==True' in training"</span>
+                    <span class="s2">"For ONNX inference, infer_with_dropout=true is only effective "</span>
+                    <span class="s2">"when the model was exported with export_with_dropout=true."</span>
                 <span class="p">)</span>
-
             <span class="bp">self</span><span class="o">.</span><span class="n">ort_session</span> <span class="o">=</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">InferenceSession</span><span class="p">(</span>
                 <span class="n">normalize_path</span><span class="p">(</span><span class="n">model_path</span><span class="p">,</span> <span class="n">project_root</span><span class="p">),</span>
                 <span class="n">providers</span><span class="o">=</span><span class="n">execution_providers</span><span class="p">,</span>
@@ -1668,7 +1712,13 @@
                 <span class="bp">self</span><span class="o">.</span><span class="n">args_config</span><span class="p">,</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">,</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">infer_with_dropout</span><span class="p">,</span>
-            <span class="p">)</span></div>
+            <span class="p">)</span>
+            <span class="n">route_model</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">inference_model</span><span class="p">,</span>
+                <span class="s2">"transformer_model"</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">inference_model</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">target_decoder_ids</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">route_model</span><span class="o">.</span><span class="n">target_decoder_ids</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="Inferer.invert_normalization"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.invert_normalization">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">invert_normalization</span><span class="p">(</span>
@@ -1681,6 +1731,7 @@
         <span class="n">mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">selected_columns_statistics</span><span class="p">[</span><span class="n">target_column</span><span class="p">][</span><span class="s2">"mean"</span><span class="p">]</span>
         <span class="k">return</span> <span class="p">(</span><span class="n">values</span> <span class="o">*</span> <span class="p">(</span><span class="n">std</span> <span class="o">+</span> <span class="mf">1e-9</span><span class="p">))</span> <span class="o">+</span> <span class="n">mean</span></div>
 
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_exclude_mask_token</span><span class="p">(</span>
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">values</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>

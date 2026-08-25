@@ -284,6 +284,7 @@
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">ModelWindowView</span><span class="p">,</span> <span class="n">StoredWindowLayout</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="p">,</span> <span class="n">validate_special_token_ids</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 
 <span class="n">RESOLVED_ONLY_CONFIG_KEYS</span> <span class="o">=</span> <span class="p">{</span>
     <span class="s2">"categorical_columns"</span><span class="p">,</span>
@@ -324,10 +325,12 @@
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"special_token_ids"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_token_ids</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
         <span class="k">return</span> <span class="n">validate_special_token_ids</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s2">"dataset metadata"</span><span class="p">)</span>
 
     <span class="nd">@property</span>
+    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">storage_layout</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StoredWindowLayout</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">StoredWindowLayout</span><span class="p">(</span>
             <span class="n">stored_context_width</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span>
@@ -336,7 +339,8 @@
         <span class="p">)</span></div>
 
 
-<div class="viewcode-block" id="load_dataset_metadata"><a class="viewcode-back" href="../../../api.html#sequifier.config.metadata.load_dataset_metadata">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">load_dataset_metadata</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DatasetMetadata</span><span class="p">:</span>
+<div class="viewcode-block" id="load_dataset_metadata"><a class="viewcode-back" href="../../../api.html#sequifier.config.metadata.load_dataset_metadata">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">load_dataset_metadata</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DatasetMetadata</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Load and validate one preprocessing metadata JSON file."""</span>
 
     <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
@@ -346,7 +350,8 @@
     <span class="k">return</span> <span class="n">DatasetMetadata</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span><span class="n">values</span><span class="p">)</span></div>
 
 
-<div class="viewcode-block" id="extract_inline_metadata"><a class="viewcode-back" href="../../../api.html#sequifier.config.metadata.extract_inline_metadata">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">extract_inline_metadata</span><span class="p">(</span>
+<div class="viewcode-block" id="extract_inline_metadata"><a class="viewcode-back" href="../../../api.html#sequifier.config.metadata.extract_inline_metadata">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">extract_inline_metadata</span><span class="p">(</span>
     <span class="n">values</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""Split the historical ``skip_metadata`` representation into two mappings."""</span>

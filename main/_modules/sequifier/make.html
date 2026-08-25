@@ -274,6 +274,8 @@
           <h1>Source code for sequifier.make</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
+
 <span class="n">preprocess_config_string</span> <span class="o">=</span> <span class="s2">"""project_root: .</span>
 <span class="s2">preprocessing_data_path: PLEASE FILL</span>
 <span class="s2">read_format: csv</span>
@@ -293,33 +295,31 @@
 <span class="s2">"""</span>
 
 <span class="n">train_config_string</span> <span class="o">=</span> <span class="s2">"""project_root: .</span>
-<span class="s2">preprocessing_data_path: PLEASE FILL</span>
 <span class="s2">model_name: PLEASE FILL</span>
-<span class="s2">training_objective: causal</span>
 <span class="s2">device: cuda</span>
-<span class="s2">read_format: parquet</span>
+<span class="s2">seed: 1010</span>
 
-<span class="s2">input_columns: [EXAMPLE_INPUT_COLUMN_NAME] # should include all target column, can include additional columns</span>
-<span class="s2">feature_layout: null # optional structure annotations for flat input columns</span>
-<span class="s2">target_columns: [EXAMPLE_TARGET_COLUMN_NAME]</span>
-<span class="s2">target_column_types: # 'criterion' in training_spec must also be adapted</span>
-<span class="s2">  EXAMPLE_TARGET_COLUMN_NAME: real</span>
-
-<span class="s2">context_length: 48</span>
-<span class="s2">model_window_stride: null # null loads one right-aligned view; a positive integer loads all contained views at this stride</span>
-<span class="s2">inference_batch_size: 10</span>
-
-<span class="s2">export_generative_model: PLEASE FILL # true or false</span>
-<span class="s2">export_embedding_model: PLEASE FILL # true or false</span>
-<span class="s2">embedding_layer_names: [backbone.final_norm] # optional ordered activation sources to concatenate</span>
-<span class="s2">export_onnx: true</span>
+<span class="s2">global_training_spec:</span>
+<span class="s2">  read_format: parquet</span>
+<span class="s2">  training_objective: causal</span>
+<span class="s2">  context_length: 48</span>
+<span class="s2">  target_offset: 1</span>
+<span class="s2">  model_window_stride: null</span>
+<span class="s2">  inference_batch_size: 10</span>
+<span class="s2">  batch_size: 10</span>
+<span class="s2">  accumulation_steps: 1</span>
+<span class="s2">  learning_rate: 0.0001</span>
+<span class="s2">  optimizer:</span>
+<span class="s2">    name: AdamW</span>
+<span class="s2">  scheduler:</span>
+<span class="s2">    name: StepLR</span>
+<span class="s2">    step_size: 1</span>
+<span class="s2">    gamma: 0.99</span>
+<span class="s2">  scheduler_step_on: epoch</span>
+<span class="s2">  gradient_clip: null</span>
+<span class="s2">  save_interval_epochs: 1</span>
 
 <span class="s2">model_spec:</span>
-<span class="s2">  ingestion:</span>
-<span class="s2">    type: direct_embed</span>
-<span class="s2">    output_dim: 128</span>
-<span class="s2">    initialization: </span><span class="si">{}</span><span class="s2"> # optional ingestion initialization overrides</span>
-<span class="s2">    feature_embedding_dims: null # optional, e.g. </span><span class="si">{EXAMPLE_INPUT_COLUMN_NAME: 128}</span><span class="s2">; unnecessary if all inputs share one numeric kind</span>
 <span class="s2">  backbone:</span>
 <span class="s2">    architecture:</span>
 <span class="s2">      dim_model: 128</span>
@@ -348,33 +348,49 @@
 <span class="s2">      publish: true</span>
 <span class="s2">      conflict_policy: compare_and_swap</span>
 <span class="s2">    initialization: </span><span class="si">{}</span>
-<span class="s2">  decoder:</span>
-<span class="s2">    type: linear</span>
-<span class="s2">    prediction_length: 1</span>
-<span class="s2">    support: 1</span>
-<span class="s2">    initialization: </span><span class="si">{}</span>
-<span class="s2">training_spec:</span>
-<span class="s2">  epochs: 10</span>
-<span class="s2">  save_interval_epochs: 10</span>
-<span class="s2">  batch_size: 10</span>
-<span class="s2">  log_interval: 10</span>
-<span class="s2">  learning_rate: 0.0001</span>
-<span class="s2">  accumulation_steps: 1</span>
-<span class="s2">  gradient_clip: null</span>
-<span class="s2">  criterion:</span>
-<span class="s2">    EXAMPLE_TARGET_COLUMN_NAME: MSELoss</span>
-<span class="s2">  optimizer:</span>
-<span class="s2">    name: AdamW</span>
-<span class="s2">  scheduler:</span>
-<span class="s2">    name: OneCycleLR</span>
-<span class="s2">    max_lr: 0.001</span>
-<span class="s2">    pct_start: 0.1</span>
-<span class="s2">    div_factor: 100</span>
-<span class="s2">    final_div_factor: 1000</span>
-<span class="s2">    anneal_strategy: cos</span>
-<span class="s2">    total_steps: PLEASE FILL</span>
-<span class="s2">    three_phase: false</span>
-<span class="s2">  scheduler_step_on: batch</span>
+<span class="s2">  interfaces:</span>
+<span class="s2">    prediction:</span>
+<span class="s2">      input_columns: [EXAMPLE_INPUT_COLUMN_NAME]</span>
+<span class="s2">      target_columns: [EXAMPLE_TARGET_COLUMN_NAME]</span>
+<span class="s2">      feature_layout: null</span>
+<span class="s2">      ingestion:</span>
+<span class="s2">        type: direct_embed</span>
+<span class="s2">        output_dim: 128</span>
+<span class="s2">        initialization: </span><span class="si">{}</span>
+<span class="s2">        feature_embedding_dims: null</span>
+<span class="s2">      decoder:</span>
+<span class="s2">        type: linear</span>
+<span class="s2">        prediction_length: 1</span>
+<span class="s2">        support: 1</span>
+<span class="s2">        initialization: </span><span class="si">{}</span>
+
+<span class="s2">dataset_training_spec:</span>
+<span class="s2">  main:</span>
+<span class="s2">    model_interface: prediction</span>
+<span class="s2">    parts:</span>
+<span class="s2">      original:</span>
+<span class="s2">        metadata_config_path: PLEASE FILL</span>
+<span class="s2">    criterion:</span>
+<span class="s2">      EXAMPLE_TARGET_COLUMN_NAME: MSELoss</span>
+
+<span class="s2">training_plan:</span>
+<span class="s2">  phases:</span>
+<span class="s2">  - name: training</span>
+<span class="s2">    epochs: 10</span>
+<span class="s2">    mode: sequential</span>
+<span class="s2">    sources:</span>
+<span class="s2">    - ref: main</span>
+
+<span class="s2">evaluation:</span>
+<span class="s2">  sources:</span>
+<span class="s2">  - ref: main</span>
+
+<span class="s2">export_generative_model: PLEASE FILL # true or false</span>
+<span class="s2">export_embedding_model: PLEASE FILL # true or false</span>
+<span class="s2">embedding_layer_names: [backbone.final_norm]</span>
+<span class="s2">export_onnx: true</span>
+<span class="s2">export_pt: false</span>
+<span class="s2">export_with_dropout: false</span>
 <span class="s2">"""</span>
 
 <span class="n">infer_config_string</span> <span class="o">=</span> <span class="s2">"""project_root: .</span>
@@ -407,7 +423,8 @@
 <span class="s2">.DS_Store"""</span>
 
 
-<div class="viewcode-block" id="make"><a class="viewcode-back" href="../../api.html#sequifier.make.make">[docs]</a><span class="k">def</span><span class="w"> </span><span class="nf">make</span><span class="p">(</span><span class="n">args</span><span class="p">):</span>
+<div class="viewcode-block" id="make"><a class="viewcode-back" href="../../api.html#sequifier.make.make">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">make</span><span class="p">(</span><span class="n">args</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">"""Create a sequifier project scaffold."""</span>
     <span class="n">project_name</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">project_name</span>
 
