@@ -195,12 +195,50 @@ def _initialize_components(
 
 @beartype
 def _decoder_metadata(view: Any) -> InterfaceRuntimeMetadata:
-    target_decoder_ids = resolve_categorical_decoder_ids(
-        view.target_columns,
-        view.target_column_types,
-        view.n_classes,
-        view.categorical_decoder_special_tokens,
-    )
+    categorical_targets = {
+        column
+        for column in view.target_columns
+        if view.target_column_types[column] == "categorical"
+    }
+    persisted_decoder_ids = getattr(view, "target_decoder_ids", None)
+    if persisted_decoder_ids:
+        if set(persisted_decoder_ids) != categorical_targets:
+            raise ValueError(
+                "Persisted target_decoder_ids must contain exactly the categorical "
+                f"targets; expected {sorted(categorical_targets)}, found "
+                f"{sorted(persisted_decoder_ids)}."
+            )
+        target_decoder_ids = {
+            column: [int(global_id) for global_id in persisted_decoder_ids[column]]
+            for column in view.target_columns
+            if column in categorical_targets
+        }
+        for column, global_ids in target_decoder_ids.items():
+            if not global_ids:
+                raise ValueError(
+                    f"Persisted target_decoder_ids[{column!r}] cannot be empty."
+                )
+            if len(global_ids) != len(set(global_ids)):
+                raise ValueError(
+                    f"Persisted target_decoder_ids[{column!r}] contains duplicates."
+                )
+            invalid_ids = [
+                global_id
+                for global_id in global_ids
+                if global_id < 0 or global_id >= view.n_classes[column]
+            ]
+            if invalid_ids:
+                raise ValueError(
+                    f"Persisted target_decoder_ids[{column!r}] contains IDs outside "
+                    f"[0, {view.n_classes[column]}): {invalid_ids}."
+                )
+    else:
+        target_decoder_ids = resolve_categorical_decoder_ids(
+            view.target_columns,
+            view.target_column_types,
+            view.n_classes,
+            view.categorical_decoder_special_tokens,
+        )
     target_n_classes = {column: len(ids) for column, ids in target_decoder_ids.items()}
     target_global_to_decoder = {}
     for column, ids in target_decoder_ids.items():

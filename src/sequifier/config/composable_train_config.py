@@ -9,6 +9,7 @@ authored configuration fields.
 from __future__ import annotations
 
 import keyword
+import math
 import os
 import warnings
 from dataclasses import dataclass
@@ -384,6 +385,24 @@ class DatasetTrainingSpecModel(BaseModel):
         for name in value.values():
             if not hasattr(torch.nn, name):
                 raise ValueError(f"Criterion {name!r} not found in torch.nn")
+        return value
+
+    @field_validator("loss_weights")
+    @classmethod
+    @beartype
+    def validate_loss_weights(cls, value):
+        if value is None:
+            return value
+        invalid = {
+            target: weight
+            for target, weight in value.items()
+            if not math.isfinite(weight) or weight < 0
+        }
+        if invalid:
+            raise ValueError(
+                "loss_weights must contain finite, non-negative values; "
+                f"found {invalid}."
+            )
         return value
 
 
@@ -1584,6 +1603,9 @@ def interface_build_view(
         n_classes=interface.n_classes,
         id_maps=interface.id_maps,
         special_token_ids=interface.special_token_ids,
+        target_decoder_ids=interface.target_decoder_ids,
+        target_n_classes=interface.target_n_classes,
+        target_global_to_decoder=interface.target_global_to_decoder,
         storage_layout=interface.storage_layout,
         window_view=interface.window_view,
         model_spec=SimpleNamespace(

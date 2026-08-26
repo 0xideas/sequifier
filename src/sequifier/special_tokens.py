@@ -74,7 +74,7 @@ def resolve_categorical_decoder_ids(
     for column in target_columns:
         if target_column_types[column] != "categorical":
             continue
-        tokens = configured_tokens.get(column, SPECIAL_TOKEN_NAMES)
+        tokens = configured_tokens.get(column, ())
         ids = [
             getattr(SPECIAL_TOKEN_IDS, name)
             for name in SPECIAL_TOKEN_NAMES
