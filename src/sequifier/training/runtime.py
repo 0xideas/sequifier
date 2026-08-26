@@ -45,14 +45,22 @@ class RuntimeBatch:
     batch: SequifierBatch
 
 
-@dataclass(frozen=True)
+@dataclass
 class PartLoaderFactory:
     config: ResolvedSequifierConfig
     dataset_name: str
     part_name: str
+    loaders: dict[Literal["training", "validation"], DataLoader] = field(
+        default_factory=dict,
+        init=False,
+    )
 
     @beartype
     def build(self, split: Literal["training", "validation"]) -> DataLoader:
+        global_spec = self.config.global_training_spec
+        if global_spec.load_full_data_to_ram and split in self.loaders:
+            return self.loaders[split]
+
         dataset_config: Any = dataset_part_view(
             self.config, self.dataset_name, self.part_name
         )
@@ -69,7 +77,6 @@ class PartLoaderFactory:
                 f"Part {self.dataset_name}.{self.part_name} has no {split} path"
             )
         shuffle = split == "training"
-        global_spec = self.config.global_training_spec
         if part.storage_form == "file":
             if global_spec.distributed:
                 raise ValueError(
@@ -102,7 +109,7 @@ class PartLoaderFactory:
                 self.part_name
             )
         )
-        return DataLoader(
+        loader = DataLoader(
             dataset,
             batch_size=None,
             sampler=None,
@@ -112,6 +119,9 @@ class PartLoaderFactory:
             persistent_workers=global_spec.num_workers > 0,
             generator=generator,
         )
+        if global_spec.load_full_data_to_ram:
+            self.loaders[split] = loader
+        return loader
 
 
 @dataclass

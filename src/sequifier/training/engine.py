@@ -429,6 +429,51 @@ class TrainingEngine:
                 self.state.epochs_without_improvement += 1
             return monitored, improved
 
+        @beartype
+        def flush_metric_window(
+            dataset_name: str,
+            epoch: int,
+            batch: int,
+            batches_total: int,
+        ) -> None:
+            window = metric_windows.pop(dataset_name, None)
+            if window is None:
+                return
+            total_loss, target_losses = model._finalize_loss_components(
+                window["sums"],
+                window["count"],
+                window["target_names"],
+                "training metrics",
+                raise_on_empty=False,
+            )
+            if self.rank != 0:
+                return
+            learning_rate = self.optimizer.param_groups[0]["lr"]
+            seconds_per_batch = window["seconds"] / window["batches"]
+            writer = model.metric_writers_by_dataset[dataset_name]
+            writer.write_training(
+                run_id=model.run_id,
+                session_id=model.session_id,
+                epoch=epoch,
+                batch=batch,
+                batches_total=batches_total,
+                global_step=self.state.global_batch_step,
+                window_batches=window["batches"],
+                total_loss=total_loss,
+                target_losses=target_losses,
+                learning_rate=learning_rate,
+                seconds_per_batch=seconds_per_batch,
+                dataset=dataset_name,
+                part=window["part"],
+            )
+            model.logger.bind(log_channel="metric").info(
+                f"Epoch {epoch:3d} | Batch {batch:5d}/{batches_total:5d} | "
+                f"Dataset: {dataset_name} | Loss: "
+                f"{float(total_loss.detach().cpu().item()): .2e} | "
+                f"LR: {float(learning_rate): .2e} | "
+                f"S/Batch {float(seconds_per_batch): .2e}"
+            )
+
         try:
             is_fresh_run = (
                 self.state.global_batch_step == 0
@@ -597,33 +642,12 @@ class TrainingEngine:
                         if window["part"] != runtime_batch.part:
                             window["part"] = None
                         if window["batches"] >= model.log_interval:
-                            total_loss, target_losses = model._finalize_loss_components(
-                                window["sums"],
-                                window["count"],
-                                window["target_names"],
-                                "training metrics",
-                                raise_on_empty=False,
+                            flush_metric_window(
+                                dataset_name,
+                                current_run_epoch,
+                                current_epoch_batch,
+                                batches_total,
                             )
-                            if self.rank == 0:
-                                writer = model.metric_writers_by_dataset[dataset_name]
-                                writer.write_training(
-                                    run_id=model.run_id,
-                                    session_id=model.session_id,
-                                    epoch=current_run_epoch,
-                                    batch=current_epoch_batch,
-                                    batches_total=batches_total,
-                                    global_step=self.state.global_batch_step,
-                                    window_batches=window["batches"],
-                                    total_loss=total_loss,
-                                    target_losses=target_losses,
-                                    learning_rate=self.optimizer.param_groups[0]["lr"],
-                                    seconds_per_batch=(
-                                        window["seconds"] / window["batches"]
-                                    ),
-                                    dataset=dataset_name,
-                                    part=window["part"],
-                                )
-                            del metric_windows[dataset_name]
                         if accumulation_count == accumulation_steps:
                             flush()
                         now = time.monotonic()
@@ -712,6 +736,13 @@ class TrainingEngine:
                             completion_reason = "integration_requested_stop"
                             break
                     flush()
+                    for dataset_name in sorted(metric_windows):
+                        flush_metric_window(
+                            dataset_name,
+                            current_run_epoch,
+                            current_epoch_batch,
+                            batches_total,
+                        )
                     self.state.phase_epoch_complete = True
                     if config.evaluation_sources:
                         evaluation_results = model.evaluate_sources(

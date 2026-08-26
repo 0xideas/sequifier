@@ -1811,6 +1811,8 @@ class TransformerModel(SequifierModel):
                                     )
                             class_distributions[column] = distribution
                         writer = self.metric_writers_by_dataset[source_config.dataset]
+                        learning_rate = self.optimizer.param_groups[0]["lr"]
+                        elapsed_seconds = time.perf_counter() - evaluation_started
                         writer.write_validation(
                             run_id=self.run_id,
                             session_id=self.session_id,
@@ -1824,11 +1826,49 @@ class TransformerModel(SequifierModel):
                             baseline_loss=baseline_loss,
                             baseline_target_losses=baseline_target_losses,
                             class_distributions=class_distributions,
-                            learning_rate=self.optimizer.param_groups[0]["lr"],
-                            elapsed_seconds=(time.perf_counter() - evaluation_started),
+                            learning_rate=learning_rate,
+                            elapsed_seconds=elapsed_seconds,
                             dataset=source_config.dataset,
                             part=source_config.part,
                         )
+                        metric_logger = self.logger.bind(log_channel="metric")
+                        metric_logger.info("-" * 89)
+                        metric_logger.info(
+                            f"Evaluation: {evaluation_kind} | "
+                            f"Source: {source_config.ref} | "
+                            f"Dataset: {source_config.dataset}.{source_config.part} | "
+                            f"Epoch: {run_epoch:3d} | "
+                            f"Batch: {training_batch}/{training_batches_total} | "
+                            f"Loss: {format_number(results[source_config.ref])} | "
+                            f"Baseline Loss: {format_number(baseline_loss)} | "
+                            f"Time: {elapsed_seconds:5.2f}s | "
+                            f"LR: {format_number(learning_rate)}"
+                        )
+                        if target_losses:
+                            metric_logger.info(
+                                "Losses | "
+                                + ", ".join(
+                                    f"{target}: {format_number(value)}"
+                                    for target, value in target_losses.items()
+                                )
+                            )
+                        if baseline_target_losses:
+                            metric_logger.info(
+                                "Baseline Losses | "
+                                + ", ".join(
+                                    f"{target}: {format_number(value)}"
+                                    for target, value in baseline_target_losses.items()
+                                )
+                            )
+                        for target, distribution in class_distributions.items():
+                            metric_logger.info(
+                                f"Class Shares | {target}: "
+                                + " | ".join(
+                                    f"{row['class_label']}: {row['share']:5.5f}"
+                                    for row in distribution
+                                )
+                            )
+                        metric_logger.info("-" * 89)
         finally:
             self.train(was_training)
         return results

@@ -40,7 +40,7 @@ class SequifierDatasetFromFile(IterableDataset):
 
         all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
-        logger.info(f"Loading training dataset into memory from '{data_path}'...")
+        logger.info(f"Loading dataset into memory from '{data_path}'...")
         data_df = read_data(data_path, config.read_format)
 
         column_data_types = {
